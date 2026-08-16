@@ -1,0 +1,11 @@
+{
+	"_note": "Donnees jetables du banc emergences -- chantier 'proprietes emergentes -- capacites conditionnelles a la fabrication'. Trois objets, bistables au clic gauche (meme geste que banc_restitution.gd) : AVANT (composition seule, aucune propriete fusionnee), APRES (Objet.fabriquer, composition fusionnee + emergences evaluees) -- l'emergence se decide entierement a la fabrication, aucun tick necessaire pour la faire avancer, seul l'INSTANT de la fabrication est rejouable au clic. 'fer_cristal' (fer+cristal_demo, volumes egaux) combine un bon conducteur (fer, conductivite_electrique 1e7 S/m) et une matiere sensible a la magie (cristal_demo, sensibilite_magique 0.5) -- aucun des deux seuls ne suffit (fer sensibilite_magique 0.2, sous le seuil 0.3 de data/emergences.json:canalise_mana) : la moyenne ponderee des volumes egaux donne conductivite_electrique~=5e6 (>=1e5) et sensibilite_magique~=0.35 (>=0.3), les deux seuils de 'canalise_mana' passent. 'balsa' (balsa_demo seul) porte densite 200.0 kg/m3 (<=500.0) et resistance_impact 3.0 (>=2.0) -- les deux seuils de 'flotte' passent. 'fer_seul' (fer seul) porte conductivite_electrique 1e7 (>=1e5, seuil de canalise_mana rempli) mais sensibilite_magique 0.2 (<0.3, seuil rate) -- ET logique, aucune emergence ; densite 7870.0 (>500.0) fait aussi rater 'flotte'. proprietes_immuables_locales etend le catalogue partage (data/proprietes_immuables_composition.json) avec 'sensibilite_magique', SEULE liste ajoutee par ce banc (DECISION : liste locale plutot que catalogue partage, pour ne jamais toucher au statut dormant de sensibilite_magique ailleurs dans le depot -- voir scripts/banc_emergences.gd).",
+	"proprietes_a_afficher": ["conductivite_electrique", "sensibilite_magique", "densite", "resistance_impact"],
+	"emergences_a_afficher": ["canalise_mana", "flotte", "incandescent"],
+	"objets": [
+		{ "id": "fer_cristal", "position": [150.0, 200.0, 0.0], "composition": [ { "materiau": "fer", "volume": 1.0 }, { "materiau": "cristal_demo", "volume": 1.0 } ] },
+		{ "id": "balsa", "position": [450.0, 200.0, 0.0], "composition": [ { "materiau": "balsa_demo", "volume": 1.0 } ] },
+		{ "id": "fer_seul", "position": [750.0, 200.0, 0.0], "composition": [ { "materiau": "fer", "volume": 1.0 } ] }
+	],
+	"camera": { "position": [450.0, 200.0, 0.0], "zoom": 0.6 }
+}

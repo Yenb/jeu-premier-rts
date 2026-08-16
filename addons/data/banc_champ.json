@@ -1,0 +1,22 @@
+{
+	"_note": "Jetable, propre a ce banc (voir CARTE.md §3, prochaine entree). 'leger_golem'/'aimant_metal' vivent dans le catalogue PARTAGE data/materiaux.json (decision Yael : le linter de reference, test_lint_donnees.gd, valide 'materiau' contre CE catalogue partout dans data/*.json, aucune notion de table locale) -- leur magnetisme reste dans l'echelle 0.0-1.0 documentee la-bas, INCHANGE par le peaufinage ci-dessous. PEAUFINAGE (session ulterieure, correction physique) : champ.gd lit desormais la QUANTITE de matiere magnetique (magnetisme x volume, SOMMEE) et non plus le seul degre de magnetisme -- le volume compte reellement dans la force, plus seulement dans la masse. La masse du golem est donc redevenue NORMALE (1.0, densite/volume ordinaires) ; c'est le VOLUME (pas la masse) qui porte desormais le facteur d'echelle necessaire pour que la traction reste detectable a portee realiste (~240 unites pour 6 m) sans constante d'echelle globale dans la loi -- l'aimant porte un volume enorme (masse enorme en consequence, ce qui ne fait que renforcer son immobilite). 'golem_magnetique' et 'aimant' restent des types LOCAUX (exception banc jetable de CLAUDE.md) : le golem REUTILISE le paquet 'dynamique' partage (controlable/ordre_joueur/lie_au_joueur, meme cablage que data/banc_controle.json:golem) plus 'objet_physique' pour porter une composition/masse ; l'aimant ne compose que 'objet_physique' (aucun controle, aucune decision -- un prop physique pur, comme arbre/bloc). Echelle : 1 metre = 40 unites (meme ordre de grandeur que les autres bancs, ex. data/banc_controle.json ou le golem va a vitesse 120 sur une scene large de 500 unites) -- choisi pour que DISTANCE_ARRIVEE (2.0 unites, scripts/banc_controle.gd, non modifiable depuis ce banc) reste negligeable (0.05 m) face a la zone de bascule (80-120 unites, 2-3 m), jamais confondu avec un arret volontaire. Calibration exacte (masse_golem 1.0, vitesse_golem 3.0, portee/plancher/plafond dans data/champs.json) : point de bascule verifie a 100 unites (2.5 m) par scripts/test_banc_champ.gd -- VALEUR DE DEPART, a regler au ressenti, aucune loi ne change si ces nombres bougent.",
+	"types": {
+		"golem_magnetique": {
+			"herite": ["objet_physique", "dynamique"],
+			"controlable": true,
+			"vitesse": 3.0,
+			"composition": [ { "materiau": "leger_golem", "volume": 1.0 } ]
+		},
+		"aimant": {
+			"herite": ["objet_physique"],
+			"composition": [ { "materiau": "aimant_metal", "volume": 33333.33 } ]
+		}
+	},
+	"golem": {
+		"position": [280.0, 0.0, 0.0],
+		"lie_au_joueur": "joueur_1"
+	},
+	"aimant": {
+		"position": [0.0, 0.0, 0.0]
+	}
+}

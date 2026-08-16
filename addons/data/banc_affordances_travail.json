@@ -1,0 +1,160 @@
+{
+	"_note": "Donnee LOCALE au banc d'observation scripts/banc_affordances_travail.gd (chantier « travail + coupe + resultat », audit_affordances_prealable.md lignes 1/2/3/4/5/6/10), jamais un catalogue partage. AUCUN nom de propriete n'est ecrit en dur dans le .gd : les quinze champs nom_* / propriete_* ci-dessous les portent tous, ce qui permet a scripts/test_banc_affordances_travail.gd de faire traverser le meme code par un domaine entierement invente (des tailleurs de cristal sur une planete sans arbres). Les types du banc (arbre_coupe, outil, lit) sont LOCAUX a ce fichier, catalogue construit a la volee (patron scripts/banc_coupe.gd:fabriquer_cibles) -- seuls les trois types PRODUITS par la coupe (buche, copeaux_bois, residu_organique) vivent dans data/types.json, parce que scripts/produit.gd resout type_produit contre cette table et que scripts/test_lint_donnees.gd verifie ce champ contre elle.\n\nREFERENCES DE TRANSFORMATION, DEUX STATUTS A NE PAS CONFONDRE : 'transformation_chantier' ci-dessous est la reference que le cablage POSE sur chaque arbre sous la cle 'transformation' -- c'est CELLE-LA que scripts/extinction.gd resout, et le linter la verifie sur l'objet qui la porte, pas ici. Les trois references d''issues.sorties[].ref' ne sont JAMAIS posees sur un objet : le cablage les lit lui-meme apres la bifurcation, elles ne passent donc pas sous le champ 'transformation' et le linter ne les voit pas -- meme statut exact que data/banc_economie.json:fonte.transformation_metal/transformation_scories.\n\nUNITES : TOUT est en SECONDES DE SIMULATION (constat (B) de l'audit -- aucune heure, aucun jour, aucune annee nulle part dans ce fichier). Le cablage ne convertit rien : il n'y a rien a convertir.\n\nAUCUNE PROBABILITE (constat (A) de l'audit) : l'issue de la coupe n'est pas tiree, elle est CALCULEE -- scripts/bifurcation.gd fait un argmax sur les trois biais composes ci-dessous par la fatigue et la qualite de l'outil. Deux colons identiques dans le meme etat produisent TOUJOURS la meme issue.\n\nCALIBRATION MESUREE, jamais devinee -- voir docs/prototypes.md pour les nombres releves en scene reelle.",
+
+	"nom_reserve_matiere": "matiere",
+	"nom_reserve_sommeil": "sommeil",
+	"nom_reserve_fraicheur": "fraicheur_entaille",
+	"propriete_tranchant_max": "tranchant_max",
+	"propriete_tranchant_effectif": "tranchant_effectif",
+	"propriete_resistance": "resistance_cisaillement",
+	"propriete_chantier": "chantier_coupe",
+	"propriete_valeur": "valeur_chantier",
+	"propriete_source_repos": "emet_repos",
+	"propriete_recoit_repos": "recoit_repos",
+	"propriete_humidite": "humidite_locale",
+	"nom_miroir_manque": "manque_sommeil",
+	"nom_vitesse": "vitesse",
+	"nom_rythme": "rythme",
+	"nom_etat_epuise": "epuise",
+	"nom_etat_entaille": "entaille",
+	"nom_etat_repose": "repose",
+
+	"regle_engagement_dormir": "dormir_reserve",
+	"canal_engagement": "sommeil",
+	"transformation_chantier": "chantier_coupe_arbre",
+
+	"_note_gate": "seuil_tranchant : le RATIO minimal tranchant_effectif / resistance_cisaillement sous lequel l'outil n'entame pas la cible (ligne 1 de l'audit). Le ratio lui-meme est le degat de coupe de scripts/banc_coupe.gd:degat_coupe, recopie a l'identique (deux bancs jetables ne se referencent jamais entre eux -- precedent explicite banc_erosion.gd). Sur du bois (resistance_cisaillement 10.0), les trois outils reels du depot donnent : fer 9.0/10.0 = 0.90, pierre 5.0/10.0 = 0.50, bois 2.0/10.0 = 0.20. A 0.30, le fer et la pierre coupent, le bois JAMAIS -- c'est le refus qu'on doit voir a l'ecran. Un REFUS (l'action n'a pas lieu) et non un rendement nul : le colon qui ne peut pas couper ne compte pas parmi les agents de scripts/extinction.gd, sa presence a portee ne fait donc rien avancer du tout.",
+	"seuil_tranchant": 0.30,
+
+	"_note_marge": "marge_securite (ligne 6 de l'audit -- « le chirurgien fatigue n'ouvre pas ») : le colon refuse d'ENTAMER un chantier si temps_necessaire * marge > temps_restant, ou temps_necessaire = travail_restant / rythme_effectif et temps_restant = reserve_sommeil / (cout_base + surcout). AUCUNE des deux grandeurs n'existe dans le depot sous ce nom (verifie par l'audit : zero occurrence de temps_restant/autonomie/marge_securite dans scripts/ et data/) -- toutes deux se DERIVENT de champs deja presents, et la division vit au cablage parce qu'aucun mecanisme du coeur ne divise. Le refus s'exprime par le RETRAIT de l'entree de 'resultats' AVANT scripts/dominance.gd : geste dont le seul precedent du depot est scripts/banc_economie.gd (« LE PREMIER RETRAIT D'UNE ENTREE DE resultats »). A 1.5 avec travail 12.0 et rythme 1.5 : 8.0 s de travail, refus sous 8.0 * 1.5 * 3.0 = 36.0 de reserve -- juste au-dessus du seuil_bascule du sommeil (30.0), pour qu'on voie le colon renoncer AVANT d'aller dormir, et non a la place.",
+	"marge_securite": 1.5,
+
+	"capacite_sommeil": 100.0,
+	"cout_veille_par_s": 1.0,
+	"surcout_coupe_par_s": 2.0,
+
+	"_note_entaille": "L'entaille (ligne 5 de l'audit). fraicheur_entaille : la reserve scripts/depense.gd posee sur l'arbre a la fabrication, gatee par l'etat 'entaille' (data/etats.json) -- son cout_base n'est actif QUE tant que l'etat l'est, exactement le gate de scripts/banc_corrosion.gd (inverse de banc_p1.gd:geler_combustible_apres_sauvetage). degradation_base/sensibilite_humidite : le cout_base EFFECTIF est compose par le cablage, degradation_base * (1 + sensibilite_humidite * humidite_locale) -- une composition arithmetique, jamais un champ du coeur ni une entree de conditions.gd (qui ne multiplie rien) ; precedent dans le coeur lui-meme, objet.gd:_fabriquer_reserve_combustible. A 0.6 * (1 + 0.8 * 0.5) = 0.84/s sur une reserve de 10.0, un chantier abandonne est PERDU en 11.9 s -- assez pour qu'un second colon ait le temps d'arriver, pas assez pour que l'abandon soit gratuit. Reserve a zero : le cablage remet travail_restant a travail_initial, l'arbre a cicatrise.",
+	"fraicheur_entaille": 10.0,
+	"degradation_entaille_base": 0.6,
+	"sensibilite_humidite": 0.8,
+	"humidite_locale": 0.5,
+
+	"_note_seuils_locaux": "Catalogue LOCAL au format exact de data/seuils_etat.json, passe tel quel a scripts/seuil_etat.gd (qui recoit toujours son catalogue en parametre) -- jamais dans le catalogue PARTAGE : meme geste que data/banc_elimination_salete.json:seuils_elimination et data/banc_psycho_social.json:seuils_locaux. L'etat pose ('epuise') est en revanche PARTAGE (data/etats.json) : il module deja 'vitesse' par 0.4 et n'avait aucune raison d'etre duplique. propriete_continue 'manque_sommeil' : le MIROIR PLAT INVERSE (capacite - reserve) que le cablage reecrit chaque tick -- seuil_etat.gd ne sait lire qu'une cle PLATE et ne compare que VERS LE HAUT, « la reserve descend sous 30 » s'ecrit donc « le manque monte au-dessus de 70 ». Patron banc_fatigue_circadien.gd:poser_miroir.",
+	"seuils_locaux": {
+		"epuisement_travail": {
+			"propriete_continue": "manque_sommeil",
+			"seuil": 70.0,
+			"etat": "epuise"
+		}
+	},
+
+	"_note_issues": "Les trois issues de la coupe (ligne 10 de l'audit -- « rater produit autre chose »), tranchees par scripts/bifurcation.gd:selectionner(grandeur, biais, sorties). 'sorties' est un ARRAY et non les cles d'un Dictionary : c'est l'ordre DECLARE, celui qui tranche une egalite stricte (voir bifurcation.gd, EGALITE STRICTE).\n\nOU VIT REELLEMENT L'ARBITRAGE : dans 'biais', jamais dans la grandeur. L'en-tete de bifurcation.gd est explicite -- la grandeur est UN SEUL SCALAIRE commun a toutes les sorties, tant qu'elle est positive elle multiplie tout par le meme nombre et NE CHANGE JAMAIS QUI GAGNE ; elle ne joue qu'un GATE (rien ne bifurque sous zero) et une ECHELLE lisible. Ce banc lui donne le ratio de coupe (tranchant_effectif / resistance_cisaillement), toujours strictement positif des lors que le chantier a pu avancer -- le gate est donc coherent avec seuil_tranchant, sans qu'aucune branche ne le repete.\n\nLA COMPOSITION DU BIAIS, par colon et par tick (voir scripts/banc_affordances_travail.gd:biais_issue) : penalite = fatigue + (1 - qualite_outil), entre 0.0 et 2.0 ; reussite = base * adresse * max(0, 1 - penalite) ; eclats = base * min(1, penalite) ; debris = base * max(0, penalite - 1). Monotone et lisible : un colon frais avec un bon outil reussit, un colon a demi fatigue eclate le tronc, un colon epuise avec un mauvais outil le reduit en debris.\n\nPOURQUOI base_debris (2.0) EST SI SUPERIEURE AUX DEUX AUTRES -- calibration MESUREE, pas devinee, et sans elle la troisieme issue serait MORTE EN DONNEE : le facteur de 'debris' ne devient non nul qu'au-dela de penalite 1.0, et la penalite MAXIMALE REELLEMENT ATTEIGNABLE est bornee par le gate d'entame lui-meme -- un colon dont l'outil est sous seuil_tranchant n'acheve JAMAIS un chantier, donc la qualite d'outil d'un abatteur vaut au moins 0.30 et sa penalite au plus 1.0 + 0.70 = 1.70. Un premier jet a 1.6 a ete mesure INATTEIGNABLE avec l'outil en pierre (qualite 0.50, penalite plafonnee a 1.50 : 1.6 x 0.50 = 0.80, sous les 0.90 d''eclats') -- la sortie existait en donnee et ne gagnait jamais, exactement le defaut que le test verrouille desormais a l'envers. A 2.0, la bascule tombe a penalite 1.45 et l'apprenti epuise (pierre, penalite 1.50) reduit bien l'arbre en debris.",
+	"issues": {
+		"sorties": ["reussite", "eclats", "debris"],
+		"base_biais": {
+			"reussite": 1.0,
+			"eclats": 0.9,
+			"debris": 2.0
+		},
+		"refs": {
+			"reussite": "couper_arbre_reussite",
+			"eclats": "couper_arbre_eclats",
+			"debris": "couper_arbre_debris"
+		},
+		"offset_produit": [0.0, 90.0, 0.0]
+	},
+
+	"terrain_largeur": 1600.0,
+	"terrain_hauteur": 900.0,
+
+	"_note_colons": "Colons construits A LA MAIN (pas Objet.fabriquer, meme statut que banc_fatigue_circadien.gd/banc_maladie.gd -- un colon de banc n'a pas de composition ici, aucun materiau n'intervient). 'adresse' est une propriete PROPRE a ce banc, lue par le seul cablage pour composer le biais de reussite. 'materiau_outil' choisit l'outil que porte le colon : fer coupe (ratio 0.90), pierre coupe moins bien (0.50), bois ne coupe JAMAIS (0.20, sous seuil_tranchant) -- c'est le manoeuvre qui rend le gate de la ligne 1 visible a l'ecran, il ira jusqu'a l'arbre et n'y fera rien. sommeil_initial echelonne, CALIBRE EN SCENE REELLE : le bucheron (100.0) travaille longtemps ; l'apprenti part a 34.0 -- juste AU-DESSUS du seuil de bascule du sommeil (30.0) et juste EN DESSOUS de ce que la marge exige (36.0, voir _note_marge), pour qu'on le voie d'abord RENONCER, puis descendre sous le seuil et aller dormir, tout cela en quelques secondes. Un premier jet a 46.0 le laissait renoncer pendant seize secondes avant de bouger : correct, mais illisible a l'ecran. Le manoeuvre (100.0) ne fatigue jamais puisqu'il ne coupe jamais.",
+	"colons": [
+		{
+			"id": "bucheron",
+			"position": [300.0, 640.0, 0.0],
+			"rythme": 1.5,
+			"vitesse": 190.0,
+			"adresse": 1.2,
+			"materiau_outil": "fer",
+			"sommeil_initial": 100.0,
+			"seuil_ecrasement": 0.6,
+			"canaux": ["vue"],
+			"canaux_config": {
+				"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+			}
+		},
+		{
+			"id": "apprenti",
+			"position": [700.0, 700.0, 0.0],
+			"rythme": 1.0,
+			"vitesse": 170.0,
+			"adresse": 0.6,
+			"materiau_outil": "pierre",
+			"sommeil_initial": 34.0,
+			"seuil_ecrasement": 0.6,
+			"canaux": ["vue"],
+			"canaux_config": {
+				"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+			}
+		},
+		{
+			"id": "manoeuvre",
+			"position": [1150.0, 700.0, 0.0],
+			"rythme": 1.2,
+			"vitesse": 180.0,
+			"adresse": 0.9,
+			"materiau_outil": "bois",
+			"sommeil_initial": 100.0,
+			"seuil_ecrasement": 0.6,
+			"canaux": ["vue"],
+			"canaux_config": {
+				"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+			}
+		}
+	],
+
+	"_note_arbres": "volume 0.5 m3 de bois a 0.6 g/cm3 : 300 kg par arbre, masse DERIVEE par scripts/objet.gd, jamais recopiee en donnee. travail : la quantite posee EN MEME TEMPS sur travail_restant et travail_initial (les deux ENSEMBLE -- travail_initial ne bouge jamais, c'est la reference). A 12.0 avec le rythme 1.5 du bucheron, un arbre tombe en 8.0 s tout seul, en 4.8 s a deux (extinction.gd somme les rythmes des agents a portee, c'est litteralement la ligne 4 de l'audit et il n'y a rien a cabler pour l'obtenir). valeur : la saillance NUE du chantier, propriete LOCALE (ce banc ne monte pas scripts/proximite.gd et ne touche donc pas au catalogue PARTAGE data/profils_saillance.json -- patron banc_economie.gd/banc_grief.gd). Trois arbres et non un : le compteur des trois issues n'aurait rien a compter avec un seul.",
+	"arbres": [
+		{ "id": "arbre_1", "position": [620.0, 300.0, 0.0], "materiau": "bois", "volume": 0.5, "travail": 12.0, "valeur": 8.0 },
+		{ "id": "arbre_2", "position": [980.0, 300.0, 0.0], "materiau": "bois", "volume": 0.5, "travail": 12.0, "valeur": 7.0 },
+		{ "id": "arbre_3", "position": [1340.0, 300.0, 0.0], "materiau": "bois", "volume": 0.5, "travail": 12.0, "valeur": 6.0 }
+	],
+
+	"_note_lit": "Le lit est la CIBLE du couplage de sommeil (scripts/couplage.gd:poser exige une cible qui porte un id) ET la source scripts/flux.gd qui recharge la reserve. Deux roles, un seul objet, aucune structure a part -- meme geste que les 'lieux' de banc_economie.gd. taux_flux 14.0/s sur portee_flux 70.0 : de seuil_bascule (30.0) a seuil_satisfait (90.0, data/engagements.json:dormir_reserve), il faut 60.0 de reserve donc ~4.3 s de sommeil, le colon endormi ne depensant plus rien (cout_base gele a 0.0 par poser_couts). La propriete RECEPTRICE ('recoit_repos') est posee/retiree par le cablage sur le colon lui-meme : flux.gd ne lit jamais un etat, il ne connait que deux noms de propriete recus en table.",
+	"lit": {
+		"id": "lit",
+		"position": [240.0, 240.0, 0.0],
+		"materiau": "paille",
+		"volume": 0.2,
+		"taux_flux": 14.0,
+		"portee_flux": 70.0
+	},
+
+	"portee_lit": 60.0,
+	"rayon_clic": 120.0,
+	"intervalle_trace_s": 2.0,
+
+	"taille_colon": 30.0,
+	"taille_arbre": 46.0,
+	"taille_outil": 16.0,
+	"taille_lit": 40.0,
+	"taille_produit": 22.0,
+	"largeur_barre": 60.0,
+	"hauteur_barre": 8.0,
+	"couleur_fond": [0.14, 0.16, 0.15],
+	"couleur_colon": [0.95, 0.85, 0.35],
+	"couleur_colon_dort": [0.35, 0.40, 0.70],
+	"couleur_colon_epuise": [0.75, 0.45, 0.25],
+	"couleur_arbre": [0.30, 0.55, 0.28],
+	"couleur_arbre_entaille": [0.62, 0.48, 0.20],
+	"couleur_arbre_filtre": [0.32, 0.34, 0.32],
+	"couleur_lit": [0.45, 0.55, 0.85],
+	"couleur_outil_coupe": [0.35, 0.85, 0.45],
+	"couleur_outil_emousse": [0.90, 0.30, 0.25],
+	"couleur_barre_fond": [0.20, 0.20, 0.20],
+	"couleur_barre_travail": [0.85, 0.70, 0.25],
+	"couleur_barre_sommeil": [0.40, 0.70, 0.95],
+	"couleur_produit_reussite": [0.72, 0.56, 0.30],
+	"couleur_produit_eclats": [0.60, 0.52, 0.36],
+	"couleur_produit_debris": [0.42, 0.38, 0.30]
+}

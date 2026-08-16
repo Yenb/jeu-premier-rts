@@ -1,0 +1,8 @@
+{
+	"_note": "Catalogue de scripts/usure_attache.gd (chantier 'L'entite comme agent complet', voir docs/design.md). UNE SEULE ENTREE 'defaut', meme convention sentinelle que data/liens_personnels.json:defaut/data/heredite.json:defaut -- l'usure est UNIVERSELLE, jamais une regle choisie par trait ou par entite (contrairement a data/contradictions_attaches.json, qui lui varie par trait). taux_usure_passive (magnitude soustraite par seconde a la force d'une attache dont le trait n'est perçu par personne ce tick) ; taux_usure_contradiction (meme role, plus rapide par construction, REMPLACE taux_usure_passive -- ne s'y ajoute jamais -- des qu'une chose portant le trait contradictoire, data/contradictions_attaches.json, est percue) ; force_plancher (valeur STRICTEMENT POSITIVE sous laquelle la force ne descend jamais -- l'attache reste posee pour toujours, emoussee, jamais retiree de proprietes.attaches -- patron NEUF de ce depot, tous les planchers existants ailleurs, deformation.gd/epigenetique.gd/lien_personnel.gd, RETIRENT l'entree en dessous, celui-ci ne retire jamais rien). Hors domaine par construction : cette entree ne nomme aucun contenu Orion, prouvee par scripts/test_usure_attache.gd via un catalogue local invente (memes valeurs, vocabulaire different), jamais lu sur disque par le test -- meme statut que data/heredite.json:defaut.",
+	"defaut": {
+		"taux_usure_passive": 0.005,
+		"taux_usure_contradiction": 0.05,
+		"force_plancher": 0.1
+	}
+}

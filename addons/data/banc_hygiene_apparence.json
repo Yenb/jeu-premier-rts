@@ -1,0 +1,89 @@
+{
+	"_note": "Jetable, propre a scripts/banc_hygiene_apparence.gd (chantier « hygiene + apparence -- perception sociale », audit_mecaniques_corps_prealable.md lignes 9 et 13, livrees ENSEMBLE -- l'audit le disait : les deux se livrent ensemble ou pas du tout, meme machinerie). AUCUN nom d'etat, de canal, de reserve ou de propriete n'est ecrit en dur dans le .gd : tout arrive d'ici. LES QUATRE COLONS NE PORTENT QUE DEUX CANAUX (odeur_corporelle/apparence), jamais les six du paquet 'percevant' -- restriction LOCALE et DELIBEREE : avec 'vue' (portee 1600) tout colon capterait tout colon a n'importe quelle distance, sans aucun filtre d'intensite, et ni l'odeur ni le seuil d'apparence ne prouveraient plus rien. Meme geste de mutation locale apres fabrication que banc_magie_perception.gd:fabriquer_colon_magie, pousse d'un cran (remplacement de la liste, pas ajout). CALIBRATION, tous les nombres etant lies : capacite d'hygiene 100.0 et seuil 'sale' a manque_hygiene > 60.0 (data/seuils_etat.json:hygiene) -- colon_sale a cout_base 8.0 devient sale a t=7.5 s exactement ; les trois autres, a 0.4, mettraient 150 s (jamais atteint en observation, et jamais assert par le test comme une garantie de machine). odeur_emise 1.0 sur portee 300 avec seuil 0.05 partout : un colon sale est SENTI jusqu'a 285 unites. visibilite_etat : 'blesse' 0.60, 'sale' 0.15, sur portee 900 -- colon_attentif (seuil 0.05) voit le blesse jusqu'a 825, colon_distrait (seuil 0.40) seulement jusqu'a 300, colon_blesse (seuil 0.20) jusqu'a 450 ; le colon SALE (0.15) n'est vu QUE par l'attentif (jusqu'a 600), jamais par le blesse (0.15 < 0.20) ni par le distrait (0.15 < 0.40), a aucune distance. CONSEQUENCE MESUREE, PAS UN REGLAGE : la FUITE demande une saillance non nulle, et data/profils_saillance.json:colon borne la saillance inter-colon a portee_saillance 350.0 -- l'attentif fuit donc le colon sale des 350 (il le VOIT avant de le sentir, sa perception a 600 etant deja saillance nulle au-dela de 350), les deux autres seulement a 285 (ils ne peuvent que le SENTIR). C'est la portee_saillance, jamais la perception, qui borne la fuite de l'attentif -- dit plutot que masque.",
+
+	"graine": 20260812,
+	"bornes": { "x_min": 100.0, "x_max": 1000.0, "y_min": 100.0, "y_max": 500.0 },
+	"duree_errance": 2.0,
+
+	"nom_reserve_hygiene": "hygiene",
+	"propriete_manque": "manque_hygiene",
+	"propriete_odeur": "odeur_emise",
+	"propriete_apparence": "visibilite_etat",
+	"nom_canal_odeur": "odeur_corporelle",
+	"nom_canal_apparence": "apparence",
+	"canaux_du_banc": ["odeur_corporelle", "apparence"],
+
+	"etat_compte": "sale",
+	"emission_odeur": { "sale": 1.0 },
+	"emission_apparence": { "sale": 0.15, "blesse": 0.60 },
+	"priorite_couleur": ["blesse", "sale"],
+
+	"rayon_nuage_odeur": 285.0,
+
+	"types": {
+		"mur": { "herite": ["objet_physique"], "composition": [ { "materiau": "pierre", "volume": 2.0 } ] }
+	},
+	"obstacles": [
+		{ "id": "mur_central", "type": "mur", "position": [550.0, 300.0, 0.0] }
+	],
+
+	"couleurs": {
+		"normal": [0.55, 0.72, 1.0],
+		"sale": [0.72, 0.58, 0.18],
+		"blesse": [0.90, 0.20, 0.20],
+		"mur": [0.45, 0.45, 0.48],
+		"odeur": [0.72, 0.58, 0.18],
+		"fuite": [1.0, 0.45, 0.15]
+	},
+
+	"colons": {
+		"colon_sale": {
+			"position": [250.0, 300.0, 0.0],
+			"attaches": [],
+			"forme": { "gain_inertie": 0.0, "seuil_ecrasement": 100.0 },
+			"poids_verbes": { "s_eloigner": 1.0 },
+			"etats_actifs": [],
+			"hygiene": { "reserve": 100.0, "capacite": 100.0, "cout_base": 8.0, "surcout_action": 0.0 },
+			"canaux_config": {
+				"odeur_corporelle": { "portee": 300.0, "sensibilite": 1.0, "seuil": 0.05 },
+				"apparence": { "portee": 900.0, "sensibilite": 1.0, "seuil": 0.30 }
+			}
+		},
+		"colon_blesse": {
+			"position": [700.0, 180.0, 0.0],
+			"attaches": [],
+			"forme": { "gain_inertie": 0.0, "seuil_ecrasement": 100.0 },
+			"poids_verbes": { "s_eloigner": 1.0 },
+			"etats_actifs": ["blesse"],
+			"hygiene": { "reserve": 100.0, "capacite": 100.0, "cout_base": 0.4, "surcout_action": 0.0 },
+			"canaux_config": {
+				"odeur_corporelle": { "portee": 300.0, "sensibilite": 1.0, "seuil": 0.05 },
+				"apparence": { "portee": 900.0, "sensibilite": 1.0, "seuil": 0.20 }
+			}
+		},
+		"colon_attentif": {
+			"position": [850.0, 420.0, 0.0],
+			"attaches": [],
+			"forme": { "gain_inertie": 0.0, "seuil_ecrasement": 100.0 },
+			"poids_verbes": { "s_eloigner": 1.0 },
+			"etats_actifs": [],
+			"hygiene": { "reserve": 100.0, "capacite": 100.0, "cout_base": 0.4, "surcout_action": 0.0 },
+			"canaux_config": {
+				"odeur_corporelle": { "portee": 300.0, "sensibilite": 1.0, "seuil": 0.05 },
+				"apparence": { "portee": 900.0, "sensibilite": 1.0, "seuil": 0.05 }
+			}
+		},
+		"colon_distrait": {
+			"position": [500.0, 460.0, 0.0],
+			"attaches": [],
+			"forme": { "gain_inertie": 0.0, "seuil_ecrasement": 100.0 },
+			"poids_verbes": { "s_eloigner": 1.0 },
+			"etats_actifs": [],
+			"hygiene": { "reserve": 100.0, "capacite": 100.0, "cout_base": 0.4, "surcout_action": 0.0 },
+			"canaux_config": {
+				"odeur_corporelle": { "portee": 300.0, "sensibilite": 1.0, "seuil": 0.05 },
+				"apparence": { "portee": 900.0, "sensibilite": 1.0, "seuil": 0.40 }
+			}
+		}
+	}
+}

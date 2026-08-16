@@ -1,0 +1,21 @@
+{
+	"_note": "Jetable, propre a scripts/banc_foudre.gd (chantier 'foudre -- evenement ponctuel', audit_foudre_prealable.md). 'position_source'/'rayon' : epicentre et portee de l'eclair (Frappe.selectionner, Portee.en_portee -- distance 3D, hauteur comprise). 'criteres' : conductivite_electrique (source 'materiau', QuantiteMatiere.quantite, EXTENSIVE -- pondere par volume, fer/bois du catalogue PARTAGE data/materiaux.json portent deja conductivite_electrique 1e7/1e-15 S/m, aucun materiau de demonstration invente -- CORRECTION FACTUELLE : magnetisme n'attire PAS la foudre, la decharge est guidee par le champ electrique/la conductivite, jamais par le champ magnetique) domine tres largement position_z (source 'position_z', brute) -- poids calibres pour que la hauteur seule ne batte JAMAIS un objet conducteur : max contribution hauteur (300*0.01=3.0) < contribution conductivite seule a hauteur nulle (1e7*0.000001=10.0, cas fer_bas) < fer_haut (10.0+3.0=13.0). Quatre objets, meme volume (1.0) pour isoler la variable : fer_haut (conducteur+haut, doit etre frappe), bois_bas (ni l'un ni l'autre, jamais frappe), fer_bas (conducteur seul, moins prioritaire que fer_haut), bois_haut (haut seul, prouve que la hauteur seule ne suffit pas). 'degats' egale 'reserve_integrite_defaut.reserve' -- un seul eclair detruit sa cible d'un coup, rendant observable qu'un objet deja detruit n'est plus jamais candidat au clic suivant. 'source_chaleur' : rayon/temperature/force d'une source construite a la position de l'impact, passee a Temperature.avancer pour UN SEUL appel (jamais reconstruite au tick suivant) -- 'delta_impact' est le delta de CET appel unique, independant du delta de _process (un choc thermique ponctuel, pas un pas de simulation ordinaire).",
+	"position_source": [400.0, 0.0, 0.0],
+	"rayon": 450.0,
+	"criteres": [
+		{ "propriete": "conductivite_electrique", "poids": 0.000001, "source": "materiau" },
+		{ "poids": 0.01, "source": "position_z" }
+	],
+	"degats": 5.0,
+	"nom_reserve_integrite": "integrite",
+	"reserve_integrite_defaut": { "reserve": 5.0, "cout_base": 0.0, "surcout_action": 0.0 },
+	"source_chaleur": { "rayon": 150.0, "temperature": 1200.0, "force": 1.0 },
+	"delta_impact": 1.0,
+	"objets": [
+		{ "id": "fer_haut", "position": [100.0, 0.0, 300.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] },
+		{ "id": "bois_bas", "position": [300.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "fer_bas", "position": [500.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] },
+		{ "id": "bois_haut", "position": [700.0, 0.0, 300.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] }
+	],
+	"camera": { "position": [400.0, -150.0, 0.0], "zoom": 0.5 }
+}

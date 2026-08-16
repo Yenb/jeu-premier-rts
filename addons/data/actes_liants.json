@@ -1,0 +1,7 @@
+{
+	"defense_ouvrage": {
+		"verbe": "eteindre",
+		"propriete_cible": "notre_ouvrage",
+		"magnitude": 0.15
+	}
+}

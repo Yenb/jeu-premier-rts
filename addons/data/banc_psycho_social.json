@@ -1,0 +1,212 @@
+{
+	"_note": "Donnees propres a scripts/banc_psycho_social.gd (Scene/banc_psycho_social.tscn), chantier « conflit interne + besoin critique + directives + apprentissage » -- audit_mecaniques_psycho_sociales_prealable.md, lignes 9, 10, 11 et 12, les QUATRE au verdict CABLABLE. JETABLE, propre au banc : rien ici n'est un catalogue partage. Les QUATRE entrees partagees que ce chantier a ajoutees vivent ailleurs et ne sont JAMAIS recopiees ici -- data/deformations.json:faim_critique, data/etats.json:stresse + colere, data/epigenetique.json:experience_combat, data/profils_saillance.json:allie_blesse + adversaire.\n\nTROIS DES QUATRE LIGNES SONT CABLEES PAR UNE VOIE DIFFERENTE DE CELLE QUE LA CONSIGNE DECRIVAIT (constat (A) de l'audit, verifie a la relecture d'agir.gd) : poids_verbes ne pese JAMAIS entre deux cibles -- il ne departage que les verbes d'UNE propriete deja gagnante, et aucune propriete de data/types_choses.json n'en propose plus d'un. Monter poids_verbes.manger a 10 000 ne ferait donc jamais gagner la nourriture contre un feu ; le colon mourrait de faim devant un repas. Les deux voies reellement disponibles, toutes deux utilisees ici : deformation.gd (amplifie la saillance d'une PROPRIETE pour CE colon seul, lu par les trois couches) pour la ligne 10, et l'ENTREE DE SAILLANCE SYNTHETIQUE ajoutee a 'resultats' avant dominance.gd pour la ligne 11 (docs/design.md, « Ordre et tension » : « Un ordre ne supprime jamais une saillance. Il en AJOUTE une, concurrente »).\n\nseuil_ecart (0.6) ET forme.seuil_ecrasement (1.0) MESURENT LA MEME GRANDEUR EN SENS OPPOSES et se calibrent donc ENSEMBLE, jamais separement (constat (F) de l'audit) : sous 0.6 d'ecart le colon est DECHIRE (deux options trop proches), au-dela de 1.0 il ne voit meme plus la seconde (dominance.gd la retire de la liste, elle n'est pas « moins prioritaire », elle n'existe plus). Entre les deux s'etend la bande ou il tranche sans hesiter. Mal regles l'un par rapport a l'autre, le conflit serait soit permanent soit impossible.\n\nCALIBRATION DE LA SCENE, mesuree et non devinee, pour le novice a (330,260) : le feu et l'allie blesse sont poses a distance EXACTEMENT egale (378.5), donc leurs saillances ne different que par leur profil -- feu 3.0 x 0.5794 = 1.738, allie 3.2 x 0.5794 = 1.854, ecart 0.116, tres en dessous de seuil_ecart : LE DILEMME. L'allie l'emporte de justesse, ce qui rend l'obeissance a la directive « va au feu » visible a l'oeil (sans elle le colon partait vers l'allie). La nourriture, elle, est a 585 : saillance nue 2.0 x 0.3498 = 0.700, ecart au sommet 1.154 -- au-dela de seuil_ecrasement, donc DEJA RETIREE de la liste au repos : « elle est la, mais le colon ne la considere meme pas ». L'adversaire (4.0, a 143) vaut 3.36 : ecart 1.5 au-dessus du dilemme, il l'ECRASE a son tour -- un adversaire qui arrive fait disparaitre tout le reste, c'est voulu.\n\nCE QUE LA SIGMOIDE RENVERSE : le cablage fait monter le biais de 'faim_critique' jusqu'a plafond_biais_faim (6.0 -- IL N'Y A AUCUN EQUILIBRE NATUREL, la decroissance de deformation.gd est une soustraction FIXE et le registre monterait sans borne : resultat negatif mesure, detail dans data/deformations.json), donc la nourriture passe de 0.700 a 4.90 -- sommet, et ecart 3.05 au-dessus de l'allie, tres au-dela de seuil_ecrasement : LE FEU, L'ALLIE ET MEME LA DIRECTIVE SORTENT DE LA LISTE. Le colon mange quoi qu'on dise, et ce n'est pas un cas particulier code : c'est dominance.gd, inchange. Le basculement (nourriture gagnante) se produit vers 48% d'energie, l'ecrasement complet vers 42% -- et 'affame' est pose a 40% par data/seuils_etat.json:faim (seuil 60 sur manque_energie, capacite 100). Les trois evenements se suivent de pres, deliberement : le gate ecrase_vital s'arme au moment ou le besoin prend la main.\n\nbonus_score (2.5) EST UNE SAILLANCE CONCURRENTE, JAMAIS UN BONUS ADDITIF : l'entree synthetique de la directive est une entree DE PLUS dans 'resultats', et agir.gd retient le MEILLEUR score, il n'additionne pas. 2.5 doit donc depasser le sommet naturel (1.854) pour que le colon obeisse -- et rester sous ce que la faim critique produit (4.90) pour qu'il desobeisse. La desobeissance est prouvee DEUX FOIS, par deux chemins independants : par le POIDS (ecrase_vital = 1, la directive est ajoutee mais perd) et par le GATE (ecrase_vital = 0, elle n'est meme pas ajoutee).\n\nLA ZONE FROIDE N'EST PAS UN DECOR : elle est centree SUR la nourriture. Aller manger, c'est traverser le froid -- le troisieme terme du surcout (thermique) ne devient non nul que la, et le colon qui mange finit en hypothermie. Au point de depart des deux colons, la distance au centre (585 et 553) depasse le rayon (300) : le surcout thermique y vaut exactement 0.0, verrouille par test.\n\nUN SEUL ECRIVAIN DE surcout_action (constat (C) de l'audit, patron banc_faim_thermo.gd:poser_surcout_action) : depense.gd n'a QU'UN emplacement surcout_action par canal, et trois choses veulent y ecrire ici -- l'effort, le froid, l'hesitation. banc_psycho_social.gd:poser_surcout_action les somme et ecrit UNE FOIS, puis rend la decomposition pour l'affichage. Trois morceaux de cablage separes se seraient ecrases EN SILENCE : aucun test n'aurait rougi, la depense aurait seulement ete fausse.\n\nNOMS DE PROPRIETES EN DONNEE : le .gd ne porte aucun nom de propriete en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente. AUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES sauf 'profil_saillance' (verifie contre data/profils_saillance.json) et 'canaux'/'deformation_sources' (verifies contre data/canaux.json et data/deformations.json) -- tous resolvent.",
+
+	"graine": 20260813,
+	"terrain_largeur": 1100.0,
+	"terrain_hauteur": 700.0,
+
+	"nom_reserve_energie": "energie",
+	"nom_reserve_repas": "repas",
+	"nom_vitesse": "vitesse",
+	"nom_manque_energie": "manque_energie",
+	"nom_froid_ressenti": "froid_ressenti",
+	"nom_chaud_ressenti": "chaud_ressenti",
+	"nom_stress_interne": "stress_interne",
+	"nom_ardeur_combat": "ardeur_combat",
+
+	"capacite_energie": 100.0,
+	"metabolisme_base_par_s": 1.5,
+	"coef_effort": 0.008,
+	"coef_stress": 2.5,
+	"vitesse_base": 120.0,
+	"rayon_arrivee": 6.0,
+
+	"temp_cible": 20.0,
+	"seuil_chaud": 26.0,
+	"cout_par_degre_froid": 0.06,
+	"cout_par_degre_chaud": 0.04,
+
+	"seuil_ecart": 0.6,
+
+	"seuil_critique_ratio": 0.4,
+	"raideur_sigmoide": 12.0,
+	"gain_deformation_par_s": 4.0,
+	"plafond_biais_faim": 6.0,
+	"source_deformation": "faim_critique",
+	"cible_deformation": "comestible",
+
+	"nom_marque_combat": "experience_combat",
+	"intervalle_pose_marque_s": 0.25,
+	"plafond_modification": 0.5,
+	"etat_colere": "colere",
+	"etat_stresse": "stresse",
+	"verbe_combat": "combattre",
+
+	"directive": {
+		"cible_id": "feu",
+		"bonus_score": 2.5,
+		"ecrase_vital": 0,
+		"etats_vitaux": ["affame", "epuise", "famine"],
+		"active_au_depart": false
+	},
+
+	"repas": {
+		"rayon_repas": 40.0,
+		"taux_repas_par_s": 30.0,
+		"verbe_repas": "manger"
+	},
+
+	"_note_soin": "CE QUE L'ARRIVEE FAIT -- ajoute apres observation de la scene reelle, et la raison est mesuree, pas supposee : sans effet derriere le verbe, le colon arrivait sur l'allie a t=4 s et y restait PLANTE jusqu'a t=28 s (la faim finissait par le deloger), puis y revenait a t=44 s. Le banc passait ~80% du temps immobile sur une cible que rien ne resolvait, et 'secourir' n'etait qu'un mot dans un label. TROIS CHOSES QUE LE SOIN REND OBSERVABLES, aucune n'existait avant : (1) le dilemme SE TRANCHE -- l'allie guerit, cesse d'etre saillant, et le colon repart vers le feu ; le conflit a une SORTIE, il ne se contente plus de s'evaporer par la distance parcourue ; (2) le soin COUTE (transfert reel, voir ci-dessous), donc soigner rapproche la faim critique : la ligne 9 et la ligne 10 se touchent au lieu de vivre cote a cote ; (3) 'profil_saillance' gele rend visible qu'une chose peut sortir de la decision SANS sortir du monde.\n\nTRANSFERT REEL ET CONSERVATIF (Consommer.transferer, colon -> allie), jamais un cout_base negatif sur l'allie seul : ce que l'allie gagne, le colon le perd EXACTEMENT, et le compteur des deux reserves le prouve. La voie 'cout_base negatif' (patron du blesse qui dort dans banc_fatigue_circadien.gd) marcherait et a ete ECARTEE PAR DECISION DE YAEL : elle fait sortir la sante du neant et ne coute rien au soigneur -- le soin n'aurait alors aucun lien avec la faim, et la scene ne montrerait pas qu'aider quelqu'un se paie. Meme geste exact que 'repas' ci-dessus, dans l'autre sens.\n\nPRE-BORNAGE DU TAUX par la place restante, jamais un ecretage apres coup : rien dans le coeur ne borne le HAUT d'une reserve (limite deja mesuree par banc_fertilite.gd), et ecreter apres transfert DETRUIRAIT de l'energie que le colon a deja perdue.\n\ntaux_soin_par_s 12.0 contre 30.0 pour le repas, et sante_depart 30.0 sur capacite 100.0 : le soin dure ~5.8 s, assez pour etre vu, assez court pour que le colon ne meure pas de faim en soignant (il depense 1.5/s de metabolisme pendant ce temps). rayon_soin identique au rayon_repas (40.0) -- une seule notion de 'a portee de main' dans ce banc.\n\nUNE FOIS GUERI, L'ALLIE RESTE GUERI (decision de Yael) : il perd 'blesse_visible' (sans quoi agir.gd:_action resoudrait encore 'secourir' -- il scanne chose.proprietes contre le catalogue d'actions) ET son 'profil_saillance' est GELE sous 'profil_saillance_gele' (sans quoi proximite.gd continuerait de le rendre saillant, et le colon resterait plante sur un allie qu'il ne peut plus aider). Les deux retraits sont NECESSAIRES et visent deux couches differentes : retirer l'un sans l'autre laisse soit une cible muette qui attire encore, soit un verbe qui se resout sur une chose invisible. Le gel est REVERSIBLE par construction (patron banc_p1.gd:mettre_a_jour_occupation) -- si la sante redescend, tout revient ; rien dans cette scene ne la fait redescendre, c'est le clic qui remet un allie neuf.",
+	"soin": {
+		"rayon_soin": 40.0,
+		"taux_soin_par_s": 12.0,
+		"capacite_sante": 100.0,
+		"nom_reserve_sante": "sante",
+		"verbe_soin": "secourir",
+		"propriete_blessure": "blesse_visible"
+	},
+
+	"_note_combat": "LE PENDANT DU SOIN, ET SON CONTRAIRE EXACT. Le soin TRANSFERE (Consommer.transferer, conservatif : ce que l'allie gagne, le colon le perd) ; le combat DETRUIT (depense.gd, la vigueur descend et ne va NULLE PART). Ce n'est pas une inconsequence, c'est le sujet : un combat ne deplace pas de la matiere d'un corps a l'autre. Consommer.transferer aurait CREDITE une reserve du colon -- 'combattre nourrit le vainqueur', physiquement faux -- et c'est pour cela que les deux gestes ne partagent pas le meme mecanisme.\n\nPOURQUOI CE CABLAGE EST NECESSAIRE ET PAS DECORATIF, mesure sur la scene reelle avant de l'ecrire : sans lui, l'adversaire actif (saillance 4.00) ECRASAIT tout definitivement, les deux colons fonçaient dessus, s'y plantaient, et MOURAIENT DE FAIM colles a lui -- la nourriture plafonne a 3.23 meme a faim critique, elle ne repassait JAMAIS devant. La ligne 10 (« le besoin vital reprend la main ») devenait infaisable des que l'adversaire etait la. Le combat qui SE TERMINE est ce qui rend la scene jouable avec lui.\n\nCALIBRATION : vigueur 100.0, cout_combat_par_s 15.0 PAR COLON qui combat a portee -- ~6.7 s a un colon, ~3.3 s a deux. Le combat doit finir BIEN AVANT que la faim morde (l'etat 'affame' arrive vers t=10 s quand les colons ont aussi soigne), sinon on retombe exactement sur le defaut que ce bloc existe pour fermer. rayon_combat 40.0, identique aux rayons de repas et de soin -- une seule notion de 'a portee de main' dans ce banc.\n\nUN SEUL ECRIVAIN, DEUX FOIS. (1) Cote adversaire : poser_cout_combat est le SEUL endroit qui ecrit le cout_base de sa vigueur, et il le reecrit A NEUF chaque tick depuis le nombre de combattants -- jamais un '+=' accumule (deux colons qui arrivent et repartent laisseraient sinon un cout fantome). (2) Cote colon : le combat est un QUATRIEME terme de surcout_action, somme dans poser_surcout_action avec l'effort, le thermique et le stress -- il n'a PAS son propre point d'ecriture, ce qui serait l'ecrasement silencieux que ce banc documente. cout_energie_combat_par_s 2.0 : combattre epuise, comme soigner coute -- sans quoi le combat serait le seul geste gratuit du banc, asymetrie injustifiable.\n\nVAINCU, IL SORT DU MONDE (et non seulement de la decision, contrairement a l'allie gueri qui reste sur place en decor) : decision de Yael -- 'l'adversaire vaincu disparait, le clic le remet'. Le cablage bascule son drapeau d'activite et RECONSTRUIT le Monde du neant (monde.gd n'a aucune fonction de retrait, dette recensee), exactement comme la touche C. Le remettre reconstruit une chose NEUVE depuis sa declaration, donc a vigueur pleine.",
+	"combat": {
+		"rayon_combat": 40.0,
+		"cout_combat_par_s": 15.0,
+		"cout_energie_combat_par_s": 2.0,
+		"capacite_vigueur": 100.0,
+		"nom_reserve_vigueur": "vigueur"
+	},
+
+	"barres_choses": [
+		{ "reserve": "sante", "capacite": 100.0, "couleur": [0.35, 0.85, 0.65] },
+		{ "reserve": "vigueur", "capacite": 100.0, "couleur": [0.85, 0.35, 0.65] }
+	],
+
+	"seuils_locaux": {
+		"stress_interne": {
+			"propriete_continue": "stress_interne",
+			"seuil": 0.15,
+			"etat": "stresse"
+		},
+		"ardeur_combat": {
+			"propriete_continue": "ardeur_combat",
+			"seuil": 0.5,
+			"etat": "colere"
+		}
+	},
+
+	"catalogue_local": {
+		"blesse_visible": { "verbes": ["secourir"] },
+		"hostile": { "verbes": ["combattre"] }
+	},
+
+	"zones_temperature": [
+		{
+			"id": "zone_froide",
+			"position": [880.0, 460.0, 0.0],
+			"rayon": 300.0,
+			"temperature": 2.0,
+			"force": 1.0,
+			"couleur": [0.20, 0.42, 0.85]
+		}
+	],
+
+	"colons": {
+		"novice": {
+			"position": [330.0, 260.0, 0.0],
+			"biais_combat_base": 0.20,
+			"modulateur_combat_depart": 0.0,
+			"couleur": [0.95, 0.90, 0.55]
+		},
+		"veteran": {
+			"position": [330.0, 400.0, 0.0],
+			"biais_combat_base": 0.20,
+			"modulateur_combat_depart": 0.40,
+			"couleur": [0.75, 0.55, 0.30]
+		}
+	},
+
+	"forme_colon": {
+		"seuil_ecrasement": 1.0,
+		"gain_inertie": 0.1,
+		"rayon_liaison": 0.0,
+		"gain_bas": 0.1,
+		"plafond_bas": 0.5,
+		"gain_haut": 1.0,
+		"plafond_haut": 1.0
+	},
+
+	"poids_verbes_colon": {
+		"approcher": 1.0,
+		"secourir": 1.0,
+		"manger": 1.0,
+		"combattre": 1.0
+	},
+
+	"canaux": ["vue"],
+	"canaux_config": {
+		"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+	},
+	"deformation_sources": ["faim_critique"],
+
+	"choses": [
+		{
+			"id": "feu",
+			"type": "feu",
+			"position": [700.0, 180.0, 0.0],
+			"active_au_depart": true,
+			"couleur": [0.95, 0.35, 0.10],
+			"proprietes": { "brule": true, "profil_saillance": "feu" }
+		},
+		{
+			"id": "allie",
+			"type": "allie_blesse",
+			"position": [700.0, 340.0, 0.0],
+			"active_au_depart": true,
+			"couleur": [0.85, 0.25, 0.55],
+			"couleur_gueri": [0.45, 0.55, 0.50],
+			"proprietes": {
+				"blesse_visible": true,
+				"profil_saillance": "allie_blesse",
+				"reserves": { "sante": { "reserve": 30.0 } }
+			}
+		},
+		{
+			"id": "repas",
+			"type": "nourriture",
+			"position": [880.0, 460.0, 0.0],
+			"active_au_depart": true,
+			"couleur": [0.35, 0.80, 0.35],
+			"proprietes": {
+				"comestible": true,
+				"profil_saillance": "nourriture",
+				"reserves": { "repas": { "reserve": 300.0 } }
+			}
+		},
+		{
+			"id": "adversaire",
+			"type": "adversaire",
+			"position": [200.0, 320.0, 0.0],
+			"active_au_depart": false,
+			"couleur": [0.55, 0.15, 0.75],
+			"proprietes": {
+				"hostile": true,
+				"profil_saillance": "adversaire",
+				"reserves": { "vigueur": { "reserve": 100.0, "cout_base": 0.0, "surcout_action": 0.0 } }
+			}
+		}
+	],
+
+	"couleur_fond": [0.14, 0.20, 0.16],
+	"couleur_colon_stresse": [0.95, 0.55, 0.15],
+	"couleur_colon_colere": [0.90, 0.15, 0.15],
+	"couleur_directive": [0.30, 0.75, 1.0],
+	"taille_colon": 24.0,
+	"taille_chose": 26.0,
+	"sigmoide": {
+		"origine": [40.0, 470.0],
+		"largeur": 200.0,
+		"hauteur": 150.0,
+		"echantillons": 60,
+		"couleur_courbe": [0.95, 0.95, 0.40],
+		"couleur_axes": [0.65, 0.70, 0.65]
+	}
+}

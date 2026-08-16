@@ -1,0 +1,165 @@
+{
+	"_note": "Donnees de scripts/banc_social_foule.gd -- chantier « foule + environnement » (audit_social_relations_prealable.md, lignes 5, 7, 9 et 10, toutes quatre au verdict CABLABLE). AUCUN nom de propriete, d'etat ou de regle n'est ecrit en dur dans le .gd : ils arrivent tous d'ici, ce qui permet a scripts/test_banc_social_foule.gd de faire traverser le meme code par un domaine entierement invente.\n\nTOUS LES NOMBRES SONT DE DEMONSTRATION, pas une calibration de jeu. Deux ecarts assumes avec le tableau de l'audit, dits plutot que masques : fenetre_s vaut 3.0 ici et non 30.0 (30 s d'attente devant l'ecran ne se regardent pas), et le bruit est une propriete de case et non une emission propagee par champ_occulte.gd (voir data/etats.json:gene_bruit).",
+
+	"grille_lignes": 4,
+	"grille_colonnes": 4,
+	"taille_case": 200.0,
+	"portee_appariement": 100.0,
+
+	"_note_noms": "Les noms de proprietes plates que ce banc ecrit et relit. 'membre_foule'/'en_colere_foule'/'culture_partagee_foule'/'croyance_partagee_foule' sont les cles que les regles de data/comptages.json testent en mode 'presente' -- posees ou RETIREES, jamais mises a false (voir la _note de colons_membres_foule).",
+	"nom_membre": "membre_foule",
+	"nom_colere": "en_colere_foule",
+	"nom_chef": "chef_foule",
+	"nom_fraction_colere": "fraction_colere",
+	"nom_case_locale": "case_locale",
+	"nom_densite_locale": "densite_locale",
+	"nom_seuil_confort": "seuil_confort",
+	"nom_bruit": "bruit",
+	"nom_bruit_local": "bruit_local",
+	"nom_seuil_gene": "seuil_gene_sommeil",
+	"nom_cohesion": "cohesion",
+	"nom_manque_cohesion": "manque_cohesion",
+	"nom_culture": "culture",
+	"nom_culture_partagee": "culture_partagee_foule",
+	"nom_croyance_partagee": "croyance_partagee_foule",
+	"nom_cycles_vecus": "cycles_vecus",
+	"nom_force_liens_locale": "force_liens_locale",
+	"nom_reserve_sommeil": "sommeil",
+
+	"_note_canaux": "UN SEUL CANAL DE charge.gd PAR OBJET, ET C'EST UNE CONTRAINTE DURE, PAS UN CHOIX D'ELEGANCE -- voir l'en-tete de scripts/banc_social_foule.gd, « TROIS PORTEURS ». charge.gd:avancer applique TOUTES les causes recues a TOUS les canaux d'une chose : deux canaux sur le meme objet ne peuvent pas etre alimentes par deux causes differentes. D'ou trois familles d'objets disjointes, un canal chacune, trois appels.",
+	"nom_canal_emeute": "montee_emeute",
+	"nom_canal_choc": "choc_cohesion",
+	"nom_canal_stress": "stress_densite",
+	"nom_marqueur_emeute": "montee_emeute_franchie",
+	"nom_marqueur_choc": "choc_chef_franchi",
+	"nom_marqueur_stress": "stress_densite_franchi",
+	"nom_miroir_emeute": "emeute_soutenue",
+	"nom_miroir_stress": "surdensite_soutenue",
+
+	"etat_colere": "colere",
+	"etat_colere_majoritaire": "colere_majoritaire",
+	"etat_emeute": "emeute",
+	"etat_disloque": "disloque",
+	"etat_surdensite": "surdensite",
+	"etat_gene_bruit": "gene_bruit",
+
+	"regle_membres": "colons_membres_foule",
+	"regle_colere": "colons_en_colere_foule",
+	"regle_croyance_partagee": "colons_croyance_partagee_foule",
+	"regle_culture_partagee": "colons_culture_partagee_foule",
+	"regle_vecu_suffisant": "colons_vecu_suffisant_foule",
+
+	"_note_croyance": "La croyance sur laquelle les colons s'accordent ou non. proprietes.croyances est construite A LA MAIN ici (croyance.gd n'est PAS cable dans ce banc : ni observer, ni corriger, ni avancer) -- ce banc observe ce qu'une croyance PARTAGEE fait a la cohesion, jamais comment elle s'acquiert ni comment elle s'oublie. Consequence : 'dangereux' n'a pas besoin d'etre dans data/croyances.json:proprietes_observables, cette liste n'etant lue que par croyance.gd:observer.",
+	"croyance_chose": "totem_foule",
+	"croyance_propriete": "dangereux",
+
+	"foule": {
+		"_note": "fenetre_s EST le seuil du canal de charge, a poids_cause 1.0 pres : la charge monte de poids_cause par seconde tant que 'colere_majoritaire' est pose, elle franchit donc 3.0 apres 3.0 s de colere majoritaire ININTERROMPUE. Changer poids_cause sans changer le seuil changerait la fenetre en silence -- scripts/test_banc_social_foule.gd verrouille l'egalite seuil == fenetre_s * poids_cause. taux_decroissance 1.0 : la charge redescend aussi vite qu'elle monte, l'emeute se defait en fenetre_s.",
+		"fraction_critique": 0.15,
+		"fenetre_s": 3.0,
+		"poids_cause": 1.0,
+		"taux_decroissance": 1.0,
+		"plafond_charge": 6.0
+	},
+
+	"choc": {
+		"_note": "Le choc de la mort du chef. Cause SYNTHETISEE (le chef est sa propre cause, portee_charge 0.0 -- patron banc_fatigue_circadien.gd:causes_dette), presente tant que la place de chef est vide. Ce n'est donc PAS un evenement ponctuel : l'audit §7 est explicite, charge.gd n'a aucune notion d'evenement, un choc qui FRAPPE UNE FOIS est une soustraction dans l'unique ecrivain (patron banc_grief.gd:poser_grief). Un choc qui DURE, lui, est bien une cause synthetisee -- c'est la voie retenue, et elle est reversible : rendre un chef fait redescendre la charge et la cohesion remonte.\n\nplafond_charge est du CABLAGE : rien dans le coeur ne borne le haut d'une charge (constat F de l'audit, deja pose cinq fois). Sans lui la charge monterait sans fin tant que la place reste vide et la cohesion resterait clouee a zero meme apres le retour d'un chef, le temps que la charge redescende de tres haut.",
+		"poids_cause": 4.0,
+		"seuil": 6.0,
+		"taux_decroissance": 2.0,
+		"plafond_charge": 10.0
+	},
+
+	"densite": {
+		"_note": "seuil_confort en colons par case. Le POIDS de la cause est l'EXCES (densite - seuil_confort) multiplie par stress_par_point : une case a 3 colons stresse a 1.0/s, la meme a 6 stresse a 4.0/s -- la proportionnalite vit dans le poids, jamais dans une branche. A l'exces nul, aucune cause n'est construite : le gate est desactive PAR LA SEULE ARITHMETIQUE et la charge redescend (idiome propagation.gd:delai_ignition).",
+		"seuil_confort": 2.0,
+		"stress_par_point": 1.0,
+		"seuil": 4.0,
+		"taux_decroissance": 2.0,
+		"plafond_charge": 12.0
+	},
+
+	"sommeil": {
+		"_note": "recuperation_par_s est pose en cout_base NEGATIF sur le canal : depense.gd calcule reserve - (cout_base + surcout_action) * delta, un cout negatif REMONTE donc la reserve. Neutralite du mecanisme EXPLOITEE, jamais contournee -- patron de la jachere de banc_fertilite.gd et du sommeil de banc_fatigue_circadien.gd. Le bruit passe par surcout_action : a 0.8 de bruit, 0.8 * 6.0 = 4.8 contre 2.0 de recuperation, la reserve descend reellement de 2.8/s.\n\nPOURQUOI surcout_action ICI, ALORS QUE L'AUDIT §10 LE ROUTE VERS cout_base : dans banc_fatigue_circadien.gd surcout_action est DEJA PRIS par l'effort de marche (coef_effort * velocite.length()), et un canal n'a qu'UN emplacement -- l'audit protege ce banc-la. Ici personne ne marche : velocite.gd n'est pas cable, surcout_action est libre, et poser_couts en est l'UNIQUE ECRIVAIN.",
+		"capacite": 100.0,
+		"reserve_initiale": 100.0,
+		"recuperation_par_s": 2.0,
+		"penalite_par_point_de_bruit": 6.0
+	},
+
+	"cohesion": {
+		"_note": "Les quatre poids somment exactement a 'capacite' : quatre axes tous au maximum donnent une cohesion de 1.0 et un manque de 0.0. poids_choc est par POINT de charge de choc, jamais une fraction -- c'est le cinquieme terme de la meme somme, avec le signe oppose. reference_liens borne l'axe des liens : une force moyenne de 1.0 vaut un axe plein.",
+		"capacite": 1.0,
+		"poids_liens": 0.3,
+		"poids_croyance": 0.25,
+		"poids_culture": 0.25,
+		"poids_vecu": 0.2,
+		"poids_choc": 0.12,
+		"reference_liens": 1.0
+	},
+
+	"_note_bruit": "Le bruit par defaut de toute case, et les cases qui en portent un autre. niveaux_bruit est le cycle du clic droit : une case passe de silence a gene legere a vacarme, puis revient.",
+	"bruit_par_defaut": 0.1,
+	"niveaux_bruit": [0.0, 0.4, 0.8],
+	"cases_bruyantes": [
+		{ "colonne": 3, "ligne": 0, "bruit": 0.8 },
+		{ "colonne": 3, "ligne": 1, "bruit": 0.8 },
+		{ "colonne": 3, "ligne": 2, "bruit": 0.8 },
+		{ "colonne": 3, "ligne": 3, "bruit": 0.8 }
+	],
+
+	"_note_colons": "VINGT colons, dont UN chef. Douze dans la ZONE DENSE (les quatre cases du coin haut-gauche, trois par case : au-dessus du seuil_confort de 2, elles stressent des le depart) et huit dans la ZONE AEREE (les quatre cases du coin bas-droit, deux par case : exactement au confort, elles ne stressent pas). 'position_entassee' est ou le colon va quand on ENTASSE -- seuls les huit de la zone aeree bougent, le chef reste ou il est.\n\nLes positions a l'interieur d'une case sont DECALEES et jamais confondues : a portee_charge 0.0, deux colons SUPERPOSES se chargeraient mutuellement (limite deja ecrite par banc_fatigue_circadien.gd:causes_dette). Chaque decalage reste sous portee_appariement du centre de sa case, jamais de celui d'une voisine.\n\n'force_lien' est la sociabilite du colon : le cablage construit, a la creation, un lien personnel de cette force vers CHAQUE autre membre (lien_personnel.gd:poser, registre reel, relu par lien_personnel.gd:force). 'croyance' est sa valeur crue sur le totem, 'culture' son appartenance, 'cycles_vecus' son nombre de saisons vues. Trois colons ne partagent pas la croyance du chef, quatre pas sa culture, cinq n'ont pas assez vecu.",
+	"colons": [
+		{ "id": "dense_a", "position": [-45.0, -45.0, 0.0], "force_lien": 0.80, "culture": "riveraine", "croyance": true, "cycles_vecus": 5.0, "seuil_gene_sommeil": 0.4, "colere_initiale": true },
+		{ "id": "dense_b", "position": [0.0, -45.0, 0.0], "force_lien": 0.70, "culture": "riveraine", "croyance": true, "cycles_vecus": 4.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_c", "position": [45.0, -45.0, 0.0], "force_lien": 0.75, "culture": "riveraine", "croyance": true, "cycles_vecus": 6.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_d", "position": [155.0, -45.0, 0.0], "force_lien": 0.60, "culture": "riveraine", "croyance": true, "cycles_vecus": 2.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_e", "position": [200.0, -45.0, 0.0], "force_lien": 0.85, "culture": "riveraine", "croyance": true, "cycles_vecus": 7.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_f", "position": [245.0, -45.0, 0.0], "force_lien": 0.70, "culture": "hauturiere", "croyance": true, "cycles_vecus": 5.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_g", "position": [-45.0, 155.0, 0.0], "force_lien": 0.65, "culture": "riveraine", "croyance": false, "cycles_vecus": 1.0, "seuil_gene_sommeil": 0.4, "colere_initiale": true },
+		{ "id": "dense_h", "position": [0.0, 155.0, 0.0], "force_lien": 0.80, "culture": "riveraine", "croyance": true, "cycles_vecus": 4.5, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_i", "position": [45.0, 155.0, 0.0], "force_lien": 0.70, "culture": "riveraine", "croyance": true, "cycles_vecus": 3.5, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_j", "position": [155.0, 155.0, 0.0], "force_lien": 0.75, "culture": "hauturiere", "croyance": true, "cycles_vecus": 6.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_k", "position": [200.0, 155.0, 0.0], "force_lien": 0.60, "culture": "riveraine", "croyance": false, "cycles_vecus": 2.5, "seuil_gene_sommeil": 0.4 },
+		{ "id": "dense_l", "position": [245.0, 155.0, 0.0], "force_lien": 0.80, "culture": "riveraine", "croyance": true, "cycles_vecus": 5.5, "seuil_gene_sommeil": 0.4 },
+
+		{ "id": "aere_a", "position": [355.0, 355.0, 0.0], "position_entassee": [-45.0, 45.0, 0.0], "force_lien": 0.70, "culture": "riveraine", "croyance": true, "cycles_vecus": 4.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "aere_b", "position": [445.0, 355.0, 0.0], "position_entassee": [0.0, 45.0, 0.0], "force_lien": 0.75, "culture": "riveraine", "croyance": true, "cycles_vecus": 6.5, "seuil_gene_sommeil": 0.4 },
+		{ "id": "aere_c", "position": [555.0, 355.0, 0.0], "position_entassee": [45.0, 45.0, 0.0], "force_lien": 0.65, "culture": "hauturiere", "croyance": true, "cycles_vecus": 3.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "aere_d", "position": [645.0, 355.0, 0.0], "position_entassee": [155.0, 45.0, 0.0], "force_lien": 0.80, "culture": "riveraine", "croyance": true, "cycles_vecus": 5.0, "seuil_gene_sommeil": 0.9 },
+		{ "id": "aere_e", "position": [355.0, 555.0, 0.0], "position_entassee": [200.0, 45.0, 0.0], "force_lien": 0.70, "culture": "riveraine", "croyance": false, "cycles_vecus": 4.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "aere_f", "position": [445.0, 555.0, 0.0], "position_entassee": [245.0, 45.0, 0.0], "force_lien": 0.85, "culture": "hauturiere", "croyance": true, "cycles_vecus": 7.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "aere_g", "position": [645.0, 555.0, 0.0], "position_entassee": [200.0, 245.0, 0.0], "force_lien": 0.75, "culture": "riveraine", "croyance": true, "cycles_vecus": 2.0, "seuil_gene_sommeil": 0.4 },
+		{ "id": "chef", "position": [555.0, 555.0, 0.0], "force_lien": 0.90, "culture": "riveraine", "croyance": true, "cycles_vecus": 8.0, "seuil_gene_sommeil": 0.4, "chef": true }
+	],
+
+	"periode_trace_s": 2.0,
+
+	"couleurs": {
+		"fond": [0.10, 0.11, 0.14],
+		"case_aeree": [0.18, 0.42, 0.24],
+		"case_stressee": [0.62, 0.48, 0.14],
+		"case_surdensite": [0.72, 0.18, 0.16],
+		"colon_calme": [0.60, 0.66, 0.78],
+		"colon_colere": [0.90, 0.45, 0.15],
+		"colon_emeute": [0.95, 0.15, 0.10],
+		"colon_disloque": [0.45, 0.20, 0.55],
+		"colon_chef": [0.95, 0.85, 0.25],
+		"colon_chef_mort": [0.35, 0.32, 0.28],
+		"barre_fond": [0.20, 0.21, 0.25],
+		"barre_cohesion": [0.30, 0.75, 0.85]
+	},
+
+	"rendu": {
+		"taille_colon": 26.0,
+		"taille_case": 186.0,
+		"taille_marqueur_bruit": 16.0,
+		"largeur_barre": 420.0,
+		"hauteur_barre": 22.0,
+		"taille_police": 12,
+		"taille_police_compteur": 17,
+		"rayon_clic": 60.0
+	},
+
+	"camera": { "position": [300.0, 300.0], "zoom": 0.62 }
+}

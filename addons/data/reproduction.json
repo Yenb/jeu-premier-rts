@@ -1,0 +1,39 @@
+{
+	"_note": "Catalogue de parametres numeriques pour scripts/accouplement.gd ET scripts/gestation.gd (chantier reproduction, deuxieme ET troisieme phases du cycle apres stade.gd -- voir docs/design.md 'L'entite comme agent complet'). Reference resolue par proprietes.reproduction_ref (forme A, meme patron que profil_saillance/lien_personnel_croissance_ref) -- PAS encore ajoutee a scripts/test_lint_donnees.gd:REFERENCES dans ce chantier (hors perimetre, voir CARTE.md). Chaque entree porte seuil_accouplement (accumulation a atteindre pour que la gestation se pose, lu par accouplement.gd), taux_montee (magnitude ajoutee par seconde de perception mutuelle compatible, multipliee par delta, lu par accouplement.gd) et duree_gestation (chantier gestation.gd : secondes BRUTES a accumuler depuis la pose de gestation avant que naissance_prete se pose -- PAS une conversion annees_par_seconde comme senescence.gd, delta consomme directement en secondes). Accumulation IRREVERSIBLE, contrairement a charge.gd dont accouplement.gd reprend le patron : une fois la gestation posee, l'accumulateur devient sans objet, proprietes.gestation bloque lui-meme tout nouvel accouplement -- aucun taux_decroissance ici, ni pour l'accumulateur d'accouplement.gd ni pour le compteur de gestation.gd. stades_fertiles/mode_reproduction/espece_reproduction vivent SUR LE TYPE (data/types.json), jamais ici -- ce catalogue ne porte que des nombres, jamais un nom de stade ou d'espece.",
+	"gravitique_fusion": {
+		"_note": "Entree hors domaine, inventee pour prouver la structure -- aucun rapport avec un contenu Orion reel. Deux cristaux matures et compatibles qui se percoivent longuement finissent par fusionner leur charge, puis la fusion mature pendant duree_gestation avant de produire un nouveau cristal.",
+		"seuil_accouplement": 1.0,
+		"taux_montee": 0.5,
+		"duree_gestation": 5.0
+	},
+	"colon": {
+		"_note": "Entree reelle, cablee sur data/types.json:colon.reproduction_ref. Valeurs de demarrage, ajustables au playtest -- meme statut que stades_config/attaches_par_trait.",
+		"seuil_accouplement": 1.0,
+		"taux_montee": 0.05,
+		"duree_gestation": 30.0
+	},
+	"herbivore": {
+		"_note": "espece HOTE, mode 'sexuee'. Les trois nombres sont calibres pour un banc d'observation, pas pour le jeu : taux_montee 0.5 contre seuil 1.0 = 2.0 SECONDES d'exposition mutuelle continue (contre 20.0 pour 'colon'), sans quoi une population de six hotes qui s'evitent en marchant ne produirait aucune naissance dans une observation d'une minute. duree_gestation 6.0 pour la meme raison. LE CABLAGE VIDE 'accouplement_accumulateur' DES DEUX PARENTS A LA NAISSANCE (accouplement.gd ne le fait jamais -- son accumulation est IRREVERSIBLE par construction, voir son en-tete) : sans ce geste, une gestation retiree serait reposee AU TICK SUIVANT, l'exposition passee restant creditee pour toujours, et la vitesse reduite d'un hote infeste cesserait de ralentir sa reproduction des le second petit.",
+		"seuil_accouplement": 1.0,
+		"taux_montee": 0.5,
+		"duree_gestation": 6.0
+	},
+	"parasite": {
+		"_note": "espece PARASITE, mode 'asexuee'. SEUL duree_gestation est reellement lu pour cette entree : accouplement.gd ne s'execute QUE pour mode_reproduction 'sexuee' (garde de son en-tete), donc seuil_accouplement/taux_montee sont INERTES ici -- ils figurent quand meme, pour que toute entree de ce catalogue ait la meme forme et qu'aucun lecteur n'ait a se demander laquelle des trois cles manque. Le point d'entree est gestation.gd:poser(entite, null, catalogue), sous un GATE DE CABLAGE (assez d'hotes vivants a portee), jamais une perception mutuelle.",
+		"seuil_accouplement": 1.0,
+		"taux_montee": 0.0,
+		"duree_gestation": 4.0
+	},
+	"proie_predation": {
+		"_note": "espece PROIE, mode 'sexuee'. Entree DISTINCTE de 'herbivore' ci-dessus malgre un role voisin : deux bancs livres en parallele, chacun regle SA propre calibration, et partager une entree les coupleraient par un nombre qu'aucun des deux ne pourrait plus regler seul (meme raison exacte que 'adversaire' contre 'menace_1' dans data/profils_saillance.json). Referencee par proprietes.reproduction_ref des animaux fabriques depuis le catalogue de types LOCAL du banc (data/banc_predation.json:types_locaux) -- data/types.json n'est PAS touche. Calibree pour un cycle proie-predateur OBSERVABLE en quelques dizaines de secondes, jamais pour un realisme biologique : taux_montee 0.5 contre seuil 1.0 = 2.0 s d'exposition mutuelle continue avant fecondation, duree_gestation 4.0 s. CALIBRATION MESUREE, jamais devinee : les valeurs ci-dessous sont celles sous lesquelles le test observe reellement une oscillation sur 60 s de config reelle -- une premiere serie (proie 90/55, predateur 80/50, gestation 8.0) donnait une decroissance MONOTONE (les predateurs ne remontaient jamais au-dessus de leur seuil assez longtemps pour mener une gestation a terme, et les proies mangees plus vite qu'elles ne naissaient) : pas de cycle, seulement une extinction. Ces deux delais, PLUS le delai de maturite (stades_config du type local, stade fertile atteint a 3.0 annees simulees), sont ce qui donne au cycle son DEPHASAGE -- c'est de la, et de nulle part ailleurs, que vient l'oscillation : la population de proies ne repond pas instantanement a la pression de predation. Volontairement PLUS RAPIDE que l'espece predateur ci-dessous : une proie doit se reproduire plus vite que ce qui la mange, sinon la population s'effondre a la premiere generation et le banc ne montre qu'une extinction. MEME GESTE QUE 'herbivore' repris ici, et pour la meme raison : le cablage VIDE 'accouplement_accumulateur' des deux parents a la naissance (accouplement.gd ne le fait jamais, son accumulation est IRREVERSIBLE par construction) -- sans quoi une gestation retiree serait reposee AU TICK SUIVANT, l'exposition passee restant creditee pour toujours, et le gate sur la reserve d'energie cesserait de retenir quoi que ce soit.",
+		"seuil_accouplement": 1.0,
+		"taux_montee": 0.5,
+		"duree_gestation": 4.0
+	},
+	"predateur_predation": {
+		"_note": "espece PREDATEUR, mode 'sexuee'. Voir 'proie_predation' ci-dessus pour la doctrine complete. Delais DELIBEREMENT plus longs que ceux de la proie (taux_montee 0.4 = 2.5 s d'exposition, duree_gestation 5.0 s, contre 2.0 s et 4.0 s) : c'est ce decalage, joint au GATE DE CABLAGE sur la reserve d'energie (accouplement.gd ne lit AUCUNE reserve -- voir son en-tete : il ne connait que mode_reproduction/espece_reproduction/stades_fertiles/stade et les perceptions ; c'est le banc qui refuse d'appeler avancer() sous le seuil), qui fait que les predateurs ne se multiplient qu'APRES avoir mange, donc apres le pic de proies, et jamais en meme temps.",
+		"seuil_accouplement": 1.0,
+		"taux_montee": 0.4,
+		"duree_gestation": 5.0
+	}
+}

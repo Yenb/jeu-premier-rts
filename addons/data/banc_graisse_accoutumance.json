@@ -1,0 +1,62 @@
+{
+	"_note": "Donnees propres a scripts/banc_graisse_accoutumance.gd (Scene/banc_graisse_accoutumance.tscn), chantier « graisse + accoutumance » (audit_mecaniques_corps_prealable.md, lignes 10 et 12). JETABLE, propre au banc : rien ici n'est un catalogue partage. Les DEUX etats (famine/mort_famine), les DEUX seuils qui les posent et la MARQUE (accoutumance_froid) vivent, eux, dans les catalogues PARTAGES data/etats.json, data/seuils_etat.json et data/epigenetique.json -- ce fichier ne les redeclare jamais, il ne porte que la scene d'observation et la calibration. Les seuils eux-memes ne sont PAS recopies ici : le banc les relit dans data/seuils_etat.json pour sa trace de pose (une seule source de verite, jamais deux nombres a garder d'accord).\n\nCALIBRATION, calculee et non devinee. Le colon est AU CENTRE EXACT de la zone froide : temperature locale = ambiante + (temperature_zone - ambiante) * force * (1 - 0/rayon)^exposant = 20 + (-10 - 20) * 1.0 * 1.0 = -10 C (data/temperature.json, ambiante 20.0, exposant 1.0), donc froid_ressenti = 30.0 constant tant que la source est active. Surcout thermique BRUT = 30 * 0.09 = 2.70/s ; avec le metabolisme, 3.30/s au premier tick. Phase 1 : le colon mange a 6.00/s, brule 3.30/s, le solde 2.70/s part en graisse -- les 40.0 de capacite se remplissent en ~15 s, pendant lesquels l'energie reste PLAQUEE juste au-dessus du seuil de surplus (70.0), jamais au maximum : c'est ce plateau qui rend le mot « surplus » visible. Phase 2 (clic gauche) : ~25 s pour vider les 70 d'energie. Phase 3 : la graisse brule au rythme exact de la combustion (voir taux_famine_max), donc ~20 s de plus a mesure que l'accoutumance ralentit la combustion. Vie totale de l'ordre d'une minute -- MESURE d'ordre de grandeur, jamais une garantie : aucun test ne l'assert, seuls les enchainements le sont.\n\nTEMP_CIBLE (20.0) EST UNE TEMPERATURE DE CONFORT, PAS UNE TEMPERATURE CORPORELLE, et elle vaut exactement l'ambiante de data/temperature.json : hors du disque froid, froid_ressenti est nul et le surcout thermique disparait -- le clic droit devient donc une vraie coupure d'exposition, pas une attenuation. Une cible a 37.0 (chiffre cite par l'audit §11) aurait laisse 17 degres d'ecart PARTOUT, y compris source coupee, et l'accoutumance n'aurait jamais pu decroitre.\n\nTAUX_FAMINE_MAX (3.00/s) EST UN PLAFOND DE MOBILISATION, PAS LE TAUX REEL : le cablage ne mobilise jamais plus que le cout courant du canal d'energie (banc_graisse_accoutumance.gd:taux_famine_effectif). Il est pose DELIBEREMENT au-dessus du cout maximal (3.30/s au premier tick, moins ensuite) pour que ce soit toujours le cout, et jamais ce plafond, qui decide -- un plafond mordant aurait fait descendre l'energie sous le zero de la famine sans que la graisse ne suive, et un taux FIXE superieur au cout aurait fait clignoter 'famine' (energie remontee au-dessus du seuil -> etat retire -> transfert arrete -> redescente).\n\nPLAFOND_ACCOUTUMANCE (0.6) N'EST PAS UN REGLAGE DE CONFORT : epigenetique.gd n'a aucune borne haute, et un modulateur au-dela de 1.0 rendrait (1 - modulateur) NEGATIF -- le froid RECHARGERAIT le colon. A 0.6, le surcout thermique ne descend jamais sous 40% de sa valeur brute : le colon s'endurcit, il ne devient jamais insensible. Avec modulateur_pose 0.01 pose toutes les 0.25 s et taux_decroissance 0.005/s (data/epigenetique.json), la marque monte de ~0.035/s : le plafond demande ~17 s d'exposition continue, atteint vers la fin d'une vie de ce banc -- ce qui doit se voir est la PROGRESSION, pas la saturation.\n\nINTERVALLE_POSE_ACCOUTUMANCE_S (0.25 s) EST CONTRAINT PAR LE CATALOGUE, il n'est pas libre. epigenetique.gd:poser ajoute un montant FIXE, sans delta : appele a chaque image, la marque monterait a une vitesse dependant de la machine (deux fois plus vite a 120 images/s qu'a 60), et saturerait en une seconde -- le banc ne montrerait aucune progression. Poser par intervalle de TEMPS rend l'accumulation reproductible. MAIS l'intervalle ne peut pas etre choisi librement : une marque qui vient d'etre posee vaut exactement modulateur_pose (0.01) et tombe sous plancher_suppression (0.008) apres 0.4 s de decroissance -- epigenetique.gd la RETIRE alors entierement. Un intervalle >= 0.4 s ferait donc effacer la marque entre chaque pose : elle n'accumulerait JAMAIS rien, et rien ne rougirait ailleurs. La contrainte (intervalle_pose_accoutumance_s < (modulateur_pose - plancher_suppression) / taux_decroissance) est verrouillee par test, contre les nombres REELS du disque.\n\nNOMS DE PROPRIETES, D'ETATS ET DE MARQUE EN DONNEE (nom_reserve_energie/nom_reserve_graisse/nom_reserve_nourriture/nom_vitesse/nom_manque_energie/nom_manque_graisse/nom_froid_ressenti/nom_marque_accoutumance/nom_etat_famine/nom_etat_mort_famine) : le .gd ne porte aucun de ces noms en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente. Les deux noms de miroir doivent rester d'accord avec 'propriete_continue' des entrees famine/mort_famine de data/seuils_etat.json -- accord verrouille par test, jamais suppose. AUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES : rien a y ajouter.",
+	"terrain_largeur": 900.0,
+	"terrain_hauteur": 520.0,
+	"position_colon": [450.0, 260.0, 0.0],
+	"position_nourriture": [560.0, 260.0, 0.0],
+
+	"capacite_energie": 100.0,
+	"energie_initiale": 100.0,
+	"seuil_surplus": 70.0,
+	"capacite_graisse": 40.0,
+	"graisse_initiale": 0.0,
+	"nourriture_initiale": 400.0,
+
+	"metabolisme_base_par_s": 0.6,
+	"temp_cible": 20.0,
+	"cout_par_degre_froid": 0.09,
+	"taux_manger": 6.0,
+	"taux_surplus_max": 4.0,
+	"taux_famine_max": 3.0,
+
+	"plafond_accoutumance": 0.6,
+	"intervalle_pose_accoutumance_s": 0.25,
+	"intervalle_trace_s": 3.0,
+
+	"vitesse_base": 60.0,
+
+	"nom_reserve_energie": "energie",
+	"nom_reserve_graisse": "graisse",
+	"nom_reserve_nourriture": "matiere_comestible",
+	"nom_vitesse": "vitesse",
+	"nom_manque_energie": "manque_energie",
+	"nom_manque_graisse": "manque_graisse",
+	"nom_froid_ressenti": "froid_ressenti",
+	"nom_marque_accoutumance": "accoutumance_froid",
+	"nom_etat_famine": "famine",
+	"nom_etat_mort_famine": "mort_famine",
+	"ref_seuil_famine": "famine",
+	"ref_seuil_mort_famine": "mort_famine",
+
+	"zone_froide": {
+		"position": [450.0, 260.0, 0.0],
+		"rayon": 260.0,
+		"temperature": -10.0,
+		"force": 1.0,
+		"couleur": [0.20, 0.42, 0.85]
+	},
+
+	"couleur_fond": [0.16, 0.38, 0.20],
+	"couleur_colon": [1.0, 0.93, 0.55],
+	"couleur_nourriture": [0.85, 0.55, 0.20],
+	"couleur_fond_barre": [0.10, 0.10, 0.12],
+	"taille_colon": 24.0,
+	"taille_nourriture": 18.0,
+	"largeur_barre": 260.0,
+	"hauteur_barre": 16.0,
+	"barres": [
+		{ "cle": "energie", "nom": "energie", "maximum": 100.0, "couleur": [0.35, 0.85, 0.40] },
+		{ "cle": "graisse", "nom": "graisse", "maximum": 40.0, "couleur": [0.95, 0.85, 0.35] },
+		{ "cle": "accoutumance_froid", "nom": "accoutumance froid", "maximum": 0.6, "couleur": [0.45, 0.75, 0.95] }
+	]
+}

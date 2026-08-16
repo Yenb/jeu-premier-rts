@@ -1,0 +1,42 @@
+{
+	"_note": "Jetable, propre a ce banc (voir CARTE.md §3terdecies). 'catalogue_genes' reste LOCAL (jamais data/genes.json, meme discipline que data/banc_genetique.json:catalogue_genes -- une regle de banc de demonstration ne rejoint le catalogue partage que si un second banc en a besoin). Un seul gene, 'vivacite', UNE SEULE cible (vitesse, poids 40.0, mode additif) -- parent_a et parent_b sont tous deux HOMOZYGOTES ([1,1] et [-1,-1]) : l'enfant sexuee tire toujours un allele +1 chez parent_a et un allele -1 chez parent_b (chaque tableau parent n'a qu'une seule valeur possible), sa somme avant mutation est TOUJOURS exactement 0.0 -- l'enfant nait a la vitesse de BASE du type colon (150.0), exactement entre ses deux parents (230.0/70.0), quel que soit le tirage RNG. Seule une mutation (data/heredite.json:defaut.taux_mutation_base, chargee REELLE par le banc, jamais ce fichier) peut l'ecarter legerement de ce milieu exact. annees_par_seconde 2.0 : maturite (data/types.json:colon.stades_config, seuil 'adulte' 18.0 annees) atteinte en 9 secondes reelles. positions [-60,0,0]/[60,0,0] : distance 120, tres en-deca de canaux_config.vue.portee du colon (1600.0) -- perception mutuelle continue des le premier tick, aucun deplacement necessaire (ce banc ne cable ni jugement.gd ni agir.gd, voir banc_reproduction.gd). offset_enfant : position de naissance relative au porteur (parent_a), pour que l'enfant apparaisse visiblement a cote de lui sans chevaucher son carre.",
+	"seed": 20260803,
+	"annees_par_seconde": 2.0,
+	"intervalle_print_age": 5.0,
+	"intervalle_print_gestation": 5.0,
+	"offset_enfant": [20.0, -30.0, 0.0],
+	"couleurs_colons": {
+		"parent_a": [0.85, 0.25, 0.25],
+		"parent_b": [0.25, 0.45, 0.85]
+	},
+	"couleur_enfant": [1.0, 1.0, 1.0],
+	"catalogue_genes": {
+		"vivacite": {
+			"_note": "Meme gene, meme discipline que data/banc_genetique.json:catalogue_genes.vivacite -- ici UNE SEULE cible (vitesse) plutot que trois, la preuve de ce banc porte sur l'heredite, pas sur un trade-off multi-cibles deja demontre ailleurs.",
+			"cibles": [
+				{ "chemin": "vitesse", "poids": 40.0 }
+			],
+			"mode_expression": "additif"
+		}
+	},
+	"colons": {
+		"parent_a": {
+			"position": [-60.0, 0.0, 0.0],
+			"role_gestation": "porteur",
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": {},
+			"genes_actifs": ["vivacite"],
+			"genes_etat": { "vivacite": { "alleles": [1.0, 1.0] } }
+		},
+		"parent_b": {
+			"position": [60.0, 0.0, 0.0],
+			"role_gestation": "non_porteur",
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": {},
+			"genes_actifs": ["vivacite"],
+			"genes_etat": { "vivacite": { "alleles": [-1.0, -1.0] } }
+		}
+	}
+}

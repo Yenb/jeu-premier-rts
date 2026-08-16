@@ -1,0 +1,76 @@
+{
+	"poissons_luisants": {
+		"propriete": "luit",
+		"mode": "presente"
+	},
+	"poissons_rouges": {
+		"propriete": "couleur",
+		"mode": "egale",
+		"valeur_reference": "rouge"
+	},
+	"poissons_lourds": {
+		"propriete": "poids",
+		"mode": "superieur_a",
+		"valeur_reference": 5.0
+	},
+	"nuees_avec_oiseau_rouge": {
+		"propriete": "oiseaux",
+		"mode": "contient_element_avec_champ",
+		"champ_element": "couleur",
+		"valeur_reference": "rouge"
+	},
+	"proies_ecosysteme": {
+		"_note": "PAIRE avec 'predateurs_ecosysteme' ci-dessous. comptage.gd n'a AUCUNE notion d'espace (voir son en-tete, TROISIEME PATRON DE PORTEE) : c'est le cablage qui construit la liste AVANT d'appeler -- par biome (filtrage sur la propriete plate 'biome_local', recopiee chaque tick depuis la case sous l'animal) pour la capacite de charge, par rayon (monde.choses_dans_rayon a un rayon d'echantillonnage FIXE) pour le territoire. Deux usages, une seule regle. Mode 'egale' sur 'espece_ecosysteme' plutot que 'presente' sur une propriete par espece : une seule propriete a poser sur l'animal, et les deux regles restent symetriques.",
+		"propriete": "espece_ecosysteme",
+		"mode": "egale",
+		"valeur_reference": "proie"
+	},
+	"predateurs_ecosysteme": {
+		"propriete": "espece_ecosysteme",
+		"mode": "egale",
+		"valeur_reference": "predateur"
+	},
+	"colons_actifs_infrastructure": {
+		"_note": "comptage.gd n'a AUCUNE notion d'espace (voir son en-tete, TROISIEME PATRON DE PORTEE) : le cablage lui passe la liste COMPLETE des colons du banc, la regle seule fait le tri. Mode 'presente' plutot que 'egale' : le cablage POSE la cle sur un colon rendu actif et la RETIRE sur un colon retire du chantier (jamais une valeur false laissee en place -- 'presente' compte une cle presente QUELLE QUE SOIT sa valeur, false compris, voir comptage.gd). Le compte rendu est recopie par le cablage en cle PLATE 'population_active' sur chaque colon, puis compare par seuil_etat.gd a 'seuil_agents' (seuil_propriete, lu PAR COLON) pour poser 'surpeuplement' -- exactement la chaine de banc_ecosysteme_terrain.gd, ici sur des colons plutot que sur des cases. AUCUN objet-groupe n'existe : le compte est refait A NEUF chaque tick, jamais une grandeur stockee qui accumulerait (docs/design.md, « Les collectifs n'existent pas »).",
+		"propriete": "actif_infrastructure",
+		"mode": "presente"
+	},
+	"colons_affames_marche": {
+		"_note": "AJOUT NON DEMANDE PAR LA CONSIGNE, et il n'etait pas evitable : scripts/test_lint_donnees.gd verifie tout champ 'comptage_ref' de data/*.json contre CE fichier -- une regle locale a data/banc_marche_competence.json rougirait le linter (meme raison exacte que 'proies_ecosysteme'). C'est la DEMANDE du marche : combien de colons manquent d'energie a cet instant. Mode 'superieur_a' sur le miroir PLAT 'manque_energie' (deja le nom partage de banc_faim_thermo.gd/banc_graisse_accoutumance.gd -- une grandeur, un nom, jamais deux miroirs concurrents), ecrit par le cablage APRES depense.gd pour que le compte porte sur la reserve de CE tick. comptage.gd n'a AUCUNE notion d'espace : c'est le cablage qui construit la liste, ici les colons du banc. UNE DEMANDE EST UN COMPTE D'ENTITES, JAMAIS UN TOTAL -- l'offre, elle, est un total et passe par somme.gd, l'autre brique de la couche lecteur. Les deux questions ne se posent pas au meme fichier.",
+		"propriete": "manque_energie",
+		"mode": "superieur_a",
+		"valeur_reference": 20.0
+	},
+	"colons_attache_brule": {
+		"propriete": "attaches",
+		"mode": "contient_element_avec_champ",
+		"champ_element": "propriete",
+		"valeur_reference": "brule"
+	},
+	"colons_membres_foule": {
+		"_note": "AJOUT NON ÉVITABLE dans ce fichier PARTAGÉ, jamais une règle locale au banc : scripts/test_lint_donnees.gd vérifie tout champ 'comptage_ref' de data/*.json contre ce seul catalogue (même raison exacte que 'proies_ecosysteme' et 'colons_affames_marche').\n\nTROIS USAGES, UNE SEULE RÈGLE -- c'est exactement ce que le TROISIÈME PATRON DE PORTÉE de comptage.gd rend possible : le mécanisme n'a AUCUNE notion d'espace, c'est le câblage qui construit la liste AVANT d'appeler. (1) le DÉNOMINATEUR de la fraction de colère (liste = tous les colons du banc) ; (2) le DÉNOMINATEUR des quatre axes de cohésion (même liste) ; (3) la DENSITÉ PAR CASE (liste = les colons dont la clé plate 'case_locale' vaut cette case). Même règle, trois listes.\n\nMode 'presente' plutôt qu''egale' : le câblage POSE la clé sur un colon vivant et membre, et la RETIRE sur le chef mort -- jamais une valeur false laissée en place, que 'presente' compterait quand même (voir comptage.gd). C'est ce retrait, et lui seul, qui fait tomber le dénominateur de 20 à 19 quand le chef meurt.",
+		"propriete": "membre_foule",
+		"mode": "presente"
+	},
+	"colons_en_colere_foule": {
+		"_note": "NUMÉRATEUR de la fraction qui retourne la foule. Compte une clé PLATE, jamais le nom d'état 'colere' dans etats_actifs -- et ce n'est pas un choix de style : AUCUN des quatre modes de comptage.gd ne sait tester l'appartenance à un Array de String ('contient_element_avec_champ' descend d'un cran mais exige des éléments Dictionary). Le câblage pose donc la clé plate au clic, et UN SEUL écrivain la reflète dans etats_actifs -- deux écrivains diraient deux vérités qui divergeraient au bord.",
+		"propriete": "en_colere_foule",
+		"mode": "presente"
+	},
+	"colons_croyance_partagee_foule": {
+		"_note": "DEUXIÈME AXE de la cohésion. Compte un MIROIR PLAT, obligatoire : proprietes.croyances est un Dictionary IMBRIQUÉ (croyances[chose_id][propriete] = { valeur, certitude }, voir croyance.gd) et comptage.gd ne lit que proprietes[propriete] -- constat (D) de l'audit, qui touche huit des quatorze lignes. Le câblage compare chaque tick la croyance du colon à celle du chef et pose ou retire la clé.",
+		"propriete": "croyance_partagee_foule",
+		"mode": "presente"
+	},
+	"colons_culture_partagee_foule": {
+		"_note": "TROISIÈME AXE. 'culture' est déjà une clé plate (une String par colon) : le miroir n'existe pas pour atteindre une valeur nichée mais pour transformer une ÉGALITÉ ENTRE DEUX OBJETS en une propriété d'un seul. Constat (E) de l'audit : aucun mécanisme du cœur ne compare une propriété de A à une propriété de B, et c'est au câblage que cette comparaison a sa place (précédents banc_menace_combat.gd:ratio_effectifs, banc_predation.gd:score_hierarchie).",
+		"propriete": "culture_partagee_foule",
+		"mode": "presente"
+	},
+	"colons_vecu_suffisant_foule": {
+		"_note": "QUATRIÈME AXE. SEULE des cinq règles de ce chantier à ne demander AUCUN miroir : 'cycles_vecus' est déjà une clé plate numérique, accumulée par le câblage de banc_temps_anticipation.gd et comparée par data/seuils_etat.json:prevoyance. Mode 'superieur_a' directement dessus.\n\nLE SEUIL VIT ICI, dans le catalogue partagé, et non en donnée de banc -- même statut que le 20.0 de 'colons_affames_marche'. C'est la limite du mode 'superieur_a' : sa valeur_reference est portée par la RÈGLE, jamais lue par objet. Un banc qui voudrait un seuil de vécu variable par colon ne pourrait pas passer par comptage.gd et devrait poser son propre miroir plat.",
+		"propriete": "cycles_vecus",
+		"mode": "superieur_a",
+		"valeur_reference": 3.0
+	}
+}

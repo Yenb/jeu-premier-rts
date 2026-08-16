@@ -1,0 +1,9 @@
+{
+	"_note": "Catalogue de scripts/banc_soudure.gd (chantier 'soudabilite', voir audit_soudabilite.md) -- scripts/soudure.gd lui-meme ne charge JAMAIS ce fichier, il ne connait ni portee ni seuil, seulement des compositions (voir son en-tete). Deux etages, jamais confondus : DETECTION reversible -- un canal charge.gd (nomme par le cablage, pas ici) monte tant qu'un voisin SOUDABLE (proprietes.soudabilite > 0, fusionnee a la fabrication depuis data/materiaux.json via data/proprietes_immuables_composition.json) ET CHAUD (etats_actifs contient 'chaud', pose par scripts/seuil_etat.gd -- catalogue data/seuils_etat.json, NON TOUCHE par ce chantier) reste a 'portee_contact' ; au franchissement de 'seuil_charge', le canal pose 'nom_marqueur' (reversible : redescend et le retire si le voisin refroidit ou s'eloigne, EXACTEMENT le contrat de charge.gd, aucune ligne neuve). DECLENCHEMENT one-shot -- scripts/soudure.gd:souder, appele par le cablage du banc UNE FOIS que deux objets portent SIMULTANEMENT 'nom_marqueur' ET sont en contact reel (meme 'portee_contact') : la fusion resultante est IRREVERSIBLE, jamais rejouee par ce fichier ni par charge.gd -- refroidir retire seulement 'nom_marqueur' d'un composite ou d'un objet qui ne s'est pas encore soude, il ne desoude jamais un composite deja produit (celui-ci n'a plus de voisin distinct a fusionner, l'objet absorbe ayant ete vide).",
+	"defaut": {
+		"portee_contact": 60.0,
+		"seuil_charge": 2.0,
+		"taux_decroissance": 1.0,
+		"nom_marqueur": "pret_a_souder"
+	}
+}

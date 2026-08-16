@@ -1,0 +1,39 @@
+{
+	"_note": "Jetable, propre a ce banc. Aucun RNG/seed : contrairement a banc_comptage.gd (bascule au hasard), la convergence ici est un ACCUMULATEUR DETERMINISTE (perception repetee -> LienPersonnel.poser), rien a seeder. 'arbre' est une declaration LOCALE minimale (brule seul, meme geste que le 'feu' de data/banc_deformation.json) -- pas le type partage data/types.json:arbre (inflammable/irremplacable/materiau, inutiles ici : ce banc ne route rien par attaches.gd/propagation.gd). catalogue_attaches_par_trait reste LOCAL a ce fichier, JAMAIS ajoute a data/attaches_par_trait.json (partage) : une premiere tentative d'y ajouter une regle 'brule' globale a casse test_banc_lien_personnel.gd, dont les objets notre_ouvrage (batisse_0/feu_ouvrage) portent aussi brule:true -- un seuil plus bas s'y declenchait en avance et faussait son rythme differencie. La regle reste donc scopee a ce seul banc. Les trois colons percoivent les TROIS arbres (tous a portee de vue) ; seul sensibilite_generalisation.brule.seuil_force differe par colon (meme patron que data/banc_lien_personnel.json, pompier_rapide/moyen/lent) -- la force d'un lien croit IDENTIQUEMENT pour tous (meme magnitude_exposition, meme decroissance data/liens_personnels.json:defaut), donc seul un seuil individuel plus bas ou plus haut fait converger un colon plus tot ou plus tard, jamais une exposition differente.",
+	"declencheur": "brule",
+	"magnitude_exposition": 0.02,
+	"fenetre_moyenne": 600,
+	"comptage_ref": "colons_attache_brule",
+	"couleur_arbre": [1.0, 0.5, 0.0],
+	"couleur_sans_attache": [0.4, 0.5, 0.7],
+	"couleur_avec_attache": [0.9, 0.2, 0.2],
+	"types": {
+		"arbre": { "brule": true }
+	},
+	"catalogue_attaches_par_trait": {
+		"generalisation_brule": {
+			"propriete": "brule",
+			"seuil_nombre": 2,
+			"seuil_force": 0.15,
+			"force_attache": 1.0
+		}
+	},
+	"positions_arbres": [
+		[400.0, 200.0, 0.0],
+		[300.0, 420.0, 0.0],
+		[500.0, 420.0, 0.0]
+	],
+	"colons": {
+		"colon_rapide": {
+			"position": [350.0, 300.0, 0.0],
+			"sensibilite_generalisation": { "brule": { "seuil_force": 0.05 } }
+		},
+		"colon_moyen": {
+			"position": [450.0, 300.0, 0.0]
+		},
+		"colon_lent": {
+			"position": [400.0, 380.0, 0.0],
+			"sensibilite_generalisation": { "brule": { "seuil_force": 0.3 } }
+		}
+	}
+}

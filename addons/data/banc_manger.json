@@ -1,0 +1,43 @@
+{
+	"_note": "Jetable, propre a scripts/banc_manger.gd (chantier 'consommer.gd -- transfert destructif + banc_manger'). 'types' est un catalogue LOCAL pour nourriture/bois_manger/pierre_manger (jamais data/types.json, meme patron que banc_feu.gd/banc_coupe.gd) -- 'nourriture' porte 'comestible' (booleen, gate de resolution de verbe dans data/types_choses.json, jamais confondu avec 'comestibilite', le degre continu fusionne depuis nourriture_demo), 'profil_saillance' (reference vers data/profils_saillance.json, catalogue PARTAGE -- 'nourriture' y a ete ajoutee, test_lint_donnees.gd verifie CE champ dans data/*.json quel que soit le fichier source, meme collision fermee que leger_golem/aimant_metal) et sa propre reserve 'contenu' (meme patron que le type 'feu' de data/types.json, qui declare 'reserves.combustible' directement). 'bois_manger'/'pierre_manger' ne portent ni 'comestible' ni 'profil_saillance' : structurellement non salients et jamais resolus en verbe 'manger', le colon les ignore entierement (jamais percus comme candidats de decision), pas seulement 'pas mange'. 'reste_nourriture' (type produit par Produit.transformer une fois 'contenu' epuise) vit dans data/types.json PARTAGE, PAS ICI -- 'type_produit' est verifie contre ce catalogue par le meme linter, meme raison. 'taux_base' est le taux DECISION EN DONNEE : taux_reel = taux_base * comestibilite_effective * valeur_nutritive_energie_effective, applique A LA FOIS a la perte de contenu et au gain d'energie (meme 'quantite' des deux cotes, voir scripts/consommer.gd) -- une ration pourrie (comestibilite ecrasee a 0.0 par etat_effectif) ne se mange donc jamais, sans aucun cas particulier.",
+	"types": {
+		"nourriture": {
+			"herite": ["objet_physique"],
+			"composition": [{ "materiau": "nourriture_demo", "volume": 1.0 }],
+			"comestible": true,
+			"profil_saillance": "nourriture",
+			"reserves": { "contenu": { "reserve": 10.0, "cout_base": 0.0, "surcout_action": 0.0 } }
+		},
+		"bois_manger": {
+			"herite": ["objet_physique"],
+			"composition": [{ "materiau": "bois", "volume": 1.0 }]
+		},
+		"pierre_manger": {
+			"herite": ["objet_physique"],
+			"composition": [{ "materiau": "pierre", "volume": 1.0 }]
+		}
+	},
+	"objets": [
+		{ "id": "nourriture_0", "type": "nourriture", "position": [400.0, 0.0, 0.0] },
+		{ "id": "bois_manger_0", "type": "bois_manger", "position": [600.0, 0.0, 0.0] },
+		{ "id": "pierre_manger_0", "type": "pierre_manger", "position": [800.0, 0.0, 0.0] }
+	],
+	"colon": {
+		"id": "colon_manger",
+		"position": [0.0, 0.0, 0.0],
+		"poids_verbes": { "manger": 1.0 }
+	},
+	"transformation_reste": { "type_produit": "reste_nourriture", "rendement": 0.3, "patron_produit": {} },
+	"portee_manger": 40.0,
+	"taux_base": 3.0,
+	"nom_reserve_contenu": "contenu",
+	"nom_reserve_energie": "energie",
+	"couleurs": {
+		"colon": [0.3, 0.55, 0.85],
+		"nourriture": [0.8, 0.6, 0.2],
+		"bois_manger": [0.5, 0.35, 0.2],
+		"pierre_manger": [0.55, 0.55, 0.55],
+		"reste_nourriture": [0.4, 0.35, 0.32]
+	},
+	"camera": { "position": [400.0, 100.0, 0.0], "zoom": 0.6 }
+}

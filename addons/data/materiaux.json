@@ -1,0 +1,477 @@
+{
+	"_note": "Catalogue de paquets de propriétés physiques par matériau, résolu par la clé materiau (String) posée sur une chose (voir data/types.json:arbre/bloc, docs/design.md 'Le matériau comme paquet de propriétés'). Valeurs : des ORDRES DE GRANDEUR cohérents pour un matériau réel (bois/pierre générique/fer/paille), pas des mesures exactes -- ajustables au playtest sans toucher au code. EXCEPTIONS assumées : leger_golem/aimant_metal (chantier scripts/champ.gd, banc_champ) sont des matériaux DE DÉMONSTRATION, PAS réels -- seules densite (structurelle, objet.gd) et magnetisme (lue à la demande par champ.gd) sont déclarées ; magnetisme reste dans l'échelle 0.0-1.0 documentée ci-dessous, la masse minuscule qui en résulte compense l'absence de constante d'échelle dans la loi de champ.gd, voir data/champs.json et data/banc_champ.json._note. combustible_dense_demo/combustible_poreux_demo (chantier 'densite et porosite sur la vitesse de combustion', banc_combustible) sont le MÊME genre d'exception -- pouvoir_calorifique/inflammabilite identiques entre les deux, seules densite et porosite opposées, pour isoler visuellement l'effet de ce chantier sans qu'aucune autre grandeur ne varie en même temps. porosite_haute_demo/porosite_basse_demo (chantier « banc_porosite -- un banc transversal ») sont le MÊME genre d'exception mais isolent une variable DIFFÉRENTE de combustible_dense_demo/combustible_poreux_demo : absorption_humidite/inflammabilite/pouvoir_calorifique/conductivite_thermique/densite identiques entre les deux (densite COMPRISE, contrairement à la paire combustible), seule porosite diverge -- preuve qu'une seule propriété matériau traverse deux mécanismes indépendants (humidité et combustion) à la fois. paille (chantier 'feu -- la réserve de combustible suit la matière') EST un matériau réel mais volontairement MINIMAL (densite/inflammabilite/pouvoir_calorifique seules, voir sa propre _note) -- ajouté pour démontrer qu'inflammabilite et pouvoir_calorifique sont deux grandeurs indépendantes, pas pour illustrer les 40 autres propriétés. seuil_sublimation (chantier 'transitions directes solide<->gaz') ajouté sur bois/pierre/fer à 9999.0°C -- valeur haute JAMAIS ATTEINTE en pratique, même convention que point_ignition sur pierre/fer : ces trois matériaux ne sublimeraient jamais avant de fondre/bouillir normalement, et la fusion générique (data/proprietes_immuables_composition.json) donnerait 0.0°C par défaut à un matériau qui ne le déclare pas -- un seuil bien trop bas, franchi dès la température ambiante, d'où la valeur explicite. glace_carbonique EST elle aussi un matériau réel mais volontairement MINIMAL (densite/seuil_sublimation seules, voir sa propre _note) -- SEUL matériau du dépôt dont le seuil_sublimation réel (-78.5°C) est sous la température ambiante, preuve que scripts/seuil_etat.gd saute directement 'liquide' pour rejoindre 'gaz' quand point_fusion/point_ebullition restent hors de portée. Unités mixtes à titre indicatif seulement (durete ~ Mohs, densite en g/cm3, conductivite_thermique en W/(m.K), chaleur_specifique en J/(kg.K), dilatation_thermique en 10^-6/K, point_fusion/point_ignition/point_ebullition en degres C, resistance_* en MPa, rigidite en GPa, conductivite_electrique en S/m, pouvoir_calorifique en degré continu 0.0 (rien à brûler) à 1.0 (maximal) -- voir data/reserve_combustible_composition.json/scripts/combustible.gd) ; point_ebullition (chantier « colonne thermique », scripts/seuil_etat.gd) ajouté sur bois/pierre/fer -- ordre de grandeur réel pour pierre/fer (vaporisation de la silice ~2230°C, fer ~2862°C), volontairement ABSTRAIT pour bois (500°C, le bois réel ne fond ni ne bout — il se décompose — mais ce dépôt lui donne déjà un point_fusion à 380°C par la même convention illustrative, voir plus bas ; point_ebullition le suit au-dessus, même logique) ; toutes les autres propriétés sont un degré continu 0.0 (absent) a 1.0 (maximal), jamais un booléen. POUVOIR_CALORIFIQUE EST INDÉPENDANT D'INFLAMMABILITE, jamais dérivable de l'un à l'autre : inflammabilite mesure la FACILITÉ à s'enflammer (une matière prend feu vite ou lentement), pouvoir_calorifique mesure la QUANTITÉ de matière combustible une fois allumé (une matière brûle longtemps ou brièvement) -- deux grandeurs séparées qui varient indépendamment d'un matériau à l'autre (voir paille : inflammabilite PLUS HAUTE que bois, pouvoir_calorifique NETTEMENT PLUS BAS). Pour un matériau qui ne s'enflamme/fond pas dans des conditions de jeu normales (pierre), point_fusion/point_ignition portent une valeur haute mais non infinie -- jamais atteinte en pratique, jamais une absence de clé. couleur_physique porte un String court (nom de couleur, pas un code Color Godot) -- separe de couleurs_types, qui reste le rendu visuel d'un banc jetable (voir CARTE.md §4). Donnée DORMANTE : aucun mécanisme du coeur ne lit ce fichier aujourd'hui -- posée pour ancrage LLM et pour les mécanismes physiques futurs (feu enrichi, thermique, humidité, mécanique), qui la liront via le meme pattern que profil_saillance/transformation/seuils_ref (String sur l'instance, catalogue en paramètre du mécanisme, alarme sur référence absente). chaleur_emise (chantier « chaleur_emise -- un feu émet de la chaleur ») ajoutée sur bois (0.8)/pierre (0.0)/fer (0.3) -- degré continu 0.0-1.0, même convention que les autres propriétés de ce catalogue, INDÉPENDANTE de pouvoir_calorifique/inflammabilite (mesure la force de la chaleur émise pendant la combustion, pas la facilité à s'enflammer ni la durée de combustion) -- voir data/proprietes_immuables_composition.json et scripts/banc_chaleur_emise.gd. absorption_sombre (chantier « absorption_sombre ») ajoutée sur TOUTES les entrées de ce catalogue -- degré continu 0.0 (blanc, réfléchit toute la lumière) à 1.0 (noir, l'absorbe entièrement), SÉPARÉE de couleur_physique (String, nommage humain et rendu visuel) : les deux coexistent, voir docs/design.md, « Le matériau comme paquet de propriétés ». Valeurs cohérentes avec couleur_physique quand elle existe (bois 0.6, pierre 0.4, fer/cuivre 0.5, bronze 0.45, argent 0.1, paille 0.3, charbon 0.95, cendre 0.7, compost 0.75, rouille 0.7, glace_carbonique 0.15) ; 0.5 (valeur neutre) pour les matériaux sans couleur_physique déclarée (leger_golem, aimant_metal, combustible_dense_demo, combustible_poreux_demo, porosite_haute_demo, porosite_basse_demo, sel_demo, residu_dissous, eclats_pierre). Donnée DORMANTE, comme les 45 autres propriétés « à la demande » -- aucun mécanisme du cœur ne la lit aujourd'hui, posée pour les futurs mécanismes d'absorption de lumière et de chaleur radiante. Rejoint data/proprietes_immuables_composition.json. son_emis (chantier « son -- grandeur ambiante par sources ») ajoutée sur bois (0.1)/pierre (0.05)/fer (0.5) -- degré continu, même convention que chaleur_emise (independante de resonance/absorption_sonore, dormantes depuis toujours et TOUJOURS non fusionnées, seule son_emis rejoint proprietes_immuables_composition.json par ce chantier) : mesure l'intensité sonore de base émise par le matériau, lue par scripts/perception.gd:_percevoir_propagation_obstacles (canal ouïe) pour atténuer par la distance et comparer au seuil de l'entité qui perçoit -- voir scripts/perception.gd et data/proprietes_immuables_composition.json. force_radiation (chantier « sensibilite_radiation -- irradiation et blindage », audit_colonnes_chimique_nucleaire_magie_prealable.md, colonne nucléaire) ajoutée sur bois (0.3)/pierre (0.1)/fer (0.2) -- degré continu, valeurs délibérément identiques à sensibilite_radiation (même matériau, même ordre de grandeur, jamais dérivée l'une de l'autre : une chose peut à la fois émettre et être sensible à la radiation, deux rôles indépendants comme pouvoir_calorifique/inflammabilite). PAS ENCORE FUSIONNÉE dans data/proprietes_immuables_composition.json, PAS ENCORE LUE : préparée pour jouer le rôle de propriete_emission (data/canaux.json, canal 'radiation' à venir) une fois scripts/banc_radiation.gd écrit -- voir docs/ETAT.md, ce chantier attend la livraison de propriete_emission dans scripts/perception.gd (autre session). force_magique (chantier « sensibilite_magique -- perception magique », scripts/banc_magie_perception.gd) ajoutée sur bois (0.3)/pierre (0.1)/fer (0.05) -- degré continu, INDÉPENDANTE de sensibilite_magique/affinite_magique/volatilite_magique (dormantes, jamais fusionnées, toujours un rôle RÉCEPTEUR -- voir ces trois clés ci-dessus) : force_magique mesure l'intensité du champ magique ÉMIS par le matériau, joue le rôle de propriete_emission (data/canaux.json, canal 'magie') une fois scripts/perception.gd:_percevoir_propagation_obstacles appelé sur ce canal -- même rôle que son_emis pour ouie, FUSIONNÉE dans data/proprietes_immuables_composition.json par ce chantier (contrairement à force_radiation ci-dessus, qui attend encore). source_magique_demo (NOUVEAU matériau, DÉMONSTRATION, force_magique 0.9) ajoutée pour ce même chantier -- source artificielle bien plus forte que les trois matériaux naturels, voir sa propre fiche.",
+	"bois": {
+		"durete": 2.0,
+		"conductivite_thermique": 0.15,
+		"point_fusion": 380.0,
+		"densite": 0.6,
+		"corrodable": 0.1,
+		"inflammabilite": 0.9,
+		"pouvoir_calorifique": 0.8,
+		"porosite": 0.6,
+		"absorption_humidite": 0.7,
+		"permeabilite": 0.5,
+		"solubilite": 0.05,
+		"sensibilite_pourriture": 0.8,
+		"conductivite_electrique": 1e-15,
+		"chaleur_emise": 0.8,
+		"friction": 0.4,
+		"magnetisme": 0.0,
+		"resistance_impact": 4.0,
+		"opacite": 1.0,
+		"reflectivite": 0.15,
+		"couleur_physique": "brun",
+		"absorption_sombre": 0.6,
+		"biodegradabilite": 0.9,
+		"absorption_sonore": 0.3,
+		"resonance": 0.7,
+		"son_emis": 0.1,
+		"fragilite": 0.3,
+		"rigidite": 11.0,
+		"resistance_compression": 40.0,
+		"resistance_traction": 90.0,
+		"resistance_cisaillement": 10.0,
+		"elasticite": 0.3,
+		"malleabilite": 0.05,
+		"restitution": 0.5,
+		"tranchant_max": 2.0,
+		"usinabilite": 0.8,
+		"chaleur_specifique": 1700.0,
+		"point_ebullition": 500.0,
+		"seuil_sublimation": 9999.0,
+		"dilatation_thermique": 5.0,
+		"soudabilite": 0.0,
+		"fluidite_liquide": 0.0,
+		"point_ignition": 300.0,
+		"reactivite": 0.2,
+		"resistance_acide": 0.5,
+		"toxicite": 0.05,
+		"comestibilite": 0.0,
+		"valeur_nutritive_energie": 0.0,
+		"sensibilite_radiation": 0.3,
+		"force_radiation": 0.3,
+		"affinite_magique": 0.6,
+		"volatilite_magique": 0.3,
+		"sensibilite_magique": 0.5,
+		"force_magique": 0.3
+	},
+	"pierre": {
+		"durete": 6.0,
+		"conductivite_thermique": 2.5,
+		"point_fusion": 1215.0,
+		"densite": 2.7,
+		"corrodable": 0.05,
+		"inflammabilite": 0.0,
+		"pouvoir_calorifique": 0.0,
+		"porosite": 0.15,
+		"absorption_humidite": 0.1,
+		"permeabilite": 0.05,
+		"solubilite": 0.02,
+		"sensibilite_pourriture": 0.0,
+		"conductivite_electrique": 1e-9,
+		"chaleur_emise": 0.0,
+		"friction": 0.65,
+		"magnetisme": 0.02,
+		"resistance_impact": 2.0,
+		"opacite": 1.0,
+		"reflectivite": 0.25,
+		"couleur_physique": "gris",
+		"absorption_sombre": 0.4,
+		"biodegradabilite": 0.0,
+		"absorption_sonore": 0.05,
+		"resonance": 0.2,
+		"son_emis": 0.05,
+		"fragilite": 0.7,
+		"rigidite": 50.0,
+		"resistance_compression": 130.0,
+		"resistance_traction": 5.0,
+		"resistance_cisaillement": 20.0,
+		"elasticite": 0.05,
+		"malleabilite": 0.0,
+		"restitution": 0.6,
+		"tranchant_max": 5.0,
+		"usinabilite": 0.3,
+		"chaleur_specifique": 790.0,
+		"point_ebullition": 2230.0,
+		"seuil_sublimation": 9999.0,
+		"dilatation_thermique": 8.0,
+		"soudabilite": 0.0,
+		"fluidite_liquide": 0.1,
+		"point_ignition": 5000.0,
+		"reactivite": 0.1,
+		"resistance_acide": 0.3,
+		"toxicite": 0.0,
+		"comestibilite": 0.0,
+		"valeur_nutritive_energie": 0.0,
+		"sensibilite_radiation": 0.1,
+		"force_radiation": 0.1,
+		"affinite_magique": 0.4,
+		"volatilite_magique": 0.1,
+		"sensibilite_magique": 0.3,
+		"force_magique": 0.1
+	},
+	"fer": {
+		"durete": 4.5,
+		"conductivite_thermique": 80.0,
+		"point_fusion": 1538.0,
+		"densite": 7.87,
+		"corrodable": 0.8,
+		"inflammabilite": 0.02,
+		"pouvoir_calorifique": 0.03,
+		"porosite": 0.02,
+		"absorption_humidite": 0.01,
+		"permeabilite": 0.0,
+		"solubilite": 0.0,
+		"sensibilite_pourriture": 0.05,
+		"conductivite_electrique": 1e7,
+		"chaleur_emise": 0.3,
+		"friction": 0.5,
+		"magnetisme": 0.95,
+		"resistance_impact": 8.0,
+		"opacite": 1.0,
+		"reflectivite": 0.55,
+		"couleur_physique": "gris_acier",
+		"absorption_sombre": 0.5,
+		"biodegradabilite": 0.05,
+		"absorption_sonore": 0.02,
+		"resonance": 0.6,
+		"son_emis": 0.5,
+		"fragilite": 0.2,
+		"rigidite": 200.0,
+		"resistance_compression": 400.0,
+		"resistance_traction": 250.0,
+		"resistance_cisaillement": 170.0,
+		"elasticite": 0.2,
+		"malleabilite": 0.7,
+		"restitution": 0.65,
+		"tranchant_max": 9.0,
+		"usinabilite": 0.5,
+		"chaleur_specifique": 450.0,
+		"point_ebullition": 2862.0,
+		"seuil_sublimation": 9999.0,
+		"dilatation_thermique": 12.0,
+		"soudabilite": 0.8,
+		"fluidite_liquide": 0.6,
+		"point_ignition": 5000.0,
+		"reactivite": 0.6,
+		"resistance_acide": 0.1,
+		"toxicite": 0.1,
+		"comestibilite": 0.0,
+		"valeur_nutritive_energie": 0.0,
+		"sensibilite_radiation": 0.2,
+		"force_radiation": 0.2,
+		"affinite_magique": 0.3,
+		"volatilite_magique": 0.05,
+		"sensibilite_magique": 0.2,
+		"force_magique": 0.05
+	},
+	"cuivre": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'corrosion', pour illustrer un produit d'oxydation DIFFÉRENT de la rouille : au contact de l'humidité, le cuivre se couvre de vert-de-gris (carbonate/sulfate de cuivre basique), une couche PROTECTRICE (passivante) qui ne ronge pas le métal comme le fait la rouille sur le fer -- voir data/etats.json:patine_verte, JAMAIS de Phase 3 destructive dans scripts/banc_corrosion.gd pour ce matériau. Densité réelle du cuivre : 8.96 g/cm3. corrodable 0.5 : le cuivre s'oxyde réellement plus lentement que le fer ne rouille (la patine se forme sur des années en conditions naturelles, contre des jours/semaines pour la rouille en milieu humide) -- valeur delibérément sous celle du fer (0.8). reflectivite 0.65 : le cuivre poli est nettement réfléchissant (teinte rougeâtre chaude), fusionnée pour la première fois par ce chantier (voir data/proprietes_immuables_composition.json) pour que la patine ait une BASE non nulle à moduler.",
+		"densite": 8.96,
+		"corrodable": 0.5,
+		"reflectivite": 0.65,
+		"absorption_sombre": 0.5
+	},
+	"bronze": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'corrosion', alliage cuivre-étain qui forme le MÊME vert-de-gris que le cuivre pur (data/etats.json:patine_verte, partagé) -- COSMÉTIQUE, jamais de Phase 3 destructive. Densité réelle du bronze : varie selon la teneur en étain, plage courante 8.7-8.9 g/cm3, 8.8 retenue comme valeur médiane. corrodable 0.45 : légèrement SOUS celui du cuivre pur (0.5) -- l'alliage à l'étain est réellement un peu plus résistant à l'oxydation que le cuivre seul. reflectivite 0.5 : plus terne que le cuivre poli (0.65), un bronze réel a une surface généralement moins spéculaire même propre.",
+		"densite": 8.8,
+		"corrodable": 0.45,
+		"reflectivite": 0.5,
+		"absorption_sombre": 0.45
+	},
+	"argent": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'corrosion', pour illustrer un TROISIÈME produit d'oxydation : au contact de l'humidité (et surtout de composés soufrés, simplifiés ici en une seule cause d'humidité, comme pour le reste de ce banc), l'argent ternit (sulfure d'argent, une couche de surface sombre) -- COSMÉTIQUE, jamais de Phase 3 destructive, voir data/etats.json:ternissure. Densité réelle de l'argent : 10.49 g/cm3. corrodable 0.55 : le ternissement de l'argent est réellement assez rapide en présence de sources sulfurées, valeur proche de celle du fer sans la dépasser (illustratif, ce banc n'a que l'humidité comme cause). reflectivite 0.95 : l'argent est le métal le plus réfléchissant usuel (~95% en lumière visible) -- contraste maximal une fois terni (voir facteur de data/etats.json:ternissure, nettement plus bas que celui de patine_verte).",
+		"densite": 10.49,
+		"corrodable": 0.55,
+		"reflectivite": 0.95,
+		"absorption_sombre": 0.1
+	},
+	"paille": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- ajouté au chantier 'feu -- la réserve de combustible suit la matière' pour prouver qu'inflammabilite et pouvoir_calorifique sont deux grandeurs indépendantes : la paille s'enflamme plus facilement que le bois (inflammabilite plus haute) mais a NETTEMENT moins de matière à brûler par volume (pouvoir_calorifique bien plus bas) -- l'inverse serait vrai si les deux propriétés étaient dérivées l'une de l'autre. 'porosite' (chantier 'densite et porosite sur la vitesse de combustion') ajoutée à 0.9 -- valeur réelle plausible pour un matériau fibreux et aéré, cohérente avec sa faible densité (0.1).",
+		"densite": 0.1,
+		"inflammabilite": 0.95,
+		"pouvoir_calorifique": 0.15,
+		"porosite": 0.9,
+		"absorption_sombre": 0.3
+	},
+	"leger_golem": {
+		"_note": "Matériau de démonstration, banc_champ -- pas un matériau réel (voir _note racine). Densité proche de l'air : golem volontairement quasi immatériel pour que la traction domine son propre pas volontaire à masse*vitesse comparable.",
+		"densite": 0.001,
+		"magnetisme": 0.9,
+		"absorption_sombre": 0.5
+	},
+	"aimant_metal": {
+		"_note": "Matériau de démonstration, banc_champ -- pas un matériau réel (voir _note racine).",
+		"densite": 5.0,
+		"magnetisme": 1.0,
+		"absorption_sombre": 0.5
+	},
+	"combustible_dense_demo": {
+		"_note": "Matériau de démonstration, banc_combustible (chantier 'densite et porosite sur la vitesse de combustion') -- pas un matériau réel (même précédent que leger_golem/aimant_metal). Partage EXACTEMENT le même pouvoir_calorifique/inflammabilite que combustible_poreux_demo pour isoler l'effet de densite/porosite seules sur la vitesse de combustion -- à volume égal, seule la vitesse diffère, jamais la quantité totale à brûler.",
+		"densite": 5.0,
+		"porosite": 0.05,
+		"inflammabilite": 0.5,
+		"pouvoir_calorifique": 0.5,
+		"absorption_sombre": 0.5
+	},
+	"combustible_poreux_demo": {
+		"_note": "Matériau de démonstration, banc_combustible -- voir combustible_dense_demo, même note, valeurs de densite/porosite opposées.",
+		"densite": 0.2,
+		"porosite": 0.9,
+		"inflammabilite": 0.5,
+		"pouvoir_calorifique": 0.5,
+		"absorption_sombre": 0.5
+	},
+	"porosite_haute_demo": {
+		"_note": "Matériau de démonstration, banc_porosite (chantier « banc_porosite -- un banc transversal ») -- pas un matériau réel (même précédent que leger_golem/aimant_metal/combustible_dense_demo/combustible_poreux_demo). DIFFÈRE de la paire combustible_dense_demo/combustible_poreux_demo sur un point précis : celle-ci variait densite ET porosite à la fois (pour isoler la vitesse de combustion SEULE) -- porosite_haute_demo/porosite_basse_demo partagent au contraire absorption_humidite/inflammabilite/pouvoir_calorifique/conductivite_thermique/densite À L'IDENTIQUE, seule porosite diverge, pour prouver qu'une SEULE propriété matériau traverse deux mécanismes indépendants à la fois (charge.gd/banc_porosite.gd pour l'humidité, objet.gd/depense.gd pour la combustion).",
+		"densite": 1.0,
+		"porosite": 0.9,
+		"absorption_humidite": 0.5,
+		"inflammabilite": 0.7,
+		"pouvoir_calorifique": 0.5,
+		"conductivite_thermique": 0.3,
+		"absorption_sombre": 0.5
+	},
+	"porosite_basse_demo": {
+		"_note": "Matériau de démonstration, banc_porosite -- voir porosite_haute_demo, même note, seule porosite diverge (0.05 contre 0.9), toutes les autres valeurs strictement identiques.",
+		"densite": 1.0,
+		"porosite": 0.05,
+		"absorption_humidite": 0.5,
+		"inflammabilite": 0.7,
+		"pouvoir_calorifique": 0.5,
+		"conductivite_thermique": 0.3,
+		"absorption_sombre": 0.5
+	},
+	"charbon": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'transformation produit un objet neuf'. Densité du charbon de bois réel : nettement plus poreux/léger que le bois d'origine (0.6), plage courante 0.2-0.4 g/cm3 pour du charbon de bois artisanal, 0.3 retenue comme valeur médiane.",
+		"densite": 0.3,
+		"absorption_sombre": 0.95
+	},
+	"cendre": {
+		"_note": "Matériau RÉEL mais MINIMAL -- chantier 'transformation produit un objet neuf'. Densité en vrac (non tassée) de la cendre de bois réelle : très légère, plage courante 0.1-0.3 g/cm3, 0.2 retenue comme valeur médiane.",
+		"densite": 0.2,
+		"absorption_sombre": 0.7
+	},
+	"compost": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'pourriture' (scripts/produit.gd, data/transformations.json:pourriture_bois). Densité du compost mûr réel (matière organique décomposée, en vrac) : plage courante 0.4-0.6 g/cm3 selon l'humidité résiduelle, 0.5 retenue comme valeur médiane -- même convention que charbon/cendre (densité seule, matériau terminal qui ne se transforme plus).",
+		"densite": 0.5,
+		"absorption_sombre": 0.75
+	},
+	"rouille": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'corrosion' (scripts/produit.gd, data/transformations.json:corrosion_fer). Densité de l'oxyde de fer (rouille) réel : plage courante 4.9-5.3 g/cm3, 5.0 retenue comme valeur médiane -- ne déclare ni corrodable ni durete : les deux retombent sur 0.0 par le défaut facultatif du patron de fusion (data/proprietes_immuables_composition.json), ce qui EST la dégradation recherchée (un objet transformé en rouille ne se corrode plus et n'a plus de dureté propre), même convention que compost (matériau terminal qui ne se transforme plus).",
+		"densite": 5.0,
+		"absorption_sombre": 0.7
+	},
+	"glace_carbonique": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'transitions directes solide<->gaz' (scripts/seuil_etat.gd, data/seuils_etat.json:sublimation). Dioxyde de carbone solide ('dry ice') : sous pression atmosphérique normale, il ne fond jamais -- il sublime directement du solide au gaz, aucun état liquide observable dans ces conditions. AUCUN point_fusion/point_ebullition déclaré ici, volontairement -- leur absence replie sur 0.0 via la fusion générique (jamais atteint aux températures de démonstration de ce chantier, toutes négatives) plutôt que sur une valeur haute façon bois/pierre/fer, puisque ce matériau n'a justement AUCUN point de fusion/ébullition réel à illustrer. Seul seuil_sublimation le fait basculer, directement vers/depuis 'gaz'. Valeurs réelles : densité ~1.56 g/cm3, sublimation à -78.5°C sous 1 atm.",
+		"densite": 1.56,
+		"seuil_sublimation": -78.5,
+		"absorption_sombre": 0.15
+	},
+	"sel_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'solubilite' (scripts/banc_solubilite.gd), sel de table (chlorure de sodium). solubilite 0.9 : le sel réel se dissout très rapidement et abondamment dans l'eau (~360 g/L à température ambiante), valeur haute sur l'échelle continue 0.0-1.0 documentée ci-dessus, à comparer à bois (0.05)/pierre (0.02)/fer (0.0). absorption_humidite 0.6 : le sel est hygroscopique (absorbe l'humidité ambiante), grandeur INDÉPENDANTE de solubilite -- l'une gouverne la vitesse à laquelle l'objet devient mouillé (scripts/charge.gd, état partagé 'mouille'), l'autre la vitesse à laquelle, une fois mouillé, sa réserve d'intégrité se consomme (scripts/depense.gd) -- même discipline que pouvoir_calorifique/inflammabilite (deux grandeurs qui ne se dérivent jamais l'une de l'autre). Densité réelle du NaCl : 2.16 g/cm3.",
+		"densite": 2.16,
+		"solubilite": 0.9,
+		"absorption_humidite": 0.6,
+		"absorption_sombre": 0.5
+	},
+	"residu_dissous": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'solubilite' (scripts/produit.gd, data/transformations.json:dissolution_sel_demo). Représente la trace insoluble/le sédiment négligeable qui subsiste une fois un objet soluble presque entièrement dissous dans l'eau -- même convention que compost/rouille/cendre (matériau terminal qui ne se transforme plus, densité seule). Densité arbitraire basse (0.3), cohérente avec un dépôt fin et meuble.",
+		"densite": 0.3,
+		"absorption_sombre": 0.5
+	},
+	"eclats_pierre": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'resistance_impact -- fracture par choc' (scripts/produit.gd, data/transformations.json:fracture_pierre). Représente la pierre elle-même une fois fragmentée par un choc qui a dépassé sa resistance_impact -- même roche, juste brisée en morceaux, contrairement à rouille/compost/residu_dissous (produits d'une réaction chimique qui change la nature du matériau) : densité identique à celle de la pierre d'origine (2.7), ni corrodable ni durete ni resistance_impact/fragilite déclarées -- retombent à 0.0 par le défaut facultatif du patron de fusion, mêmes convention que rouille (un matériau terminal qui ne se transforme plus).",
+		"densite": 2.7,
+		"absorption_sombre": 0.5
+	},
+	"verre_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'fracture par son', même patron que paille/sel_demo : verre courant (sodocalcique). densite 2.5 g/cm3, ordre de grandeur réel. resistance_impact 1.0 : sous la pierre (2.0) et très sous le fer (8.0) -- le verre casse au moindre choc, mécanique comme sonore, la MÊME grandeur resistance_impact/seuil_etat.gd sert aux deux chemins (voir data/seuils_etat.json:fracture_sonore, coexistence avec l'entrée mécanique fracture). fragilite 0.9 : la plus haute du dépôt, au-dessus de la pierre (0.7) -- un verre qui casse ne se déforme jamais, il éclate toujours. son_emis 0.0 : le verre lui-même n'émet aucun son dans ce chantier, c'est la SOURCE (déclarée localement dans data/banc_fracture_sonore.json, pas ici) qui émet -- seules resistance_impact/fragilite du verre comptent face à une source sonore extérieure. point_fusion/point_ebullition/seuil_sublimation déclarés EXPLICITEMENT (même convention que bois/pierre/fer) pour éviter le RISQUE DE CONTAMINATION documenté en _note racine et scripts/seuil_etat.gd : ces trois propriétés rejoignent déjà data/proprietes_immuables_composition.json, un matériau qui ne les déclare pas y retomberait à 0.0 -- une température ambiante (20.0) franchirait alors ce défaut et poserait 'liquide' à tort, découvert en écrivant test_banc_fracture_sonore.gd (`_chemin_reel_...`, verre_0 basculait 'liquide' sans jamais avoir été exposé au son). point_fusion 1400.0/point_ebullition 2500.0 : ordres de grandeur réels du verre sodocalcique (ramollissement ~700-860°C, fusion complète ~1400-1600°C) -- volontairement au-dessus de toute température de ce banc (aucune source de chaleur ici, verre_0 reste à l'ambiante du paquet objet_physique, 20.0).",
+		"densite": 2.5,
+		"resistance_impact": 1.0,
+		"fragilite": 0.9,
+		"son_emis": 0.0,
+		"point_fusion": 1400.0,
+		"point_ebullition": 2500.0,
+		"seuil_sublimation": 9999.0,
+		"absorption_sombre": 0.5,
+		"sensibilite_magique": 0.4
+	},
+	"eclats_verre": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'fracture par son' (scripts/produit.gd, data/transformations.json:fracture_verre). Représente le verre lui-même une fois fragmenté par un son intense qui a dépassé sa resistance_impact -- même matière, juste brisée en éclats, même convention que eclats_pierre : densité identique à celle du verre d'origine (2.5), ni resistance_impact ni fragilite déclarées -- retombent à 0.0 par le défaut facultatif du patron de fusion.",
+		"densite": 2.5,
+		"absorption_sombre": 0.5
+	},
+	"copeaux_bois": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'cisaillement et tranchant -- couper un objet' (scripts/produit.gd, data/transformations.json:coupe_bois). Représente le bois lui-même une fois tranché par un outil qui a épuisé sa réserve d'intégrité -- même bois, juste réduit en copeaux, même convention que eclats_pierre/eclats_verre : densité identique à celle du bois d'origine (0.6), ni resistance_cisaillement ni durete déclarées -- retombent à 0.0 par le défaut facultatif du patron de fusion.",
+		"densite": 0.6,
+		"absorption_sombre": 0.5
+	},
+	"limaille_fer": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'cisaillement et tranchant -- couper un objet' (scripts/produit.gd, data/transformations.json:coupe_fer). Représente le fer lui-même une fois tranché par un outil qui a épuisé sa réserve d'intégrité -- même fer, juste réduit en limaille, même convention que eclats_pierre/copeaux_bois : densité identique à celle du fer d'origine (7.87), ni resistance_cisaillement ni durete déclarées -- retombent à 0.0 par le défaut facultatif du patron de fusion.",
+		"densite": 7.87,
+		"absorption_sombre": 0.5
+	},
+	"plante_demo": {
+		"_note": "Matériau de démonstration, chantier 'croissance végétale -- une plante pousse sous la lumière et l'eau' (scripts/banc_croissance.gd) -- pas un matériau réel (même précédent que leger_golem/aimant_metal/combustible_dense_demo). densite basse (0.2, ordre de grandeur d'une matière organique vivante légère, sous bois 0.6, proche de paille 0.1) : une plante n'a pas besoin d'être dense pour ce chantier, seule sa composition organique compte. biodegradabilite 0.95 : au-dessus de bois (0.9), une plante vivante est la matière organique la plus périssable du catalogue. absorption_humidite 0.85 : au-dessus de bois (0.7), une plante absorbe l'eau facilement -- FACULTATIVE ici, lue à la demande si un futur chantier module la vitesse de charge par ce facteur, non consommée par banc_croissance.gd lui-même (voir sa propre note, la charge d'humidité de ce banc n'est pas pondérée par receveur). croissance_max 0.5 : NOUVELLE propriété (voir data/proprietes_immuables_composition.json), degré continu 0.0-1.0 même convention que les autres, vitesse MAXIMALE de croissance -- valeur médiane arbitraire, ajustable au playtest.",
+		"densite": 0.2,
+		"biodegradabilite": 0.95,
+		"absorption_humidite": 0.85,
+		"croissance_max": 0.5,
+		"absorption_sombre": 0.65
+	},
+	"poison_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'toxicite -- empoisonnement par contact' (scripts/banc_toxicite.gd), même patron que sel_demo. Représente une substance toxique concentrée et solidifiée (ex. composé arsenical), pas un matériau structurel réel du dépôt. toxicite 0.9 : au-dessus de fer (0.1)/bois (0.05)/pierre (0.0), la plus haute du catalogue -- isole visuellement l'effet de toxicite seule face aux trois matériaux qui la portaient déjà sans qu'aucun mécanisme ne la lise (voir audit_colonnes_chimique_nucleaire_magie_prealable.md, colonne chimique #3, DORMANTE avant ce chantier). densite 4.5 : ordre de grandeur réaliste pour un composé minéral toxique dense (arsenic natif ~5.7 g/cm3, minerais de plomb ~6-7, valeur médiane choisie).",
+		"densite": 4.5,
+		"toxicite": 0.9,
+		"absorption_sombre": 0.5
+	},
+	"acide_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'reactivite -- réaction chimique entre deux objets' (scripts/banc_reactivite.gd), même patron que sel_demo/poison_demo. Représente un acide fort concentré (proche de l'acide chlorhydrique/sulfurique dilué), pas un matériau structurel réel du dépôt. reactivite 0.95 : la plus haute du catalogue, au-dessus de fer (0.6)/bois (0.2)/pierre (0.1) -- isole visuellement l'effet de reactivite (voir audit_colonnes_chimique_nucleaire_magie_prealable.md, colonne chimique #1, DORMANTE avant ce chantier). toxicite 0.85 : haute, cohérente avec un acide concentré réel (corrosif, dangereux au contact) -- FACULTATIVE ici, jamais consommée par banc_reactivite.gd lui-même. densite 1.15 : ordre de grandeur réaliste d'une solution acide concentrée (acide chlorhydrique concentré ~1.19 g/cm3, eau pure 1.0).",
+		"densite": 1.15,
+		"reactivite": 0.95,
+		"toxicite": 0.85,
+		"absorption_sombre": 0.5
+	},
+	"sel_metallique": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'reactivite' (scripts/produit.gd, data/reactions.json). Représente un sel métallique issu de la réaction acide+fer (ex. chlorure de fer(II), FeCl2). Densité réelle du FeCl2 : ~3.16 g/cm3. REVISION (chantier « composition en profondeur -- chaînage automatique de réactions », scripts/reaction.gd) : N'EST PLUS un matériau terminal -- un sel métallique réel SE DISSOUT dans l'eau (ex. FeCl2 très soluble), reactivite 0.7 (ordre de grandeur, au-dessus de fer 0.6 -- un sel déjà formé réagit plus volontiers qu'un métal brut) ajoutée pour que scripts/reaction.gd puisse le faire réagir une seconde fois avec eau_demo (data/reactions.json) et produire sel_dissous -- voir data/proprietes_immuables_composition.json.",
+		"densite": 3.16,
+		"reactivite": 0.7,
+		"absorption_sombre": 0.5
+	},
+	"eau_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier « composition en profondeur -- chaînage automatique de réactions » (scripts/banc_chaine_reactions.gd), rôle SOURCE/CATALYSEUR (materiau_a de data/reactions.json, jamais transformé par scripts/reaction.gd -- modèle asymétrique). Représente de l'eau (solvant), reactivite 0.5 : ordre de grandeur modéré, sous acide_demo (0.95) -- l'eau dissout un sel déjà réactif mais plus lentement qu'un acide fort n'attaque un métal. densite 1.0 : eau pure.",
+		"densite": 1.0,
+		"reactivite": 0.5,
+		"absorption_sombre": 0.5
+	},
+	"sel_dissous": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier « composition en profondeur -- chaînage automatique de réactions » (scripts/reaction.gd, data/reactions.json). Représente le produit terminal de la dissolution de sel_metallique dans l'eau (ex. Fe2+ + 2Cl- en solution) -- même convention que residu_dissous/rouille (matériau terminal qui ne se transforme plus, densité seule, aucune reactivite déclarée : le chemin s'arrête ici). Densité proche d'une solution saline diluée, 1.1 g/cm3.",
+		"densite": 1.1,
+		"absorption_sombre": 0.5
+	},
+	"residu_calcaire": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'reactivite' (scripts/produit.gd, data/reactions.json). Représente le résidu calcaire issu de la réaction acide+pierre (dissolution partielle du calcaire) -- même convention que rouille/residu_dissous. Densité réelle du calcaire/carbonate de calcium : plage courante 2.3-2.7 g/cm3, 2.5 retenue comme valeur médiane.",
+		"densite": 2.5,
+		"absorption_sombre": 0.5
+	},
+	"residu_organique": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'reactivite' (scripts/produit.gd, data/reactions.json). Représente le résidu de la réaction acide+bois (dégradation de la matière organique par l'acide) -- même convention que rouille/residu_dissous. Densité proche de compost (0.4-0.6 g/cm3, matière organique décomposée en vrac), 0.45 retenue.",
+		"densite": 0.45,
+		"absorption_sombre": 0.5
+	},
+	"residu_acide": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'reactivite' (scripts/produit.gd, data/transformations.json:reactivite_acide_epuise). Représente l'acide lui-même une fois consommé par ses réactions (neutralisé/dilué, une trace aqueuse résiduelle) -- même convention que rouille/residu_dissous (matériau terminal qui ne se transforme plus, densité seule). Densité proche de l'eau (résidu aqueux dilué), 1.05 g/cm3.",
+		"densite": 1.05,
+		"absorption_sombre": 0.5
+	},
+	"residu_radioactif": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier « Produit nucléaire -- contamination, mutation, maladie » (scripts/produit.gd, data/transformations.json:epuisement_source_radiation). Représente ce que laisse une source radioactive une fois sa réserve 'radioactivite' épuisée -- même convention que rouille/residu_acide (matériau terminal qui ne se transforme plus, densité seule). AUCUN 'force_radiation' déclaré ici : contrairement à bois/pierre/fer (où force_radiation joue un rôle RÉCEPTEUR de composition), la force résiduelle du résidu est posée À LA MAIN par scripts/banc_produit_nucleaire.gd après Produit.transformer (produit.gd ne relaie aucune propriété immuable, constat systémique -- voir audit_produit_nucleaire_prealable.md), jamais dérivée de cette fiche. Densité proche d'un résidu métallique/minéral dense (scorie/déchet vitrifié), 4.0 g/cm3.",
+		"densite": 4.0,
+		"absorption_sombre": 0.5
+	},
+	"nourriture_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier 'consommer.gd -- transfert destructif + banc_manger' (scripts/banc_manger.gd), même patron que sel_demo/poison_demo. Représente une ration de nourriture organique générique (pain/viande séchée), pas un matériau structurel réel du dépôt. comestibilite 0.9 : haute, au-dessus de bois/pierre/fer (toutes à 0.0) -- isole visuellement l'effet de comestibilite/valeur_nutritive_energie (les deux DORMANTES avant ce chantier, voir data/proprietes_immuables_composition.json). valeur_nutritive_energie 0.8 : haute, indépendante de comestibilite (une chose peut être facile à manger sans nourrir beaucoup, et inversement -- même discipline que pouvoir_calorifique/inflammabilite, jamais dérivées l'une de l'autre). densite 0.5 : ordre de grandeur réaliste pour une ration alimentaire compacte (pain ~0.2-0.3 g/cm3, viande séchée ~0.9-1.1 g/cm3, valeur médiane retenue).",
+		"densite": 0.5,
+		"comestibilite": 0.9,
+		"valeur_nutritive_energie": 0.8,
+		"absorption_sombre": 0.5
+	},
+	"reste_nourriture": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier 'consommer.gd -- transfert destructif + banc_manger' (scripts/produit.gd, data/banc_manger.json). Représente ce qui subsiste d'une ration de nourriture une fois son contenu comestible entièrement consommé (os, peau, déchet) -- même convention que rouille/residu_dissous/eclats_pierre (matériau terminal qui ne se transforme plus, densité seule) : ne déclare ni comestibilite ni valeur_nutritive_energie, les deux retombent sur 0.0 par le défaut facultatif du patron de fusion, ce qui EST la dégradation recherchée (un reste ne se mange plus). Densité arbitraire basse-moyenne (0.6), plausible pour un mélange os/peau séchée.",
+		"densite": 0.6,
+		"absorption_sombre": 0.5
+	},
+	"source_magique_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier « sensibilite_magique -- perception magique » (scripts/banc_magie_perception.gd), même patron que poison_demo/acide_demo. Représente une source magique concentrée (artefact, foyer arcanique), pas un matériau structurel réel du dépôt. force_magique 0.9 : la plus haute du catalogue, très au-dessus de bois (0.3)/pierre (0.1)/fer (0.05) -- isole visuellement l'effet de force_magique (voir data/proprietes_immuables_composition.json) face aux trois matériaux naturels, qui n'émettent que peu de magie. densite 1.0 : valeur neutre, aucune réalité physique à isoler ici (seule force_magique compte pour ce chantier).",
+		"densite": 1.0,
+		"force_magique": 0.9,
+		"absorption_sombre": 0.5
+	},
+	"cristal_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier « propriétés émergentes -- capacités conditionnelles à la fabrication » (scripts/banc_emergences.gd), même patron que poison_demo/acide_demo/source_magique_demo. Représente un cristal magique brut (quartz-like), pas un matériau structurel réel du dépôt -- ne conduit PAS l'électricité (conductivite_electrique absente, retombe à 0.0 par le défaut facultatif de la fusion générique), c'est la propriété COMPLÉMENTAIRE (sensibilite_magique) qui compte pour ce chantier : composé avec du fer (bon conducteur, conductivite_electrique 1e7 S/m, mais sensibilite_magique basse 0.2), l'objet fabriqué combine les deux -- aucun des deux matériaux seuls ne suffit à l'émergence 'canalise_mana' (voir data/emergences.json). sensibilite_magique 0.5 : au-dessus de bois (0.5, égale en fait) mais VALEUR EXPLICITE demandée pour ce chantier, largement au-dessus de fer (0.2) et pierre (0.3) -- voir sa propre _note dans data/proprietes_immuables_composition.json (dormante partout ailleurs dans le dépôt, fusionnée UNIQUEMENT par scripts/banc_emergences.gd via une liste locale au banc, jamais ajoutée au catalogue partagé). densite 2.65 : ordre de grandeur réel du quartz (2.6-2.7 g/cm3).",
+		"densite": 2.65,
+		"sensibilite_magique": 0.5,
+		"absorption_sombre": 0.2
+	},
+	"balsa_demo": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier « propriétés émergentes -- capacités conditionnelles à la fabrication » (scripts/banc_emergences.gd), même patron que poison_demo/acide_demo. Représente le bois de balsa, nettement plus léger que le bois générique du dépôt (densite 0.6) -- démontre l'émergence 'flotte' (densite<=500.0 kg/m3 ET resistance_impact>=2.0, voir data/emergences.json) seul, sans composition. densite 0.2 : ordre de grandeur réel du balsa (0.1-0.2 g/cm3), converti par objet.gd en 200.0 kg/m3 -- sous le seuil de flotte (500.0) et sous bois (600.0 kg/m3). resistance_impact 3.0 : valeur EXPLICITE demandée pour ce chantier, au-dessus du seuil de flotte (2.0) malgré une densité basse -- le balsa réel est fibreux et absorbe le choc plutôt que de se briser comme le verre (resistance_impact 1.0), contrairement à un matériau simplement léger et friable.",
+		"densite": 0.2,
+		"resistance_impact": 3.0,
+		"absorption_sombre": 0.55
+	},
+	"terre": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier « écoulement gravitaire -- eau par pente » (scripts/banc_ecoulement.gd), représente le sol de la moitié perméable de la grille de terrain (jamais fusionné par composition -- les cases sont construites À LA MAIN, patron banc_maladie.gd, pas Objet.fabriquer). Densité réelle d'une terre meuble : plage courante 1.1-1.6 g/cm3, 1.3 retenue comme valeur médiane. permeabilite 0.8 : haute, au-dessus de bois (0.5) -- un sol perméable absorbe l'eau vite (scripts/depense.gd, même patron que scripts/banc_permeabilite.gd:taux_decroissance_permeabilite).",
+		"densite": 1.3,
+		"permeabilite": 0.8,
+		"absorption_sombre": 0.55
+	},
+	"roche": {
+		"_note": "Matériau RÉEL mais volontairement MINIMAL (voir _note racine) -- chantier « écoulement gravitaire -- eau par pente » (scripts/banc_ecoulement.gd), représente le sol de la moitié imperméable de la grille de terrain -- entrée DISTINCTE de 'pierre' (matériau structurel du dépôt) : nommée pour le rôle de SOL, jamais réutilisée en dur par un autre chantier. Densité identique à 'pierre' (roche générique, 2.7 g/cm3). permeabilite 0.05 : basse, sous bois (0.5) et sous terre (0.8) -- un sol imperméable garde l'eau en surface (scripts/depense.gd, même patron que scripts/banc_permeabilite.gd:taux_decroissance_permeabilite).",
+		"densite": 2.7,
+		"permeabilite": 0.05,
+		"absorption_sombre": 0.4
+	},
+	"cadavre_demo": {
+		"_note": "Matériau de DÉMONSTRATION (même précédent que poison_demo/acide_demo/nourriture_demo) -- chantier « fertilité -- le sol s'épuise et se refait » (scripts/banc_fertilite.gd). Représente la dépouille d'un animal enterrée au champ, pas un matériau structurel du dépôt. densite 1.05 : ordre de grandeur réel d'un tissu animal (proche de l'eau, 1.0 -- un corps flotte à peine). biodegradabilite 0.95 : la plus haute du catalogue avec plante_demo, au-dessus de bois (0.9) -- FUSIONNÉE (data/proprietes_immuables_composition.json) et lue A LA DEMANDE par le câblage du banc (via scripts/etat_effectif.gd:valeur, jamais réimplémentée) pour composer le taux passé à scripts/consommer.gd:transferer, exactement comme comestibilite/valeur_nutritive_energie pour banc_manger.gd. Ce que le cadavre perd est une RÉSERVE NOMMÉE (reserves.matiere_organique, déclarée sur le type LOCAL du banc), JAMAIS sa masse -- masse/volume/densite sont des SORTIES dérivées de la composition, interdites en écriture ailleurs qu'à la fabrication (voir scripts/produit.gd, en-tête).",
+		"densite": 1.05,
+		"biodegradabilite": 0.95,
+		"absorption_sombre": 0.45
+	},
+	"legumineuse_demo": {
+		"_note": "Matériau de DÉMONSTRATION (même précédent que plante_demo) -- chantier « fertilité -- le sol s'épuise et se refait » (scripts/banc_fertilite.gd). Représente une plante fixatrice d'azote (trèfle, luzerne, pois), pas un matériau structurel du dépôt. densite 0.25 : ordre de grandeur d'une matière végétale vivante légère, juste au-dessus de plante_demo (0.2) et sous bois (0.6) -- seule sa composition compte ici, pour que l'objet fabriqué porte une masse réelle. biodegradabilite 0.9 : haute, alignée sur bois -- FACULTATIVE pour ce chantier, jamais consommée (une légumineuse ne se décompose pas dans ce banc, elle FIXE l'azote de l'air sans se vider -- c'est scripts/flux.gd, qui ne déplète JAMAIS sa source, pas scripts/consommer.gd). La vitesse de fixation elle-même (taux_flux) n'est PAS une propriété matériau : elle vit sur le type LOCAL du banc, posée à la fabrication comme portee_flux (docs/design.md, la portée d'émission vit sur la source, pas dans une table).",
+		"densite": 0.25,
+		"biodegradabilite": 0.9,
+		"absorption_sombre": 0.6
+	},
+	"dechet_demo": {
+		"_note": "Matériau de DÉMONSTRATION (pas un matériau réel du monde), chantier « élimination + saleté -> maladie », scripts/banc_elimination_salete.gd -- même statut que cadavre_demo/legumineuse_demo. Densité 0.9 g/cm3 (matière organique fraîche et humide, un peu sous l'eau -- entre cadavre_demo 1.05 et compost 0.5, qui est déjà décomposé et en vrac). salete_emise 1.0 : degré continu 0.0 (ne salit rien) à 1.0 (salit au maximum), même convention d'échelle que les autres propriétés de ce catalogue -- c'est le POIDS de la cause que le câblage du banc donne à scripts/charge.gd pour faire monter le canal 'salete' des colons à portée, jamais lue par un mécanisme du cœur. Fusionnée sur l'objet à la fabrication par une liste LOCALE de proprietes_immuables passée à objet.gd:fabriquer (jamais data/proprietes_immuables_composition.json, qui est universel -- même décision que 'sensibilite_magique' dans scripts/banc_emergences.gd).",
+		"densite": 0.9,
+		"salete_emise": 1.0,
+		"absorption_sombre": 0.6
+	},
+	"humus": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier « fertilité -- le sol s'épuise et se refait » (scripts/produit.gd, data/transformations.json:decomposition_cadavre_demo). Représente ce que laisse un cadavre une fois sa matière organique entièrement transférée au sol : de l'humus inerte -- même convention que compost/rouille/residu_dissous (matériau terminal qui ne se transforme plus, densité seule). NE DÉCLARE PAS biodegradabilite : elle retombe à 0.0 par le défaut facultatif du patron de fusion, ce qui EST le terminus recherché (l'humus ne se décompose pas une seconde fois, aucun nouveau transfert ne repart). Densité de l'humus/terreau réel : plage courante 0.6-1.0 g/cm3 selon l'humidité, 0.8 retenue comme valeur médiane -- au-dessus du compost en vrac (0.5), sous la terre meuble (1.3). absorption_sombre 0.85 : l'humus mûr est presque noir, juste sous le charbon (0.95).",
+		"densite": 0.8,
+		"absorption_sombre": 0.85
+	},
+	"repas_gras_demo": {
+		"_note": "Matériau de DÉMONSTRATION (même précédent que nourriture_demo/cadavre_demo) -- chantier « profil de repas + malnutrition » (scripts/banc_nutrition.gd). Représente un repas gras (lard, huile, beurre), pas un matériau structurel du dépôt. FORME UN TRIPLET avec repas_proteine_demo/repas_sucre_demo : comestibilite 0.9 et valeur_nutritive_energie 0.8 sont VOLONTAIREMENT IDENTIQUES entre les trois (même discipline d'isolation que combustible_dense_demo/combustible_poreux_demo, ou que porosite_haute_demo/porosite_basse_demo) -- SEUL type_nutriment diffère, donc le taux passé à scripts/consommer.gd:transferer est le même pour les trois et la seule chose observable est la RÉSERVE que le repas alimente, chacune avec son propre cout_base (scripts/depense.gd). type_nutriment (String, NOUVELLE propriété, portée par ces trois fiches SEULEMENT) : nom de la réserve du mangeur que ce repas alimente -- PREMIÈRE propriété NON NUMÉRIQUE d'une fiche matériau, JAMAIS fusionnée par composition (absente de data/proprietes_immuables_composition.json, dont la fusion est une moyenne pondérée par volume, sans aucun sens sur une String) : elle est lue DIRECTEMENT sur la fiche par le câblage de scripts/banc_nutrition.gd, comme permeabilite l'est par scripts/banc_permeabilite.gd. densite 0.92 : ordre de grandeur réel d'un corps gras (huile ~0.91, beurre ~0.91).",
+		"densite": 0.92,
+		"comestibilite": 0.9,
+		"valeur_nutritive_energie": 0.8,
+		"type_nutriment": "gras",
+		"absorption_sombre": 0.5
+	},
+	"repas_proteine_demo": {
+		"_note": "Matériau de DÉMONSTRATION -- chantier « profil de repas + malnutrition » (scripts/banc_nutrition.gd), voir repas_gras_demo pour la doctrine du triplet (comestibilite/valeur_nutritive_energie identiques, seul type_nutriment diffère). Représente un repas protéiné (viande maigre, poisson, œuf). densite 1.05 : ordre de grandeur réel d'un muscle animal maigre (proche de l'eau, comme cadavre_demo).",
+		"densite": 1.05,
+		"comestibilite": 0.9,
+		"valeur_nutritive_energie": 0.8,
+		"type_nutriment": "proteine",
+		"absorption_sombre": 0.5
+	},
+	"repas_sucre_demo": {
+		"_note": "Matériau de DÉMONSTRATION -- chantier « profil de repas + malnutrition » (scripts/banc_nutrition.gd), voir repas_gras_demo pour la doctrine du triplet (comestibilite/valeur_nutritive_energie identiques, seul type_nutriment diffère). Représente un repas sucré (miel, fruit sec, sucre). densite 1.59 : densité réelle du saccharose cristallisé.",
+		"densite": 1.59,
+		"comestibilite": 0.9,
+		"valeur_nutritive_energie": 0.8,
+		"type_nutriment": "sucre",
+		"absorption_sombre": 0.5
+	},
+	"minerai_fer_demo": {
+		"_note": "Matériau de DÉMONSTRATION (même précédent que nourriture_demo/cadavre_demo/dechet_demo) -- chantier « conservation + fonte + portage + coût de trajet » (scripts/banc_economie.gd). Représente un minerai de fer brut, gangue comprise, pas un matériau structurel du dépôt. densite 4.2 : entre la gangue silicatée (~2.7, voir pierre) et l'oxyde de fer pur (hématite 5.26, magnétite 5.15) -- ordre de grandeur réel d'un minerai riche non enrichi. Ne déclare NI resistance_impact NI corrodable : les deux retombent à 0.0 par le défaut facultatif du patron de fusion, ce minerai n'a aucun autre rôle que d'être porté puis fondu. CE QUE LE MINERAI PERD EN ÉTANT RAMASSÉ EST UNE RÉSERVE NOMMÉE (reserves.matiere, posée par le câblage du banc depuis la masse fabriquée), JAMAIS sa masse -- masse/volume/densite sont des SORTIES dérivées de la composition, interdites en écriture ailleurs qu'à la fabrication (voir scripts/produit.gd, en-tête ; même discipline que cadavre_demo).",
+		"densite": 4.2,
+		"absorption_sombre": 0.55
+	},
+	"lingot_fer_demo": {
+		"_note": "Matériau de DÉMONSTRATION -- chantier « conservation + fonte + portage + coût de trajet » (scripts/produit.gd, data/transformations.json:fonte_metal). Représente le fer réduit et coulé en lingot. densite 7.87 : celle du fer pur, VOLONTAIREMENT IDENTIQUE à l'entrée 'fer' de ce catalogue -- entrée SÉPARÉE quand même, nommée pour le rôle de PRODUIT DE FONTE, jamais réutilisée en dur par un autre chantier (même décision que 'roche' face à 'pierre'). Matériau terminal : ne déclare aucune autre propriété, le lingot ne se fond pas une seconde fois dans ce banc.",
+		"densite": 7.87,
+		"absorption_sombre": 0.5
+	},
+	"scories": {
+		"_note": "Matériau RÉEL mais MINIMAL (seule densite requise par objet.gd, voir _note racine) -- chantier « conservation + fonte + portage + coût de trajet » (scripts/produit.gd, data/transformations.json:fonte_scories). Représente le laitier de fonderie : la gangue et les impuretés séparées du métal, refroidies en un tas vitrifié. MATÉRIAU TERMINAL, même convention que rouille/cendre/humus/residu_acide (densité seule, ne se transforme plus, aucun nouveau chantier ne repart). CE QU'IL FERME, et c'est sa raison d'être : scripts/produit.gd perd la masse complémentaire du rendement sans destination (« rendement_perdu n'existe pas comme champ [...] la masse perdue disparait simplement », son propre en-tête) -- la fonte appelle donc DEUX fois Produit.transformer sur le MÊME proprietes_ancien, 0.85 en lingot et 0.15 en scories, et la somme est exacte : plus rien ne disparaît. densite 2.9 : ordre de grandeur réel d'un laitier de haut fourneau solidifié (2.5-3.0 g/cm3, nettement sous le fer 7.87 -- c'est pourquoi il surnage et se sépare).",
+		"densite": 2.9,
+		"absorption_sombre": 0.7
+	}
+}

@@ -1,0 +1,30 @@
+{
+	"_note": "Donnees jetables du banc pourriture -- PREMIERE demonstration reelle du chantier 'pourriture'. Meme patron que data/banc_humidite.json (source d'humidite togglable au clic, un canal charge.gd par objet cible pondere par une sensibilite de materiau) etendu de deux phases : degradation de proprietes (data/etats.json:pourri, via etat_effectif.gd) puis transformation terminale en compost (reserve 'integrite', scripts/depense.gd, sans portee -- consommee UNIQUEMENT tant que 'pourri' reste actif -- puis scripts/produit.gd, voir data/transformations.json:pourriture_bois). Bois (sensibilite_pourriture 0.8) et pierre (0.0, data/materiaux.json) exposes a la MEME source : seule la matiere separe leurs destins, la pierre ne pourrit jamais et ne se transforme donc jamais. 'reserve_integrite_defaut.seuils_ref' pointe vers data/seuils_combustible.json:epuisement_pourriture (catalogue PARTAGE, jamais un catalogue local a ce banc -- scripts/test_lint_donnees.gd verifie TOUTE reference 'seuils_ref' du depot contre ce seul fichier, quel que soit son nom).",
+	"propriete_cause": "source_pourriture",
+	"declencheur_expose": "expose_pourriture",
+	"propriete_sensibilite": "sensibilite_pourriture",
+	"nom_etat": "pourri",
+	"nom_canal": "pourriture",
+	"nom_reserve_integrite": "integrite",
+	"cout_integrite_actif": 1.0,
+	"marqueur_terminal": "pourriture_totale",
+	"transformation_terminale": "pourriture_bois",
+	"canal_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 700.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_pourriture": true }
+	},
+	"reserve_integrite_defaut": {
+		"reserve": 15.0,
+		"cout_base": 0.0,
+		"surcout_action": 0.0,
+		"seuils_ref": "epuisement_pourriture"
+	},
+	"source": { "id": "source_humidite", "position": [0.0, 0.0, 0.0] },
+	"objets": [
+		{ "id": "bois", "position": [150.0, 250.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+		{ "id": "pierre", "position": [400.0, 250.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 3.0 } ] }
+	]
+}

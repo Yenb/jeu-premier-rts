@@ -1,0 +1,13 @@
+{
+	"_note": "Donnees jetables du banc combustible -- demonstration reelle du chantier 'feu -- la reserve de combustible suit la matiere', corrige par le chantier 'une grandeur dediee au contenu energetique' (materiaux.json:pouvoir_calorifique, independante d'inflammabilite), etendu par le chantier 'densite et porosite sur la vitesse de combustion'. Sept objets, deja allumes des le demarrage (aucune propagation, aucun colon -- ce banc observe la CONSUMATION, pas l'allumage). Trois de meme materiau (bois) et de volumes croissants -- bois_petit/bois_moyen/bois_grand -- montrent que la capacite suit le VOLUME. bois_moyen et fer_meme_volume partagent EXACTEMENT le meme volume (8.0) -- montrent que la capacite suit aussi la MATIERE (pouvoir_calorifique tres different entre bois et fer, donc capacite tres differente a volume egal). paille_vive (materiau paille, inflammabilite PLUS HAUTE que le bois mais pouvoir_calorifique NETTEMENT plus bas, ET tres poreuse -- chantier densite/porosite) prouve que les proprietes sont independantes : tres inflammable ne veut pas dire beaucoup a bruler, meme si sa forte porosite accelere ce qu'il reste a bruler. dense_vs_poreux_dense/dense_vs_poreux_poreux (materiaux combustible_dense_demo/combustible_poreux_demo, MEME volume, MEME pouvoir_calorifique/inflammabilite -- donc MEME capacite -- seules densite/porosite opposees) isolent VISUELLEMENT ce chantier : a capacite egale, seule la VITESSE differe.",
+	"cout_base": 1.0,
+	"objets": [
+		{ "id": "bois_petit", "position": [150.0, 400.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+		{ "id": "bois_moyen", "position": [400.0, 400.0, 0.0], "composition": [ { "materiau": "bois", "volume": 8.0 } ] },
+		{ "id": "bois_grand", "position": [650.0, 400.0, 0.0], "composition": [ { "materiau": "bois", "volume": 15.0 } ] },
+		{ "id": "fer_meme_volume", "position": [900.0, 400.0, 0.0], "composition": [ { "materiau": "fer", "volume": 8.0 } ] },
+		{ "id": "paille_vive", "position": [1150.0, 400.0, 0.0], "composition": [ { "materiau": "paille", "volume": 5.0 } ] },
+		{ "id": "dense_vs_poreux_dense", "position": [1400.0, 400.0, 0.0], "composition": [ { "materiau": "combustible_dense_demo", "volume": 6.0 } ] },
+		{ "id": "dense_vs_poreux_poreux", "position": [1650.0, 400.0, 0.0], "composition": [ { "materiau": "combustible_poreux_demo", "volume": 6.0 } ] }
+	]
+}

@@ -1,0 +1,48 @@
+{
+	"_note": "Catalogue du chantier 'biomes -- conditions multiples -> type de terrain'. MEME FORME EXACTE que data/emergences.json, LU PAR LE MEME MECANISME (scripts/conditions.gd) -- la seule difference est le point d'appel : emergences.json est evalue UNE FOIS a la fabrication (objet.gd:_evaluer_emergences, sans retrait), biomes.json est evalue A CHAQUE TICK sur chaque case de terrain AVEC retirer_si_faux=true (scripts/banc_biomes.gd) -- un biome est REVERSIBLE, si le climat change la foret redevient toundra. Chaque entree : conditions (Array de {propriete, operateur, seuil}, TOUTES vraies pour declencher, ET logique) + resultat (Dictionary fusionne sur proprietes). Operateurs : >=, <=, >, <, ==. UNITES : 'humidite' est un ratio sans dimension dans [0,1] (0 = sec absolu, 1 = sature -- meme echelle que le canal 'humidite' de charge.gd deja en place dans banc_humidite.gd/banc_permeabilite.gd, ici en propriete PLATE posee sur la case, jamais un canal) ; 'temperature' est en DEGRES CELSIUS (meme unite que data/materiaux.json:point_fusion/point_ebullition et que scripts/temperature.gd, aucune conversion). LES QUATRE ENTREES POSENT LA MEME CLE 'biome' -- c'est voulu (une case a UN type de terrain, pas quatre marqueurs cumules comme les etats de seuil_etat.gd), et c'est precisement le cas que conditions.gd traite par DEUX PASSES : une entree fausse ne retire jamais la cle qu'une entree vraie pose, quel que soit l'ordre. UN SEUL CHEVAUCHEMENT REEL entre les quatre : 'foret' (humidite>=0.5, 10<=temperature<=30) et 'marais' (humidite>=0.8, temperature>=5) sont TOUTES DEUX vraies des que humidite>=0.8 ET 10<=temperature<=30 -- 'marais' est declaree APRES 'foret' exprès, pour que LA PLUS SPECIFIQUE gagne (l'ordre du catalogue decide, la derniere entree vraie ecrase ; voir conditions.gd, DEUX PASSES). Les cinq autres paires sont disjointes par construction (toundra temperature<5 vs marais temperature>=5 et foret temperature>=10 et desert temperature>30 ; desert humidite<0.2 vs marais/foret humidite>=0.5). LES CONDITIONS NE PAVENT PAS TOUT L'ESPACE, et c'est legitime : une case a humidite 0.3 / temperature 20 ne remplit AUCUNE entree et ne porte donc AUCUNE cle 'biome' -- une absence, jamais un biome par defaut invente (le banc l'affiche en brun). Aucun nom de biome n'existe en code : ajouter un biome = une entree ici, zero ligne de GDScript. DEUX CLES DE PLUS DANS CHAQUE 'resultat' (chantier « refuge + extinction + capacite de charge + territoire », scripts/banc_ecosysteme_terrain.gd) : 'fraction_refuge' (ratio sans dimension dans [0,1] -- part du couvert ou une proie se dissimule ; 0 = terrain nu) et 'capacite_charge' (nombre d'individus que ce milieu nourrit, sans unite autre que « des individus »). Le champ 'resultat' est un Dictionary ARBITRAIRE fusionne sur la case : les poser ici ne coute ZERO ligne de GDScript, exactement comme 'biome'. Elles ne sont lues par AUCUN mecanisme du coeur -- 'fraction_refuge' par le cablage de banc_ecosysteme_terrain.gd (qui compose refuge + bonus et reecrit le 'profil_saillance' des proies), 'capacite_charge' comme 'seuil_propriete' d'une entree de seuil LOCALE a ce banc (scripts/seuil_etat.gd la lit alors PAR CASE, comme 'point_fusion' par materiau -- une case sans biome n'en porte aucune, repli INF, jamais de surpeuplement, chemin mort silencieux). Une entree AJOUTEE, 'prairie' -- voir sa propre _note.",
+	"biomes": [
+		{
+			"id": "desert",
+			"conditions": [
+				{ "propriete": "humidite", "operateur": "<", "seuil": 0.2 },
+				{ "propriete": "temperature", "operateur": ">", "seuil": 30.0 }
+			],
+			"resultat": { "biome": "desert", "fraction_refuge": 0.05, "capacite_charge": 8.0 }
+		},
+		{
+			"id": "toundra",
+			"conditions": [
+				{ "propriete": "temperature", "operateur": "<", "seuil": 5.0 }
+			],
+			"resultat": { "biome": "toundra", "fraction_refuge": 0.15, "capacite_charge": 12.0 }
+		},
+		{
+			"id": "foret",
+			"conditions": [
+				{ "propriete": "humidite", "operateur": ">=", "seuil": 0.5 },
+				{ "propriete": "temperature", "operateur": ">=", "seuil": 10.0 },
+				{ "propriete": "temperature", "operateur": "<=", "seuil": 30.0 }
+			],
+			"resultat": { "biome": "foret", "fraction_refuge": 0.6, "capacite_charge": 80.0 }
+		},
+		{
+			"id": "marais",
+			"conditions": [
+				{ "propriete": "humidite", "operateur": ">=", "seuil": 0.8 },
+				{ "propriete": "temperature", "operateur": ">=", "seuil": 5.0 }
+			],
+			"resultat": { "biome": "marais", "fraction_refuge": 0.5, "capacite_charge": 45.0 }
+		},
+		{
+			"id": "prairie",
+			"_note": "Entree AJOUTEE par le chantier « refuge + extinction + capacite de charge + territoire » (audit_ecosysteme_vivant_prealable.md, lignes 1/2/3/4 -- scripts/banc_ecosysteme_terrain.gd). Ses conditions sont DISJOINTES des quatre entrees precedentes, verifie une par une : toundra exige temperature<5 (ici >=10), desert exige humidite<0.2 (ici >=0.2), foret exige humidite>=0.5 (ici <0.5), marais exige humidite>=0.8 (ici <0.5). Aucun chevauchement, donc sa POSITION dans ce catalogue n'a aucune importance (contrairement au couple foret/marais, ou la derniere entree vraie gagne -- voir la _note en tete). CONSEQUENCE VERIFIEE AVANT ECRITURE sur scripts/banc_biomes.gd, autre chantier jamais touche ici : prairie prend 6 des 18 cases qui ne portaient AUCUN biome (colonnes 1-2 x lignes 2-4 de sa grille 6x6), il en reste 12 -- ses quatre biomes temoins, sa case temoin foret (case_3_2), son marais temoin (case_5_5) et son assertion « au moins une case sans aucun biome » sont tous intacts. Une couleur lui a ete ajoutee dans data/banc_biomes.json pour qu'il ne s'affiche pas en brun « aucun biome ».",
+			"conditions": [
+				{ "propriete": "humidite", "operateur": ">=", "seuil": 0.2 },
+				{ "propriete": "humidite", "operateur": "<", "seuil": 0.5 },
+				{ "propriete": "temperature", "operateur": ">=", "seuil": 10.0 },
+				{ "propriete": "temperature", "operateur": "<=", "seuil": 30.0 }
+			],
+			"resultat": { "biome": "prairie", "fraction_refuge": 0.2, "capacite_charge": 50.0 }
+		}
+	]
+}

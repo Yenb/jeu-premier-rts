@@ -1,0 +1,51 @@
+{
+	"_note": "Donnees JETABLES, propres a scripts/banc_lumiere.gd -- ne charge data/types.json/data/materiaux.json (aucun colon, aucune composition ici, meme famille que banc_temperature.json/banc_vent.json). 'cycle_reel.duree_jour_secondes' : combien de secondes REELLES pour un cycle jour/nuit COMPLET (mappe sur data/lumiere.json:defaut.cycle.heures_par_jour, jamais une seconde valeur de 24.0 en dur ici) -- volontairement court pour rendre le cycle observable sans attendre. 'cycle_reel.heure_depart' : heure simulee au lancement (avant l'aube, pour voir la transition tot). 'torche'/'cristal' : sources FIXES, memes grandeurs illustratives que le texte du chantier (torche : intensite 0.7/couleur 0.15 orange chaud ; cristal : intensite 0.6/couleur 0.85 bleu froid), placees assez proches pour que leurs rayons se recouvrent (zone_melange lit exactement ce recouvrement). 'lanterne' : source MOBILE (centre/amplitude/periode d'un mouvement sinusoidal, meme patron que banc_temperature.json:source_mobile, jamais son code), couleur intermediaire (0.3) pour rester distincte de la torche et du cristal. 'lecteurs' : les objets `monde` reellement avances par Lumiere.avancer -- 'temoin_ambiant' loin de toute source (cycle pur), 'pres_torche' dans le rayon de la torche, 'zone_melange' dans le recouvrement torche/cristal, 'porteur_lanterne' RECALCULE chaque tick a la position de la lanterne (voir banc_lumiere.gd, sa position en donnee ici n'est qu'un point de depart neutre), 'passage_lanterne' fixe sur la trajectoire de la lanterne. 'zones' : seuils d'intensite qui decoupent 'jour'/'penombre'/'nuit' pour le log de changement significatif (jamais l'epsilon fin du retour d'avancer(), trop bavard pour une trace console).",
+	"cycle_reel": {
+		"duree_jour_secondes": 40.0,
+		"heure_depart": 4.0
+	},
+	"torche": {
+		"position": [-200.0, 0.0, 0.0],
+		"rayon": 80.0,
+		"intensite": 0.7,
+		"temperature_couleur": 0.15,
+		"force": 1.0
+	},
+	"cristal": {
+		"position": [-80.0, 0.0, 0.0],
+		"rayon": 90.0,
+		"intensite": 0.6,
+		"temperature_couleur": 0.85,
+		"force": 1.0
+	},
+	"lanterne": {
+		"centre": [300.0, 0.0, 0.0],
+		"amplitude": 250.0,
+		"periode": 20.0,
+		"rayon": 100.0,
+		"intensite": 0.65,
+		"temperature_couleur": 0.3,
+		"force": 1.0
+	},
+	"lecteurs": [
+		{ "id": "temoin_ambiant", "position": [-600.0, -150.0, 0.0] },
+		{ "id": "pres_torche", "position": [-200.0, 40.0, 0.0] },
+		{ "id": "zone_melange", "position": [-140.0, 0.0, 0.0] },
+		{ "id": "porteur_lanterne", "position": [300.0, 0.0, 0.0] },
+		{ "id": "passage_lanterne", "position": [300.0, -80.0, 0.0] }
+	],
+	"zones": {
+		"seuil_jour": 0.5,
+		"seuil_penombre": 0.1
+	},
+	"intervalle_print": 3.0,
+	"couleurs_affichage": {
+		"orange": [1.0, 0.55, 0.1],
+		"blanc_jaune": [1.0, 0.95, 0.8],
+		"bleu": [0.25, 0.45, 0.9]
+	},
+	"camera": {
+		"position": [-50.0, -20.0, 0.0],
+		"zoom": 0.55
+	}
+}

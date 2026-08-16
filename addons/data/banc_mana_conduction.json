@@ -1,0 +1,24 @@
+{
+	"_note": "Jetable, propre a scripts/banc_mana_conduction.gd (chantier 'conductivite_electrique pour la magie -- canalisation de mana'). Rejoue EXACTEMENT le patron de scripts/banc_conduction.gd/data/banc_conduction.json (conducteurs_actifs/propager_mana, parcours en largeur, puis flux.gd appele une fois par objet canalise) sur un domaine different -- AUCUN mecanisme du coeur touche, AUCUNE ligne empruntee par appel croise a banc_conduction.gd, ce fichier et son script sont recopies, pas partages. 'seuil_conduction_mana' (10.0 S/m) est VOLONTAIREMENT DIFFERENT du seuil electrique (1.0 S/m, banc_conduction.gd) -- meme grandeur physique (conductivite_electrique, seule propriete du dépôt qui approche une notion de canalisation), seuil propre a ce banc, toujours nettement sous le fer (~1e7) et nettement au-dessus du bois/pierre (~1e-15/1e-9). 'facteur_conductivite_base' (1e-6) compense le meme ecart d'echelle que dans banc_conduction.gd, meme geste de calibration. Deux rangees d'objets espacees de 90 unites (= portee_contact) : fer-bois-fer (le mana est bloque net au bois, le second fer ne recoit jamais rien) et fer-fer-fer (le mana traverse les trois -- remplacer le bois par du fer fait traverser la rangee entiere).",
+	"propriete_cause": "source_active",
+	"propriete_sous_mana": "sous_mana",
+	"propriete_conducteur": "conducteur_mana_actif",
+	"nom_reserve_mana": "mana",
+	"seuil_conduction_mana": 10.0,
+	"portee_contact": 90.0,
+	"facteur_conductivite_base": 0.000001,
+
+	"sources": [
+		{ "id": "source_bloque", "position": [0.0, 0.0, 0.0] },
+		{ "id": "source_traverse", "position": [0.0, 150.0, 0.0] }
+	],
+	"objets": [
+		{ "id": "fer_bloque_1", "position": [90.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "bois_bloque", "position": [180.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 0.05 }] },
+		{ "id": "fer_bloque_2", "position": [270.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+
+		{ "id": "fer_traverse_1", "position": [90.0, 150.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "fer_traverse_2", "position": [180.0, 150.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "fer_traverse_3", "position": [270.0, 150.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] }
+	]
+}

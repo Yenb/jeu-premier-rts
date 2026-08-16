@@ -1,0 +1,122 @@
+{
+	"_note": "Donnees propres a scripts/banc_affordances_choix.gd (Scene/banc_affordances_choix.tscn), chantier « choix + re-scoring » (audit_affordances_prealable.md, lignes 11 et 12). JETABLE, propre au banc : rien ici n'est un catalogue partage, a trois exceptions pres qui ne POUVAIENT PAS l'etre -- les deux sources de deformation ('urgence_repas', 'habitude_atelier') vivent dans data/deformations.json et les trois profils de saillance ('repas_choix', 'bois_choix', 'forge_choix') dans data/profils_saillance.json, parce que scripts/test_lint_donnees.gd verifie 'deformation_sources' et 'profil_saillance' de tout data/*.json contre ces deux seuls catalogues.\n\nLES TROIS POIDS DE LA LIGNE 11 NE SONT PAS UNE TABLE, ET C'EST TOUTE LA CORRECTION DE VOIE DU CHANTIER. Le prompt d'origine decrivait une table { poids_urgence, poids_distance, poids_habitude } avec une division par un cout. Aucun des quatre n'existe sous cette forme, et aucun n'a ete cree : (a) poids_urgence EST une entree de data/deformations.json ('urgence_repas'), la seule voie du depot qui fasse GAGNER une cible par un etat interne, parce qu'elle est indexee PAR PERCEVANT ; (b) poids_distance N'EXISTE PAS -- proximite.gd applique une attenuation LINEAIRE FIXE clamp(1 - distance/portee), et le seul reglage est 'portee_saillance' PAR PROFIL (peser la distance plus fort = raccourcir la portee) ; (c) poids_habitude est data/deformations.json une deuxieme fois ('habitude_atelier'), deux sources distinctes que deformation.gd tient separement par [source][cible] et que proximite.gd compose EN SEQUENCE ; (d) la division par un cout n'existe nulle part, rien ne divise une saillance -- le plus proche serait une deformation de sens 'baisse', non demandee ici. Zero .gd du coeur touche, zero mecanisme neuf.\n\nCALIBRATION DES POSITIONS ET DES DISTANCES, calculee et non devinee, parce que TOUTE la demonstration en depend. Colon (500,350). Bois proche (500,230) -> 120 unites ; bois eloigne (500,70) -> 280. Forge (900,350) -> 400. Repas (500,850) -> 500. Saillances NUES qui en resultent, profils de data/profils_saillance.json : bois proche 5.0*(1-120/300) = 3.000 ; bois eloigne 5.0*(1-280/300) = 0.333 ; forge 2.0*(1-400/900) = 1.111 ; repas 2.5*(1-500/700) = 0.714. Deplacer une cible de quelques dizaines d'unites casse l'arbitrage EN SILENCE -- les quatre distances et les quatre saillances nues sont verrouillees par test contre les nombres reels de ce fichier.\n\nLES TROIS ETATS QUE LE BANC MONTRE, et l'ordre exact des scores dans chacun :\n  (A) rassasie + bois proche  -> bois 3.000 > forge 2.000 > repas 0.714  : LA DISTANCE gagne.\n  (B) rassasie + bois eloigne -> forge 2.000 > repas 0.714 > bois 0.333  : L'HABITUDE gagne.\n  (C) affame  + bois proche  -> repas 5.000 > bois 3.000 > forge 2.000  : L'URGENCE gagne.\nEn (B) et (C) la forge et le repas portent leur biais au plafond (0.8 et 6.0). En (C) la forge sort de dominance.gd : son ecart au sommet (3.000) depasse seuil_ecrasement (2.5) -- elle n'est pas 'moins prioritaire', elle N'EST PLUS DANS LA LISTE.\n\nPOURQUOI LE COLON NE SE DEPLACE PAS. Decision de ce chantier, dite plutot que masquee (meme decoupage que banc_marche_competence.gd et banc_temps_anticipation.gd) : un colon qui marche change lui-meme les distances, donc les saillances, donc l'arbitrage -- « la distance avantage le bois proche » serait vrai une seconde puis faux, et la calibration ci-dessus ne serait verifiable a aucun instant precis. Le sujet de la ligne 11 est le SCORE, pas le trajet. Consequence : la seule chose qui bouge dans cette scene est ce que le colon PORTE (sa faim, ses deux biais) et ce que la souris deplace.\n\nLE CATALOGUE D'ENGAGEMENT EST LOCAL ('engagements_locaux'), jamais une entree ajoutee a data/engagements.json -- couplage.gd recoit son catalogue en PARAMETRE (son en-tete : « catalogue toujours recu en parametre, jamais charge par ce fichier »), et le geste du catalogue local au format exact du catalogue partage a deux precedents (banc_psycho_social.gd:seuils_locaux, data/banc_elimination_salete.json:seuils_elimination). Raison de ne pas l'ajouter au partage : le poids y est calibre sur les saillances DE CE BANC (0.5 face a des scores de 0.3 a 5.0), la ou 'colon_chantier' porte 5.0 -- reutiliser l'entree partagee aurait rendu l'engagement absolument indelogeable et l'urgence inobservable. Meme raison exacte que 'dormir_reserve' contre 'animal_reserve'.\n\nsatisfait_par 'travail_restant' AVEC sens_satisfaction 'sous_seuil' ET UN COLON QUI N'AVANCE AUCUN TRAVAIL : chaque cible porte travail_restant == travail_initial, extinction.gd n'est PAS cable, l'engagement ne se satisfait donc JAMAIS et ne se relache que par l'ABSENCE (cible hors de portee_engagement -> Couplage.avancer recoit null -> « arrache ») ou par le retrait explicite du cablage quand la decision change de cible. C'est exactement la doctrine de couplage.gd (« se pose par presence, se retire par absence ou satisfaction, jamais par choix »). EFFET DE BORD VOULU ET NEUTRE : proximite.gd:_poids_avancement lit ces deux cles et multiplie la saillance par travail_restant/travail_initial == 1.000 exactement -- le troisieme mecanisme de stabilite nomme par l'audit ligne 12 est donc PRESENT et MESURABLEMENT NEUTRE ici, verrouille par test.\n\nAUCUNE DEPENSE, AUCUN METABOLISME. depense.gd n'est pas appele : la reserve d'energie n'est ecrite QUE par le clic de bascule (energie_rassasie / energie_affame). Choix assume -- une reserve qui descend toute seule rendrait l'etat (A) intenable au bout de quelques secondes et le banc ne montrerait plus qu'un colon qui mange en boucle. Ce que le banc doit montrer est l'ARBITRAGE, pas le cycle de la faim (deja montre par banc_faim_thermo.gd et banc_psycho_social.gd).\n\nNOMS DE PROPRIETES, DE SOURCES ET DE VERBES EN DONNEE (nom_reserve_energie/source_deformation_urgence/source_deformation_habitude/cible_deformation_urgence/cible_deformation_habitude/nom_pli_atelier, plus 'propriete'/'profil_saillance'/'verbe' par cible et le catalogue_local de verbes) : le .gd ne porte aucun de ces noms en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente.\n\nCHAMPS DE CE FICHIER VERIFIES AU CHARGEMENT par scripts/test_lint_donnees.gd:REFERENCES : 'canaux' (contre data/canaux.json), 'deformation_sources' (contre data/deformations.json) et le 'profil_saillance' de chaque cible (contre data/profils_saillance.json). data/types.json n'est PAS touche (colon et cibles construits a la main) : rien a enregistrer dans les registres du linter.",
+
+	"terrain_largeur": 1400.0,
+	"terrain_hauteur": 1000.0,
+
+	"canaux": ["vue"],
+	"deformation_sources": ["urgence_repas", "habitude_atelier"],
+
+	"nom_reserve_energie": "energie",
+	"nom_pli_atelier": "pli_atelier",
+	"source_deformation_urgence": "urgence_repas",
+	"source_deformation_habitude": "habitude_atelier",
+	"cible_deformation_urgence": "comestible",
+	"cible_deformation_habitude": "forgeable",
+
+	"capacite_energie": 100.0,
+	"energie_rassasie": 100.0,
+	"energie_affame": 10.0,
+
+	"gain_deformation_urgence_par_s": 3.0,
+	"gain_deformation_habitude_par_s": 1.0,
+	"plafond_biais_urgence": 6.0,
+	"plafond_biais_habitude": 0.8,
+
+	"cadence_scoring_s": 3.0,
+	"portee_engagement": 450.0,
+	"regle_engagement": "attelage_cible",
+	"engagements_locaux": {
+		"attelage_cible": {
+			"_note": "Format EXACT d'une entree de data/engagements.json, passe tel quel a couplage.gd -- voir le _note de tete, « LE CATALOGUE D'ENGAGEMENT EST LOCAL ». poids 0.5 : assez pour qu'une decision deja prise resiste a une alternative qui la depasse de peu (avec gain_inertie 0.25, il faut 0.75 d'ecart pour deloger), jamais assez pour survivre a l'urgence au plafond. seuil_bascule 0.0 : ce banc n'a AUCUNE hysteresis de canal (banc_animal.gd est le seul a lire ce champ, couplage.gd ne le fait jamais lui-meme) -- ecrit pour que l'entree reste au format complet, jamais lu ici.",
+			"poids": 0.5,
+			"seuil_satisfait": 0.0,
+			"seuil_bascule": 0.0,
+			"sens_satisfaction": "sous_seuil",
+			"satisfait_par": "travail_restant",
+			"arrache_par": "saillance_superieure_seuil"
+		}
+	},
+
+	"catalogue_local": {
+		"_note": "Vocabulaire de verbes PROPRE AU BANC, fusionne PAR-DESSUS data/types_choses.json au chargement (exception banc-jetable, patron banc_charge.gd:refuge et banc_psycho_social.gd) : data/types_choses.json n'est jamais touche sur le disque. 'comestible' -> 'manger' y existe deja et n'est PAS redeclare ici -- une redeclaration masquerait le catalogue partage sans que rien ne rougisse.",
+		"ramassable": { "verbes": ["ramasser"] },
+		"forgeable": { "verbes": ["forger"] }
+	},
+
+	"colon": {
+		"id": "colon",
+		"position": [500.0, 350.0, 0.0],
+		"pli_atelier": 1.0,
+		"couleur": [0.95, 0.85, 0.35],
+		"taille": 30.0,
+		"portee_vue": 1000.0,
+		"forme": {
+			"_note": "gain_inertie 0.25 : la tache en cours recoit ce bonus ADDITIF avant comparaison (agir.gd:_score), donc a tache egale elle gagne et il faut une saillance strictement superieure pour en sortir. C'est une preference de PERSONNALITE, jamais le meme mecanisme que l'engagement (un FAIT PHYSIQUE, 0.5 de plus, pose par presence) -- les deux coexistent et s'additionnent, agir.gd le dit dans son en-tete. seuil_ecrasement 2.5 : en etat (C) l'ecart de la forge au sommet vaut exactement 3.000, elle SORT de la liste rendue par dominance.gd -- pas « moins prioritaire », absente. En (A) et (B) rien n'est ecrase (ecarts maximaux 2.286 et 1.667).",
+			"gain_inertie": 0.25,
+			"seuil_ecrasement": 2.5
+		},
+		"poids_verbes": {
+			"_note": "Trois verbes au MEME poids, deliberement : ce banc ne demontre RIEN par poids_verbes, et c'est le sujet. agir.gd choisit d'abord la CIBLE au score, et seulement ensuite un verbe parmi ceux que la propriete gagnante propose -- monter 'manger' a 10 000 ne ferait jamais gagner le repas. Trois poids egaux rendent cette separation visible : le verbe affiche change parce que la CIBLE a change, jamais l'inverse.",
+			"manger": 1.0,
+			"ramasser": 1.0,
+			"forger": 1.0
+		}
+	},
+
+	"cibles": [
+		{
+			"id": "repas",
+			"position": [500.0, 850.0, 0.0],
+			"couleur": [0.45, 0.85, 0.40],
+			"taille": 44.0,
+			"travail": 40.0,
+			"proprietes": {
+				"comestible": true,
+				"profil_saillance": "repas_choix"
+			}
+		},
+		{
+			"id": "bois",
+			"position": [500.0, 230.0, 0.0],
+			"position_alternee": [500.0, 70.0, 0.0],
+			"couleur": [0.62, 0.42, 0.20],
+			"taille": 44.0,
+			"travail": 25.0,
+			"proprietes": {
+				"ramassable": true,
+				"profil_saillance": "bois_choix"
+			}
+		},
+		{
+			"id": "forge",
+			"position": [900.0, 350.0, 0.0],
+			"couleur": [0.90, 0.45, 0.18],
+			"taille": 44.0,
+			"travail": 60.0,
+			"proprietes": {
+				"forgeable": true,
+				"profil_saillance": "forge_choix"
+			}
+		}
+	],
+	"cible_distance": "bois",
+
+	"couleur_fond": [0.12, 0.13, 0.16],
+	"couleur_portee_vue": [0.20, 0.22, 0.28],
+	"couleur_portee_engagement": [0.30, 0.26, 0.14],
+	"couleur_decision": [1.0, 0.95, 0.45],
+	"couleur_engagement": [0.35, 0.85, 0.95],
+	"couleur_ecrasee": [0.35, 0.20, 0.20],
+	"couleur_fond_barre": [0.07, 0.07, 0.09],
+	"couleur_barre_urgence": [0.95, 0.35, 0.30],
+	"couleur_barre_habitude": [0.40, 0.85, 0.60],
+	"couleur_barre_cadence": [0.85, 0.85, 0.95],
+	"largeur_barre": 170.0,
+	"hauteur_barre": 11.0,
+	"espacement_barre": 15.0,
+	"taille_police_label": 13,
+	"taille_police_entete": 16,
+	"taille_police_aide": 12,
+	"camera_zoom": 0.72
+}

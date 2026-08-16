@@ -1,0 +1,24 @@
+{
+	"_note": "DEUX paires colon/source, matiere REELLE (data/materiaux.json, aucun materiau de demo invente) -- fer (son_emis 0.5) pour les deux sources, pierre (absorption_sonore 0.05) pour le mur. Paire 'avec_mur' : colon_avec_mur (0,0,0), source_avec_mur (100,0,0), mur (50,0,0) EXACTEMENT au milieu du segment (t=0.5, distance laterale 0.0, < largeur_obstacle 40.0 de data/canaux.json). ouie_surcharge (portee 200.0, seuil 0.24) IDENTIQUE aux deux colons -- avec portee 200/distance 100, attenuation_distance=0.5, intensite SANS mur = 0.5*0.5=0.25 (>= seuil 0.24, CAPTEE) ; AVEC le mur (absorption_sonore reelle de la pierre, seulement 5%), facteur=0.95, intensite = 0.25*0.95=0.2375 (< seuil 0.24, BLOQUEE) -- marge volontairement fine ('quasi bloque', MEMES valeurs que scripts/test_perception.gd:_mur_obstacle_bloque_le_son, jamais un mur artificiellement fort). Paire 'temoin' (colon_temoin 500,0,0 / source_temoin 600,0,0, MEME geometrie relative, MEME ouie_surcharge, distance >= 400 de la premiere paire -- aucune contamination croisee, meme raisonnement que data/banc_chaleur_emise.json) : AUCUN mur, jamais toggle, toujours captee -- reference visuelle constante a cote de la paire qui bascule. Toggle au clic gauche (_mur_actif, meme geste que banc_reflectivite.gd/banc_resonance.gd) fait DISPARAITRE/REAPPARAITRE le mur du Monde RECONSTRUIT CHAQUE TICK (meme idiome que banc_resonance.gd) -- jamais une simple mutation de sa propriete (monde.gd n'a aucune fonction de retrait, dette connue, voir CARTE.md §6).",
+	"couleurs_types": {
+		"colon_avec_mur": [0.3, 0.6, 0.9],
+		"source_avec_mur": [0.85, 0.15, 0.1],
+		"mur": [0.55, 0.5, 0.45],
+		"colon_temoin": [0.3, 0.9, 0.5],
+		"source_temoin": [0.85, 0.15, 0.1]
+	},
+	"types": {
+		"source_son": { "herite": ["objet_physique"], "composition": [ { "materiau": "fer", "volume": 1.0 } ] },
+		"mur": { "herite": ["objet_physique"], "composition": [ { "materiau": "pierre", "volume": 1.0 } ] }
+	},
+	"avec_mur": {
+		"colon": { "id": "colon_avec_mur", "position": [0.0, 0.0, 0.0], "ouie_surcharge": { "portee": 200.0, "seuil": 0.24 } },
+		"source": { "id": "source_avec_mur", "position": [100.0, 0.0, 0.0] },
+		"mur": { "id": "mur", "position": [50.0, 0.0, 0.0] }
+	},
+	"temoin": {
+		"colon": { "id": "colon_temoin", "position": [500.0, 0.0, 0.0], "ouie_surcharge": { "portee": 200.0, "seuil": 0.24 } },
+		"source": { "id": "source_temoin", "position": [600.0, 0.0, 0.0] }
+	},
+	"intervalle_print": 2.0
+}

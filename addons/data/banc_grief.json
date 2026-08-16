@@ -1,0 +1,107 @@
+{
+	"_note": "Donnees propres a scripts/banc_grief.gd (Scene/banc_grief.tscn), chantier « grief + bifurcation grief » -- audit_mecaniques_psycho_sociales_prealable.md, ligne 7 (CABLABLE, « mais pas par la voie decrite ») et ligne 8 (CONCEPT NEUF REQUIS, ferme AVANT ce banc par scripts/bifurcation.gd). JETABLE, propre au banc : rien ici n'est un catalogue partage. Les CINQ entrees partagees de ce chantier vivent ailleurs et ne sont JAMAIS recopiees ici -- data/etats.json:rupture_grief + soumis + contestataire + en_depart, data/seuils_etat.json:rupture_grief.\n\nLE GRIEF EST LE PREMIER CUMUL DU DEPOT QUI REDESCEND (voir data/seuils_etat.json:rupture_grief pour le detail des deux familles existantes). Il n'est ni une reserve (depense.gd), ni une charge (charge.gd) : l'audit ligne 7 a ecarte charge.gd pour une raison mesurable et non par gout -- charge.gd a DEUX REGIMES DISJOINTS (constat G) : si la somme des poids des causes a portee est > 0 la charge monte du net, SINON elle descend a taux FIXE. Une cause d'amelioration a poids negatif ne produit donc PAS une descente proportionnelle, elle fait seulement basculer dans le regime de decroissance fixe. Et une injustice sociale n'a pas de POSITION : il faudrait la synthetiser a portee 0.0. Deux pieces pour rien. Le miroir plat accumule, lui, s'ecrit en une ligne et se compare directement.\n\nLES TAUX SONT EN SECONDES DE SIMULATION, jamais par jour -- le depot n'a AUCUNE horloge de jour (tout est en secondes, sauf senescence.gd en annees). Meme decision, et meme raison, que le chantier banc_nutrition, qui a renomme 'accumulation_par_jour' en '..._par_s' plutot qu'inventer une conversion jour->seconde qui n'existe nulle part.\n\nCALIBRATION, mesuree et non devinee. Mode INJUSTICE : gain 8.0 - perte 1.0 = +7.0/s net, seuil 50.0 franchi a t = 50/7 = 7.14 s. Mode AMELIORATION : gain 1.0 - perte 10.0 = -9.0/s net, le grief repasse sous 50.0 presque aussitot et atteint 0.0 en 5.6 s depuis le seuil. Les DEUX termes restent non nuls dans les deux modes, deliberement : une colonie n'est jamais parfaitement juste ni parfaitement injuste, et un terme mis a zero rendrait le signe de la derivee trivialement lisible a l'oeil au lieu de resulter d'une balance.\n\nMEME seuil_rupture (50.0) POUR LES TROIS COLONS, et c'est le coeur de la demonstration : places dans des conditions IDENTIQUES et rompant au MEME INSTANT, les trois partent pourtant vers trois sorties differentes -- la seule chose qui les distingue est biais_grief. C'est exactement « Les archetypes n'existent pas » (docs/design.md) : les memes sorties sont offertes a tous, seul le POIDS distingue deux colons. Un seuil different par colon serait pourtant possible sans une ligne de code (seuil_etat.gd lit 'seuil_rupture' PAR OBJET, voir data/seuils_etat.json) -- non fait ici, ca brouillerait la lecture.\n\nLES BIAIS NE SOMMENT PAS A 1.0 PAR HASARD : ils le font par convention de lisibilite, jamais par contrainte du mecanisme. bifurcation.gd ne normalise RIEN et ne verifie aucune somme -- il multiplie et prend le maximum. Des biais [6, 2, 2] donneraient exactement la meme sortie que [0.6, 0.2, 0.2].\n\nvitesse_sortie (90.0) N'EST PAS 'vitesse' : data/etats.json:en_depart ECRASE 'vitesse' a 0.0 (le colon ne travaille plus, ne suit plus aucune directive), et c'est le cablage qui le pousse vers le bord a cette valeur-ci. Sans cette separation, ecraser 'vitesse' clouerait au sol un colon cense partir. Voir data/etats.json:en_depart.\n\nLA DIRECTIVE : entree de saillance SYNTHETIQUE ajoutee a 'resultats' avant dominance.gd -- docs/design.md, « Ordre et tension » : « Un ordre ne supprime jamais une saillance. Il en AJOUTE une, concurrente. » bonus_score (2.6) doit DEPASSER la saillance de l'ouvrage (2.0) pour que le colon obeisse : agir.gd retient le MEILLEUR score, il n'additionne jamais. 'etats_vitaux' porte le seul 'contestataire' -- patron RECOPIE de data/banc_psycho_social.json:directive.etats_vitaux (deux bancs jetables ne se referencent jamais entre eux).\n\nAUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES -- 'profil_saillance' est absent (ce banc ne monte ni perception.gd ni proximite.gd, ses deux entrees de saillance sont construites par le cablage), donc rien a y ajouter. data/types.json n'est pas touche (colons construits a la main) : aucun registre du linter a etendre.",
+
+	"nom_grief": "grief",
+	"nom_seuil_rupture": "seuil_rupture",
+	"nom_vitesse": "vitesse",
+	"nom_rythme": "rythme",
+	"nom_travail": "travail_restant",
+	"etat_rupture": "rupture_grief",
+
+	"terrain_largeur": 1100.0,
+	"terrain_hauteur": 640.0,
+
+	"seuil_rupture": 50.0,
+	"grief_initial": 0.0,
+	"gain_injustice_par_s": 8.0,
+	"perte_amelioration_par_s": 10.0,
+	"gain_base_par_s": 1.0,
+	"perte_base_par_s": 1.0,
+
+	"vitesse_base": 110.0,
+	"vitesse_sortie": 90.0,
+	"rythme_base": 1.5,
+	"travail_initial": 400.0,
+	"rayon_arrivee": 10.0,
+	"marge_bord": 30.0,
+
+	"sorties": ["soumission", "contestation", "depart"],
+	"etats_par_sortie": {
+		"soumission": "soumis",
+		"contestation": "contestataire",
+		"depart": "en_depart"
+	},
+
+	"directive": {
+		"id": "rassemblement",
+		"position": [860.0, 320.0, 0.0],
+		"bonus_score": 2.6,
+		"etats_vitaux": ["contestataire"],
+		"active_au_depart": true
+	},
+
+	"saillance_ouvrage": 2.0,
+
+	"catalogue_local": {
+		"ouvrage": { "verbes": ["travailler"] },
+		"point_rassemblement": { "verbes": ["rejoindre"] }
+	},
+
+	"poids_verbes_colon": {
+		"travailler": 1.0,
+		"rejoindre": 1.0
+	},
+
+	"forme_colon": {
+		"seuil_ecrasement": 1.2,
+		"gain_inertie": 0.1,
+		"rayon_liaison": 0.0,
+		"gain_bas": 0.1,
+		"plafond_bas": 0.5,
+		"gain_haut": 1.0,
+		"plafond_haut": 1.0
+	},
+
+	"colons": [
+		{
+			"id": "colon_soumis",
+			"position": [220.0, 160.0, 0.0],
+			"biais_grief": { "soumission": 0.6, "contestation": 0.2, "depart": 0.2 },
+			"ouvrage": [520.0, 160.0, 0.0]
+		},
+		{
+			"id": "colon_rebelle",
+			"position": [220.0, 320.0, 0.0],
+			"biais_grief": { "soumission": 0.1, "contestation": 0.7, "depart": 0.2 },
+			"ouvrage": [520.0, 320.0, 0.0]
+		},
+		{
+			"id": "colon_nomade",
+			"position": [220.0, 480.0, 0.0],
+			"biais_grief": { "soumission": 0.1, "contestation": 0.2, "depart": 0.7 },
+			"ouvrage": [520.0, 480.0, 0.0]
+		}
+	],
+
+	"intervalle_print": 1.0,
+	"seuil_trace_grief": 5.0,
+
+	"couleurs": {
+		"fond_injustice": [0.22, 0.13, 0.13],
+		"fond_amelioration": [0.13, 0.20, 0.15],
+		"neutre": [0.62, 0.62, 0.62],
+		"soumis": [0.92, 0.82, 0.25],
+		"contestataire": [0.88, 0.20, 0.18],
+		"en_depart": [0.30, 0.60, 0.95],
+		"barre_fond": [0.10, 0.10, 0.10],
+		"barre_grief": [0.85, 0.45, 0.20],
+		"seuil": [1.0, 1.0, 1.0],
+		"ouvrage": [0.55, 0.45, 0.30],
+		"directive": [0.30, 0.75, 1.0]
+	},
+
+	"taille_colon": 26.0,
+	"taille_chose": 22.0,
+	"largeur_barre": 190.0,
+	"hauteur_barre": 14.0
+}

@@ -1,0 +1,102 @@
+{
+	"_note": "Jetable, propre à scripts/banc_menace_combat.gd (chantier « menace -> peur/colère — score, bifurcation, effets », audit_mecaniques_psycho_sociales_prealable.md lignes 1/2/3/4). AUCUN catalogue de types local : les trois colons, les six ennemis, les trois ouvrages et le mur sont CONSTRUITS À LA MAIN (patron banc_nutrition.gd/banc_maladie.gd), jamais Objet.fabriquer. RAISON, posée avant d'écrire : data/types.json:colon porte déjà un canal de charge nommé 'peur' (portee_charge 900.0, pose 'effraye'), qui capterait la cause SYNTHÉTISÉE de ce banc (position du colon lui-même, distance 0.0 <= 900.0) et ferait monter une seconde peur parasite. Construire à la main évite ça sans toucher une ligne de data/types.json — donc RIEN à enregistrer dans scripts/test_lint_donnees.gd.\n\nLE SCORE DE MENACE (ligne 1 de l'audit, verdict CÂBLABLE, tenu) : par ennemi perçu, max(0, 1 - distance/portee_max_menace) * ratio_effectifs * visibilité, puis SOMMÉ sur tous les ennemis — l'agrégation par somme est une décision de ce banc, absente de la consigne : quatre ennemis doivent stresser plus que deux, et un max() ne le rendrait jamais. ratio_effectifs = Comptage.compter(ennemi) / Comptage.compter(allie), deux appels et une division, zéro ligne de mécanisme. visibilité = Occlusion.facteur(...), continue dans [0,1].\n\nPOURQUOI data/menaces.json N'EST PAS LU : ce catalogue partagé est une table propriete_vulnerabilite -> propriete_menace ({'inflammable': 'brule'}), lue par attaches.gd pour « ce à quoi je tiens est menacé ». Ici la menace vise le colon LUI-MÊME, pas une de ses attaches — la propriété de menace arrive donc en donnée de banc (propriete_menace), même geste exact que data/banc_charge.json:declencheur_charge. Le catalogue partagé n'est pas touché (dette signalée par l'audit §5, laissée intacte).\n\nCALIBRATION, mesurée et non devinée (leçon de banc_maladie) : 4 ennemis au départ contre 3 alliés = ratio 1.333. Le colon central est à ~400 des ennemis (facteur distance ~0.5), les latéraux à ~602 (~0.25). Score central ~2.67/s, latéral ~1.33/s ; seuil de charge 4.0 -> bifurcation vers t≈1.5s au centre, t≈3.0s sur les côtés. RATIO DE DÉPART VOLONTAIREMENT ≠ 1.0 : à ratio exactement 1.0 le colon équilibré (biais 0.5/0.5) tomberait sur une ÉGALITÉ STRICTE de produits, que bifurcation.gd refuse de trancher (push_error à chaque tick, première sortie déclarée conservée). 4 contre 3, puis 2 contre 3 au clic, encadrent 1.0 sans jamais l'atteindre.\n\nLE BIAIS PASSÉ À LA BIFURCATION EST COMPOSÉ, pas brut — décision de ce banc, sans quoi « l'équilibré dépend du ratio d'effectifs » (consigne) serait infaisable : bifurcation.gd multiplie chaque biais par UNE grandeur commune, qui ne peut donc jamais départager deux biais égaux (verrouillé par son propre test). Le câblage compose donc biais_effectif['peur'] = biais_combat['peur'] * ratio et biais_effectif['colere'] = biais_combat['colere'] * 1.0. Conséquences, toutes vérifiées par test : le lâche (0.8/0.2) a peur dès ratio > 0.25, l'agressif (0.2/0.8) n'a peur qu'au-delà de ratio 4.0 — leur tempérament tient à tous les paliers du banc —, l'équilibré (0.5/0.5) bascule exactement à ratio 1.0. Le biais PERSONNEL reste en donnée sur le colon, jamais réécrit ; la composition est une lecture, refaite à neuf chaque tick.\n\nPALIERS AU CLIC : 4 ennemis (ratio 1.333) -> 2 (0.667) -> 6 (2.0) -> 0 (aucun stress, aucune bifurcation, tout se retire). Cycle, jamais bistable — un ratio n'a pas deux états entre lesquels basculer.\n\nL'OUVRAGE EST LA CONCURRENCE, et c'est lui qui rend l'écrasement visible : chaque colon a un bloc 'cassable' à 160 (saillance ~2.47 via profils_saillance.json:bloc), plus proche que les ennemis (~2.25 au centre, ~1.87 sur les côtés). Sans peur, le colon va vers son ouvrage. La déformation amplifie l'ennemi jusqu'à ce que l'écart dépasse forme.seuil_ecrasement (1.5) et que dominance.gd RETIRE l'ouvrage de la liste — vers t≈4s. Sans ce bloc, il n'y aurait rien à écraser et le banc ne montrerait qu'une saillance seule.\n\nLE MUR (opacite 0.6) est posé sur le segment colon_agressif -> ennemis : son score est réduit d'environ 40%, il bifurque donc plus tard que les deux autres. opacite POSÉE À LA MAIN et non fusionnée depuis une fiche matériau — écart assumé : data/proprietes_immuables_composition.json donne opacite 1.0 à bois/pierre/fer, donc un mur réel BLOQUERAIT TOTALEMENT (score 0.0, même constat que le canal 'magie' de banc_magie_perception.gd) et l'occlusion ne serait jamais observable en dégradé.",
+
+	"propriete_menace": "hostile",
+	"propriete_allie": "allie",
+	"propriete_obstacle": "opacite",
+	"largeur_obstacle": 150.0,
+	"portee_max_menace": 1000.0,
+
+	"nom_canal_stress": "stress_combat",
+	"nom_marqueur_stress": "marqueur_stress_combat",
+	"canal_stress": {
+		"charge": 0.0,
+		"seuil": 4.0,
+		"portee_charge": 0.0,
+		"taux_decroissance": 3.0,
+		"poser": { "marqueur_stress_combat": true }
+	},
+	"charge_max_affichee": 8.0,
+
+	"sorties_bifurcation": ["peur", "colere"],
+	"deformation_par_sortie": { "peur": "peur", "colere": "colere" },
+	"magnitude_deformation_par_s": 1.2,
+	"plafond_biais": 2.0,
+	"propriete_prob_fuite": "prob_fuite",
+
+	"poids_verbes_repos": { "approcher": 0.5, "s_eloigner": 0.3 },
+	"poids_verbes_par_sortie": {
+		"peur": { "approcher": 0.2, "s_eloigner": 1.0 },
+		"colere": { "approcher": 1.0, "s_eloigner": 0.1 }
+	},
+
+	"comptages": {
+		"ennemi": { "propriete": "hostile", "mode": "presente" },
+		"allie": { "propriete": "allie", "mode": "presente" }
+	},
+	"regle_ennemi": "ennemi",
+	"regle_allie": "allie",
+
+	"colon_commun": {
+		"vitesse": 110.0,
+		"precision": 1.0,
+		"endurance": 1.0,
+		"degats": 10.0,
+		"prob_fuite": 1.0,
+		"forme": { "seuil_ecrasement": 1.5, "gain_inertie": 0.2 },
+		"canaux": ["vue"],
+		"canaux_config": {
+			"_note_angle": "angle 360.0 et NON 180.0 comme data/types.json:colon — écart assumé, et un CONSTAT trouvé en lançant le test, pas une préférence. perception.gd:_percevoir_cone_oriente compare dot(orientation, vers_chose) >= cos(deg_to_rad(angle/2)). L'orientation par défaut est (0,0,1) (data/types.json:percevant) et TOUTES les positions de ce dépôt ont z = 0 (règle de VERTICALITÉ, CLAUDE.md) : le produit scalaire vaut donc exactement 0.0 pour toute chose, alors que cos(deg_to_rad(90.0)) vaut 6.12e-17 en flottant, STRICTEMENT positif. Un cône de 180.0 ne perçoit donc RIEN dans un monde plan. Les bancs existants ne le voient pas parce que leurs colons portent aussi 'ouie' (sphère de 600, seuil 0.0 qui ne retire rien), qui rattrape ce que la vue a laissé tomber. Ce banc n'a QU'UN canal, exprès (le score de menace doit dépendre de la distance seule, pas d'un cumul de canaux), donc rien ne rattrape. 360.0 dégénère explicitement en sphère pure (perception.gd le documente). DETTE SIGNALÉE, JAMAIS CORRIGÉE ICI (fichier partagé, hors périmètre) : data/types.json:colon.canaux_config.vue.angle vaut 180.0 et sa vue est donc aveugle partout — inoffensif tant que l'ouïe couvre, faux dès qu'un banc s'en remettra à la vue seule.",
+			"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+		}
+	},
+	"colons": {
+		"colon_lache": {
+			"position": [-350.0, 0.0, 0.0],
+			"biais_combat": { "peur": 0.8, "colere": 0.2 }
+		},
+		"colon_equilibre": {
+			"position": [0.0, 0.0, 0.0],
+			"biais_combat": { "peur": 0.5, "colere": 0.5 }
+		},
+		"colon_agressif": {
+			"position": [350.0, 0.0, 0.0],
+			"biais_combat": { "peur": 0.2, "colere": 0.8 }
+		}
+	},
+
+	"ennemis": [
+		{ "id": "hostile_0", "position": [-60.0, -400.0, 0.0] },
+		{ "id": "hostile_1", "position": [60.0, -400.0, 0.0] },
+		{ "id": "hostile_2", "position": [0.0, -460.0, 0.0] },
+		{ "id": "hostile_3", "position": [0.0, -340.0, 0.0] },
+		{ "id": "hostile_4", "position": [-120.0, -430.0, 0.0] },
+		{ "id": "hostile_5", "position": [120.0, -430.0, 0.0] }
+	],
+	"paliers_ennemis": [4, 2, 6, 0],
+	"profil_saillance_ennemi": "menace_1",
+
+	"ouvrages": [
+		{ "id": "ouvrage_lache", "position": [-350.0, 160.0, 0.0] },
+		{ "id": "ouvrage_equilibre", "position": [0.0, 160.0, 0.0] },
+		{ "id": "ouvrage_agressif", "position": [350.0, 160.0, 0.0] }
+	],
+	"profil_saillance_ouvrage": "bloc",
+	"propriete_ouvrage": "cassable",
+
+	"murs": [
+		{ "id": "mur_agressif", "position": [175.0, -200.0, 0.0], "opacite": 0.6 }
+	],
+
+	"couleurs": {
+		"colon_neutre": [0.35, 0.75, 0.4],
+		"colon_peur": [0.3, 0.5, 0.95],
+		"colon_colere": [0.9, 0.2, 0.2],
+		"ennemi": [0.05, 0.05, 0.05],
+		"ouvrage": [0.55, 0.5, 0.45],
+		"mur": [0.4, 0.4, 0.45],
+		"fond_barre": [0.15, 0.15, 0.15],
+		"stress": [0.95, 0.55, 0.1]
+	},
+	"camera": { "position": [0.0, -110.0, 0.0], "zoom": 0.62 }
+}

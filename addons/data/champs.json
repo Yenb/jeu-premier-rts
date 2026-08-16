@@ -1,0 +1,11 @@
+{
+	"_note": "Catalogue du mecanisme scripts/champ.gd (force generique a portee, deplace les objets). Chaque entree parametre UNE loi identique -- aucun code moteur ne connait le nom d'une entree. 'propriete_source' pointe vers un champ de data/materiaux.json, lu a la demande par composition (jamais fusionne, voir champ.gd/objet.gd). 'signe' positif attire vers la source, negatif repousse. 'exposant' regle la decroissance (1/distance^exposant). 'portee' borne la distance au-dela de laquelle la force est nulle. 'plancher_distance' borne le 1/d^exposant pres de zero (pas d'infini). 'plafond_deplacement' borne le pas par tick (pas de traversee au contact) -- PEAUFINAGE (retour playtest Yael, banc_champ) : remonte de 0.2 a 1.5, la valeur precedente plafonnait la vitesse du golem des ~1.25 m de l'aimant, aplatissant l'acceleration exactement dans le dernier tiers de l'approche, le plus spectaculaire. A 1.5, le plafond ne s'active plus qu'a ~0.46 m de l'aimant (plancher_distance 12 = ~0.3 m) -- la courbe 1/d^2 reste visible sur presque tout le trajet. VALEUR DE DEPART, encore ajustable au ressenti. 'duree' est reservee pour une future source ephemere (explosion) -- absente ici (magnetisme permanent), lue par AUCUN code a ce jour (voir champ.gd, section DUREE).",
+	"magnetisme": {
+		"propriete_source": "magnetisme",
+		"signe": 1.0,
+		"exposant": 2.0,
+		"portee": 240.0,
+		"plancher_distance": 12.0,
+		"plafond_deplacement": 1.5
+	}
+}

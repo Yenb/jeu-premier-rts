@@ -1,0 +1,11 @@
+{
+	"_note": "Donnees jetables du banc etat_effectif -- observe scripts/etat_effectif.gd sur une seule propriete illustrative, 'inflammabilite' (valeur de depart 0.9, meme ordre de grandeur que le bois de data/materiaux.json -- AUCUN lien reel avec le chantier feu, ce banc ne fabrique rien via Objet.fabriquer, ne porte aucune composition ni materiau). data/etats.json (partage, mouille/huile) fournit les deux etats poses/retires par minuterie. Quatre objets cote a cote (voir docs/prototypes.md) : sans_etat (temoin, jamais touche), ecrase (mouille seul), module (huile seul), ecrase_et_module (les deux -- rend visible a l'ecran que l'ecraseur gagne toujours). 'etats_role' est l'ensemble des etats que l'objet porte pendant la phase ACTIVE du cycle -- vide pendant la phase inactive, aucun etat ne vise jamais 'sans_etat'.",
+	"inflammabilite_base": 0.9,
+	"periode_bascule": 4.0,
+	"objets": [
+		{ "id": "sans_etat", "position": [200.0, 300.0, 0.0], "etats_role": [] },
+		{ "id": "ecrase", "position": [380.0, 300.0, 0.0], "etats_role": ["mouille"] },
+		{ "id": "module", "position": [560.0, 300.0, 0.0], "etats_role": ["huile"] },
+		{ "id": "ecrase_et_module", "position": [740.0, 300.0, 0.0], "etats_role": ["mouille", "huile"] }
+	]
+}

@@ -1,0 +1,14 @@
+{
+	"_note": "Donnees jetables du banc point_ignition -- demonstration reelle du chantier 'point_ignition' (gate temperature dans propagation.gd:delai_ignition, en plus du proxy inflammabilite deja existant, les deux filtres COEXISTENT). Deux cibles de MEME matiere (bois, point_ignition=300.0 dans data/materiaux.json) et de MEME distance a leur propre foyer (60 unites, meme delai_propagation_base) -- seule variable experimentale : cible_chaude se tient dans le rayon de source_temperature (800 degres, au-dessus du point_ignition), cible_froide reste hors de ce rayon (temperature ambiante seule, 20 degres, data/temperature.json:defaut -- nettement sous 300). Aucune propriete d'intensite (intensite/etats non fournis a Propagation.avancer) : ce banc isole le NOUVEAU gate seul, jamais le proxy inflammabilite deja demontre par banc_inflammabilite.",
+	"delai_propagation_base": 2.0,
+	"portee_propagation": 900.0,
+	"objets": [
+		{ "id": "cible_chaude", "position": [200.0, 400.0, 0.0], "composition": [ { "materiau": "bois", "volume": 5.0 } ] },
+		{ "id": "cible_froide", "position": [700.0, 400.0, 0.0], "composition": [ { "materiau": "bois", "volume": 5.0 } ] }
+	],
+	"feux": [
+		{ "id": "feu_chaud", "position": [140.0, 400.0, 0.0] },
+		{ "id": "feu_froid", "position": [640.0, 400.0, 0.0] }
+	],
+	"source_temperature": { "position": [200.0, 400.0, 0.0], "rayon": 150.0, "temperature": 800.0, "force": 1.0 }
+}

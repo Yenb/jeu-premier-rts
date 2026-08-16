@@ -1,0 +1,43 @@
+{
+	"_note": "Jetable, propre a scripts/banc_conduction.gd (chantier 'conduction electrique -- courant continu'). 'facteur_conductivite_base' (1e-6) compense l'ecart d'echelle entre les unites reelles de materiaux.json:conductivite_electrique (S/m, 1e-15 a 1e7) et une reserve/charge lisible a l'ecran en quelques secondes -- meme geste de calibration que la masse minuscule de leger_golem dans data/banc_champ.json, jamais une loi differente. 'seuil_conduction' (1.0 S/m) separe nettement fer (~1e7) de bois/pierre (~1e-15/1e-9). Trois rangees d'objets (fer-bois-fer bloque, fer-fer-fer traverse, fer sec vs fer mouille) espacees de 90 unites (= portee_contact), un agent pres du fer central de la rangee qui traverse.",
+	"propriete_cause": "generateur",
+	"propriete_sous_tension": "sous_tension",
+	"propriete_conducteur": "conducteur_actif",
+	"nom_reserve_courant": "courant",
+	"seuil_conduction": 1.0,
+	"portee_contact": 90.0,
+	"facteur_conductivite_base": 0.000001,
+	"nom_canal_electrocution": "electrocution",
+	"canal_electrocution_defaut": {
+		"charge": 0.0,
+		"seuil": 2.0,
+		"portee_charge": 90.0,
+		"taux_decroissance": 5.0,
+		"poser": { "expose_electrocution": true }
+	},
+	"declencheur_expose_electrocution": "expose_electrocution",
+	"nom_etat_electrocute": "electrocute",
+	"degat_par_s": 3.0,
+	"nom_reserve_integrite": "integrite",
+	"reserve_integrite_defaut": { "reserve": 10.0, "cout_base": 0.0, "surcout_action": 0.0 },
+
+	"sources": [
+		{ "id": "source_bloque", "position": [0.0, 0.0, 0.0] },
+		{ "id": "source_traverse", "position": [0.0, 150.0, 0.0] },
+		{ "id": "source_sec", "position": [0.0, 300.0, 0.0] },
+		{ "id": "source_mouille", "position": [0.0, 400.0, 0.0] }
+	],
+	"objets": [
+		{ "id": "fer_bloque_1", "position": [90.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "bois_bloque", "position": [180.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 0.05 }] },
+		{ "id": "fer_bloque_2", "position": [270.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+
+		{ "id": "fer_traverse_1", "position": [90.0, 150.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "fer_traverse_2", "position": [180.0, 150.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "fer_traverse_3", "position": [270.0, 150.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+
+		{ "id": "fer_sec", "position": [90.0, 300.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "fer_mouille", "position": [90.0, 400.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }], "etats_actifs": ["mouille"] }
+	],
+	"agent": { "id": "colon_test", "position": [180.0, 200.0, 0.0] }
+}

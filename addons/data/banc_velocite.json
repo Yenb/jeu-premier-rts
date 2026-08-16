@@ -1,0 +1,19 @@
+{
+	"_note": "Jetable, propre a ce banc (voir CARTE.md, entree banc_velocite). 'colon_velocite' est un type LOCAL (exception banc jetable de CLAUDE.md) : herite objet_physique/dynamique, controlable, AUCUNE composition (pas de magnetisme, jamais dans un champ) -- demontre la velocite d'un deplacement purement VOLONTAIRE (bouger_vers via banc_controle.gd, REUTILISE tel quel). 'repere' est un second type LOCAL, objet_physique SEUL, jamais controlable ni compose -- ne bouge JAMAIS, sert a montrer un objet immobile a velocite exactement (0,0,0). Le golem/aimant magnetiques ne sont PAS redeclares ici : ce banc charge data/banc_champ.json et reutilise TEL QUEL BancChamp.fabriquer_golem_magnetique/_fabriquer_aimant (voir scripts/banc_velocite.gd) -- meme golem, meme aimant, memes positions, aucune duplication de donnee. Echelle identique aux autres bancs (1 metre = 40 unites).",
+	"types": {
+		"colon_velocite": {
+			"herite": ["objet_physique", "dynamique"],
+			"controlable": true,
+			"vitesse": 150.0
+		},
+		"repere": {
+			"herite": ["objet_physique"]
+		}
+	},
+	"colon": {
+		"position": [0.0, -240.0, 0.0]
+	},
+	"repere": {
+		"position": [140.0, 240.0, 0.0]
+	}
+}

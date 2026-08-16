@@ -1,0 +1,10 @@
+{
+	"_note": "Donnees jetables du banc chaine_reactions -- PREMIERE demonstration reelle du chantier « composition en profondeur -- chainage automatique de reactions ». Trois objets REELS (acide_demo/fer/eau_demo, data/materiaux.json), fer au centre fixe (position_proche == position_loin), acide_demo et eau_demo bistables de part et d'autre. Un clic gauche RAPPROCHE les trois (distance 250.0 au centre, sous portee_reaction=320.0 de data/reactions.json avec une marge confortable, meme ordre de grandeur que data/banc_reactivite.json) : acide_demo+fer -> sel_metallique, puis (au tick suivant, une fois fer devenu sel_metallique) sel_metallique+eau_demo -> sel_dissous -- la cascade complete visible en deux etages. profondeur_chaine_max=4 est largement au-dessus des deux etages reellement exploites ici (voir scripts/test_reaction.gd pour la preuve dediee, hors domaine, que la limite elle-meme fonctionne).",
+	"profondeur_chaine_max": 4,
+	"objets": [
+		{ "id": "acide_demo", "position_proche": [150.0, 250.0, 0.0], "position_loin": [150.0, -2000.0, 0.0], "composition": [ { "materiau": "acide_demo", "volume": 2.0 } ] },
+		{ "id": "fer", "position_proche": [400.0, 250.0, 0.0], "position_loin": [400.0, 250.0, 0.0], "composition": [ { "materiau": "fer", "volume": 3.0 } ] },
+		{ "id": "eau_demo", "position_proche": [650.0, 250.0, 0.0], "position_loin": [650.0, -2000.0, 0.0], "composition": [ { "materiau": "eau_demo", "volume": 2.0 } ] }
+	],
+	"camera": { "position": [400.0, 250.0, 0.0], "zoom": 0.6 }
+}

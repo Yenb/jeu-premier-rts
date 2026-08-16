@@ -1,0 +1,18 @@
+{
+	"_note": "Jetable, propre au banc « écoulement gravitaire -- eau par pente » (scripts/banc_ecoulement.gd). Grille grille_lignes x grille_colonnes de cases-objets CONSTRUITES À LA MAIN (patron banc_maladie.gd/banc_toxicite.gd, jamais Objet.fabriquer -- une case n'a pas de composition). 'position' des cases reste un FAIT SPATIAL PUR en unités de grille (x=colonne, y=ligne, z=0.0 toujours -- decision Yael, voir scripts/ecoulement.gd) : rayon_voisinage=1.5 couvre les 8 voisins adjacents (orthogonaux à 1.0, diagonaux à sqrt(2)≈1.414). L'altitude vit dans proprietes.altitude (nom_altitude), DÉCOUPLÉE de position -- décroît linéairement de altitude_max (colonne 0, gauche) à altitude_min (dernière colonne, droite). Moitié gauche des colonnes : sol 'terre' (permeabilite haute, data/materiaux.json) ; moitié droite : 'roche' (permeabilite basse). eau_initiale posée sur les 8 cases de la colonne 0 seulement, 0.0 partout ailleurs. taux_decroissance_plancher/facteur_permeabilite : même formule que scripts/banc_permeabilite.gd:taux_decroissance_permeabilite (plancher + facteur*permeabilite), ECRITE comme cout_base du canal reserves.<nom_reserve> (scripts/depense.gd, absorption) ; evaporation_par_s ECRITE comme surcout_action du MÊME canal (perte sèche constante, même appel à depense.gd:avancer -- aucun code neuf, voir en-tête scripts/banc_ecoulement.gd).",
+	"grille_lignes": 8,
+	"grille_colonnes": 8,
+	"altitude_max": 20.0,
+	"altitude_min": 2.0,
+	"rayon_voisinage": 1.5,
+	"taux_ecoulement": 5.0,
+	"evaporation_par_s": 0.01,
+	"eau_initiale": 10.0,
+	"nom_reserve": "niveau_eau",
+	"nom_altitude": "altitude",
+	"taux_decroissance_plancher": 0.02,
+	"facteur_permeabilite": 0.3,
+	"materiau_gauche": "terre",
+	"materiau_droite": "roche",
+	"ajout_clic": 5.0
+}

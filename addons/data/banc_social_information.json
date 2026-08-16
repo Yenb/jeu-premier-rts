@@ -1,0 +1,86 @@
+{
+	"_note": "Données propres à scripts/banc_social_information.gd (Scene/banc_social_information.tscn), chantier « circulation de l'information » (Social et relations, lignes 4 — la réputation se propage aux témoins — et 6 — un novice imite le maître compétent à portée). JETABLE, propre au banc : rien ici n'est un catalogue partagé. Les cinq colons sont CONSTRUITS À LA MAIN (patron banc_croyance.gd/banc_marche_competence.gd), jamais Objet.fabriquer — data/types.json n'est donc PAS touché, et RIEN n'est à enregistrer dans scripts/test_lint_donnees.gd. Les deux catalogues PARTAGÉS que ce banc consomme (data/croyances.json et data/epigenetique.json:competence_forge) ne sont redéclarés nulle part ici : ce fichier ne porte que la scène d'observation et sa calibration. La seule touche à un catalogue partagé est l'ajout de « reputation_voleur » dans data/croyances.json:proprietes_observables, justifié dans la _note de ce fichier-là.\n\nLES DEUX LIGNES DANS UN SEUL BANC, parce qu'elles sont LA MÊME QUESTION (CLAUDE.md, « UN GAMEPLAY EST UNE COMPOSITION, JAMAIS UNE PIÈCE ») : qu'est-ce qui circule d'un colon à un autre quand ils se voient. La ligne 4 fait circuler un FAIT (une réputation, par Croyance.corriger, atténué par la crédibilité du lien) ; la ligne 6 fait circuler un SAVOIR-FAIRE (une marque épigénétique, par Epigenetique.poser, atténué par la fidélité). Deux mécanismes du cœur déjà fermés, deux temporalités, un seul geste de câblage : PERCEVOIR QUELQU'UN À PORTÉE, PUIS ÉCRIRE CHEZ LUI. Livrées séparément, les deux ne rendraient que deux mécanismes qui existaient déjà.\n\nL'ÉCHELLE DE TEMPS EST LE PIVOT DE TOUTE LA CALIBRATION, et c'est le constat B repris de l'audit Affordances : une cadence exprimée « par heure » n'est PAS une cadence — le moteur ne connaît que des secondes. secondes_par_heure_simulee (2.0) est le SEUL facteur de conversion, et les quatre cadences en dérivent : cadence_observation_h 0.25 -> 0.5 s, heures_par_propagation 1.0 -> 2.0 s, prob_par_observation_h 10.0 -> 2.0/10.0 = 0.2 s d'intervalle d'imitation, heures_par_saison 10.0 -> 20.0 s. Aucun de ces quatre nombres n'est lisible seul : ils ne veulent dire quelque chose que multipliés (ou divisés) par l'échelle. Verrouillé par test.\n\nL'INTERVALLE D'IMITATION EST CONTRAINT PAR data/epigenetique.json, il n'est pas libre. competence_forge y porte modulateur_pose 0.04, taux_decroissance 0.05/s, plancher_suppression 0.02 : une marque fraîche tombe sous son plancher, donc est RETIRÉE, après (0.04 - 0.02) / 0.05 = 0.4 s sans renouvellement. Un intervalle de pose au-dessus de 0.4 s ferait effacer la marque entre deux poses et n'accumulerait JAMAIS rien, sans que rien ne rougisse — RÉSULTAT NÉGATIF déjà mesuré trois fois dans le dépôt (voir data/epigenetique.json:accoutumance_froid/experience_combat/competence_forge, et docs/ETAT.md), interdit de le refaire. 0.2 s reste dessous. Verrouillé par test contre les nombres RÉELS du disque, jamais contre une copie locale.\n\nLA DÉCROISSANCE DE LA RÉPUTATION EST SAISONNIÈRE, ET C'EST UNE CADENCE DE CÂBLAGE, jamais un taux de plus. croyance.gd:avancer n'a aucune notion de saison : il retire taux_decroissance x delta. Le câblage ne l'appelle donc PAS à chaque image — il accumule une horloge et l'appelle UNE FOIS par saison, avec la durée de la saison entière comme delta (patron epigenetique.gd:avancer, même geste que les intervalles de pose de banc_marche_competence.gd/banc_graisse_accoutumance.gd). Conséquence chiffrée : taux_decroissance 0.01/s x 20 s = 0.20 de certitude perdue d'un coup, à chaque saison. Une réputation entretenue (le voleur vole toujours, le témoin le revoit) remonte au plafond ; une réputation dont la cause a cessé perd 0.20 par saison et finit sous plancher_suppression (0.05), où croyance.gd RETIRE l'entrée. Depuis le plafond 1.0, l'oubli complet demande cinq saisons, soit 100 s — long à l'écran, mais chaque saison est un décrochement visible de 0.20, pas une dérive continue : c'est précisément ce que « par saison » veut dire.\n\nLA CRÉDIBILITÉ N'EST PAS INVENTÉE : credibilite = LienPersonnel.force(RECEVEUR, emetteur) x propagation_par_temoin — « à quel point JE TE crois ». LE LIEN EST PORTÉ PAR CELUI QUI ÉCOUTE, jamais par celui qui parle : maître 0.9 vers le témoin, novice 0.7, lointain 0.8. C'est le sens déjà câblé par banc_croyance.gd:transmettre, le seul du dépôt qui tourne, et celui que l'audit préalable nomme explicitement (ligne 4). ÉCART ASSUMÉ ET DIT : la consigne d'origine écrivait l'ordre inverse (force(temoin, destinataire)) — une crédibilité portée par l'émetteur ferait dépendre ma confiance de ce que L'AUTRE ressent pour moi. Les liens sont posés par LienPersonnel.poser à la construction, jamais par un Dictionary recopié — état INITIAL de la scène, au même titre qu'une position (leur naissance par événement vécu est déjà prouvée par banc_lien_personnel.gd, ce banc consomme le résultat).\n\nCALIBRATION DES CRÉDIBILITÉS, calculée et non devinée. propagation_par_temoin 0.6 : crédibilités 0.54 (maître) / 0.42 (novice) / 0.48 (lointain), toutes AU-DESSUS de data/croyances.json:seuil_bornes_transmission (0.4) — aucun destinataire de cette scène n'est « sourd », et c'est voulu : le refus par crédibilité est déjà montré à l'écran par banc_croyance.gd, ce banc n'a pas à le rejouer (le câblage lit quand même le seuil, contrat du catalogue partagé, et le test exerce la branche). La fidélité 0.6 et non 0.4 EST une conséquence de ce seuil : à 0.4 il faudrait des liens au-dessus de 1.0 pour que quiconque écoute. Certitudes reçues : gain_par_echec (0.8) x crédibilité = 0.432 / 0.336 / 0.384 — TOUTES sous la certitude du témoin, qui l'a vu de ses yeux. C'est la ligne 4 rendue visible à l'œil : une réputation s'affaiblit à chaque bouche, elle ne se duplique pas.\n\nCALIBRATION DES POSITIONS ET DES PORTÉES DE VUE, calculée et non devinée, parce que TOUTE la démonstration en dépend. Une case vaut 60 unités. Portée de propagation 5 cases (300), portée d'imitation 3 cases (180). voleur (200,200) — témoin (350,200) : 150. témoin — maître (350,440) : 240, à portée de propagation. témoin — novice (450,440) : 260, à portée. témoin — lointain (900,200) : 550, HORS PORTÉE ; rapproché (600,200) : 250, à portée. maître — novice : 100, à portée d'imitation. LA PORTÉE DE VUE DU TÉMOIN (400) EST LA SEULE LONGUE, ET C'EST STRUCTUREL : les quatre autres voient à 200, donc le maître (283 du voleur) et le novice (347) ne peuvent PAS voir le vol de leurs yeux. Sans cela ils formeraient la croyance par observation directe et il n'y aurait plus rien à propager — exactement le piège que banc_croyance.gd évite en ne faisant marcher personne. Déplacer un colon de quelques dizaines d'unités casse cette démonstration en silence : les six distances et les deux portées sont verrouillées par test.\n\nLA COMPÉTENCE DU MAÎTRE NE BAISSE PAS, ET CE N'EST PAS UN CAS PARTICULIER. epigenetique.gd:avancer décroît TOUTES les marques de tous les colons, chaque tick, inconditionnellement — un maître qui ne ferait rien perdrait sa compétence en 17.6 s, et « le maître ne perd rien » serait faux tous tests verts. Il l'ENTRETIENT donc : entretient_competence true, et le câblage repose la marque tant qu'elle est sous plafond_competence (0.9). Il exerce son métier, voilà tout — le novice, lui, ne l'entretient pas, il ne fait qu'imiter. Montée nette à l'intervalle de 0.2 s : 0.04/0.2 - 0.05 = 0.15/s, donc le maître oscille finement autour de 0.9 et le novice atteint son plafond d'imitation en ~2.4 s.\n\nDEUX BORNES SUR L'IMITATION, ET ELLES NE DISENT PAS LA MÊME CHOSE. seuil_ecart (0.2) est un gate d'ENTRÉE : sous cet écart il n'y a plus rien à apprendre de ce modèle, on ne pose pas. fidelite_imitation (0.4) est un PLAFOND : on n'apprend jamais au-delà de fidelite x modulateur du maître, soit 0.36 ici. Le plafond mord AVANT le seuil d'écart (0.36 contre 0.7), donc c'est LUI qu'on voit à l'écran ; le gate d'écart, lui, est exercé par le test sur un cas dédié. POURQUOI UN PLAFOND ET NON UNE MAGNITUDE : epigenetique.gd:poser n'accepte AUCUNE magnitude — le montant vient de catalogue[marque].modulateur_pose et de nulle part ailleurs. « fidelite x modulateur du maître » ne peut donc pas être un montant sans toucher au cœur ; c'est la BORNE que l'imitation ne franchit pas. Patron littéral : banc_marche_competence.gd:_poser_une_marque, qui borne déjà la pose plutôt que la seule lecture. L'ALTERNATIVE DE L'AUDIT (ligne 6, route (b) : « fidelite module la CADENCE ») EST ÉCARTÉE, et pour deux raisons dites plutôt que masquées : (1) elle ne fait pas apparaître le produit demandé — une cadence divisée par la fidélité ne dépend PAS du modulateur du maître, donc « fidelite x modulateur du maître » n'existerait nulle part ; (2) elle marche droit sur le piège de cadence que l'audit rappelle lui-même — intervalle_base / fidelite = 0.2 / 0.4 = 0.5 s, AU-DESSUS des 0.4 s de competence_forge, et la marque n'accumulerait JAMAIS rien. La troisième route de l'audit (Deformation.poser, qui accepte une magnitude) est écartée aussi : elle ferait gagner une CIBLE en saillance, ce qui est la ligne 11, pas la 6 — ici le novice doit gagner une COMPÉTENCE, pas trouver la forge plus attirante.",
+
+	"terrain_largeur": 1100.0,
+	"terrain_hauteur": 620.0,
+
+	"canaux": ["vue"],
+
+	"nom_propriete_reputation": "reputation_voleur",
+	"nom_marque_competence": "competence_forge",
+
+	"unites_par_case": 60.0,
+	"portee_propagation_cases": 5.0,
+	"portee_imitation_cases": 3.0,
+
+	"secondes_par_heure_simulee": 2.0,
+	"cadence_observation_h": 0.25,
+	"heures_par_propagation": 1.0,
+	"prob_par_observation_h": 10.0,
+	"heures_par_saison": 10.0,
+
+	"propagation_par_temoin": 0.6,
+	"fidelite_imitation": 0.4,
+	"seuil_ecart": 0.2,
+
+	"vol_au_depart": true,
+	"intervalle_trace_s": 3.0,
+
+	"colons": [
+		{
+			"id": "voleur",
+			"position": [200.0, 200.0, 0.0],
+			"portee_vue": 200.0,
+			"sujet_reputation": true,
+			"couleur": [0.85, 0.30, 0.30]
+		},
+		{
+			"id": "temoin",
+			"position": [350.0, 200.0, 0.0],
+			"portee_vue": 400.0,
+			"temoin": true,
+			"couleur": [0.35, 0.75, 0.95]
+		},
+		{
+			"id": "lointain",
+			"position": [900.0, 200.0, 0.0],
+			"position_alternee": [600.0, 200.0, 0.0],
+			"portee_vue": 200.0,
+			"liens": { "temoin": 0.8 },
+			"couleur": [0.60, 0.60, 0.65]
+		},
+		{
+			"id": "maitre",
+			"position": [350.0, 440.0, 0.0],
+			"portee_vue": 200.0,
+			"liens": { "temoin": 0.9 },
+			"modulateur_competence_depart": 0.9,
+			"entretient_competence": true,
+			"plafond_competence": 0.9,
+			"couleur": [0.95, 0.75, 0.25]
+		},
+		{
+			"id": "novice",
+			"position": [450.0, 440.0, 0.0],
+			"portee_vue": 200.0,
+			"liens": { "temoin": 0.7 },
+			"modulateur_competence_depart": 0.0,
+			"imite": true,
+			"couleur": [0.55, 0.90, 0.60]
+		}
+	],
+
+	"couleur_fond": [0.13, 0.14, 0.17],
+	"couleur_portee_propagation": [0.20, 0.28, 0.34],
+	"couleur_portee_imitation": [0.30, 0.28, 0.16],
+	"couleur_propagation": [0.45, 0.80, 1.0],
+	"couleur_imitation": [0.95, 0.80, 0.35],
+	"couleur_fond_barre": [0.08, 0.08, 0.10],
+	"couleur_barre_competence": [0.95, 0.60, 0.25],
+	"taille_colon": 30.0,
+	"largeur_barre": 160.0,
+	"hauteur_barre": 10.0,
+	"taille_police_label": 12,
+	"taille_police_compteur": 15,
+	"taille_police_aide": 12
+}

@@ -1,0 +1,21 @@
+{
+	"_note": "Jetable, propre au banc « succession écologique -- nu → prairie → taillis → forêt » (scripts/banc_succession.gd). Grille grille_lignes x grille_colonnes de cases-objets CONSTRUITES À LA MAIN (patron scripts/banc_ecoulement.gd, jamais Objet.fabriquer -- une case n'a pas de composition). 'position' des cases reste un FAIT SPATIAL PUR en unités de grille (x=colonne, y=ligne, z=0.0 toujours) : rayon_feu=1.5 couvre les 8 voisines immédiates (Moore-8 : orthogonales à 1.0, diagonales à sqrt(2)≈1.414), même calibration que rayon_voisinage de data/banc_ecoulement.json. stades_config est posée TELLE QUELLE sur proprietes.stades_config de chaque case (dupliquée en profondeur, jamais partagée par référence) et lue par scripts/stade.gd, qui ne connaît AUCUN nom de stade -- 'nu'/'prairie'/'taillis'/'foret' n'existent que dans CE fichier. age_seuil en ANNÉES (unité de proprietes.age, contrat de scripts/senescence.gd). annees_par_seconde : facteur d'échelle passé à Senescence.avancer, choisi haut (8.0) pour voir la succession complète en ~7.5 s (prairie à 0.5 s, taillis à 2 s, forêt à 7.5 s) -- c'est au CÂBLAGE de le choisir, jamais au mécanisme. VIEILLISSEMENT CONDITIONNEL : propriete_croissance nomme la propriété booléenne que le câblage lit sur la case pour décider de faire vieillir ou non ; colonne_sterile est la colonne qui la porte à false (l'horloge y vaut 0.0 année/seconde, la case reste au premier stade pour toujours) -- mettre colonne_sterile à -1 rend toute la grille fertile, mettre propriete_croissance à \"\" désactive entièrement la condition. couleurs_stade : une couleur RGB par nom de stade, table de RENDU seule (aucun nom de stade en dur dans le .gd).",
+	"grille_lignes": 6,
+	"grille_colonnes": 6,
+	"annees_par_seconde": 8.0,
+	"propriete_croissance": "croissance_possible",
+	"colonne_sterile": 5,
+	"rayon_feu": 1.5,
+	"stades_config": [
+		{ "nom": "nu", "age_seuil": 0.0 },
+		{ "nom": "prairie", "age_seuil": 4.0 },
+		{ "nom": "taillis", "age_seuil": 16.0 },
+		{ "nom": "foret", "age_seuil": 60.0 }
+	],
+	"couleurs_stade": {
+		"nu": [0.42, 0.30, 0.16],
+		"prairie": [0.58, 0.85, 0.36],
+		"taillis": [0.25, 0.62, 0.26],
+		"foret": [0.07, 0.31, 0.12]
+	}
+}

@@ -1,0 +1,6 @@
+{
+	"_note": "Configuration du chantier 'feu -- inflammabilite effective' (scripts/propagation.gd:delai_ignition) : quelle PROPRIETE d'intensite gate l'allumage -- resolue en valeur EFFECTIVE via scripts/etat_effectif.gd, un etat comme 'mouille' peut donc deja l'ecraser avant que propagation.gd ne la voie -- et en dessous de quel SEUIL une chose ne s'enflamme jamais, meme exposee indefiniment. FACULTATIF par construction : Propagation.avancer recoit {} par defaut, une chose sans la propriete nommee ici (pas de 'composition', donc pas d'inflammabilite calculee par objet.gd) traverse l'allumage exactement comme avant ce chantier -- delai_propagation fixe, aucune gate. 'propriete_point_ignition' (chantier 'correction nom en dur point_ignition') : quelle PROPRIETE de temperature de seuil gate l'allumage en plus du proxy d'intensite ci-dessus -- FACULTATIF, defaut '' au code (gate desactive tant que ce champ n'est pas declare) ; declare ici pour que le feu garde exactement son comportement d'avant ce chantier.",
+	"propriete_intensite": "inflammabilite",
+	"seuil_ignition": 0.1,
+	"propriete_point_ignition": "point_ignition"
+}

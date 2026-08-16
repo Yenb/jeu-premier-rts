@@ -1,0 +1,80 @@
+{
+	"_note": "JETABLE, propre a scripts/banc_oubli_consolidation.gd -- chantier « oubli exponentiel + consolidation nocturne » (audit_perception_croyance_memoire_prealable.md, lignes 3 et 4). AUCUN catalogue partage ici : les lois vivent dans data/croyances.json et data/memoire_spatiale.json (partagees, lues par les deux mecanismes du coeur), et la charge emotionnelle dans data/etats.json ; ce fichier ne porte que la mise en scene et la calibration d'observation. Le colon et les trois objets sont CONSTRUITS A LA MAIN (patron banc_croyance.gd/banc_memoire_navigation.gd), jamais Objet.fabriquer -- data/types.json n'est donc pas touche, et RIEN n'est a enregistrer dans scripts/test_lint_donnees.gd.\n\nL'EXPONENTIELLE EST UN TAUX, PAS UNE LOI NEUVE. croyance.gd:avancer et memoire_spatiale.gd:avancer decroissent par SOUSTRACTION FIXE (constat (F) de l'audit : aucune exponentielle n'existe dans le depot), et lisent leur taux AU CATALOGUE. Le cablage ecrit donc, chaque tick et par souvenir, taux_effectif = valeur_courante / (S x charge), ce qui donne dR/dt = -R/(S x charge), c'est-a-dire R = R0 x e^(-t/(S x charge)) par integration d'Euler : l'exponentielle sans une ligne de mecanisme. 'espacement_initial' EST ce S, en secondes -- la constante de temps du souvenir, jamais un taux.\n\n'espacement_initial' 6.0 : au bout de 6 s sans y revenir, un souvenir a perdu 63% de ce qu'il valait. 'gain_espacement_par_rappel' 1.15 : L'EFFET D'ESPACEMENT -- chaque observation de plus n'ajoute pas seulement de la certitude (gain_par_verification, data/croyances.json), elle ETIRE la constante de temps, donc l'oubli qui suit est plus lent. Un souvenir revu trois fois tient 1.15^2 = 1.32 fois plus longtemps qu'un souvenir vu une fois. 'plafond_espacement' 30.0 : LE PLAFOND VIT AU CABLAGE, le coeur ne borne jamais le haut (constat banc_fertilite.gd, repete six fois) -- sans lui, un colon qui observe sans cesse rendrait le taux nul et le souvenir eternel.\n\n'cadence_observation' 2.0 : croyance.gd:observer et memoire_spatiale.gd:memoriser n'ont AUCUNE notion de temps propre (meme limite qu'epigenetique.gd:poser). Les appeler a chaque image porterait la certitude au plafond en sept images. La cadence vit au cablage -- meme piege deja paye par banc_graisse_accoutumance.gd et banc_croyance.gd.\n\nLA CHARGE EMOTIONNELLE S'ATTACHE AU SOUVENIR, PAS AU COLON, et c'est une DECISION DE CE CABLAGE : data/etats.json module 'charge_emotionnelle' sur le colon entier (x2.0 sous 'peur'), mais la ligne 3 de l'audit demande que la memoire d'UN objet decroisse plus lentement, pas toutes. Le cablage fige donc, au moment de l'observation, la charge effective du colon dans un registre local 'charge_souvenir', et SEULEMENT pour les choses qui portent elles-memes 'nom_propriete_menace' -- filtre sur une PROPRIETE nommee en donnee, jamais sur un type (meme discipline que banc_memoire_navigation.gd:cibles_percues). Un souvenir charge le reste apres que la peur est retombee : c'est tout le sujet. 'charge_neutre' 1.0 est le diviseur neutre, jamais 0.0 -- diviser par zero est le piege que la base 'charge_emotionnelle' 1.0 du colon existe pour fermer (voir data/etats.json:peur).\n\nCONSOLIDATION : le sommeil rejoue ce qui est deja cru. Le cablage fabrique des PERCEPTIONS SYNTHETIQUES a partir du registre de croyances lui-meme (patron des entrees de saillance synthetiques, constat (H) de l'audit, ici applique un cran plus tot dans la chaine) et appelle observer() avec un catalogue dont gain_par_verification vaut 'gain_consolidation_certitude' ; memoriser() recoit de meme la position DEJA memorisee (relue BRUTE dans le registre, jamais celle rendue par position_memorisee, qui est deja biaisee -- la reinjecter ferait deriver le souvenir a chaque nuit). Aucune valeur n'est inventee : le sommeil ne peut renforcer que ce qui a ete percu eveille.\n\n'heures_minimum_sommeil' 3.0 : sous ce nombre d'heures dormies DANS LE CYCLE COURANT, aucune consolidation -- une sieste ne fixe rien. Le compteur est une accumulation LOCALE au banc (proprietes.heures_dormies_ce_cycle, idiome duree_maladie_cumulee), remis a zero au reveil : aucun mecanisme du coeur ne compte les heures dormies (constat de l'audit, ligne 4). 'consolidations_max_par_nuit' 5 : le plafond par nuit, en NOMBRE DE PASSES et non en points -- un seul compteur pour les deux registres, plutot que deux plafonds a echelles differentes (certitude sans unite, force en unites de memoire spatiale).\n\nHORLOGE : scripts/horloge.gd (mecanisme du coeur, livre par le groupe 0), jamais une troisieme recopie de banc_lumiere.gd/banc_fatigue_circadien.gd -- c'est exactement le seuil que l'en-tete de banc_fatigue_circadien.gd avait nomme (« si cette horloge doit un jour servir un troisieme banc, elle devient candidate au coeur »). 'duree_jour_secondes' 24.0 avec 'heures_par_jour' 24.0 : une seconde reelle = une heure du monde, pour qu'un cycle complet tienne dans une observation de scene. Depart a 8 h ; nuit de 20 h a 6 h, soit 10 s de sommeil par cycle.\n\nJALONS : les objets ne sont pas retires du Monde (monde.gd n'a aucune fonction de retrait -- dette deja recensee) mais ELOIGNES hors de portee de vue, patron litteral de banc_croyance.gd:basculer_feu. 'retrait_a' 6.0 : trois observations (t = 0.0, 2.0, 4.0) suffisent a former certitude 0.5 et a saturer la force spatiale, puis tout part. 'retour_a' 26.0 / 'redepart_a' 30.0 : le rappel a lieu APRES la premiere nuit, sans quoi on ne saurait pas si la remontee vient du sommeil ou du retour de l'objet.",
+
+	"cycle": {
+		"duree_jour_secondes": 24.0,
+		"heures_par_jour": 24.0,
+		"heure_depart": 8.0,
+		"heure_coucher": 20.0,
+		"heure_lever": 6.0
+	},
+
+	"nom_canal_vue": "vue",
+	"nom_propriete_repere": "repere",
+	"nom_propriete_menace": "dangereux",
+	"nom_propriete_charge": "charge_emotionnelle",
+	"nom_etat_peur": "peur",
+	"nom_registre_espacement": "espacement_souvenir",
+	"nom_registre_charge": "charge_souvenir",
+
+	"cadence_observation": 2.0,
+	"espacement_initial": 6.0,
+	"gain_espacement_par_rappel": 1.15,
+	"plafond_espacement": 30.0,
+	"charge_neutre": 1.0,
+	"plafond_force_memoire": 1.0,
+
+	"heures_minimum_sommeil": 3.0,
+	"cadence_consolidation": 1.0,
+	"consolidations_max_par_nuit": 5,
+	"gain_consolidation_certitude": 0.06,
+	"gain_consolidation_force": 0.08,
+
+	"retrait_a": 6.0,
+	"retour_a": 26.0,
+	"redepart_a": 30.0,
+	"id_objet_rappele": "baie",
+
+	"colon": {
+		"id": "colon_memoire",
+		"position": [0.0, 0.0, 0.0],
+		"portee_vue": 500.0
+	},
+
+	"objets": {
+		"baie": {
+			"position": [-320.0, -180.0, 0.0],
+			"position_lointaine": [-320.0, -2400.0, 0.0],
+			"proprietes": { "comestible": true, "repere": true }
+		},
+		"souche": {
+			"position": [320.0, -180.0, 0.0],
+			"position_lointaine": [320.0, -2400.0, 0.0],
+			"proprietes": { "cassable": true, "repere": true }
+		},
+		"braise": {
+			"position": [0.0, 260.0, 0.0],
+			"position_lointaine": [0.0, 2600.0, 0.0],
+			"proprietes": { "dangereux": true, "repere": true }
+		}
+	},
+
+	"couleurs": {
+		"fond_jour": [0.56, 0.62, 0.70],
+		"fond_nuit": [0.06, 0.07, 0.14],
+		"colon": [0.30, 0.82, 0.42],
+		"colon_dort": [0.35, 0.45, 0.85],
+		"colon_peur": [0.90, 0.45, 0.20],
+		"baie": [0.85, 0.30, 0.45],
+		"souche": [0.55, 0.42, 0.28],
+		"braise": [0.95, 0.50, 0.10],
+		"souvenir": [0.98, 0.72, 0.20],
+		"barre_fond": [0.18, 0.18, 0.22],
+		"barre_certitude": [0.35, 0.80, 0.95],
+		"barre_force": [0.98, 0.72, 0.20],
+		"barre_sommeil": [0.55, 0.60, 0.95]
+	},
+
+	"camera": { "position": [0.0, 60.0], "zoom": 0.55 },
+	"intervalle_print": 2.0
+}

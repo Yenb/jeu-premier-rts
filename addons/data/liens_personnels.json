@@ -1,0 +1,8 @@
+{
+	"defaut": {
+		"taux_decroissance": 0.001,
+		"plancher_suppression": 0.01,
+		"portee_menace": 100.0,
+		"portee_attraction": 100.0
+	}
+}

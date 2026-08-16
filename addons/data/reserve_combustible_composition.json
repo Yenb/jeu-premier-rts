@@ -1,0 +1,11 @@
+{
+	"_note": "Configuration du chantier 'feu -- la reserve de combustible suit la matiere' (objet.gd:_fabriquer_reserve_combustible, parametre reserve_combustible). 'nom_reserve' : nom du canal ecrit sous proprietes.reserves (meme forme que data/transformations.json:patron.reserves.combustible, lu par depense.gd, inchange). 'propriete_materiau' : quel champ de data/materiaux.json sommer (pondere par volume, scripts/quantite_matiere.gd) pour calculer la CAPACITE -- 'pouvoir_calorifique' (chantier correctif 'feu -- une grandeur dediee au contenu energetique'), une propriete DEDIEE de materiaux.json, INDEPENDANTE de inflammabilite (l'une mesure la facilite a s'enflammer, l'autre la quantite de matiere combustible une fois allume -- voir materiaux.json:_note). 'surcout_action'/'seuils_ref' : memes valeurs que le forfait d'origine (data/transformations.json:patron). 'cout_base' (chantier 'densite et porosite sur la vitesse de combustion') est desormais une REFERENCE, pas la valeur finale ecrite sur le canal -- objet.gd:_fabriquer_reserve_combustible la module par la densite (ralentit, au denominateur) et la porosite (accelere, au numerateur) de la composition, voir sa doctrine complete en tete de objet.gd. 'propriete_porosite' : quel champ de data/materiaux.json lire pour la porosite (moyenne ponderee par volume, meme geste que les proprietes immuables) -- jamais 'porosite' en dur dans le code. 'facteur_densite'/'facteur_porosite' : coefficients de la formule, valeurs illustratives de docs/orion-matrice-elements.md section Feu (0.5/1.3), ajustables au playtest sans toucher au code.",
+	"nom_reserve": "combustible",
+	"propriete_materiau": "pouvoir_calorifique",
+	"propriete_porosite": "porosite",
+	"cout_base": 1.0,
+	"facteur_densite": 0.5,
+	"facteur_porosite": 1.3,
+	"surcout_action": 0.0,
+	"seuils_ref": "epuisement"
+}

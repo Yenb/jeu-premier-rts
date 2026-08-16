@@ -1,0 +1,28 @@
+{
+	"colon_chantier": {
+		"poids": 5.0,
+		"seuil_satisfait": 0.0,
+		"seuil_bascule": 2.0,
+		"sens_satisfaction": "sous_seuil",
+		"satisfait_par": "travail_restant",
+		"arrache_par": "saillance_superieure_seuil"
+	},
+	"animal_reserve": {
+		"_note": "valeurs reprises telles quelles de data/banc_animal.json (comportement.seuil_bascule/seuil_satisfait) -- cablage reel de banc_animal fait sur ce mecanisme, valeurs verifiees par test_banc_animal.gd",
+		"poids": 5.0,
+		"seuil_satisfait": 19.5,
+		"seuil_bascule": 4.0,
+		"sens_satisfaction": "sur_seuil",
+		"satisfait_par": "reserves.{canal}.reserve",
+		"arrache_par": "saillance_superieure_seuil"
+	},
+	"dormir_reserve": {
+		"_note": "RECOPIE DE 'animal_reserve' CI-DESSUS, à trois nombres près : même sens_satisfaction 'sur_seuil', même satisfait_par à jeton, même arrache_par. C'est LE POINT DE LA LIGNE 3 : « dormir jusqu'à être reposé » ne demande AUCUN mécanisme neuf, c'est cette entrée-là avec contexte {'canal': 'sommeil'} au lieu de {'canal': 'energie'} -- le jeton '{canal}' existe précisément pour qu'UNE règle serve N réserves interchangeables (voir scripts/couplage.gd, JETONS).\n\nPOURQUOI PAS scripts/seuil_etat.gd POUR L'ARRÊT DU SOMMEIL : il ne compare QUE vers le haut ('valeur > seuil', son en-tête), et c'est pour cela que tout le dépôt écrit des miroirs plats INVERSÉS ('manque_sommeil', 'manque_energie', 'manque_hygiene'). Le miroir sert bien ici, mais à l'ENTRÉE dans le sommeil (poser 'epuise' quand le manque MONTE) -- jamais à la SORTIE : 'la réserve est remontée à 90' est exactement ce que sens_satisfaction 'sur_seuil' dit, et le dire une seconde fois par un miroir créerait deux vérités qui divergeraient au bord (piège nommé sur data/etats.json:encombre).\n\nENTRÉE DISTINCTE PLUTÔT QUE RÉUTILISATION D''animal_reserve' : les trois nombres diffèrent, et ils sont CALIBRÉS SUR UNE AUTRE ÉCHELLE -- animal_reserve travaille sur des réserves de 20.0 (seuil_satisfait 19.5, seuil_bascule 4.0, valeurs reprises de data/banc_animal.json), ce banc sur une capacité de sommeil de 100.0. Réutiliser l'entrée aurait rendu le colon 'satisfait' dès le premier tick (19.5 < sa réserve de départ) : l'engagement se relâcherait avant d'avoir commencé, exactement le défaut que sens_satisfaction existe pour fermer. seuil_bascule 30.0 : c'est le CÂBLAGE qui le lit pour décider de poser (couplage.gd ne le lit jamais lui-même, il ne fait que le cacher sur l'engagement), même geste que banc_animal.gd.",
+		"poids": 6.0,
+		"seuil_satisfait": 90.0,
+		"seuil_bascule": 30.0,
+		"sens_satisfaction": "sur_seuil",
+		"satisfait_par": "reserves.{canal}.reserve",
+		"arrache_par": "saillance_superieure_seuil"
+	}
+}

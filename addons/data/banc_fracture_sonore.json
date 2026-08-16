@@ -1,0 +1,13 @@
+{
+	"_note": "Jetable, propre a scripts/banc_fracture_sonore.gd (chantier 'fracture par son -- un son intense casse un objet fragile'). 'position_source'/'son_emis_source'/'rayon_source' declarent une source sonore LOCALE (pas un objet fabrique par Objet.fabriquer, pas de composition/materiau -- une source de bruit, pas une matiere physique) : togglable au clic gauche, jamais active au demarrage. 'verre_0' et 'fer_0' sont a EGALE DISTANCE de la source (150.0 chacun) pour que seule resistance_impact explique l'ecart de vitesse de fracture -- meme discipline que data/banc_chaleur_emise.json (froid_pres_bois/froid_pres_fer a distance identique de leur foyer). verre_demo (resistance_impact 1.0, data/materiaux.json) fracture et se transforme en eclats en quelques secondes d'exposition continue ; fer (resistance_impact 8.0) resiste nettement plus longtemps et ne se transforme jamais (fragilite 0.2, sous seuil_fragilite_eclats). 'seuil_fragilite_eclats' (0.5) reprend exactement la valeur de data/banc_fracture.json -- meme seuil, memes deux materiaux de part et d'autre (verre 0.9 au-dessus, fer 0.2 en dessous).",
+	"position_source": [0.0, 0.0, 0.0],
+	"son_emis_source": 1.0,
+	"rayon_source": 300.0,
+	"seuil_fragilite_eclats": 0.5,
+	"intervalle_print": 2.0,
+	"objets": [
+		{ "id": "verre_0", "position": [-150.0, 0.0, 0.0], "composition": [{ "materiau": "verre_demo", "volume": 1.0 }], "transformation_fracture": "fracture_verre" },
+		{ "id": "fer_0", "position": [150.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }], "transformation_fracture": "" }
+	],
+	"camera": { "position": [0.0, -100.0, 0.0], "zoom": 0.5 }
+}

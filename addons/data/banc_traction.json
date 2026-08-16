@@ -1,0 +1,12 @@
+{
+	"_note": "Jetable, propre a scripts/banc_traction.gd (chantier 'resistance_traction -- rupture par traction'). Trois objets FABRIQUES via Objet.fabriquer/composition/materiaux.json (jamais construits a la main), un materiau reel chacun (bois/pierre/fer, data/materiaux.json -- resistance_traction 90.0/5.0/250.0). 'hauteur_suspension' : hauteur initiale au repos, suspendu sous l'ancrage. 'force_valeur' : intensite de la force de traction accumulee par seconde (force_traction_cumulee += force_valeur*delta) tant que la force est active (toggle au clic gauche, aucune force au demarrage) -- voir banc_traction.gd:avancer_force. 'gravite' : integration de la chute apres rupture (meme convention que banc_restitution.gd). Avec ces valeurs, la pierre (resistance_traction 5.0) rompt vers t=0.6s, le bois (90.0) vers t=11.25s, le fer (250.0) resiste au-dela de 30s.",
+	"objets": [
+		{ "id": "bois_traction", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "pierre_traction", "position": [150.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }] },
+		{ "id": "fer_traction", "position": [300.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] }
+	],
+	"hauteur_suspension": 250.0,
+	"force_valeur": 8.0,
+	"gravite": 900.0,
+	"camera": { "position": [150.0, -50.0, 0.0], "zoom": 0.5 }
+}

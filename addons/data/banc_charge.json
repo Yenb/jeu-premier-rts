@@ -1,0 +1,56 @@
+{
+	"_note": "types ne porte plus d'entree 'colon' (PHASE 3 piece 2, chantier 'L'entite comme agent complet') : banc_charge.gd:_ready fusionne desormais entite/colon depuis data/types.json par-dessus ce catalogue local, colon.etats.peur y est herite -- seul son seuil est surcharge ici, par colon, dans colons.<nom>.etats.peur.seuil (voir banc_charge.gd:_fabriquer_colon_charge). eau/pierre/feu restent locaux (vocabulaire propre a ce banc, jamais dans data/types.json).",
+	"couleurs_types": {
+		"eau": [0.2, 0.5, 0.9],
+		"pierre": [0.55, 0.55, 0.55],
+		"feu": [1.0, 0.5, 0.0],
+		"cendre": [0.4, 0.38, 0.36],
+		"prudent": [0.2, 0.8, 0.4],
+		"peureux": [0.9, 0.7, 0.1]
+	},
+	"types": {
+		"eau": { "refuge": true },
+		"pierre": { "refuge": true },
+		"feu": { "profil_saillance": "feu", "brule": true }
+	},
+	"catalogue_local": {
+		"refuge": { "verbes": ["se_proteger", "s_eloigner"] }
+	},
+	"declencheur_charge": "brule",
+	"declencheur_interne": "effraye",
+	"intensite_interne": 4.0,
+	"instances": [
+		{ "type": "eau", "position": [180.0, 520.0, 0.0] },
+		{ "type": "pierre", "position": [220.0, 560.0, 0.0] }
+	],
+	"colons": {
+		"prudent": {
+			"position": [420.0, 300.0, 0.0],
+			"attaches": [],
+			"forme": {
+				"gain_jugement": 1.0,
+				"plafond_jugement": 10.0,
+				"gain_inertie": 1.0,
+				"seuil_ecrasement": 2.0
+			},
+			"poids_verbes": { "approcher": 1.0, "se_proteger": 1.0, "s_eloigner": 0.0 },
+			"etats": {
+				"peur": { "seuil": 8.0 }
+			}
+		},
+		"peureux": {
+			"position": [500.0, 300.0, 0.0],
+			"attaches": [],
+			"forme": {
+				"gain_jugement": 2.0,
+				"plafond_jugement": 10.0,
+				"gain_inertie": 1.0,
+				"seuil_ecrasement": 2.0
+			},
+			"poids_verbes": { "approcher": 1.0, "se_proteger": 0.0, "s_eloigner": 1.0 },
+			"etats": {
+				"peur": { "seuil": 3.0 }
+			}
+		}
+	}
+}

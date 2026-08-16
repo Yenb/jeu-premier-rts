@@ -1,0 +1,31 @@
+{
+	"_note": "Donnees jetables du banc corrosion -- PREMIERE demonstration reelle du chantier 'corrosion'. Meme patron que data/banc_pourriture.json (source d'humidite togglable au clic, un canal charge.gd par objet cible pondere par une sensibilite de materiau, chantier jumeau) etendu de deux facons : (a) chaque objet declare desormais SON PROPRE etat cible (`nom_etat`) et SA PROPRE propriete visee (`propriete_visee`), plus haut niveau de genericite que banc_pourriture (un seul etat/une seule propriete pour tout le banc) -- necessaire car la corrosion produit des effets CHIMIQUEMENT DIFFERENTS selon le metal (fer -> rouille destructive, cuivre/bronze -> vert-de-gris cosmetique, argent -> ternissure cosmetique) ; (b) SEUL le fer porte `reserve_integrite: true` -- lui seul suit la Phase 3 destructive (depense.gd + produit.gd, transformation en rouille), les trois autres s'arretent a la Phase 2 (etat_effectif.gd, cosmetique, JAMAIS detruits ni transformes -- fidele a la chimie reelle : la patine de cuivre/bronze est PROTECTRICE/passivante, le ternissement de l'argent est une simple couche de surface, ni l'un ni l'autre ne ronge le metal comme le fait la rouille). 'reserve_integrite_defaut.seuils_ref' pointe vers data/seuils_combustible.json:epuisement_corrosion (catalogue PARTAGE, jamais un catalogue local a ce banc -- scripts/test_lint_donnees.gd verifie TOUTE reference 'seuils_ref' du depot contre ce seul fichier, quel que soit son nom). CORRECTION DE DOMAINE (retour Yael, verifie en ligne) : le bois ne rouille PAS -- rouiller est un phenomene specifique au fer/acier (oxyde de fer), le bois se degrade par un tout autre processus deja modelise separement (pourriture, scripts/banc_pourriture.gd). Le second (troisieme/quatrieme) objet de ce banc n'est donc plus du bois mais d'autres METAUX qui s'oxydent reellement, chacun avec son propre produit visible.",
+	"propriete_cause": "source_humidite",
+	"declencheur_expose": "expose_corrosion",
+	"propriete_corrodable": "corrodable",
+	"nom_canal": "corrosion",
+	"nom_reserve_integrite": "integrite",
+	"cout_integrite_actif": 1.0,
+	"marqueur_terminal": "corrosion_totale",
+	"transformation_terminale": "corrosion_fer",
+	"canal_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 1200.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_corrosion": true }
+	},
+	"reserve_integrite_defaut": {
+		"reserve": 15.0,
+		"cout_base": 0.0,
+		"surcout_action": 0.0,
+		"seuils_ref": "epuisement_corrosion"
+	},
+	"source": { "id": "source_humidite", "position": [0.0, 0.0, 0.0] },
+	"objets": [
+		{ "id": "fer_0", "position": [150.0, 250.0, 0.0], "composition": [ { "materiau": "fer", "volume": 3.0 } ], "nom_etat": "corrode", "propriete_visee": "durete", "reserve_integrite": true },
+		{ "id": "cuivre_0", "position": [400.0, 250.0, 0.0], "composition": [ { "materiau": "cuivre", "volume": 3.0 } ], "nom_etat": "patine_verte", "propriete_visee": "reflectivite" },
+		{ "id": "bronze_0", "position": [650.0, 250.0, 0.0], "composition": [ { "materiau": "bronze", "volume": 3.0 } ], "nom_etat": "patine_verte", "propriete_visee": "reflectivite" },
+		{ "id": "argent_0", "position": [900.0, 250.0, 0.0], "composition": [ { "materiau": "argent", "volume": 3.0 } ], "nom_etat": "ternissure", "propriete_visee": "reflectivite" }
+	]
+}

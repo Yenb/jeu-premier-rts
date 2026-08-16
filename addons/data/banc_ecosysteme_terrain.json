@@ -1,0 +1,116 @@
+{
+	"_note": "Donnees propres a scripts/banc_ecosysteme_terrain.gd (Scene/banc_ecosysteme_terrain.tscn), chantier « refuge + extinction + capacite de charge + territoire » (audit_ecosysteme_vivant_prealable.md, lignes 1/2/3/4). Le CATALOGUE des biomes n'est PAS ici : il vit dans data/biomes.json, partage, et c'est lui qui porte 'fraction_refuge'/'capacite_charge'. Les deux profils de saillance des proies vivent dans data/profils_saillance.json, partage (seule voie que test_lint_donnees.gd sait valider). Les deux regles de comptage vivent dans data/comptages.json, partage. Ce fichier ne porte que la scene d'observation : geometrie, zones climatiques, animaux, calibration, palette, et UN catalogue de seuils LOCAL. AUCUN NOM DE PROPRIETE N'EST EN DUR DANS LE .gd -- tous les 'nom_*' viennent d'ici, c'est ce qui permet au test de faire traverser le meme code par un domaine entierement invente. REPERE : positions en unites MONDE (pixels), pas en unites de grille -- contrairement a banc_biomes.gd/banc_fertilite.gd, ce banc fait cohabiter des cases ET des animaux qui percoivent, et 'portee_saillance' (600.0, catalogue PARTAGE) comme les portees de perception sont a cette echelle-la. Une case est donc posee a (colonne*taille_case, ligne*taille_case, 0.0) et 'case_sous' apparie par Portee.en_portee a portee_appariement pres.",
+
+	"grille_lignes": 8,
+	"grille_colonnes": 8,
+	"taille_case": 96.0,
+	"portee_appariement": 48.0,
+
+	"nom_humidite": "humidite",
+	"nom_temperature": "temperature",
+	"nom_biome": "biome",
+	"nom_fraction_refuge": "fraction_refuge",
+	"nom_capacite_charge": "capacite_charge",
+	"nom_population_locale": "population_locale",
+	"nom_biome_local": "biome_local",
+	"nom_espece": "espece_ecosysteme",
+	"nom_reserve_energie": "energie",
+	"nom_manque_energie": "manque_energie",
+	"nom_vitesse": "vitesse",
+	"nom_canal_vue": "vue",
+	"nom_rayon_territoire": "rayon_territoire",
+	"nom_etat_surpeuplement": "surpeuplement",
+
+	"valeur_espece_proie": "proie",
+	"valeur_espece_predateur": "predateur",
+	"regle_proie": "proies_ecosysteme",
+	"regle_predateur": "predateurs_ecosysteme",
+
+	"_note_zones": "TROIS bandes de colonnes, chacune posant une humidite et une temperature de BASE sur ses cases. Ces deux valeurs sont posees UNE FOIS a la construction et JAMAIS mutees ensuite -- ce banc n'a aucun controle de climat (ses deux toggles portent sur le refuge et sur le renfort de proies), mais la discipline « le climat ne derive jamais » de banc_biomes.gd est tenue telle quelle : conditions.gd est rejoue A CHAQUE TICK avec retirer_si_faux=true, il repose donc biome/fraction_refuge/capacite_charge a neuf, et si un jour un decalage climatique arrivait il se composerait avec la base sans jamais l'ecraser. Les trois couples ci-dessous ont ete verifies un par un contre data/biomes.json : (0.70, 18) declenche foret SEULE (marais exige humidite>=0.8), (0.35, 18) declenche prairie SEULE, (0.05, 35) declenche desert SEUL.",
+	"zone_defaut": "prairie",
+	"zones": [
+		{ "nom": "foret", "colonne_min": 0, "colonne_max": 2, "humidite": 0.70, "temperature": 18.0 },
+		{ "nom": "prairie", "colonne_min": 3, "colonne_max": 5, "humidite": 0.35, "temperature": 18.0 },
+		{ "nom": "desert", "colonne_min": 6, "colonne_max": 7, "humidite": 0.05, "temperature": 35.0 }
+	],
+
+	"_note_refuge": "seuil_refuge_cachee : au-dessus (>=) de cette fraction de couvert, une proie porte 'profil_proie_cachee', en dessous 'profil_proie_exposee'. Avec le catalogue reel : foret 0.60 -> cachee des le depart, prairie 0.20 et desert 0.05 -> exposees. bonus_refuge_toggle est AJOUTE a la fraction du biome (borne a [0,1]) quand le clic gauche est actif : 0.45 fait passer prairie a 0.65 ET desert a 0.50, donc TOUTES les proies se cachent et les trois predateurs deviennent incapables de chasser -- c'est la ligne 2 de l'audit (trop de refuge tue les predateurs) rendue observable en un clic. La fraction du biome elle-meme n'est JAMAIS mutee : le refuge effectif est recompose a neuf chaque tick (patron 'humidite_base' de banc_biomes.gd).",
+	"seuil_refuge_cachee": 0.5,
+	"bonus_refuge_toggle": 0.45,
+	"profil_proie_exposee": "proie_exposee",
+	"profil_proie_cachee": "proie_cachee",
+	"seuil_perception_proie": 1.5,
+
+	"_note_territoire": "LE PIEGE, ferme ici (audit, ligne 4) : 'rayon = rayon_base / densite' ou la densite serait mesuree DANS CE MEME rayon est une boucle (le rayon grandit, capte plus de proies, la densite monte, le rayon retrecit -- oscillation garantie). 'rayon_echantillon' est donc FIXE et n'est JAMAIS derive du territoire ; le territoire est recalcule A NEUF depuis 'rayon_territoire_base', jamais incremente depuis sa valeur precedente (meme geste que 'humidite_base' dans banc_biomes.gd). densite = proies comptees dans rayon_echantillon / densite_reference. DIVISION PAR ZERO : le denominateur passe par max(0.1, densite) -- aucune proie a portee ne rend jamais INF (patron banc_menace_combat.gd:ratio_effectifs, 'if allies <= 0: return 0.0'), il rend le rayon MAXIMUM, borne par 'rayon_territoire_max' : sans ce plafond un predateur sans proie couvrirait 2600 unites, c'est-a-dire tout le terrain et bien au-dela, et le cercle affiche mentirait sur ce que le mecanisme fait. CALIBRATION : a densite_reference 2.0, un predateur qui voit deux proies dans son rayon d'echantillon garde exactement rayon_territoire_base.",
+	"rayon_territoire_base": 260.0,
+	"rayon_echantillon": 300.0,
+	"densite_reference": 2.0,
+	"rayon_territoire_max": 700.0,
+	"angle_vue": 360.0,
+	"sensibilite_vue": 1.0,
+
+	"_note_energie": "UN SEUL canal de reserve par animal, 'energie', capacite 100.0 -- la MEME que celle contre laquelle data/seuils_etat.json:faim (seuil 60.0) et famine (99.0) sont calibrees : leur _note exige explicitement que tout cablage qui les reutilise porte la meme capacite. Aucune entree n'a donc ete ajoutee au catalogue PARTAGE de seuils. 'mort_famine' y compare 'manque_graisse', que ce banc ne pose jamais : chemin mort silencieux, aucun etat parasite. LA MORT EST UN GATE DE CABLAGE (patron banc_faim_thermo.gd, « L'ARRET FINAL EST UN GATE DE CABLAGE, PAS UN ETAT ») : reserve a 0.0 -> l'animal est retire du monde a la reconstruction, aucun etat 'mort' n'a ete ajoute a un catalogue partage. cout_base de la proie NEGATIF : elle broute, sa reserve remonte toute seule -- neutralite de depense.gd exploitee, jamais contournee, exactement comme la jachere de banc_fertilite.gd. Le PLAFOND, lui, est du cablage : rien dans le coeur ne borne le HAUT d'une reserve (meme constat que banc_fertilite.gd:plafonner_fertilite).",
+	"capacite_energie": 100.0,
+	"cout_base_proie": -4.0,
+	"cout_base_predateur": 4.0,
+	"surcout_chasse": 2.0,
+	"surcout_surpeuplement": 10.0,
+	"taux_predation": 8.0,
+	"portee_capture": 100.0,
+	"vitesse_predateur": 55.0,
+	"ref_seuil_faim": "faim",
+
+	"_note_seuils_locaux": "Catalogue LOCAL, format EXACT de data/seuils_etat.json, passe tel quel a SeuilEtat.avancer -- patron data/banc_elimination_salete.json:seuils_elimination et data/banc_psycho_social.json:seuils_locaux. Le catalogue PARTAGE n'est pas touche par ce chantier : il est seulement LU (faim/famine sur les animaux), et les deux appels par tick portent sur deux catalogues differents sans collision, la memoire de franchissement de seuil_etat.gd etant PAR ENTREE. 'capacite_charge' en seuil_propriete : le seuil vit sur la CASE, il varie donc par biome (8 au desert, 50 en prairie, 80 en foret) sans une ligne de code.",
+	"seuils_locaux": {
+		"surpeuplement": {
+			"propriete_continue": "population_locale",
+			"seuil_propriete": "capacite_charge",
+			"etat": "surpeuplement"
+		}
+	},
+
+	"_note_animaux": "Six proies (deux par biome) et trois predateurs, tous CONSTRUITS A LA MAIN (patron banc_maladie.gd/banc_faim_thermo.gd/banc_menace_combat.gd) : aucune composition, aucune masse a calculer, et data/types.json n'est PAS touche -- donc rien a enregistrer dans scripts/test_lint_donnees.gd. Positions posees sur des CENTRES de case exacts (multiples de taille_case) : 'case_sous' apparie a 48.0 pres, une position a mi-chemin entre deux cases serait a portee des DEUX et l'appariement dependrait de l'ordre de la grille. Les trois predateurs demarrent a 60.0 d'energie et non 100.0 : ils passent 'affame' (manque > 60, donc reserve < 40) en cinq secondes s'ils ne chassent pas, ce qui rend la famine par refuge observable sans attendre.",
+	"proies": [
+		{ "id": "proie_foret_1", "position": [0.0, 192.0, 0.0], "energie": 100.0 },
+		{ "id": "proie_foret_2", "position": [96.0, 384.0, 0.0], "energie": 100.0 },
+		{ "id": "proie_prairie_1", "position": [288.0, 192.0, 0.0], "energie": 100.0 },
+		{ "id": "proie_prairie_2", "position": [384.0, 384.0, 0.0], "energie": 100.0 },
+		{ "id": "proie_desert_1", "position": [576.0, 192.0, 0.0], "energie": 100.0 },
+		{ "id": "proie_desert_2", "position": [672.0, 384.0, 0.0], "energie": 100.0 }
+	],
+	"predateurs": [
+		{ "id": "predateur_1", "position": [384.0, 288.0, 0.0], "energie": 60.0 },
+		{ "id": "predateur_2", "position": [288.0, 288.0, 0.0], "energie": 60.0 },
+		{ "id": "predateur_3", "position": [576.0, 288.0, 0.0], "energie": 60.0 }
+	],
+
+	"_note_renfort": "Le clic DROIT pose ou retire ce renfort (bistable). Huit proies de plus, toutes dans le desert (capacite_charge 8) : la population locale du desert passe de 3 (deux proies + un predateur) a 11, donc AU-DESSUS de sa capacite, et 'surpeuplement' se pose. Leurs energies de depart sont ETAGEES et non identiques : a energies egales elles mourraient toutes au meme instant et la population s'effondrerait d'un coup sous la capacite (surtir), au lieu de redescendre individu par individu jusqu'a repasser juste dessous -- c'est cette redescente qui EST la capacite de charge, et elle ne se voit qu'echelonnee. Aucune de ces proies ne se reproduit : la reproduction est la ligne 11 de l'audit, un autre chantier.",
+	"renfort_proies": [
+		{ "id": "renfort_1", "position": [576.0, 0.0, 0.0], "energie": 100.0 },
+		{ "id": "renfort_2", "position": [672.0, 0.0, 0.0], "energie": 92.0 },
+		{ "id": "renfort_3", "position": [576.0, 96.0, 0.0], "energie": 84.0 },
+		{ "id": "renfort_4", "position": [672.0, 96.0, 0.0], "energie": 76.0 },
+		{ "id": "renfort_5", "position": [576.0, 480.0, 0.0], "energie": 68.0 },
+		{ "id": "renfort_6", "position": [672.0, 480.0, 0.0], "energie": 60.0 },
+		{ "id": "renfort_7", "position": [576.0, 576.0, 0.0], "energie": 52.0 },
+		{ "id": "renfort_8", "position": [672.0, 576.0, 0.0], "energie": 44.0 }
+	],
+
+	"periode_trace_s": 2.0,
+	"taille_proie": 22.0,
+	"taille_predateur": 30.0,
+	"couleurs_biome": {
+		"foret": [0.10, 0.35, 0.15],
+		"prairie": [0.55, 0.72, 0.32],
+		"desert": [0.90, 0.80, 0.30],
+		"toundra": [0.92, 0.94, 0.96],
+		"marais": [0.15, 0.50, 0.45]
+	},
+	"couleur_aucun_biome": [0.42, 0.30, 0.16],
+	"couleur_surpeuplement": [0.85, 0.25, 0.20],
+	"couleur_proie_exposee": [0.40, 0.95, 0.35],
+	"couleur_proie_cachee": [0.10, 0.30, 0.12],
+	"couleur_predateur": [0.90, 0.15, 0.15],
+	"couleur_territoire": [0.95, 0.45, 0.35],
+	"camera_zoom": 0.62
+}

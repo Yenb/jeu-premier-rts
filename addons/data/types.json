@@ -1,0 +1,119 @@
+{
+	"_note": "colon.etats.peur : extrait de data/banc_charge.json (seul banc a le cabler a ce jour), valeurs communes aux deux colons du banc (portee_charge/taux_decroissance/poser) ; seuil (8.0 ici) n'est qu'un defaut de type, toujours surcharge par colon dans data/banc_charge.json (prudent 8.0, peureux 3.0 -- voir banc_charge.gd:_fabriquer_colon_charge). Mecanisme inerte pour banc_p1/banc_feu/banc_animal (Charge.avancer n'y est jamais appele). etats.peur reste sur colon, jamais remonte dans un paquet partage : la peur est humaine, un golem qui fuit execute une regle, il n'a pas d'etat de peur qui monte -- meme raison pour colon.deformation_etat.habituation.brule. Voir data/types.json:dynamique/percevant/agent pour le detail des trois paquets qui remplacent l'ancien paquet unique 'entite' (refonte 'eclatement du corps interne', docs/design.md 'L'entite comme agent complet'). CHANTIER 'forme A uniforme' (session ulterieure) : canaux (percevant) et deformation (dynamique) sont passes de la forme B (cle de Dictionary qui EST la reference) a la forme A (champ String/liste qui CONTIENT la reference), meme patron que profil_saillance/transformation/seuils_ref/materiau -- voir scripts/test_lint_donnees.gd:REFERENCES, docs/design.md 'Propriete du monde vs champ de configuration technique'.",
+	"objet_physique": {
+		"_note": "Paquet fondateur (docs/design.md, 'objet_physique comme paquet fondateur') : quatre propriétés physiques universelles. Unités : masse en kg, volume en m³, densite en kg/m³, temperature en °C. temperature reste dormante (personne ne la lit) et FACULTATIVE -- son défaut ambiant (20.0) tient tel quel pour tout type qui ne le surcharge pas. masse/volume/densite, EUX, sont désormais des SORTIES DÉRIVÉES pour tout type qui porte 'composition' (chantier 'densité effective calculée à la fabrication', voir objet.gd:fabriquer -- DENSITE EFFECTIVE) -- 'composition' remplace l'ancien champ 'materiau: String', voir arbre/bloc plus bas. Les trois valeurs ci-dessous (1.0/0.001/1000.0) restent le DÉFAUT NEUTRE du paquet, servi tel quel à tout type qui compose objet_physique SANS porter 'composition' (aucun aujourd'hui) -- masse == densite*volume par convention, inchangé. TENSION CONNUE -- RÉSOLUE par ce chantier : data/materiaux.json:densite (par MATÉRIAU, résolue par 'composition[].materiau') est désormais la SEULE source éditable ; objet_physique.densite/masse/volume sur une instance qui porte 'composition' ne sont plus jamais posés à la main, ils sont CALCULÉS depuis la fiche à la fabrication (moyenne pondérée des volumes, conversion g/cm³->kg/m³ dans objet.gd, jamais dans ce catalogue) -- il n'existe donc plus deux valeurs indépendamment éditables pour la même grandeur.",
+		"masse": 1.0,
+		"volume": 0.001,
+		"densite": 1000.0,
+		"temperature": 20.0
+	},
+	"dynamique": {
+		"_note": "Paquet 'dynamique' (refonte 'eclatement du corps interne', remplace l'ancien paquet unique 'entite' -- voir docs/design.md 'L'entite comme agent complet') : ce qui a un ETAT INTERNE QUI EVOLUE, sans impliquer perception ni decision. Douze cles : engagement (null -- couplage.gd, structurelle, fait physique de couplage a une cible pose/retire par presence) ; reserves (cinq canaux physiologiques generiques pour un vivant standard -- energie/faim/soif/sommeil/chaleur, reserve 100.0/cout_base 0.3/surcout_action 0.7, voir docs/suivi_corps_interne_entite.md -- seule cle PLEINE par defaut, parce que ces cinq canaux sont universels au vivant standard ; un type non vivant qui compose dynamique et n'en veut pas les ecrase en donnee, ex. un golem ou un capteur) ; liens_personnels ({} -- lien_personnel.gd, structurelle) ; deformation_sources ([] -- liste des sources actives, forme A, structurelle -- deformation.gd, verifiee contre data/deformations.json par scripts/test_lint_donnees.gd) ; deformation_etat ({} -- deformation.gd, structurelle, etat interne mutable { source: { cible: { rapide, lent } } }, jamais verifie par le linter -- ce sont des donnees d'etat, pas des references) ; etats ({} -- charge.gd, facultative) ; genes_actifs ([] -- FONDATION DORMANTE, chantier 'genetique', session ulterieure a l'eclatement du corps interne : liste des noms de genes actifs pour ce type, forme A, verifiable contre data/genes.json par scripts/test_lint_donnees.gd le jour ou un premier type reel en porte un -- AUCUN mecanisme du coeur ne lit cette cle a ce jour, aucune reference reelle n'existe encore, le linter n'est donc pas etendu) ; genes_etat ({} -- FONDATION DORMANTE, meme chantier : Dictionary nom_gene -> { alleles: Array<float> }, l'ETAT interne mutable -- jamais une reference de catalogue, meme statut que deformation_etat vis-a-vis de deformation_sources, jamais verifie par le linter) ; marques_epigenetiques ({} -- chantier 'epigenetique.gd' (session ulterieure a expression.gd) : Dictionary PLAT nom_marque -> { modulateur: float, age_marque: float }, l'ETAT interne mutable pose/decru par epigenetique.gd:poser/avancer -- jamais une reference de catalogue, jamais verifie par le linter, meme statut que genes_etat vis-a-vis de genes_actifs sauf qu'ici une seule cle porte a la fois la liste ET l'etat (pas de 'marques_actives' separee : n'importe quel nom_marque peut etre pose sans etre d'abord declare, contrairement a deformation_sources/deformation.gd). DEVENUE STRUCTURELLE ICI des ce chantier -- contrairement a expression.gd qui la lit encore en FACULTATIVE (ecrite avant qu'elle rejoigne ce fichier, voir sa propre en-tete, jamais retouche par ce chantier) : deux fichiers, deux contrats sur la meme cle, meme precedent que colon.proprietes.engagement (structurelle dans couplage.gd, facultative dans agir.gd:_score)) ; age (0.0 -- chantier 'senescence.gd' (session ulterieure a epigenetique.gd) : float en ANNEES, l'ETAT interne mutable incremente par senescence.gd:avancer(entite, delta, annees_par_seconde) -- le facteur d'echelle vient TOUJOURS du cablage, jamais une constante de ce fichier. DEVENUE STRUCTURELLE ICI, meme bascule que marques_epigenetiques ci-dessus -- expression.gd la lit toujours en FACULTATIVE, inchangee par ce chantier. senescence.gd ne calcule ni n'ecrit rien d'autre : expression.gd possede deja tout le calcul de senescence (lecture de data/senescence.json, application des courbes par chemin) depuis avant ce fichier). genes_actifs/genes_etat suivent EXACTEMENT le meme rapport que deformation_sources/deformation_etat (liste de references d'un cote, etat mutable jamais verifie de l'autre) -- jamais une cle de Dictionary qui SERAIT la reference (forme B, deja eliminee du depot pour canaux/deformation, voir docs/design.md 'Propriete du monde vs champ de configuration technique'). Les neuf suivantes sont VIDES (ou 0.0 pour age) par defaut, contrairement a reserves : aucun canal d'etat, de deformation, de lien personnel, de gene, de marque epigenetique ou d'age n'est universel a tout ce qui compose dynamique -- chaque type qui en a besoin les remplit par surcharge (voir colon.etats.peur/colon.deformation_sources/colon.deformation_etat.habituation.brule, restes sur l'entree colon elle-meme, jamais remontes ici : la peur est humaine, pas universelle a tout ce qui a un etat interne -- meme raison pour la genetique/l'epigenetique/la senescence, aucun type reel n'en porte encore). DOUZIEME/TREIZIEME CLES (chantier 'stade.gd', session ulterieure a senescence.gd) : stade ('' -- STRUCTURELLE, le nom du stade de vie COURANT, ecrit par stade.gd:avancer, jamais invente par un autre mecanisme -- remplace le booleen mature envisage puis abandonne au profit d'un systeme de stades ouvert) et stades_config ([] -- STRUCTURELLE, Array ORDONNE par age_seuil croissant de { nom, age_seuil }, la table que stade.gd lit sur l'entite elle-meme, jamais dans un catalogue partage -- vide par defaut sur dynamique, chaque type qui a un cycle de vie la remplit par surcharge, voir colon ci-dessous). QUATORZIEME A DIX-SEPTIEME CLES (chantier 'accouplement.gd', session ulterieure a stade.gd -- deuxieme phase du cycle de reproduction, voir docs/design.md 'L'entite comme agent complet') : mode_reproduction ('' -- FACULTATIVE, meme statut que etats cote charge.gd : la plupart des choses qui composent dynamique n'ont simplement rien a y faire, seule la valeur 'sexuee' met accouplement.gd en marche pour cette entite, 'asexuee'/'parthenogenese' ou toute autre valeur restent inertes sans alarme) ; espece_reproduction ('' -- une seule String qui doit MATCHER EXACTEMENT celle d'un partenaire pour etre compatible, jamais une comparaison de type -- devient STRUCTURELLE des que mode_reproduction vaut 'sexuee', CAS DU COUPLE avec stades_fertiles/reproduction_ref ci-dessous, meme precedent que jugement.gd:gain_jugement/plafond_jugement) ; stades_fertiles ([] -- Array de String, les NOMS de stade (proprietes.stade, poses par stade.gd) qui rendent cette entite mature pour l'accouplement -- vit A COTE de stades_config, jamais dans data/reproduction.json : ce ne sont pas des references de catalogue mais des noms qui n'ont de sens que dans stades_config DE CE MEME TYPE, jamais verifie par le linter ; devient STRUCTURELLE des que mode_reproduction vaut 'sexuee', meme CAS DU COUPLE) ; reproduction_ref (ABSENTE de ce paquet -- raison en CARTE.md section 4, ligne reproduction.json ; chaque type qui se reproduit la declare lui-meme, voir colon. STRUCTURELLE des que mode_reproduction vaut 'sexuee', meme CAS DU COUPLE). DIX-HUITIEME A VINGTIEME CLES (chantier 'controle direct du joueur', fondation posee SANS mecanisme du coeur -- voir CARTE.md §3quaterdecies) : controlable (false -- FACULTATIVE, defaut neutre legitime, dit si le joueur peut se substituer a la decision de cette entite ; n'est verifiee ni lue par AUCUN mecanisme du coeur, seulement par du cablage de banc, voir scripts/test_lint_donnees.gd:PROPRIETES_CABLAGE_SEUL) ; ordre_joueur ({} -- FACULTATIVE, Dictionary pose par le cablage d'un banc quand le joueur commande un deplacement, {} = aucun ordre en cours, jamais lu ni ecrit par un mecanisme du coeur) ; lie_au_joueur (\"\" -- FACULTATIVE, id String du joueur qui revendique cette entite, \"\" = non revendiquee). PREMIER CABLAGE REEL : scripts/banc_controle.gd. Comme mode_reproduction/etats.peur ci-dessus, colon ne surcharge aucune des trois (reste au defaut neutre 'ce colon decide seul') ; seul un type qui les surcharge explicitement (golem, data/banc_controle.json, LOCAL, jamais remonte ici) sort de ce defaut -- meme raison que la peur ou la reproduction : le controle joueur n'est pas universel a tout ce qui compose dynamique. Composable independamment de percevant/agent : un moulin ou une pierre qui s'erode compose dynamique seul, sans jamais percevoir ni decider.",
+		"engagement": null,
+		"reserves": {
+			"energie":  { "reserve": 100.0, "cout_base": 0.3, "surcout_action": 0.7 },
+			"faim":     { "reserve": 100.0, "cout_base": 0.3, "surcout_action": 0.7 },
+			"soif":     { "reserve": 100.0, "cout_base": 0.3, "surcout_action": 0.7 },
+			"sommeil":  { "reserve": 100.0, "cout_base": 0.3, "surcout_action": 0.7 },
+			"chaleur":  { "reserve": 100.0, "cout_base": 0.3, "surcout_action": 0.7 }
+		},
+		"liens_personnels": {},
+		"deformation_sources": [],
+		"deformation_etat": {},
+		"etats": {},
+		"genes_actifs": [],
+		"genes_etat": {},
+		"marques_epigenetiques": {},
+		"age": 0.0,
+		"stade": "",
+		"stades_config": [],
+		"mode_reproduction": "",
+		"espece_reproduction": "",
+		"stades_fertiles": [],
+		"role_gestation": "",
+		"controlable": false,
+		"ordre_joueur": {},
+		"lie_au_joueur": ""
+	},
+	"percevant": {
+		"_note": "Paquet 'percevant' (refonte 'eclatement du corps interne', remplace une partie de l'ancien paquet unique 'entite') : ce qui PERÇOIT, sans impliquer d'etat interne qui evolue ni de decision. Trois cles : canaux (Array de String, forme A -- six noms de canal par defaut, vue/ouie/odorat/toucher/gout/nociception, chaque nom verifie contre data/canaux.json par scripts/test_lint_donnees.gd -- STRUCTURELLE, sa cle absente dit 'ceci ne percoit pas') ; canaux_config (Dictionary nom_canal -> { portee, angle, sensibilite, seuil }, forme A -- les reglages, jamais verifies par le linter, ce sont des donnees non des references -- FACULTATIVE : un nom present dans canaux mais absent de canaux_config retombe sur canal muet, meme defaut silencieux que perception.gd:_portee_effective appliquait deja avant ce chantier) ; orientation (Vector3 serialise, defaut {x:0,y:0,z:1} -- perception.gd, FACULTATIVE, jamais ecrite par aucun mecanisme du cœur a ce jour, seulement lue). Composable independamment de dynamique/agent : un capteur ou un animal qui percoit sans avoir de reserves physiologiques universelles ni decider compose percevant seul, ou percevant + dynamique sans agent.",
+		"canaux": ["vue", "ouie", "odorat", "toucher", "gout", "nociception"],
+		"canaux_config": {
+			"vue":         { "portee": 1200.0, "angle": 120.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"ouie":        { "portee": 600.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"odorat":      { "portee": 300.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"toucher":     { "portee": 5.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"gout":        { "portee": 2.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"nociception": { "portee": 1.0, "sensibilite": 1.0, "seuil": 0.0 }
+		},
+		"orientation": { "x": 0.0, "y": 0.0, "z": 1.0 }
+	},
+	"agent": {
+		"_note": "Paquet 'agent' (refonte 'eclatement du corps interne', remplace une partie de l'ancien paquet unique 'entite') : ce qui DECIDE. Une seule cle aujourd'hui, attaches ([] -- attaches.gd/attache_par_trait.gd, STRUCTURELLE) -- ce a quoi le type tient, lu par la couche saillance pour peser ses decisions. Vide FONCTIONNELLEMENT tant que banc_commun.gd:fabriquer_colon vit et ecrase cette valeur par la donnee locale de chaque banc (voir CARTE.md) ; se remplira reellement quand fabriquer_colon disparaitra -- forme/poids_verbes, qui pesent eux aussi sur la decision, vivent aujourd'hui cote banc, pas dans data/types.json, migreront ici le jour venu. Composable independamment de dynamique/percevant : un golem qui execute des regles sans reserves physiologiques universelles ni canaux sensoriels standard compose agent seul, ou agent + percevant sans dynamique.",
+		"attaches": []
+	},
+	"arbre":   { "herite": ["objet_physique"], "inflammable": true, "irremplacable": true, "portee_propagation": 90.0, "delai_propagation": 1.5, "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+	"batisse": { "inflammable": true, "notre_ouvrage": true, "portee_propagation": 90.0, "delai_propagation": 2.0 },
+	"feu":     { "profil_saillance": "feu", "brule": true, "reserves": { "combustible": { "reserve": 1.5, "cout_base": 1.0, "surcout_action": 0.0, "seuils_ref": "epuisement" } } },
+	"bloc":    { "herite": ["objet_physique"], "cassable": true, "profil_saillance": "bloc", "composition": [ { "materiau": "pierre", "volume": 0.4 } ] },
+	"charbon": { "herite": ["objet_physique"], "composition": [ { "materiau": "charbon", "volume": 1.0 } ] },
+	"cendre":  { "herite": ["objet_physique"], "composition": [ { "materiau": "cendre", "volume": 1.0 } ] },
+	"compost": { "herite": ["objet_physique"], "composition": [ { "materiau": "compost", "volume": 1.0 } ] },
+	"rouille": { "herite": ["objet_physique"], "composition": [ { "materiau": "rouille", "volume": 1.0 } ] },
+	"residu_dissous": { "herite": ["objet_physique"], "composition": [ { "materiau": "residu_dissous", "volume": 1.0 } ] },
+	"eclats_pierre": { "herite": ["objet_physique"], "composition": [ { "materiau": "eclats_pierre", "volume": 1.0 } ] },
+	"eclats_verre": { "herite": ["objet_physique"], "composition": [ { "materiau": "eclats_verre", "volume": 1.0 } ] },
+	"copeaux_bois": { "herite": ["objet_physique"], "composition": [ { "materiau": "copeaux_bois", "volume": 1.0 } ] },
+	"limaille_fer": { "herite": ["objet_physique"], "composition": [ { "materiau": "limaille_fer", "volume": 1.0 } ] },
+	"sel_metallique": { "herite": ["objet_physique"], "composition": [ { "materiau": "sel_metallique", "volume": 1.0 } ] },
+	"residu_calcaire": { "herite": ["objet_physique"], "composition": [ { "materiau": "residu_calcaire", "volume": 1.0 } ] },
+	"residu_organique": { "herite": ["objet_physique"], "composition": [ { "materiau": "residu_organique", "volume": 1.0 } ] },
+	"residu_acide": { "herite": ["objet_physique"], "composition": [ { "materiau": "residu_acide", "volume": 1.0 } ] },
+	"sel_dissous": { "herite": ["objet_physique"], "composition": [ { "materiau": "sel_dissous", "volume": 1.0 } ] },
+	"residu_radioactif": { "herite": ["objet_physique"], "composition": [ { "materiau": "residu_radioactif", "volume": 1.0 } ] },
+	"reste_nourriture": { "herite": ["objet_physique"], "composition": [ { "materiau": "reste_nourriture", "volume": 1.0 } ] },
+	"humus": { "herite": ["objet_physique"], "composition": [ { "materiau": "humus", "volume": 1.0 } ] },
+	"dechet": { "herite": ["objet_physique"], "composition": [ { "materiau": "dechet_demo", "volume": 1.0 } ] },
+	"lingot_fer": { "herite": ["objet_physique"], "composition": [ { "materiau": "lingot_fer_demo", "volume": 1.0 } ] },
+	"scories": { "herite": ["objet_physique"], "composition": [ { "materiau": "scories", "volume": 1.0 } ] },
+	"_note_buche": "le produit d'un arbre BIEN abattu. Meme patron minimal que charbon/cendre/copeaux_bois -- objet_physique + une composition mono-materiau, la masse etant DERIVEE par objet.gd depuis le rendement (voir scripts/produit.gd). Nomme 'buche' et non 'bois' EXPRES : 'bois' est deja le nom d'un MATERIAU (data/materiaux.json), et un type homonyme d'un materiau rendrait illisible toute reference -- data/types.json et data/materiaux.json sont deux catalogues distincts que scripts/test_lint_donnees.gd verifie separement (type_produit contre l'un, materiau contre l'autre). Les deux autres issues de la coupe ne creent AUCUN type : elles reutilisent copeaux_bois et residu_organique, deja presents.",
+	"buche": { "herite": ["objet_physique"], "composition": [ { "materiau": "bois", "volume": 1.0 } ] },
+	"colon": {
+		"_note": "canaux_config est redeclare ICI EN ENTIER (six canaux), pas seulement vue -- le merge de objet.gd:fabriquer est superficiel/non recursif : une cle presente dans colon ET dans un paquet herite REMPLACE la valeur du paquet en bloc, elle ne la complete jamais. Un canaux_config partiel ici (seulement vue) effacerait silencieusement les cinq autres canaux herites de percevant (portee/sensibilite retombant sur leurs defauts de _portee_effective, canal muet) -- verifie avant d'ecrire, memes valeurs numeriques qu'avant le chantier 'un seul patron de reference de catalogue'. Meme piege pour toute future surcharge partielle d'un Dictionary imbrique herite (ex. deformation_etat) -- voir CARTE.md §6. stades_config (chantier 'stade.gd') ne court PAS ce risque -- c'est un Array, remplace en bloc par le merge superficiel, jamais fusionne element par element : les cinq stades ci-dessous sont les seules valeurs de demarrage, ajustables au playtest (aucun age_debut reel dans data/senescence.json a ce jour pour s'y aligner, seule l'entree hors domaine 'declin_gravitique' y existe). mode_reproduction/espece_reproduction/stades_fertiles/reproduction_ref (chantier 'accouplement.gd') : colon est le premier type reel a sortir du defaut neutre de dynamique -- 'sexuee', 'colon', ['adulte'] et 'colon' (vers data/reproduction.json:colon), valeurs de demarrage ajustables au playtest, meme statut que stades_config. force/fournit_stabilisation (chantier « portage + force + stabilisation », scripts/banc_affordances_portage.gd) : deux proprietes PLATES et NUMERIQUES -- jamais un Dictionary ni une entree sous reserves, scripts/somme.gd:_numerique alarme et fait contribuer 0.0 sur toute autre forme. Defauts de type seulement, toujours surcharges par colon dans data/banc_affordances_portage.json (colosse 1.8, faibles 0.9). Lues par du CABLAGE SEUL (inscrites dans scripts/test_lint_donnees.gd:PROPRIETES_CABLAGE_SEUL), inertes pour tous les autres bancs. fournit_stabilisation vaut 0.5 et non 1.0 : la raison, mesuree, vit dans data/banc_affordances_portage.json:_note, jamais recopiee ici. curiosite (chantier « connaissance », audit_affordances_prealable.md ligne 16, scripts/banc_affordances_connaissance.gd) : propriete PLATE et numerique, 0.2 par defaut de type -- une valeur BASSE exprès, sous le seuil du banc, pour que le defaut soit « ce colon n'experimente pas » et que la curiosite soit ce qu'un colon DECLARE, jamais ce qu'il recoit par heritage. Surchargee par colon dans data/banc_affordances_connaissance.json (medecin 0.8) ; les deux autres colons du banc la lisent TELLE QUELLE depuis ce fichier, c'est ce qui rend ce defaut reellement lu et non dormant. Lue par du CABLAGE SEUL (inscrite dans scripts/test_lint_donnees.gd:PROPRIETES_CABLAGE_SEUL) -- aucun mecanisme du coeur ne la lit : elle n'entre dans la decision que par le GATE ARITHMETIQUE qui ecrit poids_verbes.experimenter, jamais autrement.",
+		"herite": ["objet_physique", "dynamique", "percevant", "agent"],
+		"rythme": 1.5,
+		"vitesse": 150.0,
+		"curiosite": 0.2,
+		"force": 1.0,
+		"fournit_stabilisation": 0.5,
+		"profil_saillance": "colon",
+		"canaux_config": {
+			"vue":         { "portee": 1600.0, "angle": 180.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"ouie":        { "portee": 600.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"odorat":      { "portee": 300.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"toucher":     { "portee": 5.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"gout":        { "portee": 2.0, "sensibilite": 1.0, "seuil": 0.0 },
+			"nociception": { "portee": 1.0, "sensibilite": 1.0, "seuil": 0.0 }
+		},
+		"etats": {
+			"peur": { "charge": 0.0, "seuil": 8.0, "portee_charge": 900.0, "taux_decroissance": 1.0, "poser": { "effraye": true } }
+		},
+		"deformation_sources": ["habituation"],
+		"deformation_etat": {
+			"habituation": { "brule": { "rapide": 0.0, "lent": 0.0 } }
+		},
+		"stades_config": [
+			{ "nom": "nouveau_ne", "age_seuil": 0.0 },
+			{ "nom": "enfant", "age_seuil": 3.0 },
+			{ "nom": "adolescent", "age_seuil": 12.0 },
+			{ "nom": "adulte", "age_seuil": 18.0 },
+			{ "nom": "vieux", "age_seuil": 60.0 }
+		],
+		"mode_reproduction": "sexuee",
+		"espece_reproduction": "colon",
+		"stades_fertiles": ["adulte"],
+		"role_gestation": "non_porteur",
+		"reproduction_ref": "colon"
+	},
+	"menace":  { "dangereux": true, "profil_saillance": "menace_1" }
+}

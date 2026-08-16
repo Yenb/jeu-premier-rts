@@ -1,0 +1,78 @@
+{
+	"_note": "Donnees propres a scripts/banc_bonheur.gd (Scene/banc_bonheur.tscn), chantier « bonheur + temperaments » (audit_mecaniques_psycho_sociales_prealable.md, lignes 5 et 6, toutes deux au verdict CABLABLE). JETABLE, propre au banc : rien ici n'est un catalogue partage. Les TROIS etats (heureux/malheureux/desespere) et les TROIS entrees de seuil qui les posent vivent dans les catalogues PARTAGES data/etats.json et data/seuils_etat.json -- ce fichier ne les redeclare jamais ; il ne porte que la scene d'observation, les temperaments et la calibration. Les trois seuils eux-memes ne sont PAS recopies ici : le banc les relit dans data/seuils_etat.json pour son affichage (une seule source de verite, jamais deux nombres a garder d'accord -- geste de banc_faim_thermo.gd:seuil_faim).\n\nLE BONHEUR EST UN CHAMP DERIVE, JAMAIS UNE RESERVE. Il n'apparait dans aucun 'reserves' : depense.gd n'y touche jamais, charge.gd non plus. Le cablage le RECALCULE A NEUF chaque tick comme la somme ponderee des sources que CE colon valorise, et l'ecrit par-dessus la valeur du tick precedent -- jamais un '+='. C'est ce recalcul a neuf, et lui seul, qui empeche un champ derive de DERIVER : le resultat negatif est deja mesure DEUX FOIS sur expression.gd (data/epigenetique.json:exposition_radioactive/accoutumance_froid -- rappele chaque tick, exprimer() relit la valeur qu'il vient d'ecrire et diverge sans borne). expression.gd n'est donc PAS appele ici, contournement intentionnel et non un oubli, meme decision que banc_graisse_accoutumance.gd.\n\nLES TEMPERAMENTS SONT DES POIDS, JAMAIS DES CATEGORIES (docs/design.md, « Les archetypes n'existent pas »). Les CINQ MEMES sources sont offertes aux QUATRE colons, aux MEMES niveaux, au meme instant : rien dans le monde ne les distingue. Seul 'poids_bonheur' change, et c'est lui, a lui seul, qui produit quatre bonheurs differents et jusqu'a trois etats differents en meme temps. Un cinquieme colon se pose en ajoutant une entree ici, zero ligne de code. 'poids_bonheur' vit sur le colon, au meme rang qu'attaches/forme/poids_verbes -- et SURTOUT PAS dans 'poids_verbes' (audit ligne 6 : son unique lecteur est agir.gd:_verbe_par_poids, y glisser un poids de source ferait entrer 'nourriture' dans l'arbitrage des VERBES, faux positif silencieux le jour ou un verbe porterait le meme nom). Aucun mecanisme du coeur ne lit 'poids_bonheur' ; comme les colons sont construits a la main, data/types.json n'est pas touche et il n'y a rien a enregistrer dans scripts/test_lint_donnees.gd.\n\nCALIBRATION, calculee et non devinee (capacite_bonheur 1.0, seuils partages 0.7 / 0.5 / 0.8). Aucune source coupee : social 0.5x0.95 + 0.3x0.90 = 0.745 (heureux) ; guerrier 0.6x0.90 + 0.3x0.80 = 0.780 (heureux) ; gourmand 0.6x0.85 = 0.510 (NEUTRE -- son unique source ne peut jamais lui faire depasser 0.6, un gourmand dont la seule joie est la table ne sera jamais euphorique, c'est un temperament et non un defaut de reglage) ; equilibre 0.2x(0.90+0.85+0.80+0.95+0.90) = 0.880 (heureux). NOURRITURE COUPEE -- le cas que la consigne demande de rendre visible : gourmand 0.000, manque 1.000, donc malheureux (>0.5) ET desespere (>0.8) tous les deux ; equilibre 0.710, encore heureux ; social 0.745 et guerrier 0.780, strictement inchanges (ils n'y mettent aucun poids). COMBAT COUPE : guerrier 0.240, manque 0.760 -- malheureux seul, jamais desespere ; les trois autres a peine ou pas touches. Chiffres verrouilles par scripts/test_banc_bonheur.gd, jamais laisses a l'oeil.\n\nNOMS DE PROPRIETES EN DONNEE (nom_bonheur/nom_manque_bonheur/nom_poids_bonheur/nom_vitesse/nom_rythme) : le .gd n'en porte aucun en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente. nom_bonheur et nom_manque_bonheur doivent rester d'accord avec 'propriete_continue' des entrees bonheur_haut/bonheur_bas/bonheur_critique de data/seuils_etat.json -- accord verrouille par test, jamais suppose : un miroir ecrit sous un nom que plus personne ne compare ne poserait plus aucun etat, SANS AUCUNE ALARME (seuil_etat.gd traite une propriete absente comme un chemin mort legitime). AUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES.\n\nBLOC DE RENDU (taille_colon/largeur_barre/hauteur_barre/espacement_barre/largeur_legende/largeur_poids/marge_legende/marge_bloc/taille_police_*/camera, plus 'couleur' sur chaque source) : GEOMETRIE ET COULEURS SEULES, aucun de ces nombres n'entre dans le calcul du bonheur ni dans la pose d'un etat -- scripts/banc_bonheur.gd les lit UNIQUEMENT dans _creer_rendu/_rafraichir_tout, jamais dans une fonction pure. Les colons sont ecartes de 400 sur x parce que la LIGNE BONHEUR d'un colon desespere ('bonheur 0.000   desespere + malheureux') est le texte le plus large du banc et deborde de son bloc (290 = largeur_legende + marge + largeur_barre + marge + largeur_poids) : un ecart plus faible faisait se toucher deux colons voisins. Les cinq couleurs de source sont distinctes ENTRE ELLES et c'est la seule contrainte -- 'nourriture' (vert) est proche de couleurs_etat.heureux (vert aussi), sans confusion possible : l'etat ne se lit jamais sur une barre, seulement sur le carre du colon et sur la couleur de sa ligne bonheur.",
+
+	"capacite_bonheur": 1.0,
+	"nom_bonheur": "bonheur",
+	"nom_manque_bonheur": "manque_bonheur",
+	"nom_poids_bonheur": "poids_bonheur",
+	"nom_vitesse": "vitesse",
+	"nom_rythme": "rythme",
+	"vitesse_base": 100.0,
+	"rythme_base": 1.5,
+
+	"ref_seuil_haut": "bonheur_haut",
+	"ref_seuil_bas": "bonheur_bas",
+	"ref_seuil_critique": "bonheur_critique",
+	"etat_heureux": "heureux",
+	"etat_malheureux": "malheureux",
+	"etat_desespere": "desespere",
+
+	"sources": [
+		{ "nom": "securite",   "niveau": 0.90, "couleur": [0.30, 0.58, 0.95] },
+		{ "nom": "nourriture", "niveau": 0.85, "couleur": [0.20, 0.72, 0.45] },
+		{ "nom": "activite",   "niveau": 0.80, "couleur": [0.92, 0.82, 0.25] },
+		{ "nom": "liens",      "niveau": 0.95, "couleur": [0.90, 0.45, 0.78] },
+		{ "nom": "combat",     "niveau": 0.90, "couleur": [0.85, 0.28, 0.25] }
+	],
+
+	"colons": [
+		{
+			"id": "colon_social",
+			"position": [160.0, 280.0, 0.0],
+			"poids_bonheur": { "liens": 0.5, "securite": 0.3 }
+		},
+		{
+			"id": "colon_guerrier",
+			"position": [560.0, 280.0, 0.0],
+			"poids_bonheur": { "combat": 0.6, "activite": 0.3 }
+		},
+		{
+			"id": "colon_gourmand",
+			"position": [960.0, 280.0, 0.0],
+			"poids_bonheur": { "nourriture": 0.6 }
+		},
+		{
+			"id": "colon_equilibre",
+			"position": [1360.0, 280.0, 0.0],
+			"poids_bonheur": { "securite": 0.2, "nourriture": 0.2, "activite": 0.2, "liens": 0.2, "combat": 0.2 }
+		}
+	],
+
+	"couleurs_etat": {
+		"heureux": [0.30, 0.75, 0.35],
+		"malheureux": [0.90, 0.55, 0.15],
+		"desespere": [0.85, 0.15, 0.15]
+	},
+	"couleur_neutre": [0.55, 0.55, 0.55],
+	"couleur_fond_barre": [0.15, 0.15, 0.15],
+	"couleur_source_coupee": [0.30, 0.10, 0.10],
+
+	"taille_colon": 44.0,
+	"largeur_barre": 130.0,
+	"hauteur_barre": 13.0,
+	"espacement_barre": 24.0,
+	"largeur_legende": 92.0,
+	"largeur_poids": 52.0,
+	"marge_legende": 8.0,
+	"marge_bloc": 12.0,
+	"taille_police_nom": 20,
+	"taille_police_bonheur": 18,
+	"taille_police_legende": 14,
+	"taille_police_poids": 12,
+	"taille_police_pied": 13,
+	"taille_police_label": 12,
+	"taille_police_compteur": 16,
+	"periode_trace_s": 2.0,
+
+	"camera": { "position": [760.0, 190.0], "zoom": 0.72 }
+}

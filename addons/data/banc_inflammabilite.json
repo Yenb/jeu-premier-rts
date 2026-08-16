@@ -1,0 +1,32 @@
+{
+	"_note": "Donnees jetables du banc inflammabilite -- PREMIERE demonstration reelle du chantier 'feu -- inflammabilite effective' (objet.gd:proprietes_immuables + propagation.gd:delai_ignition), noms de domaine reels (inflammable/brule/inflammabilite/mouille), exception documentee CLAUDE.md ('un banc jetable peut nommer une categorie pour poser une scene d'observation'). Un feu central, deja allume, jamais eteint (aucun colon dans ce banc) expose en permanence quatre objets de composition differente. MEME delai_propagation de base (2.0s) et MEME portee_propagation pour les quatre -- seule l'inflammabilite effective explique l'ecart observe. bois_vif et melange sont au-dessus du seuil (data/intensite_propagation.json, 0.1) et finissent par s'enflammer ; fer_inerte (0.02) est structurellement sous le seuil ; bois_mouille porte la meme composition que bois_vif (0.9 de base) mais l'etat 'mouille' (data/etats.json) l'ecrase a 0.0 -- deux raisons de blocage differentes, distinguees a l'ecran.",
+	"delai_propagation_base": 2.0,
+	"portee_propagation": 900.0,
+	"feu": { "position": [500.0, 150.0, 0.0] },
+	"objets": [
+		{
+			"id": "bois_vif",
+			"position": [150.0, 450.0, 0.0],
+			"composition": [ { "materiau": "bois", "volume": 3.0 } ],
+			"etats_actifs": []
+		},
+		{
+			"id": "melange",
+			"position": [400.0, 450.0, 0.0],
+			"composition": [ { "materiau": "bois", "volume": 1.0 }, { "materiau": "pierre", "volume": 4.0 } ],
+			"etats_actifs": []
+		},
+		{
+			"id": "fer_inerte",
+			"position": [650.0, 450.0, 0.0],
+			"composition": [ { "materiau": "fer", "volume": 3.0 } ],
+			"etats_actifs": []
+		},
+		{
+			"id": "bois_mouille",
+			"position": [900.0, 450.0, 0.0],
+			"composition": [ { "materiau": "bois", "volume": 3.0 } ],
+			"etats_actifs": ["mouille"]
+		}
+	]
+}

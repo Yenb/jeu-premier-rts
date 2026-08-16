@@ -1,0 +1,50 @@
+{
+	"_note": "Jetable, propre à scripts/banc_nutrition.gd (chantier « profil de repas + malnutrition »). AUCUN catalogue de types local : le colon ET les trois repas sont CONSTRUITS À LA MAIN (patron banc_maladie.gd/banc_ecoulement.gd), jamais Objet.fabriquer -- 'type_nutriment' est une String et la fusion par composition (data/proprietes_immuables_composition.json) est une moyenne pondérée par volume, qui n'a aucun sens sur une String. Chaque repas nomme son 'materiau' (référence VÉRIFIÉE contre data/materiaux.json par scripts/test_lint_donnees.gd, forme A) et le câblage lit sa fiche DIRECTEMENT (comestibilite, valeur_nutritive_energie, type_nutriment), comme banc_permeabilite.gd lit permeabilite.\n\nTROIS RÉSERVES, UN SEUL MÉCANISME : scripts/depense.gd boucle déjà sur TOUTES les réserves d'une chose et avance chaque canal indépendamment, avec SON propre cout_base -- 'le gras cale longtemps, le sucre redescend vite' est donc entièrement en donnée, zéro ligne de code. Ratio 1:3:10 (0.10/0.30/1.00 par seconde) : lisible à l'œil sur la durée du banc. AUCUN 'seuils_ref' sur les trois canaux -- ce banc n'a aucun seuil de dépense, le seul seuil du chantier est celui, RÉVERSIBLE, de charge.gd.\n\nCALIBRATION, mesurée et non devinée (leçon de banc_maladie, dont le seuil d'origine ne contaminait jamais personne -- verrouillée ici par le cas _config_reelle_du_disque de scripts/test_banc_nutrition.gd, qui rejoue CE fichier en entier) : réserves de départ 20/15/10 (somme 45) contre seuil_qualite 30.0. Le sucre s'épuise à t=10s, la somme passe sous 30.0 vers t=12.5s, la charge (accumulation 1.0/s, seuil 3.0) fait poser 'malnutri' vers t=15.5s -- sans un seul clic, le banc lancé montre donc la dégradation complète en moins de vingt secondes. taux_decroissance 2.0 : la charge redescend DEUX FOIS plus vite qu'elle ne monte -- choix de LISIBILITÉ assumé (à parité, un colon laissé une minute sans manger aurait mis une minute à récupérer, illisible), jamais une prétention physiologique.\n\ncontenu 500.0 par repas : volontairement énorme. Ce banc observe le CORPS du colon, jamais l'épuisement du plat -- un repas qui se vide en cours d'observation ajouterait une variable dont ce chantier n'a rien à dire (banc_manger.gd, §3tersexagies, la montre déjà, transformation en 'reste_nourriture' comprise).",
+	"colon": {
+		"id": "colon_nutrition",
+		"position": [0.0, 0.0, 0.0],
+		"vitesse": 120.0
+	},
+	"reserves": {
+		"gras": { "reserve": 20.0, "cout_base": 0.10, "surcout_action": 0.0 },
+		"proteine": { "reserve": 15.0, "cout_base": 0.30, "surcout_action": 0.0 },
+		"sucre": { "reserve": 10.0, "cout_base": 1.00, "surcout_action": 0.0 }
+	},
+	"reserves_max": { "gras": 40.0, "proteine": 40.0, "sucre": 40.0 },
+	"canal_malnutrition": {
+		"charge": 0.0,
+		"seuil": 3.0,
+		"portee_charge": 0.0,
+		"taux_decroissance": 2.0,
+		"poser": { "marqueur_malnutrition": true }
+	},
+	"nom_canal_malnutrition": "malnutrition",
+	"nom_marqueur_malnutrition": "marqueur_malnutrition",
+	"etat_malnutri": "malnutri",
+	"charge_max_affichee": 6.0,
+	"seuil_qualite": 30.0,
+	"accumulation_malnutrition_par_s": 1.0,
+	"nom_reserve_contenu": "contenu",
+	"taux_base": 6.0,
+	"repas": [
+		{ "id": "repas_gras", "materiau": "repas_gras_demo", "position": [-260.0, 200.0, 0.0], "contenu": 500.0 },
+		{ "id": "repas_proteine", "materiau": "repas_proteine_demo", "position": [0.0, 200.0, 0.0], "contenu": 500.0 },
+		{ "id": "repas_sucre", "materiau": "repas_sucre_demo", "position": [260.0, 200.0, 0.0], "contenu": 500.0 }
+	],
+	"couleurs": {
+		"colon": [0.3, 0.55, 0.85],
+		"colon_malnutri": [0.55, 0.5, 0.35],
+		"repas_gras": [0.95, 0.85, 0.45],
+		"repas_proteine": [0.8, 0.35, 0.35],
+		"repas_sucre": [0.4, 0.8, 0.85],
+		"repas_non_servi": [0.35, 0.35, 0.35],
+		"malnutrition": [0.9, 0.15, 0.15],
+		"fond_barre": [0.15, 0.15, 0.15]
+	},
+	"couleurs_reserves": {
+		"gras": [0.95, 0.85, 0.45],
+		"proteine": [0.8, 0.35, 0.35],
+		"sucre": [0.4, 0.8, 0.85]
+	},
+	"camera": { "position": [0.0, 90.0, 0.0], "zoom": 0.85 }
+}

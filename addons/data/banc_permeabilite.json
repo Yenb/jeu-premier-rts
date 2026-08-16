@@ -1,0 +1,20 @@
+{
+	"_note": "Donnees jetables du banc permeabilite -- chantier 'permeabilite : un facteur sur la RETENTION d'eau, pas sur l'absorption'. Deux objets exposes a la MEME source d'humidite, meme cause, meme poids implicite (1.0) : ils montent donc STRICTEMENT a la meme vitesse (aucune modulation par l'absorption ici, contrairement a banc_humidite.gd -- ce chantier isole delibrement la seule variable qui nous interesse). Ce qui les separe est exclusivement leur taux_decroissance du canal 'humidite' (charge.gd), calcule UNE FOIS a la fabrication depuis permeabilite (data/materiaux.json, bois 0.5 / fer 0.0) : taux_decroissance = taux_decroissance_plancher + facteur_permeabilite * permeabilite. 'permeable' (bois, permeabilite 0.5) : taux = 0.05 + 2.0*0.5 = 1.05 -- seche vite une fois la source coupee. 'impermeable' (fer, permeabilite 0.0) : taux = 0.05 + 2.0*0.0 = 0.05 -- seche vingt fois plus lentement, l'eau reste piegee longtemps (jamais POUR TOUJOURS : taux_decroissance_plancher garantit un sechage residuel meme a permeabilite nulle, pour ne jamais figer un objet mouille a vie -- voir CARTE.md 3duotrigies). Le marqueur d'etat 'sature_eau' est pose/retire DIRECTEMENT par charge.gd (poser symetrique du canal), jamais via etat_duree.gd -- ce chantier n'a besoin d'aucun sechage progressif independant, la progressivite vient deja de taux_decroissance lui-meme.",
+	"propriete_cause": "source_humidite",
+	"propriete_permeabilite": "permeabilite",
+	"nom_canal": "humidite",
+	"nom_marque": "sature_eau",
+	"taux_decroissance_plancher": 0.05,
+	"facteur_permeabilite": 2.0,
+	"canal_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 900.0,
+		"poser": { "sature_eau": true }
+	},
+	"source": { "id": "source_eau", "position": [0.0, 0.0, 0.0] },
+	"objets": [
+		{ "id": "permeable", "position": [200.0, 250.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+		{ "id": "impermeable", "position": [500.0, 250.0, 0.0], "composition": [ { "materiau": "fer", "volume": 3.0 } ] }
+	]
+}

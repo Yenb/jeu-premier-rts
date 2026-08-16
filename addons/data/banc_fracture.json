@@ -1,0 +1,14 @@
+{
+	"_note": "Jetable, propre a scripts/banc_fracture.gd (chantier 'resistance_impact -- fracture par choc'). 'position_source' n'existe PAS ici, contrairement a data/banc_foudre.json -- l'epicentre de chaque frappe est la position du CLIC (get_global_mouse_position, converti en Vector3), pas une position fixe : DIFFERENCE ASSUMEE avec banc_foudre.gd (foudre = un phenomene qui choisit sa cible par un score composite sur toute la scene ; ici, un choc PORTE PAR LE JOUEUR, qui vise l'objet a frapper). 'rayon_frappe' (100.0) reste petit devant l'espacement des deux objets (400 unites) : cliquer pres du fer ne met JAMAIS la pierre a portee, et reciproquement -- c'est ce petit rayon, pas 'criteres', qui fait office de visee. 'criteres' reste quasi neutre (un seul candidat generalement a portee) mais doit rester non vide pour Frappe.selectionner. 'degats' (3.0) et 'reserve_integrite_defaut.reserve' (20.0, genereuse) sont calibres pour que la pierre (resistance_impact 2.0) fracture des le premier coup (3.0 > 2.0) et que le fer (resistance_impact 8.0) resiste a deux coups et casse au troisieme (3.0, 6.0, 9.0 > 8.0) -- la reserve d'integrite ne s'epuise jamais avant, elle ne sert qu'a filtrer un objet deja detruit (objets_frappables, meme patron que banc_foudre.gd), pas a decider la fracture (seul 'degats_impact_cumules' vs 'resistance_impact', via data/seuils_etat.json, decide ca). 'seuil_fragilite_eclats' (0.5) tranche entre pierre (fragilite 0.7, materiaux.json -- produit des eclats) et fer (fragilite 0.2 -- se deforme sans transformation) : lu SEUL par le cablage du banc, aucun mecanisme du coeur ne connait 'fragilite'. 'transformation_fracture' par objet pointe vers data/transformations.json -- vide pour le fer (jamais transforme), 'fracture_pierre' pour la pierre.",
+	"nom_reserve_integrite": "integrite",
+	"reserve_integrite_defaut": { "reserve": 20.0, "cout_base": 0.0, "surcout_action": 0.0 },
+	"rayon_frappe": 100.0,
+	"degats": 3.0,
+	"criteres": [ { "poids": 1.0, "source": "position_z" } ],
+	"seuil_fragilite_eclats": 0.5,
+	"objets": [
+		{ "id": "fer_0", "position": [200.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }], "transformation_fracture": "" },
+		{ "id": "pierre_0", "position": [600.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }], "transformation_fracture": "fracture_pierre" }
+	],
+	"camera": { "position": [400.0, -100.0, 0.0], "zoom": 0.5 }
+}

@@ -1,0 +1,22 @@
+{
+	"_note": "Donnees propres a scripts/banc_biomes.gd (Scene/banc_biomes.tscn), chantier 'biomes -- conditions multiples -> type de terrain'. Le CATALOGUE des biomes lui-meme n'est PAS ici : il vit dans data/biomes.json, partage et lu par scripts/conditions.gd -- ce fichier ne porte que la scene d'observation (taille de grille, gradient climatique de depart, pas des controles, palette de rendu). GRADIENT : l'humidite varie par COLONNE (humidite_min a gauche -> humidite_max a droite) et la temperature par LIGNE (temperature_min en haut -> temperature_max en bas) -- les deux axes croises donnent 36 climats distincts, donc les cinq rendus possibles (quatre biomes + aucun) visibles d'un seul coup d'oeil des le demarrage. Ces valeurs sont les valeurs de BASE, posees une fois a la construction et jamais mutees : la temperature/humidite EFFECTIVE d'une case est toujours base + decalage global courant (voir banc_biomes.gd:appliquer_climat), ce qui rend le climat idempotent et sans derive par accumulation. CALIBRATION ASSUMEE : avec ce gradient et le catalogue actuel, 18 des 36 cases ne remplissent AUCUNE entree au repos (bande humidite 0.2-0.5 a temperature temperee) -- ce n'est pas un defaut de reglage, c'est la lecture directe des conditions de data/biomes.json, qui ne pavent pas tout l'espace climatique (voir sa _note). Le brun de 'couleur_aucun_biome' rend cette absence VISIBLE plutot que de la masquer par un biome par defaut invente. couleurs_biome : Array [r, g, b] dans [0,1]. Ce Dictionary est LE SEUL endroit du chantier ou un nom de biome rencontre une couleur -- discipline 'un banc jetable peut nommer une categorie pour poser une scene d'observation' (CLAUDE.md) ; ni conditions.gd ni aucun mecanisme du coeur ne connait ces noms.",
+	"grille_lignes": 6,
+	"grille_colonnes": 6,
+	"humidite_min": 0.05,
+	"humidite_max": 0.95,
+	"temperature_min": 0.0,
+	"temperature_max": 35.0,
+	"pas_temperature": 5.0,
+	"pas_humidite": 0.1,
+	"nom_humidite": "humidite",
+	"nom_temperature": "temperature",
+	"nom_biome": "biome",
+	"couleurs_biome": {
+		"desert": [0.90, 0.80, 0.30],
+		"foret": [0.10, 0.35, 0.15],
+		"prairie": [0.55, 0.72, 0.32],
+		"toundra": [0.92, 0.94, 0.96],
+		"marais": [0.15, 0.50, 0.45]
+	},
+	"couleur_aucun_biome": [0.42, 0.30, 0.16]
+}

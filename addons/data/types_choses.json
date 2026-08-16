@@ -1,0 +1,10 @@
+{
+	"brule": { "verbes": ["approcher"] },
+	"dangereux": { "verbes": ["approcher"] },
+	"cassable": { "verbes": ["approcher"] },
+	"comestible": { "verbes": ["manger"] },
+	"sale": { "verbes": ["s_eloigner"] },
+	"hostile": { "verbes": ["approcher", "s_eloigner"] },
+	"proie": { "verbes": ["approcher", "s_eloigner"] },
+	"experimentable": { "verbes": ["experimenter"] }
+}

@@ -1,0 +1,17 @@
+{
+	"_note": "Donnees jetables du banc transformation_produit -- PREMIERE demonstration reelle du chantier 'transformation produit un objet neuf' (scripts/produit.gd, scripts/extinction.gd:a_zero.produire). Un seul objet, deja en feu au demarrage (aucun clic, aucune propagation -- ce banc observe la CHAINE DE PRODUITS, pas l'allumage, meme parti pris que banc_combustible). 'rythme_combustion' est un agent SYNTHETIQUE (un point {position, rythme}, jamais un colon) colle a l'objet -- extinction.gd exige des agents A PORTEE (jamais l'auto-consommation, reservee a depense.gd, hors perimetre de ce chantier) : ce point represente la combustion elle-meme qui mange son propre chantier, sans dependre de depense.gd ni de propagation.gd.",
+	"objet": {
+		"id": "bois_1",
+		"position": [0, 0, 0],
+		"composition": [ { "materiau": "bois", "volume": 3.0 } ]
+	},
+	"transformation_initiale": "combustion_bois",
+	"travail_restant_initial": 3.0,
+	"travail_initial_initial": 3.0,
+	"rythme_combustion": 1.0,
+	"couleurs": {
+		"bois": [0.55, 0.35, 0.15],
+		"charbon": [0.12, 0.12, 0.12],
+		"cendre": [0.75, 0.75, 0.72]
+	}
+}

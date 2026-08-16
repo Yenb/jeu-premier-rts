@@ -1,0 +1,23 @@
+{
+	"_note": "Données jetables du banc porosite -- chantier « banc_porosite -- un banc transversal ». Montre qu'UNE SEULE propriété matériau (porosite) traverse deux mécanismes indépendants à la fois : humidité (charge.gd, même patron que banc_humidite.gd) et combustion (objet.gd/depense.gd, même patron que banc_combustible.gd). Deux objets, `porosite_haute`/`porosite_basse` (matériaux porosite_haute_demo/porosite_basse_demo, data/materiaux.json -- absorption_humidite/inflammabilite/pouvoir_calorifique/conductivite_thermique/densite IDENTIQUES entre les deux, seule porosite diverge, 0.9 contre 0.05), déjà allumés au démarrage (`brule: true`, comme banc_combustible -- aucune propagation, aucun colon) ET exposés en permanence à la même source d'humidité fixe (comme banc_humidite -- pas de bascule au clic, la source reste active pour que les deux fronts avancent en parallèle sans intervention). Positions symétriques autour de la source (distance identique aux deux objets, 335.4 unités) et symétriques l'une par rapport à l'autre (300 unités d'écart) : tout écart observé vient de la seule porosite, jamais d'une différence de distance. `feu` : chaque objet EN FEU sert lui-même de source de chaleur pour scripts/temperature.gd (position propre, rayon/temperature/force communs aux deux) tant qu'il porte `brule` -- s'éteint du tableau de sources dès son extinction, l'autre objet continue de rayonner seul. propriete_cause/declencheur_expose/propriete_absorption/propriete_porosite/facteur_porosite/nom_etat/nom_canal : mêmes noms de champ que data/banc_humidite.json, mêmes fonctions pures réutilisées (copiées localement dans banc_porosite.gd, jamais partagées entre bancs -- même discipline que banc_humidite.gd lui-même).",
+	"propriete_cause": "source_humidite",
+	"declencheur_expose": "expose_humidite",
+	"propriete_absorption": "absorption_humidite",
+	"propriete_porosite": "porosite",
+	"facteur_porosite": 1.5,
+	"nom_etat": "mouille",
+	"nom_canal": "humidite",
+	"canal_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 500.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_humidite": true }
+	},
+	"source_humidite": { "id": "source_eau", "position": [450.0, 0.0, 0.0] },
+	"feu": { "rayon": 400.0, "temperature": 600.0, "force": 1.0 },
+	"objets": [
+		{ "id": "porosite_basse", "position": [300.0, 300.0, 0.0], "composition": [ { "materiau": "porosite_basse_demo", "volume": 6.0 } ] },
+		{ "id": "porosite_haute", "position": [600.0, 300.0, 0.0], "composition": [ { "materiau": "porosite_haute_demo", "volume": 6.0 } ] }
+	]
+}

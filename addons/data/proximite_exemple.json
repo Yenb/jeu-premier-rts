@@ -1,0 +1,21 @@
+{
+	"profils_saillance": {
+		"feu": { "saillance_intrinseque": 4.0, "portee_saillance": 50.0 }
+	},
+	"colons": {
+		"fanatique": {
+			"attaches": [
+				{ "propriete": "irremplacable", "force": 3.0 }
+			],
+			"forme": {
+				"rayon_liaison": 20.0,
+				"gain_haut": 3.0,
+				"plafond_haut": 20.0
+			}
+		},
+		"placide": {
+			"attaches": [],
+			"forme": {}
+		}
+	}
+}

@@ -1,0 +1,24 @@
+{
+	"_note": "Donnees jetables du banc croissance -- chantier « croissance vegetale -- une plante pousse sous la lumiere et l'eau ». Trois plantes (data/materiaux.json:plante_demo, meme croissance_max=0.5 pour les trois -- seule leur POSITION relative aux deux sources explique la divergence, meme discipline que bois_soleil/bois_noir dans banc_photodegradation.json) alignees autour d'une source de lumiere (0,0,0, rayon 250.0) et d'une source d'eau (300,0,0, portee_charge 250.0, canal_humidite_defaut.portee_charge). plante_1 (150,0,0) : distance a la lumiere 150 <= 250 (eclairee), distance a l'eau 150 <= 250 (arrosee) -- LES DEUX, doit pousser. plante_2 (-200,0,0) : distance a la lumiere 200 <= 250 (eclairee), distance a l'eau 500 > 250 (hors de portee) -- lumiere SANS eau, doit stagner. plante_3 (500,0,0) : distance a la lumiere 500 > 250 (hors de portee), distance a l'eau 200 <= 250 (arrosee) -- eau SANS lumiere, doit stagner. Les deux sources sont TOGGLABLES independamment (scripts/banc_croissance.gd:_unhandled_input) : clic gauche bascule la lumiere (meme geste que banc_photodegradation.gd), clic droit bascule l'eau (meme geste que banc_humidite.gd applique a un second bouton, aucun des deux bancs precedents n'ayant deux sources a distinguer).",
+	"propriete_source_croissance": "emission_croissance",
+	"propriete_receptrice_croissance": "recepteur_croissance",
+	"nom_reserve_maturite": "maturite",
+	"nom_canal_humidite": "humidite",
+	"propriete_croissance_max": "croissance_max",
+	"portee_flux_croissance": 5.0,
+	"canal_humidite_defaut": {
+		"charge": 0.0,
+		"seuil": 5.0,
+		"portee_charge": 250.0,
+		"taux_decroissance": 0.5,
+		"poser": {}
+	},
+	"source_lumiere": { "id": "soleil_croissance", "position": [0.0, 0.0, 0.0], "rayon": 250.0, "intensite": 1.0, "temperature_couleur": 0.3, "force": 1.0 },
+	"source_eau": { "id": "source_eau_croissance", "position": [300.0, 0.0, 0.0] },
+	"plantes": [
+		{ "id": "plante_1", "position": [150.0, 0.0, 0.0], "composition": [ { "materiau": "plante_demo", "volume": 1.0 } ] },
+		{ "id": "plante_2", "position": [-200.0, 0.0, 0.0], "composition": [ { "materiau": "plante_demo", "volume": 1.0 } ] },
+		{ "id": "plante_3", "position": [500.0, 0.0, 0.0], "composition": [ { "materiau": "plante_demo", "volume": 1.0 } ] }
+	],
+	"camera": { "position": [150.0, 0.0, 0.0], "zoom": 0.55 }
+}

@@ -1,0 +1,174 @@
+{
+	"_note": "Donnees JETABLES de scripts/banc_temps_vieillissement.gd. Trois unites de temps coexistent sans jamais se convertir : annees_par_seconde (l'horloge individuelle), jours_par_seconde (l'unite de l'accumulateur plat, pour que le 730.0 du catalogue de seuils se lise en jours), et les secondes brutes. Un facteur de facteurs_temps multiplie le delta de TOUT le tick : age, accumulateur, depense et gestation accelerent ensemble.",
+	"seed": 20260815,
+	"annees_par_seconde": 1.0,
+	"jours_par_seconde": 60.0,
+	"facteurs_temps": [1.0, 4.0, 16.0],
+	"intervalle_trace_s": 4.0,
+
+	"_note_courbe": "pic_force_ans et declin_par_an_apres sont poses PAR COLON, en cle plate, et non gardes comme constantes du banc : pic_force_ans sert aussi de seuil par objet a l'entree veteran_pic_force ci-dessous. Un colon sans cette cle replie sur INF et n'est jamais veteran. plancher_force borne le bas : a 0.015 par an au-dela de 28 ans, la droite passe sous zero vers 95 ans, et une force negative n'a aucun sens.",
+	"pic_force_ans": 28.0,
+	"declin_par_an_apres": 0.015,
+	"plancher_force": 0.05,
+	"nom_force_base": "force",
+	"nom_force_effective": "force_effective",
+	"nom_pic_force": "pic_force_ans",
+	"nom_declin_force": "declin_par_an_apres",
+
+	"_note_competence": "La loi de montee et de decroissance vit dans le catalogue PARTAGE (entree competence_age), jamais recopiee ici. Ce fichier ne garde que le nom qui la designe et le plafond de lecture -- epigenetique.gd ne borne jamais le haut. La valeur de depart d'un colon vaut modulateur_pose x age, calculee par le cablage depuis le catalogue : un vieux ne repart pas de zero.",
+	"nom_marque_competence": "competence_age",
+	"plafond_competence": 2.0,
+
+	"_note_differe": "L'accumulateur est une cle PLATE ecrite par le cablage : seuil_etat.gd compare, il ne possede aucune valeur. Seuls les colons qui declarent decision_differee la portent -- les autres sont un chemin mort silencieux pour l'entree partagee. cout_vie est la cle plate que module l'etat, la reserve vivant a une profondeur qu'aucun lecteur agrege ne descend.",
+	"nom_accumulateur_differe": "effet_differe_cumule",
+	"nom_cout_vie": "cout_vie",
+	"cout_vie_base": 0.5,
+	"nom_reserve_vie": "energie",
+	"capacite_vie": 100.0,
+	"etat_effet_differe": "effet_differe",
+	"etat_veteran": "veteran",
+
+	"_note_seuils_locaux": "Format EXACT du catalogue de seuils partage, passe tel quel au mecanisme. Local parce que 'age' est porte par TOUT vivant du depot : une entree partagee attraperait les hotes et les animaux des autres bancs, sans raison de les rendre veterans. Seuil lu PAR OBJET, jamais universel.",
+	"seuils_locaux": {
+		"veteran_pic_force": {
+			"propriete_continue": "age",
+			"seuil_propriete": "pic_force_ans",
+			"etat": "veteran"
+		}
+	},
+
+	"_note_reproduction": "Catalogue LOCAL au format du catalogue partage, resolu par la reference que porte deja le type colon. Local pour une raison mesurable : la calibration partagee demande presque une minute avant la premiere naissance, et la baisser ici la baisserait pour l'autre banc qui la lit.",
+	"catalogue_reproduction_local": {
+		"colon": {
+			"seuil_accouplement": 1.0,
+			"taux_montee": 0.5,
+			"duree_gestation": 5.0
+		}
+	},
+
+	"_note_genes": "Un seul gene, LOCAL (jamais le catalogue de genes partage, ou une regle de demonstration ne monte que le jour ou un deuxieme banc la reclame), UNE seule cible : la force de BASE, celle que la courbe d'age multiplie ensuite. Les deux porteurs sont homozygotes [1,1] et leurs partenaires [-1,-1] : la diploidie rend toujours un allele de chacun, donc [1,-1], somme nulle : la force de base d'un enfant tombe pile au milieu de celles de ses parents. La moitie par parent devient OBSERVABLE plutot que declaree.",
+	"catalogue_genes": {
+		"vigueur": {
+			"cibles": [
+				{ "chemin": "force", "poids": 0.2 }
+			],
+			"mode_expression": "additif"
+		}
+	},
+
+	"_note_heritage": "Trois transmissions, trois mecanismes deja fermes, aucun neuf. GENES et MARQUES : heredite.gd les produit seul, le cablage ne fait qu'ecraser les deux cles du kit rendu. OBJETS : un transfert destructif, ou le parent perd exactement ce que l'enfant gagne. LIENS : le patron ci-dessous derive une entree de catalogue par cible possible, le nom pose etant compose de son prefixe et de l'id visee. seuil_heritage_lien est un GATE lu sur le PARENT : sous ce seuil le lien ne passe pas, un enfant n'herite pas de toutes les connaissances de sa mere.",
+	"nom_reserve_patrimoine": "patrimoine",
+	"part_heritage_objets": 0.5,
+	"seuil_heritage_lien": 2.0,
+	"prefixe_lien_herite": "lien_herite",
+	"patron_marque_lien_herite": {
+		"cible": "lien_herite_par_paire",
+		"modulateur_pose": 0.5,
+		"taux_decroissance": 0.0,
+		"plancher_suppression": 0.05,
+		"taux_transmission_enfant": 0.0,
+		"source_environnementale": "naissance"
+	},
+
+	"_note_colons": "Quatre temoins d'age, puis deux couples. Un temoin ne declare aucune espece, donc aucun mode de reproduction, et le mecanisme rend la main de lui-meme : aucun filtre de cablage a ecrire. Les deux couples declarent deux especes differentes, comparees par egalite stricte : chaque porteur ne peut feconder que son partenaire, meme s'il percoit les quatre. voie_heritage_liens vaut A (l'enfant recoit les liens) ou B (il part neutre) : les deux tournent cote a cote, la decision reste ouverte.",
+	"colons": [
+		{
+			"id": "jeune",
+			"position": [-600.0, -180.0, 0.0],
+			"age_initial": 5.0,
+			"couleur": [0.35, 0.80, 0.35]
+		},
+		{
+			"id": "adulte",
+			"position": [-200.0, -180.0, 0.0],
+			"age_initial": 25.0,
+			"couleur": [0.45, 0.70, 0.40],
+			"decision_differee": true
+		},
+		{
+			"id": "veteran",
+			"position": [200.0, -180.0, 0.0],
+			"age_initial": 40.0,
+			"couleur": [0.60, 0.60, 0.45],
+			"decision_differee": true
+		},
+		{
+			"id": "vieux",
+			"position": [600.0, -180.0, 0.0],
+			"age_initial": 60.0,
+			"couleur": [0.70, 0.70, 0.70]
+		},
+		{
+			"id": "porteur_a",
+			"position": [-620.0, 260.0, 0.0],
+			"age_initial": 25.0,
+			"couleur": [0.85, 0.35, 0.35],
+			"role_gestation": "porteur",
+			"espece": "lignee_a",
+			"voie_heritage_liens": "A",
+			"patrimoine": 40.0,
+			"genes_actifs": ["vigueur"],
+			"genes_etat": { "vigueur": { "alleles": [1.0, 1.0] } },
+			"liens_initiaux": { "jeune": 3.0, "adulte": 1.0 }
+		},
+		{
+			"id": "partenaire_a",
+			"position": [-380.0, 260.0, 0.0],
+			"age_initial": 25.0,
+			"couleur": [0.85, 0.55, 0.55],
+			"role_gestation": "non_porteur",
+			"espece": "lignee_a",
+			"genes_actifs": ["vigueur"],
+			"genes_etat": { "vigueur": { "alleles": [-1.0, -1.0] } }
+		},
+		{
+			"id": "porteur_b",
+			"position": [260.0, 260.0, 0.0],
+			"age_initial": 25.0,
+			"couleur": [0.30, 0.45, 0.85],
+			"role_gestation": "porteur",
+			"espece": "lignee_b",
+			"voie_heritage_liens": "B",
+			"patrimoine": 40.0,
+			"genes_actifs": ["vigueur"],
+			"genes_etat": { "vigueur": { "alleles": [1.0, 1.0] } },
+			"liens_initiaux": { "jeune": 3.0, "adulte": 1.0 }
+		},
+		{
+			"id": "partenaire_b",
+			"position": [500.0, 260.0, 0.0],
+			"age_initial": 25.0,
+			"couleur": [0.55, 0.65, 0.85],
+			"role_gestation": "non_porteur",
+			"espece": "lignee_b",
+			"genes_actifs": ["vigueur"],
+			"genes_etat": { "vigueur": { "alleles": [-1.0, -1.0] } }
+		}
+	],
+
+	"_note_rendu": "Geometrie et couleurs. age_gris est l'age ou la teinte a fini de virer du vert au gris : lire l'age sans lire le nombre.",
+	"offset_enfant": [0.0, 190.0, 0.0],
+	"couleur_enfant": [0.95, 0.90, 0.55],
+	"age_gris": 90.0,
+	"couleur_jeunesse": [0.30, 0.80, 0.35],
+	"couleur_vieillesse": [0.62, 0.62, 0.62],
+	"couleur_fond": [0.10, 0.11, 0.13],
+	"couleur_fond_barre": [0.22, 0.22, 0.24],
+	"couleur_barre_force": [0.90, 0.55, 0.20],
+	"couleur_barre_competence": [0.30, 0.75, 0.85],
+	"couleur_barre_reserve": [0.55, 0.85, 0.45],
+	"couleur_effet_differe": [0.90, 0.20, 0.20],
+	"taille_colon": 34.0,
+	"taille_colon_enfant": 22.0,
+	"largeur_barre": 150.0,
+	"hauteur_barre": 9.0,
+	"espacement_barre": 13.0,
+	"marge_bloc": 10.0,
+	"taille_police_label": 15,
+	"taille_police_compteur": 18,
+	"taille_police_aide": 14,
+	"terrain_largeur": 1700.0,
+	"terrain_hauteur": 1100.0,
+	"camera_position": [0.0, 90.0],
+	"camera_zoom": 0.62
+}

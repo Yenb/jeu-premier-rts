@@ -1,0 +1,83 @@
+{
+	"_note": "JETABLE, propre a scripts/banc_temps_anticipation.gd -- chantier « perception du temps + anticipation » (audit_perception_croyance_memoire_prealable.md, lignes 7 et 8). AUCUN catalogue partage ici : la loi de l'oubli vit dans data/memoire_spatiale.json, la loi du biais dans data/deformations.json:anticipation, le seuil d'etat dans data/seuils_etat.json:prevoyance, les TEXTES dans data/textes.json -- ce fichier ne porte que la calibration d'observation et les noms de propriete que le cablage lit.\n\n'cycle' : l'heure ET la saison passent par scripts/horloge.gd (mecanisme du coeur), jamais par un fmod recopie. Contrairement a data/banc_memoire_navigation.json (duree_jour_secondes 0.0, jour volontairement fige), ICI LE TEMPS TOURNE REELLEMENT -- c'est le sujet. duree_jour_secondes 2.0 et jours_par_saison 8.0 donnent une SAISON DE 16 s et une ANNEE DE 64 s : assez lent pour lire un label, assez rapide pour voir trois changements de saison sans attendre. 'heure_depart' 6.0 : le banc s'ouvre au lever du jour, pas en pleine nuit. 'latitude' 0.0 : meme CHOIX de calibration que banc_memoire_navigation -- lumiere.gd:soleil multiplie l'intensite par cos(latitude), seule une latitude nulle rend exactement 1.0 a midi et 0.0 a minuit, ce qui rend le fond lisible d'un coup d'oeil.\n\n'saison_avant_hiver' : le NOM de la saison ou l'anticipation se declenche, JAMAIS ecrit dans le code. Le cablage compare la saison rendue par horloge.gd a cette chaine -- changer quelle saison declenche l'anticipation, ou renommer les quatre saisons, est un travail de donnee seule. L'ORDRE de 'saisons' est ce qui dit quelle saison suit laquelle (horloge.gd ne le sait pas) : 'automne' precede 'hiver' PARCE QUE le tableau le dit ici, pas parce qu'un fichier de code le sait.\n\n'seuil_prevoyance' 4.0, POSE PAR COLON (data/seuils_etat.json:prevoyance lit 'seuil_propriete', patron rupture_grief/seuil_rupture) -- valeur identique pour les trois ici, ce qui rend la comparaison honnete : ce qui les separe est leur COMPTE de saisons, jamais un seuil regle a la main colon par colon. Consequence chiffree, verrouillee par test : le vieux (8.0) est prevoyant DES LE PREMIER PAS ; l'adulte (3.0) le devient au DEUXIEME changement de saison (5.0 > 4.0), soit t = 32 s ; le jeune (0.1) atteindrait 4.1 au QUATRIEME, soit t = 64 s -- au-dela de la fenetre d'observation de ce banc, mais PAS jamais. La comparaison a lieu strictement au-dessus ('valeur > seuil', seuil_etat.gd), donc l'adulte a 4.0 pile n'est pas encore prevoyant : c'est voulu, il le devient une saison plus tard et on VOIT la bascule au lieu de la manquer au premier pas.\n\n'base_innee' 0.1 : la valeur INITIALE de 'cycles_vecus' du plus jeune -- ce n'est ni un poids de verbe ni un biais, c'est le point de depart d'un COMPTEUR (voir l'audit ligne 8, qui ecarte nommement poids_verbes : son unique lecteur, agir.gd:_verbe_par_poids, departage les VERBES d'une propriete deja gagnante, jamais deux cibles). Patron banc_psycho_social.gd:ardeur_combat = biais_de_base + modulateur : la base est de meme nature pour tous, seule l'experience differe -- « les archetypes n'existent pas ». Un jeune n'est donc pas d'une AUTRE espece qu'un vieux : il est sur la meme echelle, plus bas.\n\n'biais_de_base' 0.1 et 'gain_par_cycle' 0.15 : le DEBIT de pose de la deformation, compose exactement comme ci-dessus (base + modulateur), puis multiplie par delta cote appelant (deformation.gd:poser n'a aucun parametre de temps). Le vieux, a 10 cycles quand l'automne arrive, pose 1.6/s ; l'adulte, a 5 cycles, 0.85/s. Face aux taux de decroissance de data/deformations.json:anticipation (0.3 rapide, 0.15 lent), le vieux monte de ~1.36/s de biais et l'adulte de ~0.61/s : le vieux atteint le plafond en ~1.5 s, l'adulte en ~3.3 s. C'EST LA TOUTE LA GRADATION « un vieux anticipe beaucoup plus » -- elle vit dans le DEBIT, jamais dans une seconde entree de catalogue.\n\n'plafond_biais_anticipation' 2.0 : LE PLAFOND VIT AU CABLAGE, le coeur ne borne jamais le haut et IL N'EXISTE AUCUN EQUILIBRE NATUREL (constat repete quatre fois dans data/deformations.json) -- sans lui le registre monterait lineairement et sans borne. 2.0 multiplie la saillance du grenier par 3.0 (proximite.gd : saillance *= 1 + biais).\n\n'seuil_souvenir_recent' 0.6 / 'seuil_souvenir_ancien' 0.2 : les deux bornes de la PERCEPTION DU TEMPS, sur la force rendue par memoire_spatiale.gd. Avec plafond_force 1.0 et taux_decroissance 0.02/s (data/memoire_spatiale.json), un souvenir sature devient 'ancien' 20 s apres la derniere observation, 'tres_ancien' 40 s apres, et est RETIRE du registre ~49 s apres (plancher 0.02). Le repere PROCHE reste a portee en permanence : il est reobserve chaque tick, sa force reste au plafond, il reste donc 'recent' pour toujours -- c'est le temoin. Le repere LOINTAIN part a t=3 s et traverse les trois cles. AUCUNE HORLOGE INTERNE n'est lue nulle part : la seule grandeur consultee est la force du souvenir.\n\n'plafond_force' 1.0 : ecretage au CABLAGE (patron banc_memoire_navigation.gd:plafonner_memoire), obligatoire parce que memoriser() est appele CHAQUE TICK tant que le repere est vu. 1.0 exactement, pour que les deux seuils ci-dessus se lisent comme des fractions d'un souvenir plein.\n\nPOSITIONS : les trois colons ne sont PAS a distance egale du grenier (500 pour celui du milieu, 583 pour les deux autres) -- assume, et sans consequence sur ce que le banc prouve. La comparaison entre colons se fait sur le BIAIS, qui ne depend d'aucune distance ; la saillance affichee, elle, se lit toujours par rapport a la saillance NUE DU MEME COLON (le rapport avec/sans biais elimine la distance). Les vouloir a distance rigoureusement egale aurait demande de les poser sur un arc de cercle, illisible en donnee pour rien.\n\n'nom_propriete_stockage'/'nom_propriete_repere'/'nom_canal_vue'/'nom_propriete_vitesse' : le cablage ne teste JAMAIS un type -- il teste ces proprietes sur ce qu'il percoit, meme discipline que le coeur, alors meme qu'un banc jetable aurait le droit de nommer une categorie.\n\n'langue' : la langue lue dans data/textes.json. Ajouter une langue = une cle dans ce fichier-la et ce seul mot change ici, ZERO ligne de code (CLAUDE.md, INTERNATIONALISATION).",
+
+	"cycle": {
+		"duree_jour_secondes": 2.0,
+		"heures_par_jour": 24.0,
+		"heure_depart": 6.0,
+		"jours_par_saison": 8.0,
+		"latitude": 0.0,
+		"saisons": ["printemps", "ete", "automne", "hiver"]
+	},
+	"saison_avant_hiver": "automne",
+
+	"langue": "fr",
+	"nom_canal_vue": "vue",
+	"nom_propriete_stockage": "stockage",
+	"nom_propriete_repere": "repere",
+	"nom_propriete_vitesse": "vitesse",
+	"source_deformation": "anticipation",
+	"etat_prevoyant": "prevoyant",
+
+	"seuil_prevoyance": 4.0,
+	"base_innee": 0.1,
+	"biais_de_base": 0.1,
+	"gain_par_cycle": 0.15,
+	"plafond_biais_anticipation": 2.0,
+
+	"plafond_force": 1.0,
+	"seuil_souvenir_recent": 0.6,
+	"seuil_souvenir_ancien": 0.2,
+	"seuil_trace_anticipation": 0.2,
+
+	"portee_vue": 700.0,
+	"delai_eloignement": 3.0,
+
+	"colons": [
+		{ "id": "colon_jeune", "type": "colon", "nom": "jeune", "position": [-300.0, 220.0, 0.0], "cycles_vecus": 0.1 },
+		{ "id": "colon_adulte", "type": "colon", "nom": "adulte", "position": [0.0, 220.0, 0.0], "cycles_vecus": 3.0 },
+		{ "id": "colon_vieux", "type": "colon", "nom": "vieux", "position": [300.0, 220.0, 0.0], "cycles_vecus": 8.0 }
+	],
+
+	"grenier": {
+		"id": "grenier_colonie",
+		"type": "grenier",
+		"position": [0.0, -280.0, 0.0],
+		"profil_saillance": "grenier_stockage"
+	},
+
+	"reperes": [
+		{
+			"id": "repere_proche",
+			"type": "repere",
+			"nom": "l'abreuvoir",
+			"position_initiale": [0.0, 420.0, 0.0],
+			"position_lointaine": [0.0, 420.0, 0.0],
+			"s_eloigne": false
+		},
+		{
+			"id": "repere_lointain",
+			"type": "repere",
+			"nom": "le bosquet",
+			"position_initiale": [0.0, 320.0, 0.0],
+			"position_lointaine": [0.0, 1000.0, 0.0],
+			"s_eloigne": true
+		}
+	],
+
+	"couleurs": {
+		"fond_jour": [0.55, 0.62, 0.70],
+		"fond_nuit": [0.06, 0.07, 0.14],
+		"colon": [0.30, 0.82, 0.42],
+		"colon_prevoyant": [0.98, 0.85, 0.20],
+		"grenier_calme": [0.42, 0.34, 0.24],
+		"grenier_anticipe": [0.98, 0.45, 0.10],
+		"repere": [0.20, 0.45, 0.98]
+	},
+
+	"taille_colon": 44.0,
+	"taille_grenier": 70.0,
+	"taille_repere": 26.0,
+	"camera": { "position": [0.0, 350.0], "zoom": 0.40 },
+	"intervalle_print": 4.0
+}

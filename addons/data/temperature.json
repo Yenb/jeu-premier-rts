@@ -1,0 +1,9 @@
+{
+	"_note": "Catalogue de temperature (chantier 'temperature'), lu par scripts/temperature.gd. Une seule entree, 'defaut' -- meme convention sentinelle que data/vent.json:defaut/data/liens_personnels.json:defaut : l'ambiante est UNIVERSELLE a la scene, jamais une regle choisie par objet. 'ambiante' (degres C) : la temperature lue a une position que ne porte aucune source a portee -- meme valeur que le defaut du paquet objet_physique (data/types.json:objet_physique.temperature). 'attenuation.exposant' : courbe d'attenuation d'une source a la distance (1.0 = lineaire, plus grand = chute plus rapide pres du bord du rayon) -- forme UNIQUE, partagee par toutes les sources d'un meme appel, jamais par source, meme patron que data/vent.json:attenuation_source.exposant.",
+	"defaut": {
+		"ambiante": 20.0,
+		"attenuation": {
+			"exposant": 1.0
+		}
+	}
+}

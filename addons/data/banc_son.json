@@ -1,0 +1,49 @@
+{
+	"_note": "jetable, propre a ce banc. QUATRE sources sonores locales, matiere REELLE (data/materiaux.json, aucun materiau de demo invente) -- fer (son_emis 0.5) pour source_forte ET source_ultrason (MEME son_emis : la seule difference entre les deux est la frequence, jamais l'intensite -- preuve que le filtre de frequence, applique par ce banc, est independant du filtre de seuil, active dans scripts/perception.gd), bois (0.1) pour source_moyenne, pierre (0.05) pour source_faible. 'frequence' (Hz) est posee EN DUR sur chaque declaration de type -- pas une propriete materiau (une meme matiere peut sonner a des frequences tres differentes selon sa forme), donc jamais fusionnee via proprietes_immuables_composition.json, simplement fusionnee par le merge superficiel de objet.gd:fabriquer (proprietes du type ecrasent celles des paquets herites). DEUX GRAPPES SPATIALES, tres eloignees l'une de l'autre (memes distance/portee a l'interieur de chaque grappe, aucune contamination croisee -- meme raisonnement que data/banc_chaleur_emise.json) : colon_humain (0,0,0) entoure de ses quatre sources a distance 300 (portee ouie 600, ratio d'attenuation 0.5) ; colon_chien (3000,0,0), meme disposition, sources dupliquees. seuil (0.04) est identique pour les deux colons -- avec portee 600/distance 300, intensite attenuee = son_emis*0.5 : forte/ultrason 0.25, moyenne 0.05, faible 0.025 -- seuil 0.04 capte forte/moyenne/ultrason, ignore faible, chez les DEUX colons (le seuil ne distingue jamais forte de faible ULTRASON, seule la frequence le fait). frequence_min (20.0, identique aux deux) et frequence_max divergent : colon_humain 20000.0 (n'entend jamais l'ultrason a 30000.0 Hz), colon_chien 45000.0 (l'entend). ouie_surcharge est fusionne PAR-DESSUS colon.canaux_config.ouie (qui porte deja portee/sensibilite/seuil par defaut) par banc_son.gd -- jamais par perception.gd ni par un autre mecanisme du coeur, meme geste que le retrait local de profil_saillance dans banc_feu.gd. NEUVIEME source, source_mobile_humain (bois, meme son_emis que source_moyenne, 0.1) : SEULE source dont la POSITION change au fil du temps (retour Yael -- les quatre autres varient l'intensite de base a distance FIXE identique, aucune ne montre l'attenuation par la distance a l'ecran, seuls les tests le faisaient) -- oscille sur l'axe X (mouvement_source_mobile, y_fixe/amplitude_x/periode, banc_son.gd:position_source_mobile, fonction PURE) autour de colon_humain SEUL (colon_chien n'est jamais a portee) : a x=0 (t=0), distance 200, intensite attenuee 0.1*(1-200/600)=0.067 >= seuil 0.04, ENTENDUE ; a x=+-400 (t=periode/4 et 3*periode/4), distance ~447, intensite attenuee 0.1*(1-447/600)=0.026 < seuil, IGNOREE -- bascule visible deux fois par periode (6.0s), dans le label de colon_humain ET dans la trace console (au changement seulement). y_fixe INVERSE a -200.0 (chantier « occlusion -- un obstacle entre A et B bloque la perception », correction de regression) : a +200.0, la position de depart (x=0) tombait EXACTEMENT sur le segment colon_humain->source_moyenne_humain (tous deux sur l'axe Y positif), qui devenait un obstacle reel (bois, absorption_sonore 0.3) pour moyenne des l'activation de l'occlusion sur le canal ouie -- inverse au cote de source_ultrason_humain (deja hors de portee frequentielle de colon_humain, aucune consequence sur ce qui est entendu), MEMES magnitudes de distance (200/447), aucune autre valeur changee.",
+	"couleurs_types": {
+		"colon_humain": [0.3, 0.6, 0.9],
+		"colon_chien": [0.9, 0.6, 0.2],
+		"source_forte": [0.85, 0.15, 0.1],
+		"source_moyenne": [0.6, 0.4, 0.2],
+		"source_faible": [0.6, 0.6, 0.6],
+		"source_ultrason": [0.7, 0.2, 0.8],
+		"source_mobile": [0.2, 0.8, 0.3]
+	},
+	"types": {
+		"source_forte":    { "herite": ["objet_physique"], "composition": [ { "materiau": "fer", "volume": 1.0 } ], "frequence": 200.0 },
+		"source_moyenne":  { "herite": ["objet_physique"], "composition": [ { "materiau": "bois", "volume": 1.0 } ], "frequence": 300.0 },
+		"source_faible":   { "herite": ["objet_physique"], "composition": [ { "materiau": "pierre", "volume": 1.0 } ], "frequence": 250.0 },
+		"source_ultrason": { "herite": ["objet_physique"], "composition": [ { "materiau": "fer", "volume": 1.0 } ], "frequence": 30000.0 },
+		"source_mobile":   { "herite": ["objet_physique"], "composition": [ { "materiau": "bois", "volume": 1.0 } ], "frequence": 220.0 }
+	},
+	"sources": [
+		{ "id": "source_forte_humain",    "type": "source_forte",    "position": [300.0, 0.0, 0.0] },
+		{ "id": "source_moyenne_humain",  "type": "source_moyenne",  "position": [0.0, 300.0, 0.0] },
+		{ "id": "source_faible_humain",   "type": "source_faible",   "position": [-300.0, 0.0, 0.0] },
+		{ "id": "source_ultrason_humain", "type": "source_ultrason", "position": [0.0, -300.0, 0.0] },
+		{ "id": "source_mobile_humain",   "type": "source_mobile",   "position": [0.0, -200.0, 0.0] },
+		{ "id": "source_forte_chien",    "type": "source_forte",    "position": [3300.0, 0.0, 0.0] },
+		{ "id": "source_moyenne_chien",  "type": "source_moyenne",  "position": [3000.0, 300.0, 0.0] },
+		{ "id": "source_faible_chien",   "type": "source_faible",   "position": [2700.0, 0.0, 0.0] },
+		{ "id": "source_ultrason_chien", "type": "source_ultrason", "position": [3000.0, -300.0, 0.0] }
+	],
+	"mouvement_source_mobile": { "id": "source_mobile_humain", "amplitude_x": 400.0, "y_fixe": -200.0, "periode": 6.0 },
+	"colons": {
+		"colon_humain": {
+			"position": [0.0, 0.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": {},
+			"ouie_surcharge": { "seuil": 0.04, "frequence_min": 20.0, "frequence_max": 20000.0 }
+		},
+		"colon_chien": {
+			"position": [3000.0, 0.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": {},
+			"ouie_surcharge": { "seuil": 0.04, "frequence_min": 20.0, "frequence_max": 45000.0 }
+		}
+	},
+	"intervalle_print": 2.0,
+	"camera": { "position": [1500.0, 0.0, 0.0], "zoom": 0.2 }
+}

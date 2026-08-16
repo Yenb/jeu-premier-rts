@@ -1,0 +1,73 @@
+{
+	"_note": "Jetable, propre a ce banc (voir CARTE.md §3duodecies). 'feu' reste LOCAL (vocabulaire propre au banc, exception banc jetable de CLAUDE.md) -- profil_saillance/transformation restent des references REELLES vers data/profils_saillance.json/data/transformations.json (partages, inchanges), sans le canal reserves.combustible de data/types.json:feu (son seuils_ref 'epuisement' consumerait le feu en 1.5s au rythme par defaut, bien avant qu'aucun colon n'arrive -- feu local sans combustible, plus simple que de recabler seuils_combustible.json ici). 'catalogue_genes' reste LOCAL (jamais data/genes.json, meme discipline que catalogue_attaches_par_trait dans data/banc_convergence_attache.json/data/banc_vecu_inter_colon.json -- une regle de banc de demonstration ne rejoint le catalogue partage QUE si un second banc en a besoin). reserve_energie_initiale/reserves_max.energie a 8.0 (au lieu du defaut 100.0 de data/types.json:dynamique) pour que l'ecart de metabolisme se voie en dizaines de secondes, pas en minutes.",
+	"reserve_energie_initiale": 8.0,
+	"couleurs_types": {
+		"feu": [1.0, 0.5, 0.0],
+		"cendre": [0.4, 0.38, 0.36]
+	},
+	"couleurs_colons": {
+		"vif": [0.9, 0.2, 0.2],
+		"moyen": [0.85, 0.75, 0.1],
+		"endurant": [0.2, 0.55, 0.9]
+	},
+	"couleurs_reserves": {
+		"energie": [1.0, 0.85, 0.2],
+		"faim": [0.9, 0.55, 0.15],
+		"soif": [0.3, 0.55, 0.95],
+		"sommeil": [0.6, 0.4, 0.9],
+		"chaleur": [0.9, 0.25, 0.2]
+	},
+	"reserves_max": {
+		"energie": 8.0,
+		"faim": 100.0,
+		"soif": 100.0,
+		"sommeil": 100.0,
+		"chaleur": 100.0
+	},
+	"types": {
+		"feu": {
+			"profil_saillance": "feu",
+			"brule": true,
+			"travail_restant": 3.0,
+			"travail_initial": 3.0,
+			"transformation": "defaut"
+		}
+	},
+	"catalogue_genes": {
+		"vivacite": {
+			"_note": "Seul gene de ce banc, UN SEUL, TROIS cibles (chantier 'fondation genetique dormante' : data/genes.json:cibles). mode_expression additif -- les alleles s'additionnent, poids positif sur portee/vitesse (voir loin, bouge vite), poids positif aussi sur reserves.energie.cout_base (PAS negatif : cibler directement 'reserves.energie.reserve' avec un poids negatif n'aurait baisse le stock qu'UNE FOIS, a la fabrication -- ce qui differencie vif/endurant ici doit etre un RYTHME de consommation, pas un capital de depart ; cout_base est le TAUX que depense.gd lit chaque tick, augmenter ce taux EST l'effet 'consomme plus vite'). Alleles symetriques par colon : vif [1,1] (+), moyen [0,0] (aucun effet, colon reste exactement au defaut du type), endurant [-1,-1] (-) -- moyen n'est donc pas un troisieme jeu de valeurs invente, c'est le colon SANS le gene actif, ce que 'valeurs intermediaires sur tout' veut dire au sens le plus strict.",
+			"cibles": [
+				{ "chemin": "canaux_config.vue.portee", "poids": 200.0 },
+				{ "chemin": "vitesse", "poids": 30.0 },
+				{ "chemin": "reserves.energie.cout_base", "poids": 0.13 }
+			],
+			"mode_expression": "additif"
+		}
+	},
+	"colons": {
+		"vif": {
+			"position": [400.0, 0.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "approcher": 1.0 },
+			"genes_actifs": ["vivacite"],
+			"genes_etat": { "vivacite": { "alleles": [1.0, 1.0] } }
+		},
+		"moyen": {
+			"position": [-200.0, 346.41, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "approcher": 1.0 },
+			"genes_actifs": ["vivacite"],
+			"genes_etat": { "vivacite": { "alleles": [0.0, 0.0] } }
+		},
+		"endurant": {
+			"position": [-200.0, -346.41, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "approcher": 1.0 },
+			"genes_actifs": ["vivacite"],
+			"genes_etat": { "vivacite": { "alleles": [-1.0, -1.0] } }
+		}
+	}
+}

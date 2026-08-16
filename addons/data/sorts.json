@@ -1,0 +1,44 @@
+{
+	"_note": "Catalogue de scripts/banc_sorts.gd:lancer_sort (chantier « sorts -- cablage de base + banc de demonstration »). Un SORT N'EST PAS UN MECANISME -- chaque entree nomme un effet (mecanisme existant du coeur, jamais un nom en dur dans lancer_sort au-dela d'un match sur cette cle), une grandeur (Dictionary de parametres numeriques DEJA a la forme attendue par le mecanisme cible, jamais transformee), une cible ('objet' | 'soi' | 'zone', lue par le cablage pour choisir COMMENT trouver le/les destinataires -- ce champ n'est jamais lu par un mecanisme du coeur, seulement par le dispatcher), une portee (float, sens differe par cible : rayon de selection pour 'objet'/'zone', ignoree pour 'soi') et un cout_mana (float, ponctionne sur proprietes.reserves.mana.reserve AVANT tout effet -- sort non lance si insuffisant, aucune reserve negative). 'effet' resout vers UNE fonction du coeur : 'frappe' -> Frappe.selectionner puis Frappe.frapper (grandeur.critere, forme EXACTE attendue par Frappe.selectionner -- {propriete, poids, source}) ; 'flux' -> Flux.avancer avec un emetteur SYNTHETIQUE (patron banc_conduction.gd/banc_mana_conduction.gd, jamais une propriete SOURCE reelle posee sur le lanceur) ; 'etat' -> EtatDuree.poser (grandeur.duree documente l'intention SEULE -- la duree REELLEMENT appliquee vient de data/etats.json:<nom_etat>.duree, EtatDuree.poser ne recoit jamais de duree en parametre ; les deux valeurs DOIVENT coincider, verifie a l'ecriture) ; 'frappe_zone' -> boucle scripts/portee.gd:en_portee + Frappe.frapper sur CHAQUE objet a portee (PAS Frappe.selectionner, qui ne rend qu'un seul objet -- nuance verifiee dans audit_sorts_cablage_base_prealable.md). affinite_magique (proprietes.get('affinite_magique', 1.0) du lanceur, JAMAIS fusionnee par composition -- posee en donnee directement sur le type du caster, voir data/banc_sorts.json) MULTIPLIE toute grandeur numerique d'intensite (degats/taux) AVANT l'appel au mecanisme -- jamais nom_etat/duree/nom_reserve, qui ne sont pas des intensites. Aucun nom de sort n'apparait dans scripts/banc_sorts.gd au-dela du dispatch par 'effet' -- ajouter un cinquieme sort est une entree de donnee, zero ligne de code, tant qu'il reutilise un 'effet' deja cable.",
+	"eclair": {
+		"effet": "frappe",
+		"cible": "objet",
+		"portee": 300.0,
+		"grandeur": {
+			"degats": 5.0,
+			"nom_reserve": "integrite",
+			"critere": { "propriete": "conductivite_electrique", "poids": 1.0, "source": "materiau" }
+		},
+		"cout_mana": 10.0
+	},
+	"soin": {
+		"effet": "flux",
+		"cible": "soi",
+		"portee": 0.0,
+		"grandeur": {
+			"taux": 2.0,
+			"reserve_cible": "sante"
+		},
+		"cout_mana": 5.0
+	},
+	"bouclier": {
+		"effet": "etat",
+		"cible": "soi",
+		"portee": 0.0,
+		"grandeur": {
+			"nom_etat": "protege",
+			"duree": 8.0
+		},
+		"cout_mana": 15.0
+	},
+	"explosion": {
+		"effet": "frappe_zone",
+		"cible": "zone",
+		"portee": 200.0,
+		"grandeur": {
+			"degats": 3.0,
+			"nom_reserve": "integrite"
+		},
+		"cout_mana": 20.0
+	}
+}

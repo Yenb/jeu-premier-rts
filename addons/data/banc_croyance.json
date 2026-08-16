@@ -1,0 +1,77 @@
+{
+	"_note": "Jetable, propre à scripts/banc_croyance.gd (chantier « croyance + correction — le colon croit au lieu de savoir », audit_perception_croyance_memoire_prealable.md lignes 1 et 2). AUCUN catalogue de types local : les quatre colons et les trois objets sont CONSTRUITS À LA MAIN (patron banc_menace_combat.gd/banc_nutrition.gd), jamais Objet.fabriquer — data/types.json n'est donc pas touché, et RIEN n'est à enregistrer dans scripts/test_lint_donnees.gd.\n\nLES COLONS NE SE DÉPLACENT PAS, décision de ce banc et limite dite : le sujet est ce qu'un colon SAIT, jamais où il va. Les quatre couches sont exercées en entier (perception → filtrage de croyance → proximité → dominance → agir) et le VERBE RÉSOLU est affiché ; personne ne bouge, aucune vitesse, aucune fuite, aucun ciblage. Un banc qui aurait fait marcher les colons vers le fruit les aurait tous mis au contact, donc tous corrigés par l'expérience directe — et il n'y aurait plus rien à transmettre.\n\nCE QUI SÉPARE LES QUATRE COLONS N'EST QU'UN NOMBRE (docs/design.md, « Les archétypes n'existent pas ») : cadence_observation, la fréquence à laquelle il revient regarder. AUCUNE croyance n'est posée en dur ici — elles naissent toutes de la perception vécue (même précédent que lien_personnel.gd, docs/design.md). Le dogmatique n'est dogmatique par AUCUN état déclaré : il regarde simplement dix fois plus souvent que les autres, sa certitude franchit resistance_par_certitude (0.9 dans data/croyances.json) vers t≈3 s, et plus aucune correction ne l'atteint.\n\nCALIBRATION, mesurée et non devinée. Certitude nette gagnée par observation = gain_par_verification − taux_decroissance × cadence :\n- dogmatique (cadence 0.4 s) : +0.096 par observation → 0.3 → 0.9 en 7 observations, soit t≈2.8 s. DOGME.\n- ouvert / isolé (cadence 8.0 s) : +0.02 par observation → il faudrait 30 observations (240 s) pour devenir dogmatique. Corrigibles pendant toute la durée d'observation.\n- informé (cadence 60.0 s) : il ne regarde presque pas, il TOUCHE (cadence_verification 1.0 s). Chaque vérification ÉCRASE sa certitude à gain_par_echec × 1.0 = 0.8, sous la résistance : sa croyance reste donc toujours corrigible, et c'est ce qui en fait la source de vérité du banc. RÉSULTAT MESURÉ, dit plutôt que masqué : un colon qui REGARDE et TOUCHE le même objet oscille — l'observation pousse vers le dogme (+0.1), la vérification ramène en deçà (:=0.8). Avec ces cadences le croisement n'a pas lieu avant t=60 s.\n\nLE FRUIT TOXIQUE PERD LA CLÉ comestible, il ne la met pas à false — et c'est structurel, pas cosmétique : observer() n'itère que les propriétés PRÉSENTES sur la chose, une clé retirée n'est donc jamais réobservée et la croyance périmée SURVIT. Si le fruit portait comestible: false, un simple coup d'œil suffirait à corriger, et le banc ne montrerait plus rien. À l'inverse « toxique » n'est PAS dans data/croyances.json:proprietes_observables : on ne voit pas qu'un fruit est toxique, on l'apprend en y goûtant (proprietes_verifiables_au_contact, ci-dessous, est plus large que ce que l'œil capte).\n\nLES LIENS PERSONNELS SONT POSÉS À LA CONSTRUCTION, via LienPersonnel.poser et jamais par un Dictionary recopié — état INITIAL de la scène, au même titre qu'une position. Leur NAISSANCE par événement vécu est déjà prouvée par banc_lien_personnel.gd ; ce banc n'a pas à la rejouer, il consomme le résultat.\n\nSAILLANCES, vérifiées au chiffre : le fruit (profils_saillance.json:nourriture, 2.0/900.0) l'emporte chez les quatre colons sur le feu (menace_1, 3.0/1600.0) volontairement placé loin — colon_dogmatique voit 1.222 contre 0.281, colon_ouvert 0.733 contre 0.154. Sans cet écart, agir.gd résoudrait « approcher » sur le feu et le verbe « manger » ne serait jamais observable. La pierre ne porte AUCUN profil de saillance : elle est perçue (sa position est connue) et n'entre jamais dans la décision — c'est le cas neutre du banc.",
+
+	"portee_contact": 80.0,
+	"portee_transmission": 1200.0,
+	"periode_trace_s": 3.0,
+
+	"propriete_toxique": "toxique",
+	"proprietes_verifiables_au_contact": ["comestible", "toxique", "dangereux"],
+
+	"colon_commun": {
+		"forme": { "seuil_ecrasement": 3.0, "gain_inertie": 0.0 },
+		"poids_verbes": { "manger": 1.0, "approcher": 0.6 },
+		"canaux": ["vue"],
+		"canaux_config": {
+			"_note_angle": "angle 360.0 et NON 180.0 comme data/types.json:colon — même constat que banc_menace_combat.json : l'orientation par défaut est (0,0,1), toutes les positions ont z = 0, le produit scalaire vaut donc exactement 0.0 alors que cos(90°) vaut 6.12e-17 en flottant. Un cône de 180.0 ne perçoit RIEN dans un monde plan. Ce banc n'a qu'un seul canal, exprès : rien ne rattraperait la vue.",
+			"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+		}
+	},
+
+	"emetteur": "colon_informe",
+	"colons": {
+		"colon_informe": {
+			"position": [0.0, -160.0, 0.0],
+			"cadence_observation": 60.0,
+			"cadence_verification": 1.0,
+			"lien_vers_emetteur": 0.0
+		},
+		"colon_ouvert": {
+			"position": [-450.0, 250.0, 0.0],
+			"cadence_observation": 8.0,
+			"cadence_verification": 1.0,
+			"lien_vers_emetteur": 0.8
+		},
+		"colon_dogmatique": {
+			"position": [0.0, 250.0, 0.0],
+			"cadence_observation": 0.4,
+			"cadence_verification": 1.0,
+			"lien_vers_emetteur": 0.8
+		},
+		"colon_isole": {
+			"position": [450.0, 250.0, 0.0],
+			"cadence_observation": 8.0,
+			"cadence_verification": 1.0,
+			"lien_vers_emetteur": 0.0
+		}
+	},
+
+	"objets": {
+		"fruit": {
+			"position": [0.0, -100.0, 0.0],
+			"proprietes": { "comestible": true, "profil_saillance": "nourriture" },
+			"proprietes_alternees": { "toxique": true, "profil_saillance": "nourriture" }
+		},
+		"feu": {
+			"position": [0.0, -1200.0, 0.0],
+			"position_alternee": [0.0, -4000.0, 0.0],
+			"proprietes": { "dangereux": true, "profil_saillance": "menace_1" }
+		},
+		"pierre": {
+			"position": [700.0, -100.0, 0.0],
+			"proprietes": {}
+		}
+	},
+
+	"couleurs": {
+		"colon_correct": [0.3, 0.75, 0.35],
+		"colon_perime": [0.9, 0.6, 0.15],
+		"colon_faux": [0.85, 0.2, 0.2],
+		"fruit": [0.85, 0.35, 0.45],
+		"feu": [0.95, 0.5, 0.1],
+		"pierre": [0.5, 0.5, 0.55],
+		"lien": [0.4, 0.7, 0.9],
+		"cible": [0.7, 0.7, 0.7]
+	},
+	"camera": { "position": [0.0, -420.0, 0.0], "zoom": 0.42 }
+}

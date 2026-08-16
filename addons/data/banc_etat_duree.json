@@ -1,0 +1,8 @@
+{
+	"_note": "Donnees jetables du banc etat_duree -- PREMIERE demonstration reelle du chantier 'un etat peut cesser' (scripts/etat_duree.gd). Deux objets, meme propriete de base observee (inflammabilite, 0.9, meme illustration que banc_etat_effectif/banc_inflammabilite -- exception documentee du banc jetable qui nomme un domaine reel). 'objet_expire' recoit l'etat reel 'mouille' (data/etats.json, duree 6.0s) : s'epuise tout seul, la propriete effective revient a la base au meme instant. 'objet_permanent' recoit l'etat reel 'huile' (sans 'duree' declaree) : reste actif pour toujours, contraste voulu.",
+	"propriete_observee": "inflammabilite",
+	"objets": [
+		{ "id": "objet_expire", "position": [300.0, 300.0, 0.0], "valeur_base": 0.9, "nom_etat": "mouille" },
+		{ "id": "objet_permanent", "position": [550.0, 300.0, 0.0], "valeur_base": 0.9, "nom_etat": "huile" }
+	]
+}

@@ -1,0 +1,34 @@
+{
+	"_note": "Malgre son nom, ce fichier est LE catalogue partage de toute reference 'seuils_ref' du depot (scripts/depense.gd) -- scripts/test_lint_donnees.gd:REFERENCES verifie CHAQUE 'seuils_ref' de data/*.json contre CE fichier, quel que soit le canal ou le chantier d'origine (aucun second catalogue de seuils n'existe). 'epuisement' (chantier feu -- combustible) reste la premiere entree ; 'epuisement_pourriture' (chantier 'pourriture', scripts/banc_pourriture.gd, canal 'integrite') suit le meme patron sur un canal sans aucun rapport avec le feu -- 'poser' au lieu de 'retirer' : ce seuil pose un simple marqueur booleen (pourriture_totale) que le cablage du banc lit lui-meme pour declencher scripts/produit.gd, depense.gd n'ayant pas de branche 'produire'. 'epuisement_corrosion' (chantier 'corrosion', scripts/banc_corrosion.gd, canal 'integrite') suit exactement le meme patron que 'epuisement_pourriture' -- chantier jumeau, seul le nom du marqueur change (corrosion_totale). 'epuisement_solubilite' (chantier 'solubilite', scripts/banc_solubilite.gd, canal 'integrite') suit le meme patron -- marqueur 'dissolution_totale'. 'epuisement_reactivite_acide' (chantier 'reactivite', scripts/banc_reactivite.gd, reserve 'acide') suit le meme patron -- marqueur 'acide_epuise'. 'epuisement_radioactivite' (chantier « Produit nucléaire -- contamination, mutation, maladie », scripts/banc_produit_nucleaire.gd, reserve 'radioactivite' de la source) suit le meme patron -- marqueur 'radioactivite_epuisee', lu par le cablage du banc pour declencher scripts/produit.gd:transformer (data/transformations.json:epuisement_source_radiation). 'effacement_trace' (chantier « cratère + érosion -- trace d'impact qui s'efface », scripts/banc_cratere.gd, reserve 'trace_age' d'une case de terrain) est la SEULE entrée du fichier dont 'poser' écrit une valeur NUMERIQUE (creusement: 0.0) plutôt qu'un marqueur booléen -- l'effacement du cratère est ALORS FAIT PAR depense.gd lui-meme, le cablage ne fait que lire les ids rendus par Depense.avancer pour la trace console. Legitime ici parce que la valeur restauree est le CREUSEMENT (toujours 0.0, une constante), jamais l'altitude de la case (differente par case des qu'un terrain est en pente -- voir audit_terrain_et_monde_prealable.md §3). 'usure_route' (chantier « stockage + degradation + coordination + routes », scripts/banc_infrastructure.gd, reserve 'duree_route' d'une case de route) est la SECONDE entree a poser une valeur NUMERIQUE plutot qu'un marqueur, et pour la MEME raison exactement : la valeur restauree ('facteur_vitesse': 1.0) est le NEUTRE de la multiplication, une constante identique pour toute case, jamais une grandeur qui differerait par case. Une route epuisee cesse ainsi d'accelerer sans qu'aucune ligne de cablage ne remette la valeur -- c'est depense.gd qui l'ecrit. Le cablage RECHARGE la reserve ET VIDE 'seuils_franchis' a la reparation (obligatoire : depense.gd n'applique jamais deux fois le meme seuil, piege deja paye par banc_cratere.gd). 'epuisement_lisibilite' (chantier « connaissance », audit_affordances_prealable.md ligne 17, scripts/banc_affordances_connaissance.gd, reserve 'integrite' d'un livre ecrit en cours de partie) revient au patron MARQUEUR de 'epuisement_pourriture'/'epuisement_corrosion' : depense.gd pose 'illisible' et NE PRODUIT RIEN -- le cablage lit ce marqueur pour refuser la lecture et pour basculer le label affiche vers data/textes.json:livre.illisible. IRREVERSIBLE ici, non par doctrine mais par ce que fait le cablage : personne ne recharge la reserve ni ne vide 'seuils_franchis' (a la difference de 'usure_route'), un livre use ne redevient jamais lisible. CE QUI N'EST PAS EFFACE, et c'est le sujet : 'contenu_croyance' reste INTACT sur l'objet -- le savoir n'est pas detruit, il devient inatteignable. 'epuisement_chronique' est la SEULE entree en ESCALIER a deux paliers : illisible d'abord, consume ensuite. Le premier palier ferme la lecture, le second est lu par le cablage pour appeler scripts/produit.gd.",
+	"epuisement": [
+		{ "seuil": 0.0, "retirer": ["inflammable", "brule", "profil_saillance", "travail_restant", "transformation"] }
+	],
+	"epuisement_pourriture": [
+		{ "seuil": 0.0, "poser": { "pourriture_totale": true } }
+	],
+	"epuisement_corrosion": [
+		{ "seuil": 0.0, "poser": { "corrosion_totale": true } }
+	],
+	"epuisement_solubilite": [
+		{ "seuil": 0.0, "poser": { "dissolution_totale": true } }
+	],
+	"epuisement_reactivite_acide": [
+		{ "seuil": 0.0, "poser": { "acide_epuise": true } }
+	],
+	"epuisement_radioactivite": [
+		{ "seuil": 0.0, "poser": { "radioactivite_epuisee": true } }
+	],
+	"effacement_trace": [
+		{ "seuil": 0.0, "poser": { "creusement": 0.0 } }
+	],
+	"usure_route": [
+		{ "seuil": 0.0, "poser": { "facteur_vitesse": 1.0 } }
+	],
+	"epuisement_lisibilite": [
+		{ "seuil": 0.0, "poser": { "illisible": true } }
+	],
+	"epuisement_chronique": [
+		{ "seuil": 6.0, "poser": { "illisible": true } },
+		{ "seuil": 0.0, "poser": { "chronique_consumee": true } }
+	]
+}

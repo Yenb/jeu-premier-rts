@@ -1,0 +1,8 @@
+{
+	"_note": "Catalogue de scripts/usure_attache.gd (chantier 'L'entite comme agent complet', voir docs/design.md) -- declare quelle propriete CONTREDIT quel trait d'attache. Dictionary regle_id -> { trait, trait_contradictoire }, meme patron qu'attache_par_trait.gd/data/attaches_par_trait.json : AUCUNE reference choisie par l'entite, usure_attache.gd ITERE TOUTES les entrees a chaque attache et retient celles dont 'trait' correspond a attache.propriete. 'trait' nomme le trait de l'attache vise (meme vocabulaire que attache.propriete/data/attaches_par_trait.json:propriete) ; 'trait_contradictoire' nomme la propriete dont la perception declenche l'usure acceleree (data/usure_attaches.json:defaut.taux_usure_contradiction) au lieu de l'usure passive. FONDATION DORMANTE, comme data/genes.json a sa creation : aucun contenu reel du jeu Orion n'y figure encore (aucun trait de data/types_choses.json/data/attaches_par_trait.json n'a de contradictoire declare ici) -- une seule entree hors domaine, prouvant la structure, jamais lue par scripts/test_usure_attache.gd (qui construit son propre catalogue local, meme statut que data/genes.json:resonance_gravitique).",
+	"gravitique_polarite": {
+		"_note": "Entree hors domaine, inventee pour prouver la structure -- aucun rapport avec un contenu Orion reel. Un cristal attache au champ gravitique POSITIF voit sa force s'eroder plus vite s'il percoit un champ gravitique NEGATIF pres de lui.",
+		"trait": "champ_gravitique_positif",
+		"trait_contradictoire": "champ_gravitique_negatif"
+	}
+}

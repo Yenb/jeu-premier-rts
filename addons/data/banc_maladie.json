@@ -1,0 +1,39 @@
+{
+	"_note": "Jetable, propre a scripts/banc_maladie.gd (chantier « maladie par contact -- contagion, incubation, mort »). Neuf colons construits A LA MAIN (pas Objet.fabriquer, pas data/types.json:colon -- ce banc demontre un cablage, pas une integration au jeu), disperses dans 'zone' pour que la contagion ne soit pas instantanee. 'patient_zero_id' commence deja 'malade' (aucune incubation) et 'porteur' -- les huit autres demarrent sains, sans le canal 'maladie' pose que par le cablage lui-meme (voir scripts/banc_maladie.gd:fabriquer_colon). 'seed' fixe la RNG des destinations aleatoires -- aucun hasard non seede (CLAUDE.md). incubation_s/maladie_duree_s/seuil_mort DOIVENT rester coherents avec data/etats.json ('incube_maladie'.duree, 'malade'.duree) et data/seuils_etat.json ('mort_par_maladie'.seuil) -- ces trois valeurs sont dupliquees en donnee plutot que lues indirectement (etat_duree.gd/seuil_etat.gd sont generiques, ils ne savent pas lire un fichier de banc), meme convention que 'protege'/'explose' (data/etats.json) dont la duree est deja fixee par le chantier qui les a introduits. seuil_mort (16.0, REVISION -- demande Yael, valeur d'origine 10.0 jugee trop courte) delibermment SOUS maladie_duree_s (20.0) : un colon malade meurt AVANT de guerir naturellement -- l'issue par defaut d'une maladie non traitee, coherente avec l'absence de tout mecanisme de traitement dans ce banc. CALIBRATION DU CANAL, REVISION 2026-08-12 -- RESULTAT NEGATIF A NE PAS REFAIRE : les valeurs d'origine (seuil 3.0, taux_decroissance 1.0) ne produisaient JAMAIS la moindre contamination, mesure sur le chemin reel du banc (60s simulees, charge max atteinte 2.32 sur 3.0 requis, 8 sains / 1 mort). Trois valeurs se contredisaient : le seuil demandait 3s de contact cumule (charge.gd monte de 1.0/s par porteur), un croisement dure au mieux ~2s (portee_charge 60 face a vitesse_base 60), et le patient zero -- unique source -- meurt a 16s, apres quoi plus aucune charge ne peut monter. Le seuil est le verrou : l'abaisser a 1.5 suffit, mesure -- premiere contamination a t=3.9, chaine etalee jusqu'a t=22, neuf morts a t=42. ECARTES, mesures eux aussi : cumuler portee_charge 100 par-dessus (six contaminations en moins de 6s, la chaine 'qui infecte qui' devient illisible -- c'est ce que ce banc doit montrer) ; monter seuil_mort au-dessus de maladie_duree_s (20.0), qui fait expirer 'malade' avant la mort et bascule le banc de letalite totale a letalite NULLE, sans palier. taux_decroissance 0.0 (cliquet) est un choix de MODELISATION, pas la reparation : mesure sans effet sur l'issue (seuil 1.5 contamine les neuf colons avec ou sans lui) -- une dose recue ne s'efface pas quand on s'eloigne, alors qu'une decroissance egale au taux de charge annulait dix croisements brefs. Sous le seuil la charge ne croit JAMAIS seule (ECARTE : la distance et la duree de contact cesseraient de proteger, et il faudrait un cinquieme verbe dans charge.gd) ; au-dessus, l'infection s'auto-entretient deja -- le cablage retire le canal 'etats' et duree_maladie_cumulee monte seule sans aucune source.",
+
+	"seed": 20260811,
+	"vitesse_base": 60.0,
+	"incubation_s": 4.0,
+	"maladie_duree_s": 20.0,
+	"seuil_mort": 16.0,
+	"patient_zero_id": "colon_0",
+
+	"zone": { "min": [50.0, 50.0, 0.0], "max": [750.0, 450.0, 0.0] },
+
+	"canal_maladie": {
+		"charge": 0.0,
+		"seuil": 1.5,
+		"portee_charge": 60.0,
+		"taux_decroissance": 0.0,
+		"poser": { "expose_maladie": true }
+	},
+
+	"couleurs": {
+		"sain": [0.2, 0.8, 0.3],
+		"incubation": [0.9, 0.85, 0.15],
+		"malade": [0.9, 0.55, 0.1],
+		"mort": [0.75, 0.15, 0.15]
+	},
+
+	"colons": [
+		{ "id": "colon_0", "position": [400.0, 250.0, 0.0] },
+		{ "id": "colon_1", "position": [150.0, 100.0, 0.0] },
+		{ "id": "colon_2", "position": [650.0, 100.0, 0.0] },
+		{ "id": "colon_3", "position": [150.0, 400.0, 0.0] },
+		{ "id": "colon_4", "position": [650.0, 400.0, 0.0] },
+		{ "id": "colon_5", "position": [400.0, 100.0, 0.0] },
+		{ "id": "colon_6", "position": [400.0, 400.0, 0.0] },
+		{ "id": "colon_7", "position": [150.0, 250.0, 0.0] },
+		{ "id": "colon_8", "position": [650.0, 250.0, 0.0] }
+	]
+}

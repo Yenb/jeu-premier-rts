@@ -1,0 +1,53 @@
+{
+	"_note": "Jetable, propre a scripts/banc_elimination_salete.gd (chantier « elimination + salete -> maladie »). Trois colons construits A LA MAIN (pas Objet.fabriquer -- meme statut que banc_maladie.gd/banc_contagion.gd) ; les DECHETS, eux, sont de VRAIS objets fabriques en cours de partie (Objet.fabriquer + Monde.ajouter, patron banc_reproduction.gd) -- c'est la seule facon d'obtenir salete_emise depuis data/materiaux.json:dechet_demo sans la recopier ici. 'seed' fixe la RNG des destinations aleatoires -- aucun hasard non seede (CLAUDE.md). incubation_s/maladie_duree_s/seuil_mort sont des COPIES documentaires de data/etats.json ('incube_maladie'.duree, 'malade'.duree) et data/seuils_etat.json ('mort_par_maladie'.seuil), memes valeurs et meme convention que data/banc_maladie.json -- ce banc REJOUE la chaine maladie du catalogue PARTAGE, il ne la redefinit jamais (deux bancs ne se referencent jamais entre eux, mais ils lisent les memes donnees).\n\nSEUILS_ELIMINATION est un catalogue LOCAL au format exact de data/seuils_etat.json, passe tel quel a scripts/seuil_etat.gd (qui recoit toujours son catalogue en parametre, ne charge jamais rien) -- meme geste que data/banc_erosion.json:vent face a data/vent.json. Il n'est PAS remonte dans le catalogue partage : une seule entree, lue par un seul banc, et data/seuils_etat.json est sous chantiers concurrents. La MORT, elle, vient bien du catalogue partage (mort_par_maladie), lu sur disque et JAMAIS modifie par ce banc.\n\nCALIBRATION, mesuree sur le chemin reel (lecon de data/banc_maladie.json : une calibration jamais rejouee par un test est une calibration fausse -- scripts/test_banc_elimination_salete.gd rejoue ce fichier EN ENTIER, deplacement seede compris). ELIMINATION : cout_base -1.0 (NEGATIF -- depense.gd fait reserve = max(0, reserve - (cout_base+surcout)*delta), un cout negatif fait donc MONTER la reserve, neutralite du mecanisme exploitee, jamais contournee ; precedent : la jachere de banc_fertilite.gd) plus surcout_action = -(coef_repas * taux_repas), REECRIT CHAQUE TICK par le cablage et par LUI SEUL (constat (D) de audit_mecaniques_corps_prealable.md : un seul emplacement surcout_action par canal, plusieurs ecrivains se detruiraient en silence). Seuil 6.0 : un colon qui ne mange pas produit un dechet toutes les 6.0s, le gros mangeur (taux_repas 1.0, coef_repas 1.0) toutes les 3.0s exactement -- deux fois plus souvent, mesure sur le chemin reel (glouton a t=3.0/6.0/9.0..., moyen a t=4.6, sobre a t=6.0), visible a l'oeil sans chronometre. UN COLON MORT N'ELIMINE PLUS : ce n'est PAS une valeur de ce fichier mais un gate de cablage (banc_elimination_salete.gd:poser_taux_elimination met les deux taux a 0.0), voir le RESULTAT NEGATIF ci-dessous. SALETE : portee_charge 75.0 et poids 1.0 par dechet (salete_emise de la fiche materiau, jamais un nombre recopie ici), seuil 12.0 -- douze secondes passees a portee d'UN dechet, six a portee de deux, trois a portee de quatre : c'est l'ACCUMULATION qui rend malade, jamais un dechet isole croise une fois. taux_decroissance 0.8 : la charge REDESCEND des que plus aucun dechet n'est a portee -- OBLIGATOIRE ici, contrairement au cliquet 0.0 de banc_maladie.json, sans quoi 'nettoyer fait redescendre la salete' serait infaisable et le clic ne montrerait rien.\n\nDEUX RESULTATS NEGATIFS, MESURES SUR LE CHEMIN REEL (scene reelle headless, console lue), A NE PAS REFAIRE. (1) Calibration d'origine du canal de salete (seuil 4.0, portee_charge 90.0, taux_decroissance 0.6) : le premier colon etait EXPOSE des t=6.3s -- sur ses DEUX PROPRES dechets, avant meme qu'un tas soit visible a l'ecran -- symptomes a t=10.3s et les trois colons MORTS avant t=31.0s. Le banc ne montrait donc PAS l'accumulation qu'il est cense montrer, et le clic de nettoyage n'avait jamais le temps de servir a quoi que ce soit. Calibration retenue (12.0 / 75.0 / 0.8), mesuree : premier expose t=18.6s, premiers symptomes t=22.6s, morts entre t=38.6s et t=44.8s, 29 dechets au sol -- le tas est largement visible avant le premier malade, et il reste une trentaine de secondes ou nettoyer change l'issue. (2) Un colon MORT continuait d'eliminer (dechet a t=27.0s pour un colon mort a t=26.3s) -- invisible au test, trouve en lancant la scene : corrige par le gate de cablage, verrouille depuis par scripts/test_banc_elimination_salete.gd.\n\nOBSERVATION, PAS UN REGLAGE : le colon_sobre (taux_repas 0.0, celui qui produit le MOINS) est le premier expose dans la mesure ci-dessus -- il a traverse les tas des deux autres. La salete est un fait du LIEU, jamais une punition individuelle ; c'est le deplacement seede qui decide, et un autre seed donnera un autre ordre.",
+
+	"seed": 20260812,
+	"vitesse_base": 55.0,
+	"incubation_s": 4.0,
+	"maladie_duree_s": 20.0,
+	"seuil_mort": 16.0,
+
+	"coef_repas": 1.0,
+	"type_dechet": "dechet",
+	"propriete_salete": "salete_emise",
+
+	"zone": { "min": [60.0, 60.0, 0.0], "max": [740.0, 440.0, 0.0] },
+
+	"canal_besoin_elimination": {
+		"reserve": 0.0,
+		"cout_base": -1.0,
+		"surcout_action": 0.0
+	},
+
+	"seuils_elimination": {
+		"_note": "Format EXACT d'une entree de data/seuils_etat.json (propriete_continue / seuil / etat), lu par scripts/seuil_etat.gd tel quel. 'urgence_elimination' est le MIROIR PLAT que le cablage recopie chaque tick depuis reserves.besoin_elimination.reserve -- seuil_etat.gd ne sait pas descendre dans un sous-dictionnaire (constat (B) de audit_mecaniques_corps_prealable.md).",
+		"urgence_elimination": {
+			"propriete_continue": "urgence_elimination",
+			"seuil": 6.0,
+			"etat": "doit_eliminer"
+		}
+	},
+
+	"canal_salete": {
+		"charge": 0.0,
+		"seuil": 12.0,
+		"portee_charge": 75.0,
+		"taux_decroissance": 0.8,
+		"poser": { "expose_salete": true }
+	},
+
+	"couleurs": {
+		"sain": [0.2, 0.8, 0.3],
+		"expose": [0.9, 0.85, 0.15],
+		"incubation": [0.85, 0.7, 0.2],
+		"malade": [0.9, 0.55, 0.1],
+		"mort": [0.75, 0.15, 0.15]
+	},
+	"couleur_dechet": [0.35, 0.32, 0.12],
+
+	"colons": [
+		{ "id": "colon_glouton", "position": [200.0, 250.0, 0.0], "taux_repas": 1.0 },
+		{ "id": "colon_moyen", "position": [400.0, 150.0, 0.0], "taux_repas": 0.3 },
+		{ "id": "colon_sobre", "position": [600.0, 350.0, 0.0], "taux_repas": 0.0 }
+	]
+}

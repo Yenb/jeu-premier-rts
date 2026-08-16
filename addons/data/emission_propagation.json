@@ -1,0 +1,7 @@
+{
+	"_note": "Configuration du chantier 'emission et seuil' (scripts/propagation.gd) -- separe la portee de propagation, autrefois un seul nombre lu sur la cible (portee_propagation), en deux grandeurs distinctes. EMISSION, portee par la SOURCE en feu : 'portee_emission_base' + 'portee_emission_par_capacite' * la capacite de sa reserve nommee 'nom_reserve' (proprietes.reserves.<nom_reserve>.capacite -- meme canal que data/reserve_combustible_composition.json, LU ici, jamais recalcule). Decroit avec la distance en 1/distance^2 (scripts/propagation.gd:recu). Une source sans cette reserve emet a 'portee_emission_base' seul, flat -- absence legitime, jamais une alarme. SEUIL, porte par la CIBLE : 'seuil_base' / intensite EFFECTIVE de la cible -- MEME lecture que delai_ignition (scripts/etat_effectif.gd), jamais une propriete separee. Une cible est exposee des que ce qu'elle recoit d'au moins une source depasse ce seuil. FACULTATIF par construction (Propagation.avancer recoit {} par defaut) : une chose ou une source qui ne participe pas a ce mecanisme garde EXACTEMENT le comportement d'avant (portee_propagation lu sur la cible, test binaire de distance). Valeurs reelles calibrees sur data/materiaux.json (bois/fer) et data/reserve_combustible_composition.json (pouvoir_calorifique), voir scripts/banc_emission.gd.",
+	"portee_emission_base": 0.0,
+	"portee_emission_par_capacite": 125000.0,
+	"nom_reserve": "combustible",
+	"seuil_base": 1.0
+}

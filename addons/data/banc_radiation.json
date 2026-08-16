@@ -1,0 +1,26 @@
+{
+	"_note": "Jetable, propre a scripts/banc_radiation.gd (chantier « sensibilite_radiation -- irradiation et blindage », audit_colonnes_chimique_nucleaire_magie_prealable.md, colonne nucleaire #1/#2 -- attendait la generalisation de propriete_emission dans scripts/perception.gd, chantier separe livre entre-temps par une autre session, voir docs/ETAT.md). Trois objets FABRIQUES (bois_radiation/pierre_radiation/fer_radiation, composition reelle) a EGALE DISTANCE (200.0) d'une source radioactive HAND-BUILT (pas de composition -- meme patron que data/banc_corrosion.json:source/data/banc_croissance.json:source_lumiere, un point d'emission n'a besoin d'aucune matiere physique), disposes perpendiculairement les uns aux autres ((200,0,0)/(0,200,0)/(0,-200,0)) pour qu'aucun ne tombe jamais sur le segment source->fer_radiation (verifie : t<=0 pour les deux autres, exclus par scripts/perception.gd:_facteur_obstacles avant meme le test de largeur_obstacle). scripts/banc_radiation.gd appelle Perception.percevoir (canal 'radiation', data/canaux.json, INCHANGE) par objet cible pour savoir si la source lui est visible (mur absent, ou mur hors de son segment) ou occluse (mur present ET sur son segment) ; seule cause presente, la source, pondere alors un appel a Charge.avancer PAR OBJET CIBLE (poids = force_radiation de la source * sensibilite_radiation EFFECTIVE de l'objet, EtatEffectif.valeur, jamais reimplementee) -- meme idiome que data/banc_toxicite.json/data/banc_corrosion.json (un appel a Charge.avancer par objet cible, charge.gd n'ayant aucun coefficient par receveur). Au seuil, un marqueur (expose_radiation) est pose puis reconduit CHAQUE tick en EtatDuree.poser('irradie') tant qu'il reste vrai -- meme geste que empoisonne/corrode, JAMAIS etats_actifs pose directement par charge.gd (symetrique, incompatible avec une guerison PROGRESSIVE). depense.gd consomme la reserve 'integrite' a 'degat_par_s' SEULEMENT tant que 'irradie' est actif, gelee sinon -- meme gate que 'integrite' dans data/banc_conduction.json/data/banc_toxicite.json:sante. 'mur_radiation' (fer, densite 7.87, TRES dense -- clampee a 1.0 par scripts/perception.gd:_facteur_obstacles, blocage TOTAL) togglable au clic, place EXACTEMENT au milieu du segment source->fer_radiation ((0,-100,0)) : actif, fer_radiation cesse d'etre percu -- 0 cause, sa charge de radiation NE MONTE JAMAIS ; inactif, il redevient visible et s'irradie comme les deux autres. 'seuil_perception_radiation' (0.01) choisi entre l'intensite bloquee (0.0, mur present) et l'intensite non bloquee (force_radiation 0.2 * attenuation_distance 0.333 = 0.0667, mur absent ou hors segment) -- marge large, aucune ambiguite. 'canal_radiation_defaut.seuil' (1.0) et 'portee_charge' (300.0) suivent le meme ordre de grandeur que data/banc_toxicite.json/data/banc_corrosion.json.",
+	"nom_canal_radiation": "radiation",
+	"declencheur_expose_radiation": "expose_radiation",
+	"canal_radiation_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 300.0,
+		"taux_decroissance": 0.3,
+		"poser": { "expose_radiation": true }
+	},
+	"nom_etat_irradie": "irradie",
+	"nom_reserve_integrite": "integrite",
+	"reserve_integrite_defaut": { "reserve": 10.0, "cout_base": 0.0, "surcout_action": 0.0 },
+	"degat_par_s": 1.0,
+	"portee_perception_radiation": 300.0,
+	"seuil_perception_radiation": 0.01,
+
+	"source": { "id": "source_radioactive", "position": [0.0, 0.0, 0.0], "force_radiation": 0.2 },
+	"mur": { "id": "mur_radiation", "position": [0.0, -100.0, 0.0], "composition": [ { "materiau": "fer", "volume": 0.05 } ] },
+	"objets": [
+		{ "id": "bois_radiation", "position": [200.0, 0.0, 0.0], "composition": [ { "materiau": "bois", "volume": 0.05 } ] },
+		{ "id": "pierre_radiation", "position": [0.0, 200.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 0.05 } ] },
+		{ "id": "fer_radiation", "position": [0.0, -200.0, 0.0], "composition": [ { "materiau": "fer", "volume": 0.05 } ] }
+	]
+}

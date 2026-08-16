@@ -1,0 +1,14 @@
+{
+	"_note": "Donnees jetables du banc emission -- PREMIERE demonstration reelle du chantier 'emission et seuil' (scripts/propagation.gd:recu/seuil_exposition), noms de domaine reels (bois/fer/inflammable/brule), exception documentee CLAUDE.md ('un banc jetable peut nommer une categorie pour poser une scene d'observation'). Deux feux DEJA allumes (aucune propagation entre eux, aucun colon) de meme materiau (bois) mais de volumes tres differents -- petit_feu (1.0) et grand_feu (8.0), memes volumes que bois_petit/bois_moyen de banc_combustible.json, meme capacite de reserve calculee par objet.gd (0.8 vs 6.4). Devant chacun, DEUX cibles a la MEME distance (500.0) : une en bois (inflammable), une en fer (quasi inerte). Avec data/emission_propagation.json (portee_emission_par_capacite=125000.0, seuil_base=1.0), seul grand_feu+bois_grand franchit son seuil a cette distance -- petit_feu+bois_petit ne le franchit jamais (capacite trop faible : c'est la PORTEE qui manque, pas la matiere, meme distance que bois_grand) et les deux cibles en fer ne le franchissent jamais non plus, quelle que soit la taille du feu en face (c'est la MATIERE qui bloque, pas la distance). Aucune distance de portee n'est ecrite a la main : elle resulte de emission(capacite)/distance^2 >= seuil_base/inflammabilite_effective.",
+	"delai_propagation_base": 2.0,
+	"feux": [
+		{ "id": "petit_feu", "position": [300.0, 300.0, 0.0], "composition": [ { "materiau": "bois", "volume": 1.0 } ] },
+		{ "id": "grand_feu", "position": [1500.0, 300.0, 0.0], "composition": [ { "materiau": "bois", "volume": 8.0 } ] }
+	],
+	"cibles": [
+		{ "id": "bois_petit", "position": [300.0, 800.0, 0.0], "composition": [ { "materiau": "bois", "volume": 1.0 } ] },
+		{ "id": "fer_petit", "position": [800.0, 300.0, 0.0], "composition": [ { "materiau": "fer", "volume": 1.0 } ] },
+		{ "id": "bois_grand", "position": [1500.0, 800.0, 0.0], "composition": [ { "materiau": "bois", "volume": 1.0 } ] },
+		{ "id": "fer_grand", "position": [2000.0, 300.0, 0.0], "composition": [ { "materiau": "fer", "volume": 1.0 } ] }
+	]
+}

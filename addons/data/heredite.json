@@ -1,0 +1,15 @@
+{
+	"_note": "Catalogue de regles d'heredite, chantier 'fondation genetique dormante' -- lu depuis ce chantier par scripts/heredite.gd (derniere phase du cycle de reproduction, voir docs/design.md 'L'entite comme agent complet'). Chaque entree porte taux_mutation_base (probabilite, 0.0 a 1.0, qu'un allele transmis mute -- modes 'sexuee'/'parthenogenese', lu par heredite.gd), taux_mutation_asexuee (meme role, mode 'asexuee' SEUL -- plus faible que taux_mutation_base par construction, un seul parent copie plutot que deux melanges, lu par heredite.gd), ecart_type_mutation (ecart-type du bruit gaussien AJOUTE a un allele qui mute, rng.randfn(0.0, ecart_type_mutation) -- allele reste un float LIBRE, jamais borne, lu par heredite.gd), modulateurs_environnementaux (Array de { environnement, facteur } -- facteur multiplierait taux_mutation_base/taux_mutation_asexuee quand l'environnement nomme est celui de la fabrication de l'enfant ; 'environnement' est un String libre, pas encore une reference de catalogue), modulateurs_age_parent (Array de { age_parent_min, facteur } -- courbe en escalier, facteur multiplierait le taux au-dela de l'age du parent le plus proche atteint, meme esprit qu'un seuil de data/senescence.json) et _note. Une seule entree, 'defaut', meme convention que data/liens_personnels.json:defaut (sentinelle interne au mecanisme, jamais une reference de catalogue posee sur une instance -- heredite.gd resout toujours 'defaut', jamais un champ heredite_ref sur l'instance). MODULATEURS ENCORE DORMANTS : modulateurs_environnementaux/modulateurs_age_parent restent NON LUS par heredite.gd -- ce chantier ne recoit ni un parametre 'environnement' ni l'age des parents, aucun des deux concepts n'est cadre a ce jour (meme statut que 'codominant' pour expression.gd). Concept de fabrication d'un enfant/naissance : CADRE depuis ce chantier (gestation.gd pose naissance_prete, heredite.gd produit le kit genetique) -- l'appelant qui orchestre le tout (lit le flag, appelle heredite.gd, fabrique par Objet.fabriquer) reste non ecrit. Meme patron que data/materiaux.json pour la forme dormante residuelle (les deux modulateurs).",
+	"defaut": {
+		"_note": "Regle par defaut, hors domaine par construction (aucun contenu Orion nomme) -- applicable a tout gene tant qu'aucune regle plus specifique n'existe.",
+		"taux_mutation_base": 0.01,
+		"taux_mutation_asexuee": 0.002,
+		"ecart_type_mutation": 0.05,
+		"modulateurs_environnementaux": [
+			{ "environnement": "expose_gravitique", "facteur": 1.5 }
+		],
+		"modulateurs_age_parent": [
+			{ "age_parent_min": 30.0, "facteur": 1.2 }
+		]
+	}
+}

@@ -1,0 +1,32 @@
+{
+	"_note": "Jetable, propre a scripts/banc_dilatation.gd (chantier 'colonne thermique', case 5, DERNIERE case du tableau Thermique -- premiere demonstration reelle de la dilatation thermique dans scripts/temperature.gd:avancer). 'chauffe'/'refroidi' : deux objets CONSTRUITS DIRECTEMENT par ce banc (temperature/conductivite_thermique/dilatation_thermique/volume/masse poses en donnee locale, PAS via Objet.fabriquer/composition/materiaux.json -- meme discipline que scripts/banc_temperature.gd, voir son en-tete). 'dilatation_thermique' ICI est une valeur DE DEMONSTRATION (0.04), PAS la valeur reelle de data/materiaux.json (bois 5.0/pierre 8.0/fer 12.0, deja fusionnee a la fabrication depuis ce chantier) -- la formule litterale de temperature.gd (dV = dilatation_thermique * dT, sans mise a l'echelle) rendrait le volume d'un objet reel demesure sur l'ecart de temperature demande ici ('modeste', pour rester lisible) ; ce banc calibre donc son propre coefficient pour que l'effet reste visible SANS exploser, sans toucher aux materiaux partages ni aux autres bancs du meme chantier (voir CARTE.md). 'chauffe' part a l'ambiante (20 deg, meme defaut que data/temperature.json) pres d'une source fixe a 90 deg (ecart modeste, ~70 deg) et grossit en chauffant ; 'refroidi' part deja chaud (90 deg), hors de portee de toute source (distance 800 entre les deux objets > rayon 400 de la source), et retombe vers l'ambiante en retrecissant -- meme coefficient, meme conductivite, mouvement en miroir, meme masse (12.0) pour que la comparaison visuelle ne soit jamais brouillee par une masse differente. 'volume_reference'/'taille_base' pilotent scripts/banc_dilatation.gd:taille_pour_volume (aire du carre proportionnelle au volume, purement visuel). 'seuil_variation_significative' (unite de volume) : la console n'imprime une ligne par objet que lorsque son volume a bouge d'au moins ce montant depuis la derniere impression, jamais a chaque frame. L'ambiante et l'attenuation viennent de data/temperature.json PARTAGE, jamais redeclarees ici.",
+	"chauffe": {
+		"position": [0.0, 0.0, 0.0],
+		"temperature_initiale": 20.0,
+		"conductivite_thermique": 0.25,
+		"dilatation_thermique": 0.04,
+		"volume_initial": 6.0,
+		"masse": 12.0
+	},
+	"refroidi": {
+		"position": [800.0, 0.0, 0.0],
+		"temperature_initiale": 90.0,
+		"conductivite_thermique": 0.25,
+		"dilatation_thermique": 0.04,
+		"volume_initial": 6.0,
+		"masse": 12.0
+	},
+	"source_chaude": {
+		"position": [0.0, 0.0, 0.0],
+		"rayon": 400.0,
+		"temperature": 90.0,
+		"force": 1.0
+	},
+	"volume_reference": 6.0,
+	"taille_base": 50.0,
+	"couleur_froid": [0.15, 0.35, 0.85],
+	"couleur_chaud": [0.85, 0.15, 0.1],
+	"echelle_couleur": { "min": 20.0, "max": 90.0 },
+	"seuil_variation_significative": 0.3,
+	"camera": { "position": [400.0, -110.0, 0.0], "zoom": 0.55 }
+}

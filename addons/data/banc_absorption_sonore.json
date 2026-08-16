@@ -1,0 +1,20 @@
+{
+	"_note": "UN SEUL triplet colon/source/mur, matiere REELLE (data/materiaux.json, aucun materiau de demo invente) -- fer (son_emis 0.5) pour la source, bois/pierre/fer pour le mur (absorption_sonore 0.3/0.05/0.02). colon_0 (0,0,0), source_0 (100,0,0), mur_0 (50,0,0) EXACTEMENT au milieu du segment (distance laterale 0.0 < largeur_obstacle 40.0 de data/canaux.json). ouie_surcharge (portee 200.0, seuil 0.0) -- seuil VOLONTAIREMENT NUL (contrairement a banc_occlusion.gd, qui cherche une coupure) : le but ici est de montrer le POURCENTAGE de reduction, jamais une disparition -- le colon entend TOUJOURS la source, quel que soit le mur. attenuation_distance = 1.0 - 100/200 = 0.5, intensite SANS mur = 0.5*0.5 = 0.25. AVEC bois (absorption_sonore 0.3, facteur 0.7) : intensite = 0.175, reduction exacte 30% de l'intensite sans mur. AVEC pierre (0.05, facteur 0.95) : intensite = 0.2375, reduction 5%. AVEC fer (0.02, facteur 0.98) : intensite = 0.245, reduction 2% -- le fer resonne, il n'absorbe presque rien ; le bois (panneau acoustique) absorbe le plus. Le mur cycle par clic gauche parmi QUATRE etats (aucun -> bois -> pierre -> fer -> aucun, scripts/banc_absorption_sonore.gd:ETATS_MUR), jamais deux murs simultanes dans ce banc (la cumulation multiplicative de deux murs empiles est verifiee separement par scripts/test_banc_absorption_sonore.gd, chemin reel, sans passer par ce cycle d'etats).",
+	"couleurs_types": {
+		"colon": [0.3, 0.6, 0.9],
+		"source": [0.85, 0.15, 0.1],
+		"mur_bois": [0.55, 0.35, 0.15],
+		"mur_pierre": [0.55, 0.5, 0.45],
+		"mur_fer": [0.65, 0.68, 0.72]
+	},
+	"types": {
+		"source_son": { "herite": ["objet_physique"], "composition": [ { "materiau": "fer", "volume": 1.0 } ] },
+		"mur_bois": { "herite": ["objet_physique"], "composition": [ { "materiau": "bois", "volume": 1.0 } ] },
+		"mur_pierre": { "herite": ["objet_physique"], "composition": [ { "materiau": "pierre", "volume": 1.0 } ] },
+		"mur_fer": { "herite": ["objet_physique"], "composition": [ { "materiau": "fer", "volume": 1.0 } ] }
+	},
+	"colon": { "id": "colon_0", "position": [0.0, 0.0, 0.0], "ouie_surcharge": { "portee": 200.0, "seuil": 0.0 } },
+	"source": { "id": "source_0", "position": [100.0, 0.0, 0.0] },
+	"mur": { "id": "mur_0", "position": [50.0, 0.0, 0.0] },
+	"intervalle_print": 2.0
+}

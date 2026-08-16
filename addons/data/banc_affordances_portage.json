@@ -1,0 +1,93 @@
+{
+	"_note": "Donnee LOCALE au banc d'observation scripts/banc_affordances_portage.gd (chantier « portage + force + stabilisation », audit_affordances_prealable.md lignes 7/8/9), jamais un catalogue partage. AUCUN nom de propriete n'est ecrit en dur dans le .gd : les six champs propriete_* / type_colon ci-dessous les portent tous, ce qui permet a scripts/test_banc_affordances_portage.gd de faire traverser le meme code par un domaine entierement invente (des pousseurs de monolithe sur une planete sans troncs).\n\nLES QUATRE OBJETS DU BANC (tronc, echelle, enclume, etau) SONT LOCAUX A CE FICHIER, catalogue construit a la volee (patron scripts/banc_economie.gd:construire_ressources et scripts/banc_coupe.gd:fabriquer_cibles) -- aucun n'est produit par une transformation, donc aucun n'a de raison de vivre dans data/types.json (ou seuls les types resolus par scripts/produit.gd:type_produit doivent aller, voir data/banc_economie.json:_note). Ce qui vit dans data/types.json, et seulement ca : « force » et « fournit_stabilisation » sur l'entree colon, les deux enregistrees dans scripts/test_lint_donnees.gd:PROPRIETES_CABLAGE_SEUL.\n\nLE CATALOGUE DE CHANTIERS EST LOCAL LUI AUSSI (« chantiers » ci-dessous), et sa reference s'appelle « chantier_ref », JAMAIS « transformation ». Raison, pas un caprice : scripts/test_lint_donnees.gd:REFERENCES verifie tout champ nomme exactement « transformation » de data/*.json contre le catalogue PARTAGE data/transformations.json. Le cablage recopie la valeur sous la cle de contrat « transformation » EN CODE, au moment de la fabrication -- scripts/extinction.gd recoit son catalogue en parametre, il n'a jamais exige que ce soit le catalogue partage.\n\nDIRECTION DES TROIS COMPARAISONS : « au-dessus du seuil » se lit ici « >= », une exigence exactement atteinte est atteinte -- meme convention que scripts/portee.gd:en_portee (« <= », jamais « < »), et volontairement PAS celle de scripts/seuil_etat.gd/scripts/charge.gd (strictement « > »). Ces deux-la comparent une grandeur qui MONTE en continu, ou l'egalite stricte est un instant sans duree ; ici on compare une capacite POSEE en donnee a une exigence POSEE en donnee, ou l'egalite est un cas nominal qu'un auteur de contenu ecrira exprès (force_requise 0.9 pour un porteur a 0.9).\n\nCALIBRATION : colon.fournit_stabilisation vaut 0.5 dans data/types.json, PAS 1.0. Sans ca, « enclume stabilisation_requise 1 » et « sans stabilisation le travail est refuse » ne peuvent pas etre vrais en meme temps -- un porteur seul suffirait toujours, et le troisieme gate ne serait jamais observable. A 0.5 : un porteur seul (0.5) est refuse ; un porteur + l'etau (1.5) passe ; deux porteurs (1.0) passent aussi -- c'est LA demonstration de la ligne 9, un objet et un colon interchangeables sur la meme propriete.\n\nUNITES : tout en secondes de simulation (constat (B) de l'audit). Aucune heure, aucun jour.",
+
+	"type_colon": "colon",
+	"propriete_force": "force",
+	"propriete_stabilisation": "fournit_stabilisation",
+	"propriete_force_requise": "force_requise",
+	"propriete_points_de_prise": "points_de_prise",
+	"propriete_stabilisation_requise": "stabilisation_requise",
+	"propriete_chantier_ref": "chantier_ref",
+
+	"portee_stabilisation": 90.0,
+
+	"_note_chantiers": "Catalogue LOCAL passe tel quel a scripts/extinction.gd:avancer en quatrieme argument (le mecanisme recoit son catalogue en parametre depuis toujours). « portee_travail » est OBLIGATOIRE dans chaque entree -- son absence fait alarmer extinction.gd, jamais un defaut 0.0 silencieux. « a_zero.poser » pose un marqueur pur (aucun resultat calcule, voir docs/design.md « Cause, jamais resultat ») : extinction.gd retire de lui-meme travail_restant et transformation en fin de chantier.",
+	"chantiers": {
+		"portage_tronc": {
+			"portee_travail": 90.0,
+			"a_zero": { "poser": { "chantier_accompli": true } }
+		},
+		"portage_echelle": {
+			"portee_travail": 90.0,
+			"a_zero": { "poser": { "chantier_accompli": true } }
+		},
+		"serrage_enclume": {
+			"portee_travail": 90.0,
+			"a_zero": { "poser": { "chantier_accompli": true } }
+		}
+	},
+
+	"_note_colons": "force : propriete PLATE et NUMERIQUE, jamais un Dictionary ni une entree sous « reserves » -- scripts/somme.gd:_numerique alarme (push_error) et fait contribuer 0.0 pour toute valeur non numerique. Le colosse a 1.8, les deux faibles 0.9 : un colosse seul passe force_requise 1.6, un faible seul ne la passe pas, deux faibles ensemble (1.8) la passent. rythme (1.5) et vitesse ne sont PAS declares ici -- ils viennent de data/types.json:colon, comme dans tous les bancs.\n\nPOSITIONS DE DEPART, CHOISIES POUR QUE LA SCENE SE PROUVE VIVANTE SANS UN CLIC : colosse et faible_a sont loin de tout (les deux chantiers de gauche restent ROUGES et attendent Yael), faible_b demarre a 60 unites de l'enclume, donc a portee de l'etau -- ce seul chantier est VERT des la premiere image et s'accomplit en ~13 s (travail_restant 20.0 / rythme 1.5). Sans ca, le banc lance montre trois carres rouges immobiles et rien ne distingue une scene qui attend d'une scene cassee.",
+	"colons": [
+		{ "id": "colosse",  "position": [300.0, 700.0, 0.0], "force": 1.8 },
+		{ "id": "faible_a", "position": [520.0, 700.0, 0.0], "force": 0.9 },
+		{ "id": "faible_b", "position": [1300.0, 360.0, 0.0], "force": 0.9 }
+	],
+
+	"_note_cibles": "Les trois chantiers, chacun cablant UN gate different comme cas dominant. tronc : la FORCE seule (force_requise 1.6, points_de_prise 1) -- un colosse seul suffit, deux faibles aussi, un faible seul non. echelle : les POINTS DE PRISE, gate SEPARE de la force (force_requise 0.9, points_de_prise 2) -- le colosse seul est largement assez fort et reste refuse, parce qu'une echelle a deux bouts. enclume : la STABILISATION (stabilisation_requise 1.0, force_requise 0.0, points_de_prise 1) -- un porteur seul (0.5) est refuse, avec l'etau (1.5) ou avec un second porteur (1.0) il passe. travail_restant est le chantier lui-meme, mange par scripts/extinction.gd des que les trois gates passent.",
+	"cibles": [
+		{
+			"id": "tronc",
+			"position": [300.0, 300.0, 0.0],
+			"composition": [ { "materiau": "bois", "volume": 3.0 } ],
+			"force_requise": 1.6,
+			"points_de_prise": 1,
+			"stabilisation_requise": 0.0,
+			"chantier_ref": "portage_tronc",
+			"travail_restant": 20.0
+		},
+		{
+			"id": "echelle",
+			"position": [800.0, 300.0, 0.0],
+			"composition": [ { "materiau": "bois", "volume": 0.4 } ],
+			"force_requise": 0.9,
+			"points_de_prise": 2,
+			"stabilisation_requise": 0.0,
+			"chantier_ref": "portage_echelle",
+			"travail_restant": 20.0
+		},
+		{
+			"id": "enclume",
+			"position": [1300.0, 300.0, 0.0],
+			"composition": [ { "materiau": "fer", "volume": 0.05 } ],
+			"force_requise": 0.0,
+			"points_de_prise": 1,
+			"stabilisation_requise": 1.0,
+			"chantier_ref": "serrage_enclume",
+			"travail_restant": 20.0
+		}
+	],
+
+	"_note_objets": "L'etau ne porte PAS « force » et ne porte PAS « rythme » : il n'est donc ni un porteur (le filtre de force l'ignore) ni un agent de chantier (scripts/banc_commun.gd:agents_rythme ne le ramasse pas). Il ne porte QUE fournit_stabilisation -- la meme propriete que le colon, a une valeur deux fois plus haute. C'est tout ce qui le rend interchangeable avec un aide humain : aucune ligne de code ne demande si un contributeur est vivant.",
+	"objets": [
+		{
+			"id": "etau",
+			"position": [1300.0, 385.0, 0.0],
+			"composition": [ { "materiau": "fer", "volume": 0.02 } ],
+			"fournit_stabilisation": 1.0
+		}
+	],
+
+	"terrain_largeur": 1600.0,
+	"terrain_hauteur": 900.0,
+	"taille_colon": 28.0,
+	"taille_cible": 54.0,
+	"taille_objet": 34.0,
+	"couleur_fond": [0.15, 0.16, 0.18],
+	"couleur_colon": [0.95, 0.85, 0.35],
+	"couleur_colon_selectionne": [1.0, 1.0, 0.85],
+	"couleur_objet": [0.55, 0.60, 0.68],
+	"couleur_satisfait": [0.30, 0.75, 0.35],
+	"couleur_manque": [0.80, 0.28, 0.25],
+	"couleur_accompli": [0.40, 0.42, 0.45]
+}

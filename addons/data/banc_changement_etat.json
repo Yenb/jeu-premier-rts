@@ -1,0 +1,27 @@
+{
+	"_note": "Jetable, propre a scripts/banc_changement_etat.gd (chantier 'colonne thermique', cases 3/4/8, premiere demonstration reelle de scripts/seuil_etat.gd). 'objet' : 'position' de depart, 'composition' (fer reel, data/materiaux.json), 'temperature_initiale' (deg C, meme defaut que le paquet objet_physique -- ce banc ne passe pas par 'herite': ['objet_physique'], voir en-tete de banc_changement_etat.gd). 'source' : FIXE a la MEME position que l'objet (distance nulle, attenuation toujours pleine) -- 'rayon'/'force' comme pour temperature.gd, 'ramp_rate' (deg C par seconde, rampe lineaire depuis l'ambiante) et 'duree_chauffe' (secondes, au-dela la source disparait -- l'objet retombe vers l'ambiante par la meme loi de Newton). Calibre pour que l'objet croise 'chaud' (~150 deg C) en ~7-8s (CORRIGE -- mesure sur lancement reel, l'ancienne estimation ~10-15s ne tenait pas compte du LAG de la loi de Newton pres de l'origine, ou l'objet part de l'ambiante et met un temps caracteristique conductivite/chaleur_specifique -- ~5.6s pour le fer -- a rattraper la rampe de la source), point_fusion (1538) vers ~40-45s, point_ebullition (2862) vers ~75-80s (ces deux-la confirmees exactes par lancement reel), laissant une marge avant la coupure a 90s. 'couleurs' : 'solide'/'chaud_tint'/'liquide'/'gaz'/'gaz_alpha' pilotent scripts/banc_changement_etat.gd:couleur_pour_etats -- purement visuel, aucun rapport avec le mecanisme. L'ambiante et l'attenuation viennent de data/temperature.json PARTAGE, jamais redeclarees ici -- meme discipline que scripts/banc_temperature.gd avec data/temperature.json.",
+	"objet": {
+		"position": [0.0, 0.0, 0.0],
+		"composition": [{"materiau": "fer", "volume": 1.0}],
+		"temperature_initiale": 20.0
+	},
+	"source": {
+		"position": [0.0, 0.0, 0.0],
+		"rayon": 100.0,
+		"force": 1.0,
+		"ramp_rate": 40.0,
+		"duree_chauffe": 90.0
+	},
+	"couleurs": {
+		"solide": [0.55, 0.55, 0.58],
+		"chaud_tint": [0.85, 0.45, 0.1],
+		"liquide": [0.95, 0.35, 0.05],
+		"gaz": [0.95, 0.95, 0.55],
+		"gaz_alpha": 0.4
+	},
+	"camera": {
+		"position": [0.0, -60.0, 0.0],
+		"zoom": 0.9
+	},
+	"intervalle_print": 3.0
+}

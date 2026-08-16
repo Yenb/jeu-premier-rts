@@ -1,0 +1,33 @@
+{
+	"_note": "Jetable, propre a ce banc. Trois colons construits A LA MAIN (pas Objet.fabriquer, pas data/types.json:colon -- ce banc demontre un cablage, pas une integration au jeu). Aucun RNG : la contagion est deterministe (portee_charge fixe, causes fixes), rien a seeder. 'guerrier_1'/'guerrier_2' portent l'attache 'guerrier' des le demarrage (posee en donnee, aucun mecanisme de formation ici -- attache_par_trait.gd n'est pas cable). 'recepteur' seul porte le canal etats.pression_guerrier. portee_charge (200.0) couvre largement le triangle serre -- les deux porteurs contribuent chacun un poids implicite de 1.0 (charge.gd, defaut), somme 2.0 tant que les deux restent perceptibles. seuil 2.0 : a delta 0.1 (rythme reel, ~1/60s en jeu mais ce banc ne borne aucun delta), la charge monte de somme*delta par tick -- observable en quelques secondes.",
+	"propriete_visee": "guerrier",
+	"recepteur_id": "recepteur",
+	"fenetre_moyenne": 60,
+	"couleur_porteur": [0.8, 0.2, 0.2],
+	"couleur_non_porteur": [0.4, 0.5, 0.7],
+	"couleur_marqueur_pression": [1.0, 0.85, 0.1],
+	"canal": {
+		"charge": 0.0,
+		"seuil": 2.0,
+		"portee_charge": 200.0,
+		"taux_decroissance": 1.0,
+		"poser": { "sous_pression_guerrier": true }
+	},
+	"colons": [
+		{
+			"id": "guerrier_1",
+			"position": [350.0, 340.0, 0.0],
+			"attaches_initiales": [{ "propriete": "guerrier", "force": 1.0 }]
+		},
+		{
+			"id": "guerrier_2",
+			"position": [450.0, 340.0, 0.0],
+			"attaches_initiales": [{ "propriete": "guerrier", "force": 1.0 }]
+		},
+		{
+			"id": "recepteur",
+			"position": [400.0, 260.0, 0.0],
+			"attaches_initiales": []
+		}
+	]
+}

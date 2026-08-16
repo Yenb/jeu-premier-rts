@@ -1,0 +1,25 @@
+{
+	"_note": "Jetable, propre a scripts/banc_resonance.gd (chantier 'resonance -- un materiau resonnant amplifie le son'). 'source' : point d'emission abstrait (pas un Objet.fabriquer, meme patron que banc_fracture_sonore.gd:_position_source/_son_emis_source/_rayon_source -- rien a fusionner sur un point). rayon_emission (800.0) est la portee PHYSIQUE de propagation du son depuis la source, INDEPENDANTE de canaux_config.ouie.portee du colon (600.0, defaut de data/types.json:colon, jamais surcharge ici). 'objets' : trois objets resonnants REELS (data/materiaux.json, aucun materiau de demo invente) a EXACTEMENT LA MEME DISTANCE (250.0) de la source, sur un arc a -30/0/+30 degres -- fer_resonant (resonance 0.6) et pierre_resonant (resonance 0.2) sont symetriques par rapport a l'axe source-colon (memes distances a la source ET au colon), preuve que resonance est la SEULE variable qui les distingue ; bois_resonant (resonance 0.7, angle 0) est aligne avec la source et le colon, donc le plus proche du colon des trois -- son_recu identique aux deux autres (meme distance a la source), son_reemis strictement le plus haut (resonance la plus haute), et le colon le percoit avec la plus forte intensite (distance au colon la plus courte). Colon a 500.0 sur l'axe, portee ouie au defaut du type (600.0) : percoit la source originale (distance 500, sous portee) ET les trois sources secondaires (distances ~250-310, toutes sous portee), seuil au defaut (0.0) -- toute intensite positive est captee, aucune surcharge necessaire pour ce banc.",
+	"source": { "id": "source_sonore", "position": [0.0, 0.0, 0.0], "son_emis": 1.0, "rayon_emission": 800.0 },
+	"objets": [
+		{ "id": "fer_resonant", "position": [216.51, -125.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] },
+		{ "id": "bois_resonant", "position": [250.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "pierre_resonant", "position": [216.51, 125.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }] }
+	],
+	"colon": {
+		"position": [500.0, 0.0, 0.0],
+		"attaches": [],
+		"forme": {},
+		"poids_verbes": {}
+	},
+	"couleurs_types": {
+		"fer_resonant": [0.6, 0.65, 0.7],
+		"bois_resonant": [0.55, 0.35, 0.15],
+		"pierre_resonant": [0.55, 0.55, 0.55],
+		"colon": [0.3, 0.6, 0.9]
+	},
+	"couleur_source_active": [0.95, 0.85, 0.2],
+	"couleur_source_inactive": [0.35, 0.35, 0.35],
+	"intervalle_print": 2.0,
+	"camera": { "position": [250.0, 0.0, 0.0], "zoom": 0.55 }
+}

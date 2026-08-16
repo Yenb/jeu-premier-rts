@@ -1,0 +1,65 @@
+{
+	"_note": "jetable, propre a ce banc. DEUX GRAPPES tres eloignees (meme patron que data/banc_son.json) -- mage (0,0,0) entoure de SIX sources, guerrier (3000,0,0) entoure de QUATRE. Meme portee magie (600.0) pour les deux colons, seul le seuil diverge (mage 0.02, guerrier 0.1). A distance 300 (facteur d'attenuation 1.0 - 300/600 = 0.5) : source_bois (force_magique 0.3) attenuee 0.15, source_pierre (0.1) attenuee 0.05, source_fer (0.05) attenuee 0.025, source_demo (source_magique_demo, 0.9) attenuee 0.45 -- le mage (seuil 0.02) percoit les quatre (0.025/0.05/0.15/0.45 tous >= 0.02), le guerrier (seuil 0.1) ne percoit que bois et demo (0.15/0.45 >= 0.1 ; pierre/fer < 0.1, ignorees). source_neutre_mage (verre_demo, force_magique absente de sa fiche -- 0.0 par defaut generique) a distance ~354 (a portee) mais n'est JAMAIS percue par aucun des deux colons, quel que soit le seuil (0.0 < tout seuil strictement positif) -- preuve qu'une chose muette sur force_magique ne se fait jamais capter par accident. source_lointaine_mage (bois, memes force_magique que source_bois) a distance ~1414 (hors de la portee 600.0) n'est jamais captee non plus, mais pour une raison geometrique distincte (avant tout filtre de seuil, meme distinction que data/banc_son.json). Canal magie (data/canaux.json) : geometrie propagation_obstacles, propriete_obstacle 'opacite' (un mur opaque bloque le champ magique), propriete_emission 'force_magique' -- exactement le meme mecanisme que le canal ouie/son_emis, rendu possible par le chantier separe 'propriete_emission configurable par canal' (scripts/perception.gd). magie_config (par colon) POSE tout canaux_config.magie (portee/seuil) -- le type partage 'colon' (data/types.json) ne porte pas 'magie' dans sa liste 'canaux' ni de defaut dans canaux_config, contrairement a ouie_surcharge de banc_son.gd qui ne fait que SURCHARGER un defaut deja present.",
+	"_note_affichage": "la position d'affichage (ci-dessous, section 'affichage') est SÉPARÉE de la position logique ('sources'/'colons.*.position' au-dessus, INCHANGÉE, toujours celle que lit Perception.percevoir/Monde) -- aucune mécanique ne bouge, seul l'endroit où chaque carré/label/ligne se dessine à l'écran change. 'affichage.colons.<nom>.position' place le colon ; 'decalage_colonne_x' décale sa colonne de sources horizontalement (négatif = à gauche du mage, positif = à droite du guerrier, assez large pour ne jamais chevaucher le label du colon lui-même) ; 'sources' est la liste ORDONNÉE des ids empilés verticalement (scripts/banc_magie_perception.gd:position_colonne, espacement ESPACEMENT_COLONNE, centrée sur la position du colon). 'affichage.isolees' place les sources sans colonne (source_lointaine_mage, en bas au centre). Couleurs mage/guerrier passées à jaune/cyan (au lieu de violet/rouge) -- même couleur pour le carré, le nom, la ligne de perception et la légende de ce colon, un seul réglage.",
+	"couleurs_types": {
+		"mage": [1.0, 1.0, 0.0],
+		"guerrier": [0.0, 1.0, 1.0],
+		"source_bois": [0.5, 0.35, 0.15],
+		"source_pierre": [0.6, 0.6, 0.6],
+		"source_fer": [0.75, 0.75, 0.8],
+		"source_demo": [0.9, 0.2, 0.9],
+		"source_neutre": [0.3, 0.3, 0.3]
+	},
+	"affichage": {
+		"colons": {
+			"mage": {
+				"position": [-250.0, 0.0],
+				"decalage_colonne_x": -260.0,
+				"sources": ["source_bois_mage", "source_pierre_mage", "source_fer_mage", "source_demo_mage", "source_neutre_mage"]
+			},
+			"guerrier": {
+				"position": [250.0, 0.0],
+				"decalage_colonne_x": 260.0,
+				"sources": ["source_bois_guerrier", "source_pierre_guerrier", "source_fer_guerrier", "source_demo_guerrier"]
+			}
+		},
+		"isolees": {
+			"source_lointaine_mage": [0.0, 300.0]
+		}
+	},
+	"types": {
+		"source_bois":   { "herite": ["objet_physique"], "composition": [ { "materiau": "bois", "volume": 1.0 } ] },
+		"source_pierre": { "herite": ["objet_physique"], "composition": [ { "materiau": "pierre", "volume": 1.0 } ] },
+		"source_fer":    { "herite": ["objet_physique"], "composition": [ { "materiau": "fer", "volume": 1.0 } ] },
+		"source_demo":   { "herite": ["objet_physique"], "composition": [ { "materiau": "source_magique_demo", "volume": 1.0 } ] },
+		"source_neutre": { "herite": ["objet_physique"], "composition": [ { "materiau": "verre_demo", "volume": 1.0 } ] }
+	},
+	"sources": [
+		{ "id": "source_bois_mage",       "type": "source_bois",   "position": [300.0, 0.0, 0.0] },
+		{ "id": "source_pierre_mage",     "type": "source_pierre", "position": [-300.0, 0.0, 0.0] },
+		{ "id": "source_fer_mage",        "type": "source_fer",    "position": [0.0, 300.0, 0.0] },
+		{ "id": "source_demo_mage",       "type": "source_demo",   "position": [0.0, -300.0, 0.0] },
+		{ "id": "source_neutre_mage",     "type": "source_neutre", "position": [250.0, 250.0, 0.0] },
+		{ "id": "source_lointaine_mage",  "type": "source_bois",   "position": [1000.0, 1000.0, 0.0] },
+		{ "id": "source_bois_guerrier",   "type": "source_bois",   "position": [3300.0, 0.0, 0.0] },
+		{ "id": "source_pierre_guerrier", "type": "source_pierre", "position": [2700.0, 0.0, 0.0] },
+		{ "id": "source_fer_guerrier",    "type": "source_fer",    "position": [3000.0, 300.0, 0.0] },
+		{ "id": "source_demo_guerrier",   "type": "source_demo",   "position": [3000.0, -300.0, 0.0] }
+	],
+	"colons": {
+		"mage": {
+			"position": [0.0, 0.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": {},
+			"magie_config": { "portee": 600.0, "seuil": 0.02 }
+		},
+		"guerrier": {
+			"position": [3000.0, 0.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": {},
+			"magie_config": { "portee": 600.0, "seuil": 0.1 }
+		}
+	}
+}

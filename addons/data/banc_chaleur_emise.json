@@ -1,0 +1,16 @@
+{
+	"_note": "Jetable, propre a scripts/banc_chaleur_emise.gd (chantier 'chaleur_emise -- un feu emet de la chaleur'). 'rayon_emission'/'temperature_source' : forme de la source de chaleur qu'un objet en train de bruler projette a chaque tick (voir temperature.gd) -- communes aux deux foyers, seule 'force' diverge (proprietes.chaleur_emise, fusionne a la fabrication depuis data/materiaux.json via data/proprietes_immuables_composition.json). 'objets' : quatre declarations (id, position, composition, brule_initial) -- bois_brule/fer_brule (brule_initial true, reserve_combustible reelle fusionnee, chaleur_emise 0.8/0.3) et froid_pres_bois/froid_pres_fer (brule_initial false, jamais de reserve combustible, chaleur_emise 0.0 -- materiau pierre, ne brule jamais). Layout CALIBRE pour isoler les deux foyers : froid_pres_bois est a la MEME distance (150 unites) de bois_brule que froid_pres_fer l'est de fer_brule, et cette distance depasse tout juste la moitie de 'rayon_emission' (300) pour que l'effet reste visible sans saturer ; l'ecart entre les deux foyers (600 unites) est strictement superieur a 2*rayon_emission, aucune contamination croisee (bois_brule ne rechauffe jamais froid_pres_fer, ni l'inverse). Volumes (bois_brule 40.0, fer_brule 140.0) calibres depuis data/reserve_combustible_composition.json (cout_base/facteur_densite/facteur_porosite partages) pour que les deux foyers brulent une duree comparable (bois ~23s, fer ~20s), assez longtemps pour observer le rechauffement comparatif avant extinction.",
+	"rayon_emission": 300.0,
+	"temperature_source": 800.0,
+	"intervalle_print": 2.0,
+	"couleur_froid": [0.15, 0.35, 0.85],
+	"couleur_chaud": [0.85, 0.15, 0.1],
+	"echelle_couleur": { "min": 0.0, "max": 800.0 },
+	"camera": { "position": [375.0, 0.0, 0.0], "zoom": 0.45 },
+	"objets": [
+		{ "id": "bois_brule", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 40.0 }], "brule_initial": true },
+		{ "id": "froid_pres_bois", "position": [150.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 3.0 }], "brule_initial": false },
+		{ "id": "fer_brule", "position": [600.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 140.0 }], "brule_initial": true },
+		{ "id": "froid_pres_fer", "position": [750.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 3.0 }], "brule_initial": false }
+	]
+}

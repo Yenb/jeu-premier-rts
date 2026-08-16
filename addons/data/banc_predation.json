@@ -1,0 +1,258 @@
+{
+	"_note": "Jetable, propre à scripts/banc_predation.gd (chantier « prédation + agression + hiérarchie — l'orchestrateur d'écosystème », audit_ecosysteme_vivant_prealable.md lignes 5/6/7 et 11). L'audit dit ce que ce fichier existe pour rendre possible : « Les mécanismes existent tous ; ce qui n'existe pas, c'est l'ORDRE FIXE qui les fait tenir ensemble tick après tick, plus la naissance et le retrait. »\n\nCATALOGUE DE TYPES LOCAL (types_locaux ci-dessous), jamais data/types.json — patron data/banc_psycho_social.json:catalogue_local, fabriqué par Objet.fabriquer via BancCommun.fabriquer_colon exactement comme banc_reproduction.gd fabrique ses colons. RAISON, posée avant d'écrire : data/types.json:colon porte déjà un canal de charge 'peur' (portee_charge 900.0) qui capterait les causes SYNTHÉTISÉES de ce banc (position de l'animal lui-même, distance 0.0) et ferait monter une peur parasite ; il porte aussi cinq réserves physiologiques dont quatre ne servent à rien ici. Conséquence utile : data/types.json n'est PAS touché, donc RIEN à enregistrer dans scripts/test_lint_donnees.gd. Seule 'reste_nourriture' y est PIOCHÉE au chargement (fusionnée dans le même catalogue), parce que produit.gd résout son type_produit dans une table de fabrication et que scripts/test_lint_donnees.gd vérifie tout champ 'type_produit' de data/*.json contre data/types.json — un type de reste local rougirait le linter.\n\nAUCUN HASARD, NULLE PART, sauf UN et il est seedé et reçu en paramètre : heredite.gd:fabriquer_genes_enfant (mutation gaussienne). Il n'y a AUCUN autre RNG dans le banc — pas d'errance aléatoire, pas de tirage de prédation, pas de tirage de mort. Un animal qui ne décide rien reste IMMOBILE (voir 'comportements' ci-dessous), il n'erre pas au hasard : docs/design.md, RÈGLE ANTI-BRUIT, vaut pour tout DÉCIDEUR et pas seulement pour les colons (audit ligne 10, CORRECTION 2).\n\nCALIBRATION, mesurée et non devinée (leçon de banc_maladie, dont le seuil d'origine ne franchissait jamais rien pendant que son test restait VERT) : les proies regagnent 2.0/s d'énergie (cout_base NÉGATIF, patron de la jachère de banc_fertilite.gd — rien dans le cœur ne borne le HAUT d'une réserve, le plafond vit donc au câblage), plafonnées à 100.0 ; les prédateurs en perdent 3.2/s et meurent donc en ~31 s sans repas. RÉSULTAT NÉGATIF MESURÉ, écrit pour ne pas être repayé : une première calibration (proie regain 1.2 / seuil 90 / coût 55 ; prédateur seuil 80 / coût 50 / gestation 8.0 s) ne produisait AUCUNE oscillation sur 60 s de config réelle — les prédateurs ne restaient jamais au-dessus de leur seuil de reproduction assez longtemps pour mener une gestation à terme, et les proies étaient mangées plus vite qu'elles ne naissaient : décroissance monotone, extinction, aucun cycle. Ce sont les DÉLAIS, et non les taux, qui font le cycle — il faut que le temps « repas → naissance » du prédateur tienne DANS son autonomie sans manger. Un repas transfère 45.0/s (consommer.gd, CONSERVATIF : le prédateur est crédité de ce que la proie a RÉELLEMENT perdu), donc une proie pleine est vidée en ~2.2 s et remplit son prédateur. Les délais de reproduction (data/reproduction.json:proie_predation/predateur_predation) plus le délai de MATURITÉ (stades_config ci-dessous, stade fertile à 3.0 années simulées, annees_par_seconde 1.0 → 3 s réelles) sont ce qui DÉPHASE les deux populations : c'est de là, et de nulle part ailleurs, que vient l'oscillation.\n\nLES TROIS PRÉDATEURS NE DIFFÈRENT QUE PAR biais_agression (docs/design.md, « Les archétypes n'existent pas ») : même corps, même perception, même vitesse, même force de base. Le chasseur attaque par faim, le territorial par densité d'intrus, le protecteur pour ses petits — et c'est bifurcation.gd qui tranche, sur un biais COMPOSÉ par le câblage (la grandeur passée est UN SEUL SCALAIRE commun à toutes les sorties, elle ne peut donc JAMAIS départager deux biais : voir bifurcation.gd, LIMITE RÉELLE DE CETTE LOI, et banc_menace_combat.gd:biais_effectif).",
+
+	"seed": 20260814,
+	"annees_par_seconde": 1.0,
+	"paliers_facteur_temps": [1.0, 3.0, 8.0],
+	"periode_trace_s": 3.0,
+	"zone": { "min": [-500.0, -320.0, 0.0], "max": [500.0, 320.0, 0.0] },
+
+	"propriete_proie": "proie",
+	"propriete_predateur": "hostile",
+	"nom_reserve_energie": "energie",
+	"nom_manque_energie": "manque_energie",
+	"nom_masse": "masse",
+	"nom_force": "force",
+	"nom_vitesse": "vitesse",
+	"capacite_energie": 100.0,
+	"etat_mort": "mort_famine",
+
+	"_note_seuils": "Catalogue de seuils LOCAL, au format EXACT de data/seuils_etat.json et passé tel quel à SeuilEtat.avancer (qui reçoit toujours son catalogue en paramètre) — patron data/banc_elimination_salete.json:seuils_elimination et data/banc_psycho_social.json:seuils_locaux. Le catalogue PARTAGÉ n'est pas touché : ses entrées 'faim'/'famine'/'mort_famine' sont calibrées contre une capacité de 100.0 ET une réserve de graisse que ces animaux n'ont pas (leur _note l'exige explicitement). UNE SEULE entrée pour DEUX morts : un prédateur qui n'a plus rien mangé et une proie vidée par consommer.gd franchissent le MÊME miroir plat 'manque_energie' (capacite - reserve, RECALCULÉ À NEUF chaque tick par le câblage, jamais un '+=' — c'est ce recalcul, et lui seul, qui le rend réversible). L'état posé, lui, vient du catalogue PARTAGÉ data/etats.json:mort_famine (ÉCRASE vitesse à 0.0) — aucune entrée d'état neuve n'était nécessaire.",
+	"seuils_locaux": {
+		"mort_energie_predation": {
+			"propriete_continue": "manque_energie",
+			"seuil": 99.0,
+			"etat": "mort_famine"
+		}
+	},
+
+	"_note_hierarchie": "LIGNE 7 DE L'AUDIT, et sa correction de voie : NI dominance.gd (il n'élit personne — il ÉCRASE tout ce dont l'écart au sommet dépasse forme.seuil_ecrasement et rend une liste filtrée ; le gagnant est choisi par agir.gd:_score, privé et fermé, où le câblage ne peut rien ajouter sans modifier le cœur) NI frappe.gd (son _score ne connaît que deux sources, 'materiau' — qui exige une composition — et 'position_z' ; il n'existe AUCUNE source « propriété plate », en ajouter une serait modifier le cœur). Le score est une SOMME PONDÉRÉE DE PROPRIÉTÉS RECALCULÉE À NEUF chaque tick, c'est-à-dire exactement banc_bonheur.gd — zéro mécanisme, zéro .gd. poids_masse 0.05 contre poids_force 1.0 : sur des masses de 40 à 60 et des forces de 2 à 8, les deux termes pèsent du même ordre (2.0-3.0 contre 2.0-8.0), et c'est la FORCE — donc le gène 'vigueur' hérité — qui départage le plus souvent. La hiérarchie devient ainsi HÉRÉDITAIRE sans une ligne de code pour le dire.",
+	"hierarchie": { "poids_masse": 0.05, "poids_force": 1.0 },
+
+	"portee_morsure": 70.0,
+	"taux_predation": 45.0,
+
+	"_note_reste": "produit.gd:transformer, patron banc_fertilite.gd:avancer_transformations (cadavre → humus). rendement 0.4 : le reste pèse 40% de la masse du mort, le reste de la masse DISPARAÎT (rendement_perdu n'existe pas comme champ, c'est le complément de rendement, jamais stocké). LIMITE DITE, PAS MASQUÉE : les restes ne sont PAS ajoutés au Monde — décision de COÛT, pas un oubli. monde.gd:choses_dans_rayon est un balayage LINÉAIRE sans aucune structure d'accélération spatiale et perception.gd demande explicitement de signaler tout dépassement de ~50 candidats par requête (audit, point 3 de « CE QUI MANQUE VRAIMENT ») : une population qui naît et meurt en continu y arriverait vite si chaque carcasse restait interrogeable. Ils sont donc fabriqués RÉELLEMENT (masse calculée par produit.gd depuis la composition de data/types.json:reste_nourriture) et affichés, mais perçus par personne. restes_max borne l'affichage, les plus anciens sortent.",
+	"produit_reste": { "type_produit": "reste_nourriture", "rendement": 0.4 },
+	"restes_max": 24,
+
+	"_note_agression": "LIGNE 6 DE L'AUDIT, et il faut LES DEUX voies, jamais une seule : charge.gd répond à « attaque-t-il ? » (il SOMME les poids de toutes les causes à portée — trois causes SYNTHÉTISÉES à portee_charge 0.0, l'animal est sa propre cause, charge.gd ne scanne jamais le monde) mais la somme EFFACE L'ORIGINE ; bifurcation.gd répond à « pourquoi ? », donc à « que fait-il après ». Les MÊMES trois produits servent aux deux : poids de cause pour charge.gd, biais composé pour bifurcation.gd. Seuil 1.5 avec des contributions de l'ordre de 0.5/s → bascule vers 3 s d'exposition continue ; taux_decroissance 2.0 (appliqué SEULEMENT quand la somme est nulle ce pas) → retombée en moins d'une seconde dès que la cause disparaît. magnitude_deformation_par_s 2.0 : débit net rapide +1.2/s, lent +1.5/s, donc biais +1.26/s → plafond 3.0 atteint en ~2.4 s. plafond_biais_agression 3.0 : la saillance d'une proie est multipliée par 4.0, assez pour qu'à 300 unités (1.5) elle passe devant un congénère à 212 (3.88) — mesuré, pas deviné. LE PLAFOND EST AU CÂBLAGE et nulle part ailleurs : deformation.gd:avancer décroît par SOUSTRACTION FIXE, il n'existe AUCUN équilibre naturel ni asymptote m/taux (résultat négatif déjà payé trois fois — data/deformations.json:faim_critique, peur, data/epigenetique.json:accoutumance_froid).",
+	"nom_canal_agression": "agression",
+	"nom_marqueur_agression": "marqueur_agression",
+	"canal_agression": {
+		"charge": 0.0,
+		"seuil": 1.5,
+		"portee_charge": 0.0,
+		"taux_decroissance": 2.0,
+		"poser": { "marqueur_agression": true }
+	},
+	"charge_max_affichee": 4.0,
+	"sorties_agression": ["agressif_faim", "agressif_territoire", "agressif_petits"],
+	"deformation_par_sortie": {
+		"agressif_faim": "agression_faim",
+		"agressif_territoire": "agression_territoire",
+		"agressif_petits": "agression_petits"
+	},
+	"cible_par_sortie": {
+		"agressif_faim": "proie",
+		"agressif_territoire": "hostile",
+		"agressif_petits": "hostile"
+	},
+	"magnitude_deformation_par_s": 2.0,
+	"plafond_biais_agression": 3.0,
+
+	"_note_vigilance": "LA CONTRE-PARTIE COTE PROIE, et elle n'est pas une symetrie decorative : proximite.gd lit 'saillance_intrinseque' DANS le catalogue, jamais sur l'objet -- une chose a donc UNE seule saillance pour tous ceux qui la regardent. Or il faut les DEUX sens (le predateur voit la proie plus fort que ses congeneres, la proie voit le predateur plus fort que les siens), et un profil unique ne peut pas les rendre tous les deux. La deformation, elle, est PAR PERCEVANT. La vigilance est donc posee INCONDITIONNELLEMENT sur toute proie vivante, a chaque tick, jusqu'au plafond -- ce n'est pas un etat, c'est un trait permanent. CONSEQUENCE MESUREE : une proie ne fuit qu'a courte distance (le predateur passe devant une congenere proche vers ~300 unites, pas au-dela) -- elle broute tant qu'il est loin, elle detale quand il approche. Voir data/deformations.json:vigilance_proie pour le resultat negatif qui a impose cette entree.",
+	"deformation_vigilance": { "source": "vigilance_proie", "cible": "hostile" },
+	"plafond_biais_vigilance": 3.0,
+
+	"_note_causes": "Les trois grandeurs de situation, toutes RECALCULÉES À NEUF chaque tick, jamais accumulées. urgence_faim = clamp(manque_energie / capacite_energie, 0, 1). densite_intrus = min(1, nombre d'autres porteurs de la propriété prédateur dans portee_territoire / densite_intrus_reference) — GARDE reprise de banc_menace_combat.gd:ratio_effectifs : une référence nulle rendrait INF et ferait exploser la charge en silence. proximite_menace = max(0, 1 - distance_du_plus_proche_intrus / portee_menace_petits), et SEULEMENT si au moins un juvénile de la même espèce est à portee_petits — sinon 0.0 exactement.",
+	"portee_territoire": 260.0,
+	"densite_intrus_reference": 3.0,
+	"portee_petits": 220.0,
+	"portee_menace_petits": 320.0,
+
+	"comptages": {
+		"proie": { "propriete": "proie", "mode": "presente" },
+		"predateur": { "propriete": "hostile", "mode": "presente" }
+	},
+	"regle_proie": "proie",
+	"regle_predateur": "predateur",
+
+	"_note_comportements": "Indexé par espece_reproduction, jamais par un nom de type écrit dans le code. LE GATE QUI TIENT LE TROUPEAU, et c'est une décision de ce banc, absente de la consigne : 'proie' et 'hostile' proposent LES MÊMES deux verbes (data/types_choses.json) et un animal n'a QU'UN poids_verbes — une proie dont le poids 's_eloigner' domine résout donc 's_eloigner' AUSSI sur une congénère, et le troupeau se disperserait jusqu'aux bords de la zone, sans jamais se percevoir assez longtemps pour s'accoupler. Le câblage n'applique donc un mouvement QUE si la propriété portée par la cible figure dans 'poursuit' (verbe orienté 'declencheur' → BancCommun.bouger_vers) ou dans 'fuit' (verbe orienté 'fuite' → Fuite.direction + BancCommun.bouger_selon). Toute autre décision laisse l'animal IMMOBILE — une proie broute, elle n'erre pas au hasard (voir AUCUN HASARD en tête). Un prédateur ne fuit jamais dans ce banc : sa liste 'fuit' est vide, le gate est donc exercé dans les deux sens.",
+	"comportements": {
+		"proie_predation": { "poursuit": [], "fuit": ["hostile"] },
+		"predateur_predation": { "poursuit": ["proie", "hostile"], "fuit": [] }
+	},
+
+	"_note_type_par_espece": "La table qui permet à une NAISSANCE de retrouver le type local de sa mère sans qu'aucun nom de type n'apparaisse dans le code : le câblage lit proprietes.espece_reproduction sur la porteuse (la même String qu'accouplement.gd compare pour la compatibilité) et résout ici le gabarit à passer à Objet.fabriquer. Sans elle, il faudrait soit un nom en dur, soit deviner le type depuis l'espèce par convention de nommage — les deux sont exactement ce que l'ADN du moteur interdit.",
+	"type_par_espece": {
+		"proie_predation": "proie_animal",
+		"predateur_predation": "predateur_animal"
+	},
+
+	"_note_populations_initiales": "espèce → nom de la liste de déclarations qui la peuple, plus bas dans ce fichier. Existe pour que scripts/banc_predation.gd:etat_initial ne nomme AUCUNE espèce : un banc jetable aurait le droit d'en nommer une (CLAUDE.md, l'exception), mais trois lignes suffisent à l'éviter et le lecteur n'a alors plus à se demander si le code est couplé aux deux espèces de CE banc. Une troisième espèce serait une entrée de plus ici et une liste de plus plus bas, zéro ligne de code.",
+	"populations_initiales": {
+		"proie_predation": "proies",
+		"predateur_predation": "predateurs"
+	},
+
+	"_note_surcout": "UN SEUL ÉCRIVAIN de surcout_action (audit, constat C — même piège que poids_verbes, fermé par banc_faim_thermo.gd:poser_surcout_action) : deux morceaux de câblage qui écriraient chacun leur contribution s'écraseraient EN SILENCE, aucun test ne rougirait, la dépense serait seulement fausse. Les deux contributions sont SOMMÉES puis écrites d'un seul geste, et la décomposition est rendue pour que le label la relise sans jamais rien recalculer. UN TICK DE RETARD INHÉRENT, dit plutôt que masqué : le surcoût est écrit au pas 13 du tick (après le mouvement, seul instant où l'on sait si l'animal a bougé) et consommé par depense.gd au pas 3 du tick SUIVANT. L'ordre inverse serait circulaire.",
+	"surcout_mouvement": 1.6,
+	"surcout_agression": 1.2,
+
+	"_note_reproduction": "GATE DE CÂBLAGE, et il ne peut pas être ailleurs : accouplement.gd:avancer ne lit AUCUNE réserve — seulement mode_reproduction, espece_reproduction, stades_fertiles, stade et les perceptions (voir son en-tête). Le banc refuse donc simplement de l'appeler tant que la réserve d'énergie est sous seuil_reproduction. Précédents exacts : banc_psycho_social.gd:directive_autorisee, banc_graisse_accoutumance.gd (gate sur manque_graisse), banc_elimination_salete.gd (gate sur cout_base pour qu'un mort cesse d'éliminer — défaut trouvé EN LANÇANT LA SCÈNE, invisible au test). cout_reproduction est déduit de la porteuse À LA NAISSANCE, jamais avant : sans lui la population de proies diverge en quelques secondes et le banc ne montre plus aucun cycle.\n\nUN SEUL DES DEUX GESTE. Les deux espèces déclarent role_gestation « les_deux » : elles n'ont pas de sexes, n'importe lequel des deux peut porter, donc accouplement.gd pose 'gestation' des deux côtés. Laisser les deux avancer ferait naître DEUX petits d'un seul accouplement, et le non-porteur garderait sinon une gestation gelée POUR TOUJOURS, définitivement indisponible (garde de accouplement.gd). Le câblage la lui RETIRE au même tick, par une convention déterministe et symétrique : porte celui dont l'id est le plus petit dans l'ordre alphabétique. Un contenu à sexes séparés déclarerait « porteur »/« non_porteur » et n'aurait besoin d'aucune de ces deux lignes.",
+	"_note_population_max": "PLAFOND D'OBSERVABILITE, ajouté APRÈS avoir lancé la scène et non raisonné à l'avance — et ce n'est PAS une capacité de charge. Mesure : une fois les prédateurs éteints (ce qui arrive, et c'est juste), les proies croissent EXPONENTIELLEMENT — 8 → 32 en une trentaine de secondes, et le nombre de ticks par seconde s'effondre avec le carré de la population (monde.gd:choses_dans_rayon est un balayage LINÉAIRE, chaque animal fait sa propre requête). Le banc cessait d'être observable : défaut réel du CÂBLAGE, pas du monde qu'il montre. La VRAIE capacité de charge est la LIGNE 3 de l'audit (un milieu nourrit un nombre fini) — elle est SPATIALE, par case de biome, avec seuil_propriete 'capacite_charge' et un état 'surpeuplement' posé par seuil_etat.gd sur un comptage local, et elle vit dans un autre chantier (scripts/banc_ecosysteme_terrain.gd, session concurrente). Ce plafond-ci est GLOBAL et brut, de la même famille que restes_max : il empêche le banc de se noyer, il ne modélise rien. IL EST DÉPASSABLE, et c'est voulu : il ferme le GATE D'ACCOUPLEMENT, jamais une gestation déjà engagée — une population plafonnée à 22 se stabilise donc un peu au-dessus (29 mesuré), le temps que les dernières gestations arrivent à terme. Couper une gestation en cours aurait demandé de retirer 'gestation' à des animaux qui ne l'ont pas mérité, pour un nombre rond.",
+	"population_max": { "proie_predation": 22.0, "predateur_predation": 10.0 },
+	"seuil_reproduction": { "proie_predation": 75.0, "predateur_predation": 65.0 },
+	"cout_reproduction": { "proie_predation": 35.0, "predateur_predation": 30.0 },
+	"offset_naissance": [26.0, -26.0, 0.0],
+
+	"_note_genes": "catalogue_genes LOCAL (jamais data/genes.json — même discipline que data/banc_genetique.json/data/banc_reproduction.json : une règle de banc de démonstration ne rejoint le catalogue partagé que si un second banc en a besoin). UN SEUL gène, 'vigueur', UNE SEULE cible : 'force', celle-là même que lit le score de hiérarchie. C'est ce qui rend la hiérarchie HÉRÉDITAIRE — un petit de dominant naît plus fort et mangera en premier à son tour, sans une ligne de code pour le dire. expression.gd n'est appelé QU'À LA FABRICATION, jamais chaque tick : résultat négatif déjà mesuré DEUX FOIS dans le dépôt (exprimer() relit par _lire_chemin la valeur qu'il vient d'écrire et fait diverger la propriété sans borne — data/epigenetique.json:exposition_radioactive puis accoutumance_froid).",
+	"catalogue_genes": {
+		"vigueur": {
+			"cibles": [ { "chemin": "force", "poids": 2.0 } ],
+			"mode_expression": "additif"
+		}
+	},
+
+	"types_locaux": {
+		"_note": "Deux types, fabriqués par Objet.fabriquer via BancCommun.fabriquer_colon. AUCUN 'herite' : ces types ne composent aucun paquet de data/types.json (voir _note en tête). AUCUNE 'composition' : Objet.fabriquer traverse alors densité/proprietes_immuables/reserve_combustible comme des chemins morts, et 'masse' reste la valeur plate posée ici — c'est elle que lit le score de hiérarchie. angle 360.0 et NON 180.0 : CONSTAT déjà payé par banc_menace_combat.gd — perception.gd:_percevoir_cone_oriente compare dot(orientation, vers_chose) >= cos(angle/2) ; l'orientation par défaut est (0,0,1) et toutes les positions du dépôt ont z = 0 (VERTICALITÉ), le produit scalaire vaut donc exactement 0.0 alors que cos(90°) vaut 6.12e-17, strictement positif — un cône de 180.0 ne perçoit RIEN dans un monde plan. Ce banc n'a QU'UN canal, rien ne rattraperait.",
+		"proie_animal": {
+			"masse": 40.0,
+			"force": 2.0,
+			"vitesse": 108.0,
+			"proie": true,
+			"profil_saillance": "proie_predation",
+			"canaux": ["vue"],
+			"canaux_config": {
+				"vue": { "portee": 700.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+			},
+			"reserves": {
+				"energie": { "reserve": 70.0, "cout_base": -2.0, "surcout_action": 0.0 }
+			},
+			"etats_actifs": [],
+			"deformation_sources": ["vigilance_proie"],
+			"deformation_etat": {},
+			"genes_actifs": ["vigueur"],
+			"genes_etat": { "vigueur": { "alleles": [0.0, 0.0] } },
+			"marques_epigenetiques": {},
+			"age": 0.0,
+			"stade": "",
+			"stades_config": [
+				{ "nom": "nouveau_ne", "age_seuil": 0.0 },
+				{ "nom": "juvenile", "age_seuil": 1.0 },
+				{ "nom": "adulte", "age_seuil": 3.0 }
+			],
+			"stades_juveniles": ["nouveau_ne", "juvenile"],
+			"mode_reproduction": "sexuee",
+			"espece_reproduction": "proie_predation",
+			"role_gestation": "les_deux",
+			"stades_fertiles": ["adulte"],
+			"reproduction_ref": "proie_predation"
+		},
+		"predateur_animal": {
+			"masse": 55.0,
+			"force": 5.0,
+			"vitesse": 124.0,
+			"hostile": true,
+			"profil_saillance": "predateur_predation",
+			"canaux": ["vue"],
+			"canaux_config": {
+				"vue": { "portee": 700.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+			},
+			"reserves": {
+				"energie": { "reserve": 60.0, "cout_base": 3.2, "surcout_action": 0.0 }
+			},
+			"etats": {
+				"agression": {
+					"charge": 0.0,
+					"seuil": 1.5,
+					"portee_charge": 0.0,
+					"taux_decroissance": 2.0,
+					"poser": { "marqueur_agression": true }
+				}
+			},
+			"etats_actifs": [],
+			"deformation_sources": ["agression_faim", "agression_territoire", "agression_petits"],
+			"deformation_etat": {},
+			"genes_actifs": ["vigueur"],
+			"genes_etat": { "vigueur": { "alleles": [0.0, 0.0] } },
+			"marques_epigenetiques": {},
+			"age": 0.0,
+			"stade": "",
+			"stades_config": [
+				{ "nom": "nouveau_ne", "age_seuil": 0.0 },
+				{ "nom": "juvenile", "age_seuil": 1.0 },
+				{ "nom": "adulte", "age_seuil": 3.0 }
+			],
+			"stades_juveniles": ["nouveau_ne", "juvenile"],
+			"mode_reproduction": "sexuee",
+			"espece_reproduction": "predateur_predation",
+			"role_gestation": "les_deux",
+			"stades_fertiles": ["adulte"],
+			"reproduction_ref": "predateur_predation"
+		}
+	},
+
+	"forme_proie": { "seuil_ecrasement": 2.0, "gain_inertie": 0.2 },
+	"forme_predateur": { "seuil_ecrasement": 2.5, "gain_inertie": 0.3 },
+	"poids_verbes_proie": { "approcher": 0.2, "s_eloigner": 1.0 },
+	"poids_verbes_predateur": { "approcher": 1.0, "s_eloigner": 0.1 },
+
+	"_note_population": "8 proies groupées à gauche, 3 prédateurs à droite — assez loin pour que la chasse soit un DÉPLACEMENT observable, assez près pour que la portée de saillance (600.0) les relie dès le premier tick. age_depart 3.0 pour tous : ils démarrent ADULTES, donc fertiles, sinon rien ne se passerait pendant les trois premières secondes. Les trois prédateurs ne diffèrent QUE par biais_agression (voir _note en tête) ; les proies ne portent aucun biais — elles n'ont ni canal d'agression ni source de déformation, elles ne bifurquent jamais, et le câblage ne les traite pas dans la phase d'agression.",
+	"age_depart": 3.0,
+	"proies": [
+		{ "id": "proie_0", "position": [-300.0, -150.0, 0.0] },
+		{ "id": "proie_1", "position": [-220.0, -40.0, 0.0] },
+		{ "id": "proie_2", "position": [-340.0, 60.0, 0.0] },
+		{ "id": "proie_3", "position": [-180.0, 140.0, 0.0] },
+		{ "id": "proie_4", "position": [-100.0, -120.0, 0.0] },
+		{ "id": "proie_5", "position": [-260.0, 200.0, 0.0] },
+		{ "id": "proie_6", "position": [-140.0, -220.0, 0.0] },
+		{ "id": "proie_7", "position": [-380.0, -60.0, 0.0] }
+	],
+	"_note_genes_fondateurs": "TROIS jeux d'alleles DISTINCTS, et ce n'est pas un ornement : la force est la cible du gene 'vigueur' ET le terme dominant du score de hierarchie. Trois fondateurs aux alleles identiques donnaient trois scores identiques, donc une EGALITE STRICTE a chaque proie disputee -- push_error a chaque tick, aucun departage, la hierarchie invisible (constate au lancement du test, pas raisonne a l'avance ; meme piege que le ratio de depart 1.0 evite par data/banc_menace_combat.json). Meme raison de fond que la-bas : la convention du depot est de ne PAS trancher une egalite mais de refuser le silence, donc c'est a la CALIBRATION d'eviter de la produire. force = 5.0 (base du type) + 2.0 x somme des alleles : 8.0 / 5.0 / 3.0. Le biais d'agression et la force sont INDEPENDANTS -- le plus fort n'est pas le plus agressif, et c'est voulu : deux axes, jamais un seul « archetype ».",
+	"predateurs": [
+		{
+			"id": "predateur_chasseur",
+			"position": [250.0, -120.0, 0.0],
+			"genes_etat": { "vigueur": { "alleles": [1.0, 0.5] } },
+			"biais_agression": { "agressif_faim": 1.0, "agressif_territoire": 0.2, "agressif_petits": 0.2 }
+		},
+		{
+			"id": "predateur_territorial",
+			"position": [320.0, 80.0, 0.0],
+			"genes_etat": { "vigueur": { "alleles": [0.0, 0.0] } },
+			"biais_agression": { "agressif_faim": 0.3, "agressif_territoire": 1.0, "agressif_petits": 0.2 }
+		},
+		{
+			"id": "predateur_protecteur",
+			"position": [200.0, 220.0, 0.0],
+			"genes_etat": { "vigueur": { "alleles": [-0.5, -0.5] } },
+			"biais_agression": { "agressif_faim": 0.3, "agressif_territoire": 0.2, "agressif_petits": 1.0 }
+		}
+	],
+
+	"taille_base": 22.0,
+	"masse_reference_taille": 40.0,
+	"taille_min": 10.0,
+	"taille_max": 40.0,
+	"taille_reste": 9.0,
+	"taille_police_label": 10,
+	"taille_police_compteur": 15,
+	"largeur_barre_population": 26.0,
+	"hauteur_barre_population_max": 150.0,
+	"population_affichee_max": 40.0,
+	"origine_courbe": [-470.0, 300.0],
+
+	"couleurs": {
+		"proie": [0.30, 0.75, 0.35],
+		"predateur": [0.88, 0.20, 0.18],
+		"juvenile": [0.95, 0.85, 0.20],
+		"mort": [0.35, 0.35, 0.35],
+		"reste": [0.45, 0.40, 0.36],
+		"fond_barre": [0.15, 0.15, 0.15],
+		"agression": [0.98, 0.55, 0.10]
+	},
+	"camera": { "position": [0.0, 0.0, 0.0], "zoom": 0.72 }
+}

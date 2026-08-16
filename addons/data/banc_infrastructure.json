@@ -1,0 +1,137 @@
+{
+	"_note": "Jetable, propre au banc « stockage + dégradation + coordination + routes » (scripts/banc_infrastructure.gd), audit préalable audit_economie_logistique_prealable.md, lignes 5 (stockage fini), 6 (dégradation hors stockage), 7 (coordination) et 8 (routes) — toutes quatre au verdict CÂBLABLE, zéro .gd neuf. CONFIRMÉ à l'écriture : aucun mécanisme du cœur touché. Grenier, tas, lots, cases de route et colons sont CONSTRUITS À LA MAIN (patron scripts/banc_faim_thermo.gd/banc_cratere.gd — ni composition ni matériau), donc data/types.json n'est PAS touché et rien n'est à enregistrer dans scripts/test_lint_donnees.gd. ÉCHELLE DE TEMPS : duree_j_abri/duree_j_exterieur sont des JOURS de monde ramenés à des SECONDES de simulation par jours_par_seconde (1.0 ici) — le facteur d'échelle vit en donnée, jamais dans un mécanisme (docs/design.md, « Simulation accélérée »). TROIS CATALOGUES PARTAGÉS ENRICHIS par ce chantier, jamais modifiés ailleurs : data/etats.json:encombre (marqueur pur), data/seuils_combustible.json:usure_route (référencé par route.seuils_ref — scripts/test_lint_donnees.gd vérifie CHAQUE seuils_ref contre CE SEUL fichier, un catalogue local serait refusé), data/comptages.json:colons_actifs_infrastructure (référencé par comptage_ref). L'entrée de seuil qui pose 'surpeuplement' vit en revanche dans le catalogue LOCAL seuils_locaux ci-dessous (format exact de data/seuils_etat.json, passé tel quel — seuil_etat.gd reçoit toujours son catalogue en paramètre ; même geste que data/banc_ecosysteme_terrain.json:seuils_locaux). AUCUN NOM DE PROPRIÉTÉ N'EST EN DUR dans le .gd : les quinze noms ci-dessous arrivent tous d'ici, c'est ce qui permet au test de faire traverser le même code par un domaine entièrement inventé.",
+
+	"jours_par_seconde": 1.0,
+	"periode_trace_s": 1.0,
+
+	"nom_reserve_stockage": "stockage",
+	"nom_capacite_stockage": "capacite_stockage",
+	"nom_reserve_charge": "charge_portee",
+	"nom_capacite_charge": "capacite_charge",
+	"nom_reserve_integrite": "integrite",
+	"nom_reserve_route": "duree_route",
+
+	"nom_vitesse": "vitesse",
+	"nom_rythme": "rythme",
+	"nom_rythme_effectif": "rythme_effectif",
+	"nom_population_active": "population_active",
+	"nom_seuil_agents": "seuil_agents",
+	"nom_facteur_vitesse": "facteur_vitesse",
+	"nom_actif": "actif_infrastructure",
+	"nom_mode": "mode_transport",
+	"nom_abrite": "abrite",
+
+	"etat_encombre": "encombre",
+	"etat_surpeuplement": "surpeuplement",
+
+	"mode_vers_tas": "vers_tas",
+	"mode_charge": "charge",
+	"mode_vers_grenier": "vers_grenier",
+	"mode_depot": "depot",
+
+	"comptage_ref": "colons_actifs_infrastructure",
+	"seuils_locaux": {
+		"surpeuplement_infrastructure": {
+			"propriete_continue": "population_active",
+			"seuil_propriete": "seuil_agents",
+			"etat": "surpeuplement"
+		}
+	},
+
+	"grenier": {
+		"id": "grenier",
+		"position": [900.0, 400.0, 0.0],
+		"stockage_initial": 120.0,
+		"capacite_initiale": 500.0,
+		"agrandissement": 100.0,
+		"capacite_max": 900.0,
+		"cout_base": 0.0
+	},
+
+	"tas": {
+		"id": "tas_exterieur",
+		"position": [150.0, 400.0, 0.0],
+		"stock_initial": 4000.0
+	},
+
+	"degradation": {
+		"rayon_abri": 130.0,
+		"integrite_lot": 100.0,
+		"duree_j_abri": 90.0,
+		"duree_j_exterieur": 12.0,
+		"lots": [
+			{ "id": "lot_a", "position": [860.0, 310.0, 0.0] },
+			{ "id": "lot_b", "position": [940.0, 310.0, 0.0] },
+			{ "id": "lot_c", "position": [900.0, 288.0, 0.0] },
+			{ "id": "lot_d", "position": [108.0, 302.0, 0.0] },
+			{ "id": "lot_e", "position": [192.0, 302.0, 0.0] },
+			{ "id": "lot_f", "position": [150.0, 262.0, 0.0] }
+		]
+	},
+
+	"route": {
+		"cases": [
+			[300.0, 400.0, 0.0],
+			[450.0, 400.0, 0.0],
+			[600.0, 400.0, 0.0],
+			[750.0, 400.0, 0.0]
+		],
+		"rayon_case": 95.0,
+		"facteur_vitesse": 1.8,
+		"facteur_vitesse_use": 1.0,
+		"duree_route": 60.0,
+		"cout_base_route": 0.2,
+		"cout_par_passage": 1.2,
+		"seuils_ref": "usure_route"
+	},
+
+	"colons": {
+		"population_max": 30,
+		"actifs_initial": 5,
+		"pas_toggle": 5,
+		"vitesse_base": 90.0,
+		"rythme_base": 1.0,
+		"capacite_charge": 40.0,
+		"taux_charge": 30.0,
+		"taux_depot": 30.0,
+		"portee_travail": 62.0,
+		"seuil_agents": 20.0,
+		"perte_efficacite": 0.04,
+		"facteur_min_coordination": 0.1,
+		"depart": [60.0, 500.0, 0.0],
+		"colonnes_depart": 6,
+		"espacement_depart": 30.0
+	},
+
+	"rendu": {
+		"taille_colon": 16.0,
+		"taille_lot": 34.0,
+		"taille_grenier": 96.0,
+		"taille_tas": 72.0,
+		"taille_case_route": 150.0,
+		"hauteur_case_route": 74.0,
+		"largeur_barre_grenier": 140.0,
+		"hauteur_barre_grenier": 16.0,
+		"taille_police": 13,
+		"taille_police_compteur": 17
+	},
+
+	"couleurs": {
+		"grenier": [0.62, 0.45, 0.22],
+		"grenier_plein": [0.85, 0.30, 0.20],
+		"tas": [0.35, 0.28, 0.20],
+		"barre_fond": [0.16, 0.16, 0.18],
+		"barre_remplie": [0.35, 0.75, 0.40],
+		"lot_abrite": [0.25, 0.75, 0.35],
+		"lot_dehors": [0.88, 0.22, 0.16],
+		"lot_ruine": [0.10, 0.09, 0.09],
+		"route_neuve": [0.88, 0.74, 0.26],
+		"route_usee": [0.42, 0.42, 0.44],
+		"colon_vide": [0.30, 0.60, 0.95],
+		"colon_charge": [0.95, 0.72, 0.20],
+		"colon_inactif": [0.30, 0.30, 0.33],
+		"fond": [0.13, 0.14, 0.15]
+	},
+
+	"camera": { "position": [520.0, 400.0], "zoom": 0.62 }
+}

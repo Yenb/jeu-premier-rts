@@ -1,0 +1,19 @@
+{
+	"_note": "Donnees jetables du banc photodegradation. Trois objets : bois_soleil/pierre_soleil sont a distance 125.0 de la source 'soleil' (rayon 250.0 -> ratio d'attenuation 0.5, lumiere_locale=0.5 quand le soleil est actif), bois_noir est a distance ~831 -- hors de portee EN PERMANENCE, quel que soit l'etat du soleil. bois_soleil (biodegradabilite 0.9, materiaux.json) perd son integrite au rythme cout_base_eff=0.9*facteur_uv_degradation*0.5=0.45/s pendant que le soleil est actif ; pierre_soleil (biodegradabilite 0.0) recoit la MEME lumiere mais ne perd jamais d'integrite -- preuve que biodegradabilite 0.0 neutralise l'effet quelle que soit l'exposition ; bois_noir ne recoit jamais de lumiere donc ne perd jamais d'integrite non plus, pour une raison DIFFERENTE (position, pas biodegradabilite). Le soleil est TOGGLABLE au clic gauche (scripts/banc_photodegradation.gd:_unhandled_input) -- soleil coupe, lumiere_locale retombe a l'ambiante (0.0, data/lumiere.json) partout, cout_base_eff retombe a 0.0, toute degradation s'arrete.",
+	"propriete_biodegradabilite": "biodegradabilite",
+	"nom_reserve_integrite": "integrite",
+	"facteur_uv_degradation": 1.0,
+	"reserve_integrite_defaut": {
+		"reserve": 20.0,
+		"cout_base": 0.0,
+		"surcout_action": 0.0
+	},
+	"soleil": { "position": [75.0, -60.0, 0.0], "rayon": 250.0, "intensite": 1.0, "temperature_couleur": 0.15, "force": 1.0 },
+	"objets": [
+		{ "id": "bois_soleil", "position": [150.0, 40.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+		{ "id": "bois_noir", "position": [900.0, 40.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+		{ "id": "pierre_soleil", "position": [0.0, 40.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 3.0 } ] }
+	],
+	"intervalle_print": 5.0,
+	"camera": { "position": [475.0, 20.0, 0.0], "zoom": 0.5 }
+}

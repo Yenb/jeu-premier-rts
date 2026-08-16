@@ -1,0 +1,61 @@
+{
+	"_note": "Jetable, propre au banc « fertilité -- le sol s'épuise et se refait » (scripts/banc_fertilite.gd). Grille grille_lignes x grille_colonnes de cases-objets CONSTRUITES À LA MAIN (patron scripts/banc_ecoulement.gd/banc_maladie.gd, jamais Objet.fabriquer -- une case n'a pas de composition). 'position' des cases reste un FAIT SPATIAL PUR en unités de GRILLE (x=colonne, y=ligne, z=0.0 toujours -- même décision Yael que banc_ecoulement) ; les sources (légumineuse, cadavres) sont déclarées dans LE MÊME repère de grille, sans quoi ni portee_flux ni l'appariement cadavre/case ne fonctionneraient. Chaque case porte reserves.fertilite (scripts/depense.gd) : 'reserve' part de fertilite_initiale, 'cout_base' vient de cout_base_par_zone (NÉGATIF = la jachère se refait toute seule -- depense.gd est neutre par construction, exactement comme flux.gd l'est pour un taux négatif : reserve - (cout_base+surcout)*delta MONTE quand la somme est négative, aucun code neuf), 'surcout_action' vaut surcout_recolte tant que la récolte est active sur cette case (toggle au clic gauche, zone 'recolte' seulement), 0.0 sinon. 'capacite' est posée SUR le canal mais n'est JAMAIS lue par depense.gd (qui ne borne que le BAS, à 0.0) : c'est le CÂBLAGE qui écrête au plafond après chaque pas (scripts/banc_fertilite.gd:plafonner_fertilite) -- un sol saturé ne stocke pas plus, le surplus est perdu, et c'est visible sur les cases légumineuse qui butent à 100. 'sol' (true sur chaque case) est la propriété RÉCEPTRICE de scripts/flux.gd ; 'fixe_azote'/'taux_flux'/'portee_flux' vivent sur le type LOCAL 'legumineuse' (posés à la fabrication, jamais dans la table -- docs/design.md, la portée d'émission vit sur la source et non dans une table). La table de flux est LOCALE au banc, construite depuis propriete_fixation/propriete_sol/nom_reserve (patron banc_conduction.gd/banc_sorts.gd), jamais data/flux.json partagé. 'humus' (type_produit de data/transformations.json:decomposition_cadavre_demo) vit dans data/types.json PARTAGÉ, PAS ICI -- 'type_produit' y est vérifié par scripts/test_lint_donnees.gd, quel que soit le fichier source, même raison que 'reste_nourriture' pour banc_manger.gd. 'recolte_active_au_depart' (true) pose surcout_recolte sur les deux cases de récolte DÈS la construction : sans lui, le banc s'ouvrirait sur un monde où rien ne descend, et il faudrait cliquer pour voir le phénomène central du chantier -- le clic gauche ARRÊTE alors la récolte (la case se refait, visible) puis la relance, dans les deux sens. CALIBRATION : les deux cadavres portent des matiere_organique DIFFÉRENTES (15.0 et 6.0) pour que le petit s'épuise et devienne humus bien avant le gros, et TOUTES DEUX sous capacite-fertilite_initiale (20.0) -- aucune case cadavre n'écrête, la conservation du transfert reste lisible à l'œil comme au test.",
+	"grille_lignes": 4,
+	"grille_colonnes": 4,
+	"fertilite_initiale": 80.0,
+	"capacite": 100.0,
+	"nom_reserve": "fertilite",
+	"nom_reserve_cadavre": "matiere_organique",
+	"propriete_sol": "sol",
+	"propriete_fixation": "fixe_azote",
+	"propriete_biodegradabilite": "biodegradabilite",
+	"surcout_recolte": 4.0,
+	"recolte_active_au_depart": true,
+	"taux_decomposition_base": 0.8,
+	"portee_appariement": 0.1,
+	"transformation_terminale": "decomposition_cadavre_demo",
+	"cout_base_par_zone": {
+		"recolte": -0.5,
+		"legumineuse": 0.0,
+		"cadavre": 0.0,
+		"jachere": -0.5
+	},
+	"zones": {
+		"recolte": [[0, 0], [1, 0]],
+		"legumineuse": [[0, 2], [1, 2]],
+		"cadavre": [[3, 0], [3, 1]]
+	},
+	"zone_defaut": "jachere",
+	"types": {
+		"legumineuse": {
+			"herite": ["objet_physique"],
+			"composition": [{ "materiau": "legumineuse_demo", "volume": 0.05 }],
+			"fixe_azote": true,
+			"taux_flux": 1.5,
+			"portee_flux": 1.0
+		},
+		"cadavre": {
+			"herite": ["objet_physique"],
+			"composition": [{ "materiau": "cadavre_demo", "volume": 0.06 }],
+			"reserves": { "matiere_organique": { "reserve": 15.0, "cout_base": 0.0, "surcout_action": 0.0 } }
+		},
+		"cadavre_petit": {
+			"herite": ["objet_physique"],
+			"composition": [{ "materiau": "cadavre_demo", "volume": 0.025 }],
+			"reserves": { "matiere_organique": { "reserve": 6.0, "cout_base": 0.0, "surcout_action": 0.0 } }
+		}
+	},
+	"sources": [
+		{ "id": "legumineuse_0", "type": "legumineuse", "position": [0.5, 2.0, 0.0], "role": "flux" },
+		{ "id": "cadavre_0", "type": "cadavre", "position": [3.0, 0.0, 0.0], "role": "cadavre" },
+		{ "id": "cadavre_1", "type": "cadavre_petit", "position": [3.0, 1.0, 0.0], "role": "cadavre" }
+	],
+	"couleurs": {
+		"fertile": [0.10, 0.42, 0.14],
+		"appauvri": [0.85, 0.80, 0.20],
+		"epuise": [0.70, 0.13, 0.10],
+		"legumineuse": [0.35, 0.80, 0.40],
+		"cadavre": [0.55, 0.35, 0.35],
+		"humus": [0.22, 0.15, 0.10]
+	}
+}

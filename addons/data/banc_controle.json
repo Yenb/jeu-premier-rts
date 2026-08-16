@@ -1,0 +1,51 @@
+{
+	"_note": "Jetable, propre a ce banc (voir CARTE.md, entree banc_controle). 'golem' et 'feu' restent LOCAUX (exception banc jetable de CLAUDE.md) ; 'colon' reutilise data/types.json:colon inchange, via BancCommun.fabriquer_colon. 'golem' compose UNIQUEMENT le paquet 'dynamique' (herite: ['dynamique']) -- pas 'agent', pas 'percevant' : ce golem n'a rien a decider et rien a percevoir, sa position vient entierement de ordre_joueur (cablage), jamais d'une saillance. A NE PAS CONFONDRE avec le golem ILLUSTRATIF de data/types.json:agent._note ('un golem qui execute des regles sans reserves physiologiques universelles ni canaux sensoriels standard compose agent seul') -- CE golem-ci ne decide JAMAIS, meme sans ordre : un golem sans ordre reste immobile, il n'a pas de pipeline de repli autonome. 'reserves' est redeclare EN ENTIER, cinq canaux : le merge de objet.gd:fabriquer remplace le conteneur en bloc, en omettre un l'effacerait. Les quatre dont un golem n'a que faire sont ETEINTS -- pleins, sans cout de base ni surcout, donc ils ne descendent jamais et personne ne les lit comme un manque (une reserve a zero se lit partout comme un manque MAXIMAL : voir docs/design.md, doctrine des compartiments). surcout_action du golem (2.5) est volontairement plus haut que le defaut de dynamique (0.7, colon inclus) -- decision Yael : forcer un golem a agir coute plus cher que le libre arbitre d'un colon.",
+	"couleurs_types": {
+		"golem": [0.55, 0.25, 0.85],
+		"colon": [0.85, 0.15, 0.15],
+		"feu": [1.0, 0.5, 0.0],
+		"cendre": [0.4, 0.38, 0.36]
+	},
+	"couleurs_reserves": {
+		"energie": [1.0, 0.85, 0.2]
+	},
+	"reserves_max": {
+		"energie": 100.0,
+		"faim": 100.0,
+		"soif": 100.0,
+		"sommeil": 100.0,
+		"chaleur": 100.0
+	},
+	"types": {
+		"golem": {
+			"herite": ["dynamique"],
+			"controlable": true,
+			"max_par_joueur": 3,
+			"vitesse": 120.0,
+			"reserves": {
+				"energie": { "reserve": 100.0, "cout_base": 0.0, "surcout_action": 2.5 },
+				"faim":    { "reserve": 100.0, "cout_base": 0.0, "surcout_action": 0.0 },
+				"soif":    { "reserve": 100.0, "cout_base": 0.0, "surcout_action": 0.0 },
+				"sommeil": { "reserve": 100.0, "cout_base": 0.0, "surcout_action": 0.0 },
+				"chaleur": { "reserve": 100.0, "cout_base": 0.0, "surcout_action": 0.0 }
+			}
+		},
+		"feu": {
+			"profil_saillance": "feu",
+			"brule": true,
+			"travail_restant": 3.0,
+			"travail_initial": 3.0,
+			"transformation": "defaut"
+		}
+	},
+	"golem": {
+		"position": [-250.0, 0.0, 0.0],
+		"lie_au_joueur": "joueur_1"
+	},
+	"colon": {
+		"position": [250.0, 0.0, 0.0],
+		"attaches": [],
+		"forme": {},
+		"poids_verbes": { "approcher": 1.0 }
+	}
+}

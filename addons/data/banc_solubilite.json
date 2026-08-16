@@ -1,0 +1,31 @@
+{
+	"_note": "Donnees jetables du banc solubilite -- PREMIERE demonstration reelle du chantier 'solubilite'. Phase 1 (accumulation -> mouille) recopie EXACTEMENT le cablage de data/banc_humidite.json/scripts/banc_humidite.gd : une source d'humidite togglable au clic, un canal charge.gd par objet cible pondere par absorption_humidite du receveur, seuil franchi -> marqueur expose_humidite -> scripts/banc_solubilite.gd appelle EtatDuree.poser sur l'etat PARTAGE 'mouille' (data/etats.json), jamais un nouvel etat. Phase 2 (degradation -> transformation) recopie le cablage de data/banc_pourriture.json/data/banc_corrosion.json : une reserve nommee 'integrite' (scripts/depense.gd) dont le cout_base est GATE sur 'mouille' actif ET vaut facteur_dissolution * solubilite (PROPORTIONNEL, contrairement au cout_integrite_actif FIXE de banc_pourriture) -- le sel (solubilite 0.9, data/materiaux.json:sel_demo) se dissout en quelques secondes une fois mouille, la pierre (solubilite 0.02) en prendrait plus de 200s, donc jamais en pratique dans ce banc. Au seuil 0.0 (data/seuils_combustible.json:epuisement_solubilite, catalogue PARTAGE), le marqueur dissolution_totale declenche scripts/produit.gd:transformer vers data/transformations.json:dissolution_sel_demo (residu_dissous, rendement 0.02 -- le sel part presque integralement en solution).",
+	"propriete_cause": "source_humidite",
+	"declencheur_expose": "expose_humidite",
+	"propriete_absorption": "absorption_humidite",
+	"propriete_solubilite": "solubilite",
+	"nom_etat": "mouille",
+	"nom_canal": "humidite",
+	"nom_reserve_integrite": "integrite",
+	"facteur_dissolution": 1.0,
+	"marqueur_terminal": "dissolution_totale",
+	"transformation_terminale": "dissolution_sel_demo",
+	"canal_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 900.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_humidite": true }
+	},
+	"reserve_integrite_defaut": {
+		"reserve": 5.0,
+		"cout_base": 0.0,
+		"surcout_action": 0.0,
+		"seuils_ref": "epuisement_solubilite"
+	},
+	"source": { "id": "source_eau", "position": [0.0, 0.0, 0.0] },
+	"objets": [
+		{ "id": "sel", "position": [150.0, 250.0, 0.0], "composition": [ { "materiau": "sel_demo", "volume": 3.0 } ] },
+		{ "id": "pierre", "position": [400.0, 250.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 3.0 } ] }
+	]
+}

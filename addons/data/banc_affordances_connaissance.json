@@ -1,0 +1,122 @@
+{
+	"_note": "Jetable, propre à scripts/banc_affordances_connaissance.gd (chantier « connaissance », audit_affordances_prealable.md lignes 13 à 17). Une seule chose est prise à data/types.json : le TYPE 'colon' lui-même, fabriqué par Objet.fabriquer via BancCommun.fabriquer_colon — écart au patron « construits à la main » de banc_croyance.gd, et il est VOULU : c'est la seule façon que 'curiosite' (ajoutée sur data/types.json:colon par ce chantier) soit RÉELLEMENT lue plutôt que dormante. Deux des trois colons ne la déclarent pas ici et héritent donc la valeur du type (0.2) ; seul le médecin la surcharge (0.8). Le LIVRE, lui, a son type dans 'types_locaux' ci-dessous (patron banc_corrosion.gd:fabriquer_objets) — data/types.json n'a pas à connaître un objet que seul ce banc fabrique.\n\nPERSONNE NE SE DÉPLACE, décision reprise telle quelle de banc_croyance.gd et pour la même raison exacte : faire marcher les colons vers le fruit les mettrait tous au contact, donc tous corrigés par l'expérience directe, et il n'y aurait plus ni ignorance ni transmission ni livre à montrer. Toutes les portées ci-dessous sont donc des portées de SCÈNE, calibrées sur des positions fixes.\n\nCALIBRATION DES POSITIONS, mesurée et non devinée — chaque distance décide d'un fait du banc :\n- médecin→fruit_amer 212.6 et médecin→objet_inconnu 240.0, tous deux SOUS portee_usage 260.0 : il se sert des deux.\n- médecin→fruit_sain 386.0, AU-DESSUS : il ne s'en sert jamais. C'est ce qui libère son 'temps_libre' une fois qu'il a cessé de manger le fruit amer — sans cette distance il mangerait le fruit sain toutes les secondes, son temps libre ne dépasserait jamais sa cadence d'usage, et le gate d'expérimentation ne s'ouvrirait JAMAIS. Trouvé en calibrant, pas raisonné à l'avance.\n- novice→fruit_amer 80.0, sous portee_usage : il mange ce qu'il croit comestible, et il s'empoisonne.\n- apprenti→fruits 510.0 et 940.0, tous deux AU-DESSUS : il ne se sert de rien, il ne sait donc RIEN par lui-même. Tout ce qu'il finit par savoir vient d'un autre — le livre (portee_lecture) ou la parole (portee_transmission). C'est la ligne 13 par la négative.\n- médecin→pupitre 312.4 sous portee_ecriture 350.0 ; apprenti→pupitre 300.0 et novice→pupitre 302.7 sous portee_lecture 320.0 ; médecin exclu de la lecture par le champ 'auteur' du livre, jamais par une distance.\n\nDEUX CADENCES PAR COLON, et c'est là que vit toute la traduction des probabilités de l'audit (constat A : aucun RNG n'existe dans le dépôt, et c'est une règle, pas un manque). 'prob_decouverte_par_usage_par_h' de la ligne 13 devient cadence_usage ; 'duree_h' de la ligne 14 devient une échéance. cadence_observation sépare le dogmatique des autres exactement comme dans banc_croyance.json : croyance.gd n'a AUCUNE notion de temps propre (observer() n'a pas de delta), appeler observer() à chaque image porterait la certitude au plafond en sept images et rendrait tout le monde dogmatique avant la première seconde. Certitude nette par observation = gain_par_verification − taux_decroissance × cadence (data/croyances.json) :\n- novice (0.4 s) : +0.096 → 0.3 → 0.9 en 7 observations, soit t≈2.8 s, AVANT instant_toxicite_s 5.0. DOGME installé quand le monde change.\n- apprenti (8.0 s) : +0.02 → il resterait corrigible pendant 240 s.\n- médecin (60.0 s) : il ne REGARDE presque pas, il SE SERT (cadence_usage 1.0 s). Chaque usage ÉCRASE sa certitude à gain_par_echec × 1.0 = 0.80, sous resistance_par_certitude 0.9 : sa croyance reste éternellement corrigible, et c'est ce qui en fait la source de vérité du banc.\n\nLE DOGME N'EST PAS ÉTERNEL, et c'est mesuré, pas voulu au départ : la certitude du novice plafonne à 1.0, le fruit perd sa clé 'comestible' à t=5.0 s donc observer() ne la rafraîchit plus, et l'oubli la ramène sous 0.9 à t≈15 s. Son usage suivant le corrige alors. Le banc montre donc aussi qu'un dogme cède à l'oubli quand plus rien ne le nourrit — dit plutôt que masqué.\n\nLE FRUIT TOXIQUE PERD LA CLÉ 'comestible', il ne la met pas à false : observer() n'itère que les propriétés PRÉSENTES, une clé retirée n'est donc jamais réobservée et la croyance périmée SURVIT (structurel, repris de banc_croyance.json). 'toxique' n'est pas dans data/croyances.json:proprietes_observables : on ne voit pas qu'un fruit est toxique, on l'apprend en s'en servant.\n\nLE GATE D'EXPÉRIMENTATION EST ARITHMÉTIQUE, jamais une branche (patron banc_predation.gd:poser_poids_verbes, écrivain unique de la table) : trois comparaisons, et poids_verbes.experimenter vaut 0.0 dès que l'une manque — agir.gd:_verbe_par_poids exige p > 0.0, le verbe devient donc inchoisissable par la seule arithmétique, sans qu'aucun mécanisme ne connaisse le mot 'curiosité'. scripts/conditions.gd a été ÉCARTÉ : il ne compare qu'à des seuils CONSTANTS sur des propriétés PLATES d'UN objet, ce qui aurait exigé les mêmes trois miroirs plats PLUS une entrée de catalogue, et il pose un Dictionary de résultat qu'aucun mécanisme ne lirait ici. Deux des trois grandeurs sont de toute façon des MIROIRS PLATS écrits chaque tick par le câblage (constat de l'audit, ligne 16) : 'temps_libre' n'existe nulle part dans le dépôt, et le matériau vit sous proprietes.reserves.<nom>.reserve, inatteignable par une comparaison de clé plate.\n\nLE MATÉRIAU FERME LE GATE DE LUI-MÊME : expérimenter écrit un surcout_action sur la réserve, depense.gd la vide, le miroir tombe sous seuil_materiau et le verbe s'éteint. Aucune ligne ne dit « il s'arrête » — 6.0 de réserve à 1.0/s donne environ 5.5 s d'expérimentation.\n\nLE LIVRE. Son CONTENU est un registre de croyances (duplicate(true) des croyances de l'auteur au moment de l'écriture), jamais du texte : data/textes.json ne porte que le titre affiché et le mot qui le remplace une fois illisible. Il est écrit quand l'auteur CROIT qu'une chose est toxique avec une certitude suffisante — 'on écrit ce qu'on juge important', déclenchement en donnée (propriete_declenchant_ecriture) et jamais un instant codé. fidelite_livre 0.75 : ce qu'on lit vaut moins que ce qu'on a vécu, et moins que fidelite_parole 0.85 — la certitude d'un lecteur vaut gain_par_echec × 0.75 = 0.60, sous les 0.80 de l'auteur. Sa réserve d'intégrité (12.0 à 1.0/s) le rend illisible vers t≈17 s ; le clic droit multiplie ce coût par 6 pour le voir mourir en trois secondes.\n\nLA TRANSMISSION EST MANUELLE (touche T), la LECTURE est continue à la cadence : c'est ce qui permet de les distinguer à la console. Crédibilité de la parole = force du lien personnel × fidelite_parole (0.8 × 0.85 = 0.68 pour l'apprenti, 0.9 × 0.85 = 0.765 pour le novice) — les deux au-dessus de data/croyances.json:seuil_bornes_transmission 0.4, donc le câblage APPELLE dans les deux cas et c'est le MÉCANISME qui tranche. Aucun colon 'sourd' dans ce banc : ce refus-là est déjà démontré par banc_croyance, celui qu'on montre ici est le DOGME.",
+
+	"langue": "fr",
+	"type_colon": "colon",
+	"auteur": "medecin",
+	"fruit_bascule": "fruit_amer",
+	"pupitre_id": "pupitre",
+
+	"portee_usage": 260.0,
+	"portee_transmission": 1200.0,
+	"portee_ecriture": 350.0,
+	"portee_lecture": 320.0,
+	"periode_trace_s": 3.0,
+	"instant_toxicite_s": 5.0,
+
+	"propriete_toxique": "toxique",
+	"propriete_comestible": "comestible",
+	"propriete_experimentable": "experimentable",
+	"verbe_experimenter": "experimenter",
+	"verbes_d_usage": ["manger"],
+	"etat_empoisonne": "empoisonne",
+
+	"proprietes_apprises_par_usage": ["comestible", "toxique"],
+	"proprietes_apprises_par_experimentation": ["toxique"],
+
+	"fidelite_parole": 0.85,
+	"fidelite_livre": 0.75,
+
+	"seuil_curiosite": 0.5,
+	"seuil_temps_libre": 2.0,
+	"seuil_materiau": 0.5,
+	"poids_experimenter": 1.4,
+	"cout_experimentation": 1.0,
+	"nom_reserve_materiau": "materiau",
+	"nom_reserve_integrite": "integrite",
+	"nom_miroir_temps_libre": "temps_libre",
+	"nom_miroir_materiau": "materiau_disponible",
+	"canal_materiau": { "reserve": 6.0, "capacite": 6.0, "cout_base": 0.0, "surcout_action": 0.0 },
+
+	"forme_commune": { "seuil_ecrasement": 3.0, "gain_inertie": 0.0 },
+	"poids_verbes_commun": { "manger": 1.0, "approcher": 0.4 },
+	"nom_canal_vue": "vue",
+	"_note_angle": "angle 360.0 et NON 180.0 comme data/types.json:colon — même constat que banc_croyance.json/banc_menace_combat.json : l'orientation par défaut est (0,0,1), toutes les positions ont z = 0, le produit scalaire vaut donc exactement 0.0 alors que cos(90°) vaut 6.12e-17 en flottant. Un cône de 180.0 ne perçoit RIEN dans un monde plan. 'canaux' est réduit à la seule vue, exprès : rien ne doit rattraper la vue, et les cinq autres canaux du type introduiraient des portées (ouïe 600, odorat 300) qui brouilleraient les distances calibrées ci-dessus.",
+	"canal_vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 },
+
+	"propriete_declenchant_ecriture": "toxique",
+	"certitude_minimale_ecriture": 0.6,
+	"cadence_lecture": 2.0,
+
+	"livre": {
+		"id": "carnet",
+		"type": "livre",
+		"cle_titre": "livre.titre",
+		"cle_illisible": "livre.illisible",
+		"propriete_illisible": "illisible",
+		"integrite": 12.0,
+		"cout_lisibilite": 1.0,
+		"facteur_degradation_acceleree": 6.0,
+		"seuils_ref": "epuisement_lisibilite"
+	},
+	"types_locaux": {
+		"livre": { "composition": [ { "materiau": "bois", "volume": 0.02 } ] }
+	},
+
+	"colons": {
+		"medecin": {
+			"position": [-100.0, 0.0, 0.0],
+			"curiosite": 0.8,
+			"cadence_observation": 60.0,
+			"cadence_usage": 1.0,
+			"lien_vers_auteur": 0.0
+		},
+		"apprenti": {
+			"position": [400.0, 240.0, 0.0],
+			"cadence_observation": 8.0,
+			"cadence_usage": 1.0,
+			"lien_vers_auteur": 0.8
+		},
+		"novice": {
+			"position": [60.0, -60.0, 0.0],
+			"cadence_observation": 0.4,
+			"cadence_usage": 4.0,
+			"lien_vers_auteur": 0.9
+		}
+	},
+
+	"objets": {
+		"fruit_sain": {
+			"position": [-460.0, -140.0, 0.0],
+			"proprietes": { "comestible": true, "profil_saillance": "nourriture" }
+		},
+		"fruit_amer": {
+			"position": [60.0, -140.0, 0.0],
+			"proprietes": { "comestible": true, "profil_saillance": "nourriture" },
+			"proprietes_toxiques": { "toxique": true, "profil_saillance": "nourriture" }
+		},
+		"objet_inconnu": {
+			"position": [-100.0, 240.0, 0.0],
+			"proprietes": { "experimentable": true, "toxique": true, "profil_saillance": "objet_inconnu_savoir" }
+		},
+		"pupitre": {
+			"position": [100.0, 240.0, 0.0],
+			"proprietes": {}
+		}
+	},
+
+	"couleurs": {
+		"colon": [0.35, 0.55, 0.8],
+		"colon_empoisonne": [0.55, 0.2, 0.6],
+		"colon_selectionne": [0.95, 0.85, 0.3],
+		"cru_comestible": [0.3, 0.75, 0.35],
+		"cru_toxique": [0.85, 0.2, 0.2],
+		"cru_inconnu": [0.55, 0.55, 0.55],
+		"objet_inconnu": [0.6, 0.45, 0.85],
+		"pupitre": [0.45, 0.4, 0.35],
+		"livre": [0.9, 0.8, 0.55],
+		"livre_illisible": [0.4, 0.38, 0.35],
+		"cible": [0.7, 0.7, 0.7]
+	},
+	"camera": { "position": [0.0, 60.0, 0.0], "zoom": 0.45 }
+}

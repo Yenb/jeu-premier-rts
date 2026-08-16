@@ -1,0 +1,67 @@
+{
+	"_note": "Jetable, propre a scripts/banc_produit_nucleaire.gd (chantier « Produit nucleaire -- contamination, mutation, maladie », audit_produit_nucleaire_prealable.md). Source au centre (0,0,0), masse 50.0 posee a la main (REQUISE pour que Produit.transformer calcule un residu de volume non nul, voir en-tete de banc_produit_nucleaire.gd). bois_nucleaire/pierre_nucleaire disposes PERPENDICULAIREMENT ((200,0,0)/(0,200,0), meme patron que data/banc_radiation.json) -- jamais sur le segment du mur ((0,-100,0)). fer_nucleaire ((0,-200,0)) ET colon_nucleaire ((0,-300,0)) sont alignes sur le MEME axe que le mur : un seul mur togglable bloque donc SIMULTANEMENT les deux. reserve_radioactivite (capacite/reserve 20.0, cout_base 1.0) s'epuise en 20s de simulation continue ; reserve_residuelle (capacite/reserve 10.0, cout_base 0.5, SANS seuils_ref -- le residu ne se transforme plus une seconde fois) s'epuise ensuite en 20s de plus. dose_par_s (0.5) : a delta=1.0s/pas et exposition continue, le seuil syndrome_radiation (50.0) tombe vers t=100s, mort_radiation (100.0) vers t=200s -- ordres de grandeur choisis pour rester observables sur une suite de tests headless (quelques centaines de pas), ajustables au playtest. canal_mutation_defaut/canal_nausee_defaut : seuils/portees/decroissances de demonstration, meme ordre de grandeur que data/banc_radiation.json/data/banc_toxicite.json.",
+
+	"nom_canal_radiation": "radiation",
+	"declencheur_expose_radiation": "expose_radiation",
+	"canal_radiation_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 400.0,
+		"taux_decroissance": 0.3,
+		"poser": { "expose_radiation": true }
+	},
+	"nom_etat_irradie": "irradie",
+	"nom_reserve_integrite": "integrite",
+	"reserve_integrite_defaut": { "reserve": 10.0, "cout_base": 0.0, "surcout_action": 0.0 },
+	"degat_par_s": 1.0,
+
+	"portee_perception_radiation": 400.0,
+	"seuil_perception_radiation": 0.001,
+
+	"nom_reserve_source": "radioactivite",
+	"nom_reserve_residu": "radioactivite_residuelle",
+	"force_radiation_source_base": 0.3,
+	"force_radiation_residu_base": 0.15,
+	"reserve_residuelle_defaut": { "capacite": 10.0, "reserve": 10.0, "cout_base": 0.5, "surcout_action": 0.0 },
+	"declencheur_radioactivite_epuisee": "radioactivite_epuisee",
+	"transformation_source": "epuisement_source_radiation",
+
+	"nom_canal_mutation": "exposition_radioactive",
+	"declencheur_mutation": "expose_radiation_chronique",
+	"canal_mutation_defaut": {
+		"charge": 0.0,
+		"seuil": 5.0,
+		"portee_charge": 400.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_radiation_chronique": true }
+	},
+	"nom_marque_epigenetique": "exposition_radioactive",
+
+	"nom_canal_nausee": "nausee_radiation",
+	"declencheur_nausee": "expose_nausee_radiation",
+	"canal_nausee_defaut": {
+		"charge": 0.0,
+		"seuil": 2.0,
+		"portee_charge": 400.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_nausee_radiation": true }
+	},
+	"nom_etat_nausee": "nausee_radiation",
+	"dose_par_s": 0.5,
+
+	"source": {
+		"id": "source_nucleaire",
+		"position": [0.0, 0.0, 0.0],
+		"force_radiation": 0.3,
+		"masse": 50.0,
+		"nom_reserve_source": "radioactivite",
+		"reserve_radioactivite": { "capacite": 20.0, "reserve": 20.0, "cout_base": 1.0, "surcout_action": 0.0, "seuils_ref": "epuisement_radioactivite" }
+	},
+	"mur": { "id": "mur_blindage", "position": [0.0, -100.0, 0.0], "composition": [ { "materiau": "fer", "volume": 0.05 } ] },
+	"objets": [
+		{ "id": "bois_nucleaire", "position": [200.0, 0.0, 0.0], "composition": [ { "materiau": "bois", "volume": 0.05 } ] },
+		{ "id": "pierre_nucleaire", "position": [0.0, 200.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 0.05 } ] },
+		{ "id": "fer_nucleaire", "position": [0.0, -200.0, 0.0], "composition": [ { "materiau": "fer", "volume": 0.05 } ] }
+	],
+	"colon": { "id": "colon_nucleaire", "position": [0.0, -300.0, 0.0] }
+}

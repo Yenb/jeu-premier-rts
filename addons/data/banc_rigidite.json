@@ -1,0 +1,17 @@
+{
+	"_note": "Jetable, propre a scripts/banc_rigidite.gd (chantier 'rigidite -- resistance a la flexion'). Trois objets FABRIQUES via Objet.fabriquer/composition/materiaux.json (jamais construits a la main), un materiau reel chacun (bois/pierre/fer, data/materiaux.json -- rigidite 11.0/50.0/200.0). 'charge_valeur' : intensite d'une charge identique posee au centre des trois poutres au clic gauche (toggle, aucune charge au demarrage) -- fleche = charge / rigidite_effective, voir banc_rigidite.gd:fleche. 'seuil_flexion' : catalogue LOCAL de seuil_etat.gd (jamais data/seuils_etat.json partage, voir en-tete de banc_rigidite.gd) -- une poutre dont la fleche MAXIMALE ATTEINTE depasse cette valeur casse (etat 'fracture', irreversible car la fleche maximale ne redescend jamais). Avec ces valeurs, le bois (fleche ~45.5) casse, la pierre (~10.0) et le fer (~2.5) resistent. 'facteur_affichage' : mise a l'echelle pixels du deplacement visuel du point central de chaque poutre, jamais melange au calcul physique de la fleche.",
+	"objets": [
+		{ "id": "bois_rigidite", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "pierre_rigidite", "position": [0.0, 150.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }] },
+		{ "id": "fer_rigidite", "position": [0.0, 300.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] }
+	],
+	"charge_valeur": 500.0,
+	"seuil_flexion": 20.0,
+	"facteur_affichage": 2.0,
+	"couleurs": {
+		"bois_rigidite": [0.55, 0.42, 0.28],
+		"pierre_rigidite": [0.55, 0.55, 0.58],
+		"fer_rigidite": [0.6, 0.63, 0.66]
+	},
+	"camera": { "position": [0.0, 150.0, 0.0], "zoom": 0.55 }
+}

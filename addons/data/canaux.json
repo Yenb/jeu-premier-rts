@@ -1,0 +1,60 @@
+{
+	"_note": "Catalogue des canaux perceptifs (PHASE 3.5, chantier 'L'entite comme agent complet'). Chaque entree : geometrie (String, lue par scripts/perception.gd pour choisir le mecanisme interne) + proprietes_captees (liste de noms de propriete, METADONNEE descriptive de l'intention du canal -- NE FILTRE PAS la detection, decide en conversation le 2026-07-28 : la perception reste aveugle/exhaustive dans sa geometrie, comme design.md l'exige ; proprietes_captees servira plus tard de modulateur de gain a la couche saillance, pas ici). Portee/angle/sensibilite/seuil vivent sur l'ENTITE (data/types.json), pas ici -- une portee est individuelle, jamais partagee par tous les porteurs d'un canal (voir docs/design.md, convention de nommage portee_*). Choix des listes, documente : vue -- ce qui se voit (irremplacable/notre_ouvrage : ce qu'on regarde et reconnait comme important ; brule/cassable/dangereux : ce qui saute aux yeux). ouie -- ce qui s'entend (brule crepite, dangereux gronde, cassable resonne sous le travail). odorat -- ce qui se sent (brule -- fumee, inflammable -- odeur du bois/combustible avant meme l'ignition). toucher -- ce qui se sent au contact (brule -- chaleur, cassable -- texture, dangereux -- ce qui blesse au contact). gout -- liste volontairement minimale : aucune propriete 'comestible' n'existe encore dans le projet, seul brule (cendres) est plausible au contact. nociception -- distincte du toucher (voir docs/design.md, 'nociception != douleur') : brule/dangereux, ce qui declenche une douleur en cas de contact soutenu (mecanisme de douleur lui-meme non construit, PHASE ulterieure). propriete_obstacle/largeur_obstacle (chantier 'occlusion -- un obstacle entre A et B bloque la perception', geometrie propagation_obstacles SEULE) : propriete_obstacle nomme, PAR CANAL, la propriete materiau (data/materiaux.json, fusionnee via data/proprietes_immuables_composition.json) qu'un obstacle positionne entre le percepteur et une source doit porter pour l'attenuer -- absorption_sonore pour ouie, degre continu 0.0 (transparent) a 1.0 (bloque tout) ; VIDE ou absent pour un canal qui n'utilise jamais cette geometrie (vue/odorat/toucher/gout/nociception) -- lu par scripts/perception.gd:_percevoir_propagation_obstacles/_facteur_obstacles, jamais en dur, gate : absent ou vide -> aucune occlusion testee, comportement identique a avant ce chantier. largeur_obstacle (float, meme unite que les positions) : distance laterale au segment percepteur->source sous laquelle un objet compte comme obstacle -- valeur de demonstration (40.0), pas une mesure physique de largeur reelle d'un mur, ajustable au playtest. propriete_emission (chantier 'propriete_emission configurable par canal', geometrie propagation_obstacles SEULE) : nomme, PAR CANAL, la propriete que porte la SOURCE pour son intensite d'emission -- son_emis pour ouie ; FACULTATIF, defaut 'son_emis' si absent (non-regression) -- lu par scripts/perception.gd:_percevoir_propagation_obstacles, jamais en dur. radiation (chantier 'sensibilite_radiation -- irradiation et blindage', audit_colonnes_chimique_nucleaire_magie_prealable.md, colonne nucleaire) : DEUXIEME canal a utiliser propagation_obstacles apres ouie, PREMIER a exploiter propriete_emission configurable (ouie garde son defaut implicite 'son_emis') -- propriete_obstacle 'densite' (un materiau dense bloque la radiation, deja structurelle sur tout objet fabrique par composition, voir objet.gd) et propriete_emission 'force_radiation' (data/materiaux.json, dormante -- voir data/proprietes_immuables_composition.json). Lu par scripts/banc_radiation.gd pour decider, par objet cible, si la source radioactive lui est visible (mur absent ou peu dense) ou occluse (mur dense, densite clampee a 1.0 -- blocage total) avant d'inclure ou non cette source dans les causes de scripts/charge.gd. magie (chantier 'sensibilite_magique -- perception magique') : TROISIEME canal a utiliser propagation_obstacles, DEUXIEME a exploiter propriete_emission configurable -- propriete_obstacle 'opacite' (deja fusionnee, dormante, voir data/proprietes_immuables_composition.json : CHOIX assume, un mur opaque bloque le champ magique comme il bloquerait la vue, plutot qu'une propriete magique dediee a l'obstruction qui n'existe pas encore) et propriete_emission 'force_magique' (data/materiaux.json, bois/pierre/fer, voir data/proprietes_immuables_composition.json). Lu par scripts/banc_magie_perception.gd : un colon percoit une source magique si son intensite (force_magique * attenuation par distance * attenuation par obstacle) depasse le seuil de son canaux_config.magie -- meme mecanique exacte que le canal ouie/son_emis, seuil INDIVIDUEL par colon (un mage au seuil bas percoit les sources faibles, un guerrier au seuil haut ne percoit que les fortes). 'sensibilite_magique' (data/materiaux.json, dormante) NE JOUE AUCUN ROLE ICI -- decision Yael (chantier « sensibilite_magique -- perception magique ») : c'est un stat du RECEPTEUR (seuil de detection), jamais fusionnee, jamais lue par ce canal ; le seuil reel vit sur le colon (canaux_config.magie.seuil), pas derive d'une propriete materiau du colon lui-meme.",
+	"vue": {
+		"geometrie": "cone_oriente",
+		"proprietes_captees": ["irremplacable", "notre_ouvrage", "brule", "cassable", "dangereux"]
+	},
+	"ouie": {
+		"geometrie": "propagation_obstacles",
+		"proprietes_captees": ["brule", "dangereux", "cassable"],
+		"propriete_obstacle": "absorption_sonore",
+		"largeur_obstacle": 40.0,
+		"propriete_emission": "son_emis"
+	},
+	"odorat": {
+		"geometrie": "sphere_directionnelle",
+		"proprietes_captees": ["brule", "inflammable"]
+	},
+	"toucher": {
+		"geometrie": "contact",
+		"proprietes_captees": ["brule", "cassable", "dangereux"]
+	},
+	"gout": {
+		"geometrie": "contact",
+		"proprietes_captees": ["brule"]
+	},
+	"nociception": {
+		"geometrie": "contact",
+		"proprietes_captees": ["brule", "dangereux"]
+	},
+	"radiation": {
+		"geometrie": "propagation_obstacles",
+		"proprietes_captees": ["dangereux"],
+		"propriete_obstacle": "densite",
+		"largeur_obstacle": 40.0,
+		"propriete_emission": "force_radiation"
+	},
+	"magie": {
+		"geometrie": "propagation_obstacles",
+		"proprietes_captees": [],
+		"propriete_obstacle": "opacite",
+		"largeur_obstacle": 40.0,
+		"propriete_emission": "force_magique"
+	},
+	"odeur_corporelle": {
+		"_note": "QUATRIEME canal a utiliser propagation_obstacles, TROISIEME a exploiter propriete_emission configurable. N'EST PAS le canal 'odorat' ci-dessus et ne le remplace jamais : 'odorat' a la geometrie sphere_directionnelle, SEULE porteuse de la modulation par le vent (perception.gd:_percevoir_sphere_directionnelle) et qui ne lit NI propriete_emission NI seuil -- basculer sa geometrie retirerait le vent a l'odorat en silence (ecarte explicitement par l'audit, ligne 9, voie (b)). Un canal NEUF est donc la seule voie qui ne touche pas au coeur. propriete_obstacle VIDE (jamais absente : la valeur vide dit explicitement 'aucune occlusion sur ce canal') -- occlusion.gd:facteur court-circuite a 1.0, une odeur corporelle contourne un mur, contrairement a 'apparence' ci-dessous. propriete_emission 'odeur_emise' : propriete PLATE ECRITE PAR LE CABLAGE sur le colon quand l'etat 'sale' est actif, JAMAIS fusionnee depuis une fiche materiau (un colon n'a pas de composition) -- meme geste exact que banc_activation_neutronique.gd, ou un objet irradie se voit poser un 'force_radiation' et devient source secondaire du canal 'radiation'. Le seuil reste INDIVIDUEL par percepteur (canaux_config.odeur_corporelle.seuil), comme pour magie.",
+		"geometrie": "propagation_obstacles",
+		"proprietes_captees": [],
+		"propriete_obstacle": "",
+		"largeur_obstacle": 0.0,
+		"propriete_emission": "odeur_emise"
+	},
+	"apparence": {
+		"_note": "CINQUIEME canal propagation_obstacles. propriete_obstacle 'opacite' (deja fusionnee sur tout objet fabrique par composition, voir data/proprietes_immuables_composition.json -- bois/pierre/fer valent toutes 1.0, donc un mur reel BLOQUE TOTALEMENT, jamais une attenuation partielle : meme consequence assumee que le canal 'magie'). propriete_emission 'visibilite_etat' : propriete PLATE ECRITE PAR LE CABLAGE comme la SOMME des marqueurs d'etat visibles actifs sur le colon (table en donnee de banc, ex. 'sale' + 'blesse'), jamais une fiche materiau. Le seuil INDIVIDUEL par percepteur (canaux_config.apparence.seuil) EST le sujet du canal : un colon attentif (seuil bas) remarque un etat faible de loin, un colon distrait (seuil haut) ne le voit que de pres -- meme mecanique exacte que 'magie' (mage/guerrier), applique cette fois a l'etat d'un autre colon plutot qu'a une source d'objet.",
+		"geometrie": "propagation_obstacles",
+		"proprietes_captees": [],
+		"propriete_obstacle": "opacite",
+		"largeur_obstacle": 40.0,
+		"propriete_emission": "visibilite_etat"
+	}
+}

@@ -1,0 +1,21 @@
+{
+	"_note": "montant_par_pose (renomme depuis taux_montee, chantier correction 'banc invisible' -- BUG AUDITE ET FERME, voir scripts/lien_personnel_croissance.gd) est un montant FIXE par evenement de pose, jamais un debit multiplie par delta -- meme convention que banc_convergence_attache.json:magnitude_exposition (0.02) et actes_liants.json:defense_ouvrage.magnitude (0.15), les deux autres appelants de LienPersonnel.poser du depot. intervalle_pose (secondes) espace les evenements de pose pour rester OBSERVABLE a un framerate reel -- sans lui, un montant qui survit a liens_personnels.json:defaut.plancher_suppression (0.01) cristalliserait en ~1-2s, trop vite pour suivre a l'oeil. Valeurs reelles (venere_arbres_verts*) : 0.05 par pose, une pose par seconde -- ~18 poses pour franchir un seuil_force de 0.9 (voir data/banc_vecu_inter_colon.json), soit ~18s, dans la fourchette visee.",
+	"fourmis_suivent_sucre": {
+		"traits_recherches": ["odeur_sucre"],
+		"montant_par_pose": 0.1,
+		"intervalle_pose": 1.0,
+		"plafond": 0.5
+	},
+	"venere_arbres_verts_croissance": {
+		"traits_recherches": ["venere_arbres_verts"],
+		"montant_par_pose": 0.05,
+		"intervalle_pose": 1.0,
+		"plafond": 1.0
+	},
+	"venere_arbres_verts_et_rouges_croissance": {
+		"traits_recherches": ["venere_arbres_verts", "venere_arbres_rouges"],
+		"montant_par_pose": 0.05,
+		"intervalle_pose": 1.0,
+		"plafond": 1.0
+	}
+}

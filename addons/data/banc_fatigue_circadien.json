@@ -1,0 +1,92 @@
+{
+	"_note": "JETABLE, propre a scripts/banc_fatigue_circadien.gd -- chantier « fatigue + circadien + blesse != repos » (audit_mecaniques_corps_prealable.md, lignes 4/5/6). AUCUN catalogue partage ici : data/etats.json (epuise/endette_sommeil/blesse) et data/seuils_etat.json (epuisement) portent la part PARTAGEE de ce chantier, ce fichier ne porte que la calibration du banc. 'zone_sommeil' est un catalogue au FORMAT EXACT de data/emergences.json / data/biomes.json (Array de { id, conditions, resultat }), lu par scripts/conditions.gd -- il reste LOCAL et non partage parce que 16h/8h sont une calibration d'observation, pas une loi du monde ; le jour ou un vrai cycle de sommeil existera en jeu, il rejoindra un catalogue partage. LES DEUX ENTREES POSENT LA MEME CLE 'doit_dormir' : c'est voulu et c'est le point du chantier -- une zone qui enjambe minuit n'est pas un seuil, c'est 'heure >= 16 OU heure <= 8', et seules les DEUX PASSES DISJOINTES de conditions.gd rendent ce montage sur (une entree fausse ne peut jamais effacer ce qu'une entree vraie vient de poser). CALIBRATION, chiffres choisis pour que tout soit observable en une minute reelle : un jour dure 48 s (2 s par heure), la zone de sommeil couvre 16 h soit 32 s, le depart a 12.00 ouvre le banc EN VEILLE et l'entree en zone survient 8 s plus tard. Le colon actif perd 3.0/s de sommeil par metabolisme plus jusqu'a ~4.6/s de surcout d'effort au plus vite de sa patrouille (coef_effort 0.02 x vitesse ~230 px/s) : de 100 il passe sous le seuil d'epuisement (reserve 30, soit manque_sommeil 70 -- data/seuils_etat.json:epuisement) en une douzaine de secondes. Endormi il remonte a 9.0/s, soit ~8 s pour se refaire entierement -- dormir doit rester nettement plus rapide que fatiguer, sans quoi le cycle n'est pas jouable. La dette monte de 1.0/s en veille sous zone (seuil 6.0, franchi en 6 s) et redescend a 2.0/s hors zone (resorbee en 3 s) : monter plus lentement qu'on ne redescend est ce qui rend une dette PUNITIVE mais RATTRAPABLE. Le colon blesse ne patrouille pas (amplitude 0.0) et part a 25 de sante : il remonte a 2.5/s, soit ~30 s pour se soigner, PENDANT QUE sa fatigue descend de 3.0/s sans le moindre surcout -- c'est la demonstration centrale de la ligne 6, les deux reserves sont deux canaux du meme Dictionary 'reserves' que depense.gd avance sans qu'aucun ne connaisse l'autre. Les deux colons sont declares a des positions DISTINCTES : le canal de dette a portee_charge 0.0, la cause synthetisee par le cablage est le colon lui-meme et ne peut atteindre que lui (voir banc_fatigue_circadien.gd:causes_dette).",
+
+	"cycle": {
+		"duree_jour_secondes": 48.0,
+		"heures_par_jour": 24.0,
+		"heure_depart": 12.0
+	},
+
+	"zone_sommeil": [
+		{
+			"id": "soiree",
+			"conditions": [ { "propriete": "heure_du_jour", "operateur": ">=", "seuil": 16.0 } ],
+			"resultat": { "doit_dormir": true }
+		},
+		{
+			"id": "petit_matin",
+			"conditions": [ { "propriete": "heure_du_jour", "operateur": "<=", "seuil": 8.0 } ],
+			"resultat": { "doit_dormir": true }
+		}
+	],
+
+	"nom_propriete_heure": "heure_du_jour",
+	"nom_propriete_vitesse": "vitesse",
+	"nom_marqueur_zone": "doit_dormir",
+	"nom_reserve_sommeil": "sommeil",
+	"nom_reserve_sante": "sante",
+	"nom_miroir_manque": "manque_sommeil",
+	"nom_canal_dette": "dette_sommeil",
+	"nom_marqueur_dette": "dette_de_sommeil_franchie",
+	"nom_etat_epuise": "epuise",
+	"nom_etat_endette": "endette_sommeil",
+	"nom_etat_blesse": "blesse",
+
+	"capacite_sommeil": 100.0,
+	"capacite_sante": 100.0,
+	"cout_veille_par_s": 3.0,
+	"coef_effort": 0.02,
+	"recuperation_sommeil_par_s": 9.0,
+	"recuperation_sante_par_s": 2.5,
+
+	"dette": {
+		"seuil": 6.0,
+		"taux_decroissance": 2.0,
+		"poids": 1.0,
+		"portee_charge": 0.0
+	},
+
+	"colons": [
+		{
+			"id": "colon_actif",
+			"position": [0.0, 0.0, 0.0],
+			"vitesse": 150.0,
+			"sommeil_initial": 100.0,
+			"sante_initial": 100.0,
+			"etats_actifs": [],
+			"patrouille": { "amplitude": 220.0, "periode": 6.0 }
+		},
+		{
+			"id": "colon_blesse",
+			"position": [0.0, 260.0, 0.0],
+			"vitesse": 150.0,
+			"sommeil_initial": 100.0,
+			"sante_initial": 25.0,
+			"etats_actifs": ["blesse"],
+			"patrouille": { "amplitude": 0.0, "periode": 0.0 }
+		}
+	],
+
+	"priorite_couleurs": ["epuise", "endette_sommeil", "blesse"],
+
+	"couleurs": {
+		"fond_jour": [0.52, 0.60, 0.70],
+		"fond_nuit": [0.07, 0.08, 0.15],
+		"eveille": [0.35, 0.80, 0.42],
+		"dort": [0.25, 0.45, 0.95],
+		"epuise": [0.90, 0.20, 0.20],
+		"endette_sommeil": [0.95, 0.60, 0.12],
+		"blesse": [0.72, 0.26, 0.56],
+		"barre_fond": [0.13, 0.13, 0.17],
+		"barre_sommeil": [0.32, 0.62, 1.00],
+		"barre_sante": [0.30, 0.86, 0.42],
+		"barre_dette_sommeil": [1.00, 0.62, 0.15],
+		"horloge_jour": [0.86, 0.82, 0.62],
+		"horloge_nuit": [0.14, 0.14, 0.30],
+		"horloge_curseur": [1.00, 0.24, 0.24]
+	},
+
+	"colonne_labels_x": 320.0,
+	"camera": { "position": [270.0, 130.0], "zoom": 0.72 },
+	"intervalle_print": 1.0
+}

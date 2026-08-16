@@ -1,0 +1,36 @@
+{
+	"_note": "Jetable, propre au banc « simulation accélérée -- le monde existait avant toi » (scripts/banc_simulation_acceleree.gd). Grille grille_lignes x grille_colonnes de cases-objets CONSTRUITES À LA MAIN (patron scripts/banc_ecoulement.gd, jamais Objet.fabriquer -- une case n'a pas de composition). 'position' reste un FAIT SPATIAL PUR en unités de grille (x=colonne, y=ligne, z=0.0 toujours) ; l'altitude vit dans proprietes.altitude (nom_altitude), DÉCOUPLÉE de position -- décroît de altitude_max (colonne 0, sommet) à altitude_min (dernière colonne, bas de pente). rayon_voisinage=1.5 couvre les 8 voisins adjacents (orthogonaux 1.0, diagonaux sqrt(2)). ACCÉLÉRATION : le banc boucle iterations_par_tick fois par tick réel avec delta_fixe (PETIT, jamais un grand delta) et annees_par_seconde (ÉLEVÉ) -- proprietes.age avance de iterations_par_tick*delta_fixe*annees_par_seconde par tick réel. Le facteur d'échelle est le SEUL levier de vitesse, jamais le delta : scripts/senescence.gd le reçoit en paramètre par doctrine (« c'est au CÂBLAGE de choisir à quelle vitesse le temps du jeu vieillit ses entités »), et un grand delta ferait diverger/tricher d'autres mécanismes (voir audit_terrain_et_monde_prealable.md §1 -- temperature.gd diverge, ecoulement.gd devient non physique, consommer.gd perd la conservation). annees_par_seconde_temps_reel est le MÊME paramètre, valeur lente, pour le mode d'observation. stades_config est la table de succession lue par scripts/stade.gd -- POSÉE SUR CHAQUE CASE (stade.gd ne reçoit aucun catalogue, par contrat), copiée par valeur à la construction. couleurs_stade/couleur_stade_inconnu/couleur_eau : palette d'AFFICHAGE en donnée, pour qu'aucun nom de stade ne soit écrit en dur dans le code du banc -- couleurs_stade reprend EXACTEMENT la table de data/banc_succession.json (même nom de clé, mêmes quatre couleurs) et couleur_eau celle de scripts/banc_ecoulement.gd:couleur_pour_niveau, les deux bancs que celui-ci rejoue en accéléré ; couleur_stade_inconnu reprend le gris de la roche sèche de banc_ecoulement. taux_decroissance_plancher/facteur_permeabilite (cout_base d'absorption, même formule que scripts/banc_permeabilite.gd:taux_decroissance_permeabilite) et evaporation_par_s (surcout_action) sont VOLONTAIREMENT bien plus bas que dans data/banc_ecoulement.json : à cette vitesse simulée, les valeurs de ce banc-là videraient la grille avant qu'aucune succession ne soit observable.",
+	"grille_lignes": 8,
+	"grille_colonnes": 8,
+	"altitude_max": 20.0,
+	"altitude_min": 2.0,
+	"rayon_voisinage": 1.5,
+	"taux_ecoulement": 5.0,
+	"eau_initiale": 10.0,
+	"nom_reserve": "niveau_eau",
+	"nom_altitude": "altitude",
+	"taux_decroissance_plancher": 0.002,
+	"facteur_permeabilite": 0.03,
+	"evaporation_par_s": 0.001,
+	"materiau_gauche": "terre",
+	"materiau_droite": "roche",
+	"iterations_par_tick": 25,
+	"delta_fixe": 0.016,
+	"annees_par_seconde": 300.0,
+	"annees_par_seconde_temps_reel": 0.1,
+	"intervalle_trace_annees": 1000.0,
+	"stades_config": [
+		{ "nom": "nu", "age_seuil": 0.0 },
+		{ "nom": "prairie", "age_seuil": 100.0 },
+		{ "nom": "taillis", "age_seuil": 800.0 },
+		{ "nom": "foret", "age_seuil": 3000.0 }
+	],
+	"couleurs_stade": {
+		"nu": [0.42, 0.30, 0.16],
+		"prairie": [0.58, 0.85, 0.36],
+		"taillis": [0.25, 0.62, 0.26],
+		"foret": [0.07, 0.31, 0.12]
+	},
+	"couleur_stade_inconnu": [0.5, 0.5, 0.52],
+	"couleur_eau": [0.05, 0.15, 0.55]
+}

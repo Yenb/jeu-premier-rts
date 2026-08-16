@@ -1,0 +1,205 @@
+{
+	"_note": "Donnees propres a scripts/banc_social_rupture.gd (Scene/banc_social_rupture.tscn), chantier « rupture + migration » -- tableau Social et relations, lignes 8 (le deuil), 12 (la trahison) et 13 (la migration). JETABLE, propre au banc : rien ici n'est un catalogue partage. Les QUATRE entrees partagees de ce chantier vivent ailleurs et ne sont JAMAIS recopiees ici -- data/etats.json:en_deuil + tentation_trahison + traitre, data/seuils_etat.json:tentation_trahison. Les QUATRE entrees REUTILISEES telles quelles, sans une ligne changee : data/etats.json:rupture_grief + soumis + contestataire + en_depart et data/seuils_etat.json:rupture_grief (chantier « grief + bifurcation grief »). data/banc_grief.json n'est PAS touche : les deux bancs ne partagent que le catalogue, jamais leur donnee.\n\nTROIS LIGNES, UN SEUL BANC, parce qu'elles INTERAGISSENT (CLAUDE.md, « UN GAMEPLAY EST UNE COMPOSITION, JAMAIS UNE PIECE ») : le deuil fait monter le grief, le grief franchit un palier puis un second, le second ouvre la trahison, le detournement vide la reserve commune que le deuil ralentissait deja, et le colon dont la loyaute est basse s'en va chez le voisin. Livrees separement, ces trois lignes ne rendraient que trois mecanismes deja fermes.\n\nLES TAUX SONT EN SECONDES DE SIMULATION, jamais par jour -- le depot n'a AUCUNE horloge de jour (constat deja paye par le chantier banc_nutrition). SEULE EXCEPTION, et elle est explicite : 'duree_deuil_j' x 'secondes_par_jour' ci-dessous, dont le PRODUIT doit valoir exactement data/etats.json:en_deuil.duree -- verrouille par test, les deux ne peuvent pas diverger en silence.\n\nCALIBRATION, mesuree et non devinee, avec le mode INJUSTICE actif au depart (le banc lance sans un clic montre deja une rupture, une trahison et une migration) :\n- chef_nord : injustice seule, 6.0/s -> palier de rupture (30.0) a t=5.0 s, palier de trahison (60.0) a t=10.0 s. Biais domine par 'soumission' (0.50) et cupidite 0.3 : la quatrieme sortie s'ouvre et ne change RIEN pour lui (0.10 x 0.3 = 0.03 contre 0.50). C'est le temoin.\n- colon_cupide : injustice 6.0 + agression 4.0 x 0.8 = 9.2/s -> rupture a t=3.3 s (il CONTESTE, 0.25 contre 0.15), tentation a t=6.5 s (il TRAHIT, 0.15 x 3.0 = 0.45 contre 0.25). L'escalade en deux temps est le sujet de la ligne 12 : la trahison n'est pas une autre colere, c'est une colere qui a franchi un second palier.\n- colon_endeuille : injustice seule jusqu'au clic gauche. Le deuil ajoute 5.0/s x intensite, qui decroit de 1.0 a 0.0 en 18 s -- son integrale vaut 45.0, sous le palier de trahison (60.0) : un deuil seul ne fait JAMAIS un traitre, quel que soit le temps qu'on attend.\n- taux_decroissance 8.0/s : des que TOUTES les causes d'un colon sont nulles, son grief retombe a zero en moins de 4 s et seuil_etat.gd retire les deux marqueurs. Une seule cause encore active suffit a bloquer toute decrue (charge.gd a deux regimes disjoints) -- assume, voir data/seuils_etat.json:tentation_trahison.\n\nLES DEUX PALIERS SONT LES MEMES POUR LES CINQ COLONS (30.0 et 60.0), et c'est le coeur de la demonstration, exactement comme dans banc_grief : places dans des conditions identiques, ils partent vers des sorties differentes -- seuls 'biais_grief' et 'poids_cupidite' les distinguent. Un palier par colon serait possible sans une ligne de code (seuil_etat.gd lit les deux seuils PAR OBJET), non fait ici, ca brouillerait la lecture.\n\nLES BIAIS NE SOMMENT PAS A 1.0 PAR HASARD : convention de lisibilite, jamais contrainte du mecanisme -- bifurcation.gd ne normalise RIEN. 'poids_cupidite' est un MULTIPLICATEUR applique au seul biais de trahison, compose par le cablage AVANT l'appel (voir banc_social_rupture.gd:biais_effectif) : c'est ce qui rend la cupidite DECISIVE et non decorative -- a cupidite 1.0, colon_cupide contesterait (0.15 < 0.25) au lieu de trahir.\n\n'vitesse_migration' N'EST PAS 'vitesse', et les colons de ce banc ne portent meme PAS 'vitesse' : data/etats.json:en_depart ECRASE 'vitesse' a 0.0, un colon a la fois en depart et en partance serait cloue au sol. Meme separation, meme raison, que banc_grief.json:vitesse_sortie. Ce banc ne refait pas le depart vers le bord -- banc_grief le montre deja ; ici la sortie 'depart' arrete la production, rien de plus.\n\nLA MIGRATION EST UN GATE COMBINE, et il passe par scripts/conditions.gd (N conditions en ET logique sur N proprietes differentes, reversible), jamais par seuil_etat.gd qui ne compare qu'UNE propriete a UN seuil. Le catalogue de conditions est LOCAL au banc ('gate_migration' ci-dessous, format exact de data/emergences.json/data/biomes.json passe tel quel -- conditions.gd recoit toujours son catalogue en parametre), jamais une entree ajoutee a un catalogue partage : meme geste que data/banc_psycho_social.json:seuils_locaux.\n\n'attractivite_autre' EST UN RESUME LU, jamais une colonie percue : il n'existe aucune entite-colonie dans ce banc (docs/design.md, « Les collectifs n'existent pas »). Le cablage ecrit sur chaque colon, a chaque tick, resume_attractivite de L'AUTRE colonie x son propre 'ouverture_ailleurs' -- un champ derive RECALCULE A NEUF, jamais accumule (patron banc_marche_competence.gd:poser_prix, un prix par colon). C'est exactement la forme qu'aurait une propriete posee par une couche serveur en multijoueur : un nombre plat, lu au cablage comme n'importe quelle autre propriete. colon_endeuille et colon_cupide portent LA MEME ouverture (0.9) et voient donc LA MEME attractivite : seule leur loyaute les separe, et c'est ce que le banc existe pour montrer.\n\n'adhesions' N'EST PAS le registre de scripts/croyance.gd, et le nom differe EXPRES : croyance.gd ecrit { chose_id: { propriete: { valeur, certitude } } }, ce banc porte un Dictionary PLAT { sujet: bool } et ne monte JAMAIS croyance.gd. Reutiliser la cle 'croyances' aurait donne un registre a la mauvaise forme, qu'un futur appel a Croyance.observer aurait lu de travers, en silence.\n\nAUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES -- pas de 'profil_saillance' (ce banc ne monte ni perception.gd ni proximite.gd), pas d''etats_actifs' declare en donnee (les colons naissent sans aucun etat, seuil_etat.gd/etat_duree.gd/la bifurcation sont ses seuls ecrivains). data/types.json n'est pas touche (colons, depots et compagnon construits a la main) : aucun registre du linter a etendre.",
+
+	"nom_grief": "grief",
+	"canal_grief": "grief",
+	"nom_seuil_rupture": "seuil_rupture",
+	"nom_seuil_trahison": "seuil_trahison",
+	"etat_rupture": "rupture_grief",
+	"etat_tentation": "tentation_trahison",
+	"etat_deuil": "en_deuil",
+	"nom_rythme": "rythme",
+	"nom_loyaute": "loyaute",
+	"nom_poids_loyaute": "poids_loyaute",
+	"nom_attractivite": "attractivite_autre",
+	"nom_ouverture": "ouverture_ailleurs",
+	"nom_colonie": "colonie",
+	"nom_chef": "chef",
+	"nom_cupidite": "poids_cupidite",
+	"nom_veut_migrer": "veut_migrer",
+	"nom_vecu_cumule": "vecu_cumule",
+	"source_lien_colonie": "lien_colonie",
+	"source_adhesions_partagees": "adhesions_partagees",
+	"source_vecu": "vecu",
+	"nom_adhesions": "adhesions",
+	"nom_injustice": "injustice_subie",
+	"nom_deuil_ressenti": "deuil_ressenti",
+	"nom_deuils_faits": "deuils_faits",
+	"nom_sorties_ouvertes": "sorties_ouvertes_memoire",
+	"nom_reserve_commune": "commun",
+	"nom_reserve_butin": "butin",
+
+	"colonie_principale": "nord",
+	"terrain_largeur": 1240.0,
+	"terrain_hauteur": 660.0,
+
+	"seuil_rupture": 30.0,
+	"seuil_trahison": 60.0,
+	"taux_decroissance_grief": 8.0,
+	"rythme_base": 1.5,
+
+	"causes_grief": [
+		{ "nom": "injustice", "propriete": "injustice_subie", "poids": 6.0 },
+		{ "nom": "faim", "propriete": "faim_ressentie", "poids": 4.0 },
+		{ "nom": "agression", "propriete": "agression_subie", "poids": 4.0 },
+		{ "nom": "deuil", "propriete": "deuil_ressenti", "poids": 5.0 }
+	],
+
+	"sorties": ["soumission", "contestation", "depart", "trahison"],
+	"etats_par_sortie": {
+		"soumission": "soumis",
+		"contestation": "contestataire",
+		"depart": "en_depart",
+		"trahison": "traitre"
+	},
+	"marqueur_par_sortie": {
+		"soumission": "rupture_grief",
+		"contestation": "rupture_grief",
+		"depart": "rupture_grief",
+		"trahison": "tentation_trahison"
+	},
+	"sortie_detournement": "trahison",
+	"sortie_sans_production": "depart",
+	"taux_detournement_par_s": 6.0,
+
+	"sources_loyaute": ["lien_colonie", "adhesions_partagees", "vecu"],
+	"plafond_lien": 1.0,
+	"plafond_vecu": 1.0,
+	"vecu_par_s": 0.02,
+	"seuil_proche": 0.5,
+
+	"gate_migration": [
+		{
+			"id": "migration",
+			"conditions": [
+				{ "propriete": "loyaute", "operateur": "<", "seuil": 0.45 },
+				{ "propriete": "attractivite_autre", "operateur": ">", "seuil": 0.50 }
+			],
+			"resultat": { "veut_migrer": 1.0 }
+		}
+	],
+	"vitesse_migration": 85.0,
+	"rayon_arrivee": 20.0,
+
+	"duree_deuil_j": 180.0,
+	"secondes_par_jour": 0.1,
+
+	"pas_attractivite": 0.10,
+	"attractivite_min": 0.0,
+	"attractivite_max": 1.0,
+
+	"colonies": {
+		"nord": {
+			"position": [250.0, 330.0, 0.0],
+			"resume_attractivite": 0.30,
+			"couleur": [0.35, 0.62, 0.92],
+			"depot": { "id": "depot_nord", "position": [250.0, 120.0, 0.0], "reserve": 40.0 }
+		},
+		"sud": {
+			"position": [1030.0, 330.0, 0.0],
+			"resume_attractivite": 0.65,
+			"couleur": [0.92, 0.62, 0.22],
+			"depot": { "id": "depot_sud", "position": [1030.0, 120.0, 0.0], "reserve": 40.0 }
+		}
+	},
+
+	"compagnon": { "id": "compagnon_nord", "position": [370.0, 330.0, 0.0] },
+
+	"colons": [
+		{
+			"id": "chef_nord",
+			"colonie": "nord",
+			"chef": true,
+			"position": [160.0, 200.0, 0.0],
+			"biais_grief": { "soumission": 0.50, "contestation": 0.30, "depart": 0.10, "trahison": 0.10 },
+			"poids_cupidite": 0.3,
+			"poids_loyaute": { "lien_colonie": 0.5, "adhesions_partagees": 0.3, "vecu": 0.2 },
+			"ouverture_ailleurs": 0.2,
+			"causes_propres": { "faim_ressentie": 0.0, "agression_subie": 0.0 },
+			"liens": { "colon_endeuille": 0.8, "colon_cupide": 0.9, "compagnon_nord": 0.2 },
+			"adhesions": { "regle_du_partage": true, "avenir_de_la_colonie": true }
+		},
+		{
+			"id": "colon_endeuille",
+			"colonie": "nord",
+			"chef": false,
+			"position": [160.0, 340.0, 0.0],
+			"biais_grief": { "soumission": 0.40, "contestation": 0.20, "depart": 0.30, "trahison": 0.10 },
+			"poids_cupidite": 0.4,
+			"poids_loyaute": { "lien_colonie": 0.6, "adhesions_partagees": 0.2, "vecu": 0.2 },
+			"ouverture_ailleurs": 0.9,
+			"causes_propres": { "faim_ressentie": 0.0, "agression_subie": 0.0 },
+			"liens": { "chef_nord": 0.3, "colon_cupide": 0.2, "compagnon_nord": 1.4 },
+			"adhesions": { "regle_du_partage": true, "avenir_de_la_colonie": false }
+		},
+		{
+			"id": "colon_cupide",
+			"colonie": "nord",
+			"chef": false,
+			"position": [160.0, 480.0, 0.0],
+			"biais_grief": { "soumission": 0.10, "contestation": 0.25, "depart": 0.10, "trahison": 0.15 },
+			"poids_cupidite": 3.0,
+			"poids_loyaute": { "lien_colonie": 0.6, "adhesions_partagees": 0.2, "vecu": 0.2 },
+			"ouverture_ailleurs": 0.9,
+			"causes_propres": { "faim_ressentie": 0.0, "agression_subie": 0.8 },
+			"liens": { "chef_nord": 0.9, "colon_endeuille": 0.7, "compagnon_nord": 0.1 },
+			"adhesions": { "regle_du_partage": false, "avenir_de_la_colonie": true }
+		},
+		{
+			"id": "colon_sud_a",
+			"colonie": "sud",
+			"chef": false,
+			"position": [1120.0, 250.0, 0.0],
+			"biais_grief": { "soumission": 0.40, "contestation": 0.30, "depart": 0.20, "trahison": 0.10 },
+			"poids_cupidite": 0.5,
+			"poids_loyaute": { "lien_colonie": 0.5, "adhesions_partagees": 0.3, "vecu": 0.2 },
+			"ouverture_ailleurs": 0.2,
+			"causes_propres": { "faim_ressentie": 0.0, "agression_subie": 0.0 },
+			"liens": { "colon_sud_b": 1.0 },
+			"adhesions": { "regle_du_partage": true, "avenir_de_la_colonie": true }
+		},
+		{
+			"id": "colon_sud_b",
+			"colonie": "sud",
+			"chef": false,
+			"position": [1120.0, 410.0, 0.0],
+			"biais_grief": { "soumission": 0.30, "contestation": 0.40, "depart": 0.20, "trahison": 0.10 },
+			"poids_cupidite": 0.5,
+			"poids_loyaute": { "lien_colonie": 0.5, "adhesions_partagees": 0.3, "vecu": 0.2 },
+			"ouverture_ailleurs": 0.2,
+			"causes_propres": { "faim_ressentie": 0.0, "agression_subie": 0.0 },
+			"liens": { "colon_sud_a": 1.0 },
+			"adhesions": { "regle_du_partage": true, "avenir_de_la_colonie": true }
+		}
+	],
+
+	"intervalle_trace_s": 2.0,
+
+	"taille_colon": 30.0,
+	"taille_depot": 40.0,
+	"taille_compagnon": 22.0,
+	"largeur_barre": 190.0,
+	"hauteur_barre": 13.0,
+	"taille_police_label": 12,
+	"taille_police_compteur": 16,
+	"taille_police_aide": 13,
+
+	"couleurs": {
+		"fond_calme": [0.12, 0.16, 0.14],
+		"fond_injustice": [0.20, 0.12, 0.12],
+		"zone_colonie": [0.18, 0.20, 0.24],
+		"depot": [0.55, 0.50, 0.32],
+		"compagnon": [0.75, 0.72, 0.90],
+		"compagnon_mort": [0.30, 0.30, 0.32],
+		"barre_fond": [0.09, 0.09, 0.09],
+		"barre_grief": [0.85, 0.45, 0.20],
+		"trait_rupture": [1.0, 1.0, 1.0],
+		"trait_trahison": [0.95, 0.25, 0.25],
+		"neutre": [0.62, 0.62, 0.62],
+		"soumis": [0.92, 0.82, 0.25],
+		"contestataire": [0.88, 0.20, 0.18],
+		"en_depart": [0.30, 0.60, 0.95],
+		"traitre": [0.72, 0.20, 0.78],
+		"en_deuil": [0.55, 0.55, 0.85]
+	}
+}

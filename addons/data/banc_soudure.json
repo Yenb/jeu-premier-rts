@@ -1,0 +1,22 @@
+{
+	"_note": "Jetable, propre a scripts/banc_soudure.gd (chantier 'soudabilite', voir audit_soudabilite.md). Deux blocs de fer proches (soudabilite 0.8, data/materiaux.json) et un bloc de bois (soudabilite 0.0) tout aussi proche d'un des deux fers -- seule la matiere doit empecher le bois de se souder, jamais la chaleur ni le contact. La source de temperature n'est plus automatique : elle suit le curseur tant que le clic gauche est maintenu (voir scripts/banc_soudure.gd, sources_du_tick), 'source' ne porte donc plus qu'un gabarit fixe (rayon/temperature/force), jamais de position ni de rampe.",
+	"temperature_initiale": 20.0,
+	"objets": [
+		{ "id": "bois_0", "position": [-45.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "fer_0", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] },
+		{ "id": "fer_1", "position": [45.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.5 }] }
+	],
+	"source": {
+		"rayon": 100.0,
+		"temperature": 900.0,
+		"force": 1.0
+	},
+	"couleurs": {
+		"fer": [0.55, 0.55, 0.58],
+		"bois": [0.55, 0.35, 0.15],
+		"chaud_tint": [0.85, 0.45, 0.1],
+		"pret_tint": [0.95, 0.85, 0.1],
+		"curseur": [0.95, 0.55, 0.1, 0.35]
+	},
+	"camera": { "position": [0.0, 0.0, 0.0], "zoom": 1.6 }
+}

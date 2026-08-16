@@ -1,0 +1,77 @@
+{
+	"_note": "PHASE 5 etape 2 (chantier 'L'entite comme agent complet', voir docs/suivi_corps_interne_entite.md), correction session ulterieure (le feu s'eteint reellement) : jetable, propre a ce banc. 'batisse' est une declaration LOCALE minimale, deja en feu des t=0 (aucun clic, aucune ignition par propagation.gd) -- pas le type partage data/types.json (inexistant pour une batisse) -- referencant le profil_saillance PARTAGE 'feu' (data/profils_saillance.json) et la transformation PARTAGEE 'defaut' (data/transformations.json), aucune donnee partagee modifiee. travail_restant/travail_initial a 3.0, MEME valeur qu'un feu normal (data/transformations.json:patron) -- BUG FERME cette session : ce type ne portait avant ni 'brule' ni 'profil_saillance' ni 'transformation' ni aucun chantier, la batisse ne prenait donc jamais feu dans le banc reel malgre toute la doc qui l'affirmait (seule la fixture LOCALE de test_banc_lien_personnel.gd, independante de ce fichier, en portait un). PAS 'inflammable' (ni 'portee_propagation'/'delai_propagation') sur la batisse : elle demarre DEJA en feu (pose directement, jamais par propagation.gd) et doit RESTER eteinte une fois sauvee -- verifie empiriquement (scene reelle, script jetable) qu'avec 'inflammable' present, 'feu_proche' (brule en permanence, a 20 unites) la reallumait cycliquement via propagation.gd (qui lit la portee sur la chose VULNERABLE, pas sur la source) jusqu'a epuisement du combustible et consumption definitive -- CORRIGE en retirant 'inflammable' de la batisse : propagation.gd l'ignore completement, aucun risque de reallumage. 'brule' -> ['eteindre'] est un catalogue_local PROPRE A CE BANC (comme banc_feu.gd/banc_charge.gd) -- data/types_choses.json partage garde 'brule' -> 'approcher', inchange, meme non charge ici. PHASE 5 etape 4 piece 2 : les trois pompiers (rapide/moyen/lent) ne different QUE par leur position et leur sensibilite_generalisation (surcharge locale des seuils de attache_par_trait.gd, voir scripts/banc_lien_personnel.gd:_ajouter_colon) -- tous restent a portee de vue (canaux_config.vue.portee 1600.0, colon) ET de travail (portee_travail 25.0, transformations.json:defaut) de la batisse ; spectateur en est hors de portee des deux (5000 unites) -- tout le reste (forme/poids_verbes/liens_personnels de depart) est identique via l'heritage entite/colon commun. PHASE 5 etape 3 (lecture par lien_personnel_saillance.gd) : 'feu_proche' est un second feu LOCAL, sans 'notre_ouvrage' (ne forme pas son propre lien via actes_liants.json -- seule la batisse en forme un), place a 20 unites de la batisse sur l'axe Y (distance batisse->feu_proche = 20, bien dans portee_menace 100.0 de data/liens_personnels.json) mais plus loin des pompiers (~522+ unites) que la batisse elle-meme (~500-522 unites) -- choisi ainsi pour que la saillance totale (nue + bonus de lien) de la batisse reste TOUJOURS strictement superieure a celle de feu_proche, meme a force de lien nulle (tick 0) : chaque pompier continue de choisir la batisse a chaque tick, feu_proche ne fait jamais basculer sa decision, il devient seulement observable en saillance (barre/lien), pas en action choisie. 'feu_ouvrage' : type LOCAL instancie par clic gauche (scripts/banc_lien_personnel.gd:_unhandled_input) -- meme forme minimale que le type 'feu' de data/banc_feu.json (profil_saillance/brule seuls sur le type, travail_restant/travail_initial/transformation/reserves poses par le patron via BancCommun.resoudre_chantier, jamais declares ici), PLUS notre_ouvrage: true (Option B, tranchee par Yael) : le premier colon qui resout 'eteindre' sur un feu_ouvrage declenche le meme effet de bord ACTES LIANTS que sur la batisse (agir.gd, data/actes_liants.json:defense_ouvrage), formant un lien personnel colon -> feu_N distinct -- plusieurs feux clique's produisent plusieurs liens simultanes, complexification volontaire pour eprouver la robustesse du mecanisme a N sources d'evenements liants. 'bois' (session ulterieure, CORRIGE -- n'etait avant jamais ajoute par _ready malgre la doc qui l'affirmait) : objet LOCAL inflammable (memes champs que 'arbre' de data/types.json -- inflammable/portee_propagation/delai_propagation, sans profil_saillance sur le type lui-meme, acquis via le patron a l'allumage, jamais avant), place a 40 unites de la batisse (position [360,400,0], du cote OPPOSE aux pompiers -- distance pompier->bois toujours strictement superieure a distance pompier->batisse, meme raisonnement que feu_proche) : s'enflamme par PROPAGATION depuis la batisse (portee_propagation DE BOIS lui-meme, pas celle de la source -- voir propagation.gd) pendant que la batisse brule encore, rend Propagation.avancer observable ; recoit ensuite reserves.combustible via le patron, se consume seul faute de defenseur (aucun pompier ne le vise, sa saillance totale restant sous celle de la batisse).",
+	"couleurs_types": {
+		"batisse": [0.9, 0.4, 0.1],
+		"pompier_rapide": [0.9, 0.2, 0.2],
+		"pompier_moyen": [0.9, 0.5, 0.2],
+		"pompier_lent": [0.9, 0.75, 0.2],
+		"spectateur": [0.3, 0.5, 0.9],
+		"feu_proche": [1.0, 0.6, 0.0],
+		"feu_ouvrage": [1.0, 0.5, 0.0],
+		"bois": [0.4, 0.25, 0.1],
+		"cendre": [0.3, 0.3, 0.3]
+	},
+	"types": {
+		"batisse": {
+			"notre_ouvrage": true,
+			"brule": true,
+			"profil_saillance": "feu",
+			"transformation": "defaut",
+			"travail_restant": 3.0,
+			"travail_initial": 3.0
+		},
+		"feu_proche": {
+			"brule": true,
+			"profil_saillance": "feu"
+		},
+		"feu_ouvrage": {
+			"profil_saillance": "feu",
+			"brule": true,
+			"notre_ouvrage": true
+		},
+		"bois": {
+			"inflammable": true,
+			"portee_propagation": 90.0,
+			"delai_propagation": 1.5
+		}
+	},
+	"catalogue_local": {
+		"brule": { "verbes": ["eteindre"] }
+	},
+	"biais_max": 30.0,
+	"batisse": { "position": [400.0, 400.0, 0.0] },
+	"feu_proche": { "position": [400.0, 420.0, 0.0] },
+	"bois": { "position": [360.0, 400.0, 0.0] },
+	"colons": {
+		"pompier_rapide": {
+			"position": [900.0, 250.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "eteindre": 1.0 },
+			"sensibilite_generalisation": {
+				"notre_ouvrage": { "seuil_nombre": 2 }
+			}
+		},
+		"pompier_moyen": {
+			"position": [900.0, 400.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "eteindre": 1.0 }
+		},
+		"pompier_lent": {
+			"position": [900.0, 550.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "eteindre": 1.0 },
+			"sensibilite_generalisation": {
+				"notre_ouvrage": { "seuil_nombre": 5, "seuil_force": 0.5 }
+			}
+		},
+		"spectateur": {
+			"position": [5000.0, 400.0, 0.0],
+			"attaches": [],
+			"forme": {},
+			"poids_verbes": { "eteindre": 1.0 }
+		}
+	}
+}

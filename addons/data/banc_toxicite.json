@@ -1,0 +1,28 @@
+{
+	"_note": "Jetable, propre a scripts/banc_toxicite.gd (chantier 'toxicite -- empoisonnement par contact'). Trois objets fixes espaces de 300 unites (poison_demo/fer_toxicite/pierre_toxicite) -- espacement grand devant 'portee_charge' (60.0) pour qu'un colon place pres de l'un des trois ne soit jamais simultanement a portee d'un second. 'positions_colon' donne, dans le MEME ordre que 'objets', la position du colon quand il est place a cote de chacun -- offset de 40 unites (a l'interieur de portee_charge) sur l'axe y. seuil (1.0) choisi pour que poison_demo (toxicite 0.9) empoisonne en ~1.1s et fer (0.1) en ~10s -- l'ecart de vitesse EST la demonstration ; pierre (toxicite 0.0) n'accumule jamais de charge, causes_toxicite() filtre les objets a toxicite effective nulle ou negative.",
+	"nom_canal_empoisonnement": "empoisonnement",
+	"canal_empoisonnement_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 60.0,
+		"taux_decroissance": 1.0,
+		"poser": { "expose_empoisonnement": true }
+	},
+	"declencheur_expose_empoisonnement": "expose_empoisonnement",
+	"nom_etat_empoisonne": "empoisonne",
+	"degat_par_s": 2.0,
+	"nom_reserve_sante": "sante",
+	"reserve_sante_defaut": { "reserve": 10.0, "cout_base": 0.0, "surcout_action": 0.0 },
+
+	"objets": [
+		{ "id": "poison_demo", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "poison_demo", "volume": 0.05 }] },
+		{ "id": "fer_toxicite", "position": [300.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 0.05 }] },
+		{ "id": "pierre_toxicite", "position": [600.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 0.05 }] }
+	],
+	"positions_colon": [
+		[0.0, 40.0, 0.0],
+		[300.0, 40.0, 0.0],
+		[600.0, 40.0, 0.0]
+	],
+	"agent": { "id": "colon_toxicite" }
+}

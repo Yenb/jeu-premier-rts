@@ -1,0 +1,26 @@
+{
+	"_note": "Donnees jetables du banc humidite -- PREMIERE demonstration reelle du chantier 'humidite -- pose automatique de mouille'. Noms de domaine reels (bois/pierre/fer, source_humidite, mouille), exception documentee CLAUDE.md ('un banc jetable peut nommer une categorie pour poser une scene d'observation'). Une source d'humidite fixe (clic gauche : bascule active/inactive) expose en permanence trois objets de composition differente, memes seuil/portee/taux_decroissance -- seule absorption_humidite (data/materiaux.json) explique l'ecart de vitesse de montee entre bois (0.7, mouille en ~1.4s), pierre (0.1, mouille en ~10s) et fer (0.01, ne mouille jamais en pratique). Tous restent dans portee_charge : seule la matiere separe leurs vitesses dans ce banc (la portee elle-meme, deja prouvee par charge.gd/banc_charge, est verrouillee separement par test_banc_humidite.gd). Chantier 'porosite comme facteur de vitesse d'absorption' : deux objets supplementaires, dense_mixte/poreux_mixte, a COMPOSITION MIXTE (deux materiaux reels de materiaux.json chacun, JAMAIS de nouveau materiau ajoute au catalogue partage -- decision Yael) dosee pour que les DEUX partagent exactement la meme absorption_humidite (0.05, verifie par la moyenne ponderee par volume que fait deja objet.gd) tout en divergeant fortement sur la porosite (0.525 pour poreux_mixte, contre ~0.0536 pour dense_mixte) -- seule variable qui les separe desormais, la matiere absorbante etant a parite. poreux_mixte = pierre (absorption 0.1, porosite 0.15, volume 1.0) + paille (absorption absente donc 0.0, porosite 0.9, volume 1.0) -> moyenne absorption (0.1*1.0+0.0*1.0)/2.0 = 0.05, moyenne porosite (0.15*1.0+0.9*1.0)/2.0 = 0.525. dense_mixte = bois (absorption 0.7, porosite 0.6, volume 4.0) + fer (absorption 0.01, porosite 0.02, volume 65.0) -> moyenne absorption (0.7*4.0+0.01*65.0)/69.0 = 3.45/69.0 = 0.05, moyenne porosite (0.6*4.0+0.02*65.0)/69.0 = 3.7/69.0 = 0.05362. portee_charge remontee de 700.0 a 1000.0 pour que les cinq objets restent tous dans le rayon de la source, aucun changement de comportement pour bois/pierre/fer (deja largement dans l'ancien rayon).",
+	"propriete_cause": "source_humidite",
+	"declencheur_expose": "expose_humidite",
+	"propriete_absorption": "absorption_humidite",
+	"propriete_porosite": "porosite",
+	"facteur_porosite": 1.5,
+	"_note_facteur_porosite": "Valeur reprise telle quelle de docs/orion-matrice-elements.md, colonne Humidite, ligne porosite (facteur_porosite: 1.5) -- meme discipline que le chantier combustion, qui reprenait facteur_densite/facteur_porosite (0.5/1.3) de la colonne Feu du meme document.",
+	"nom_etat": "mouille",
+	"nom_canal": "humidite",
+	"canal_defaut": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 1000.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_humidite": true }
+	},
+	"source": { "id": "source_eau", "position": [0.0, 0.0, 0.0] },
+	"objets": [
+		{ "id": "bois", "position": [150.0, 250.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] },
+		{ "id": "pierre", "position": [350.0, 250.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 3.0 } ] },
+		{ "id": "fer", "position": [550.0, 250.0, 0.0], "composition": [ { "materiau": "fer", "volume": 3.0 } ] },
+		{ "id": "dense_mixte", "position": [750.0, 250.0, 0.0], "composition": [ { "materiau": "bois", "volume": 4.0 }, { "materiau": "fer", "volume": 65.0 } ] },
+		{ "id": "poreux_mixte", "position": [950.0, 250.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 1.0 }, { "materiau": "paille", "volume": 1.0 } ] }
+	]
+}

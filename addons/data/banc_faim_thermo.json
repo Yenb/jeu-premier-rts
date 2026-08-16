@@ -1,0 +1,43 @@
+{
+	"_note": "Donnees propres a scripts/banc_faim_thermo.gd (Scene/banc_faim_thermo.tscn), chantier « faim + thermoregulation -- un seul banc ». JETABLE, propre au banc : rien ici n'est un catalogue partage. Les QUATRE etats (affame/frisson/hypothermie/hyperthermie) et les QUATRE seuils qui les posent vivent, eux, dans les catalogues PARTAGES data/etats.json et data/seuils_etat.json -- ce fichier ne les redeclare jamais, il ne porte que la scene d'observation et la calibration. Le seuil de faim lui-meme n'est PAS recopie ici : le banc le relit dans data/seuils_etat.json:faim.seuil pour son compteur (une seule source de verite, jamais deux nombres a garder d'accord).\n\nTEMP_CIBLE EST UNE TEMPERATURE DE CONFORT (20.0), PAS UNE TEMPERATURE CORPORELLE. audit_mecaniques_corps_prealable.md §11 citait 37.0 ; avec l'ambiante de data/temperature.json (20.0, catalogue PARTAGE, non touche par ce chantier), 'froid_ressenti' vaudrait 17 PARTOUT sur le terrain -- hypothermie permanente des le demarrage, y compris au coeur de la zone chaude, et le banc ne montrerait plus rien. 20.0 met la zone neutre exactement a l'equilibre : hors des deux zones, les DEUX miroirs thermiques valent 0.0 et le surcout thermique est nul (verrouille par test).\n\nSEUIL_CHAUD (26.0) EST DISTINCT DE TEMP_CIBLE, deliberement : entre les deux s'etend une bande ou il ne fait ni trop froid ni trop chaud. Tant que seuil_chaud >= temp_cible, 'froid_ressenti' et 'chaud_ressenti' ne peuvent jamais etre non nuls en meme temps (verrouille par test).\n\nCALIBRATION, mesuree et non devinee. Zone froide : au centre, temperature locale = 20 + (-5-20)*1.0 = -5, donc froid_ressenti 25 -> hypothermie (>15) ET frisson (>5) tous deux actifs ; l'attenuation de temperature.gd etant lineaire (data/temperature.json:attenuation.exposant 1.0), frisson SEUL occupe la couronne entre 0.4 et 0.8 rayon -- c'est cette bande, et elle seule, qui rend l'escalier observable. Zone chaude : au centre, 20 + (60-20)*1.0 = 60, donc chaud_ressenti 34 -> hyperthermie ; le seuil est franchi des 0.725 rayon. Les deux zones sont separees de 500 unites pour 220+220 de rayons : elles NE SE CHEVAUCHENT JAMAIS -- temperature.gd superpose ADDITIVEMENT, deux zones qui se recouvrent s'annuleraient partiellement et le banc mentirait sur ce qu'il montre.\n\nCOUTS : metabolisme_base_par_s (0.4) est pose sur le canal comme 'cout_base' A LA CONSTRUCTION et n'est plus jamais touche ; coef_effort/cout_par_degre_froid/cout_par_degre_chaud ne servent QU'A composer 'surcout_action', reecrit en UNE SEULE ecriture par tick (voir banc_faim_thermo.gd:poser_surcout_action -- trois morceaux de cablage ecrivant chacun le leur s'ecraseraient en silence, piege nomme par audit_mecaniques_corps_prealable.md constat D). A pleine vitesse (140), l'effort coute 0.84/s ; au coeur du froid, le thermique coute 1.25/s ; au coeur du chaud, 1.36/s. Le colon vit donc entre ~40 et ~60 s selon son trajet -- MESURE d'ordre de grandeur, jamais une garantie : aucun test ne l'assert, le trajet est tire au sort (seede).\n\nAUCUNE NOURRITURE dans ce banc, par construction : l'energie ne peut que descendre. La reversibilite de 'affame' n'y est donc jamais observee en direct, seulement prouvee par le test -- meme statut que la guerison de 'malade' dans banc_maladie.\n\nNOMS DE PROPRIETES EN DONNEE (nom_reserve_energie/nom_vitesse/nom_manque_energie/nom_froid_ressenti/nom_chaud_ressenti) : le .gd ne porte aucun de ces noms en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente. Les trois noms de miroir doivent rester d'accord avec 'propriete_continue' des entrees faim/frisson/hypothermie/hyperthermie de data/seuils_etat.json -- accord verrouille par test, jamais suppose. AUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES : rien a y ajouter.",
+	"graine": 20260812,
+	"terrain_largeur": 900.0,
+	"terrain_hauteur": 520.0,
+	"position_depart": [450.0, 260.0, 0.0],
+	"rayon_arrivee": 8.0,
+	"vitesse_base": 140.0,
+	"capacite_energie": 100.0,
+	"metabolisme_base_par_s": 0.4,
+	"coef_effort": 0.006,
+	"temp_cible": 20.0,
+	"seuil_chaud": 26.0,
+	"cout_par_degre_froid": 0.05,
+	"cout_par_degre_chaud": 0.04,
+	"nom_reserve_energie": "energie",
+	"nom_vitesse": "vitesse",
+	"nom_manque_energie": "manque_energie",
+	"nom_froid_ressenti": "froid_ressenti",
+	"nom_chaud_ressenti": "chaud_ressenti",
+	"ref_seuil_faim": "faim",
+	"zones": [
+		{
+			"id": "zone_froide",
+			"position": [200.0, 260.0, 0.0],
+			"rayon": 220.0,
+			"temperature": -5.0,
+			"force": 1.0,
+			"couleur": [0.20, 0.42, 0.85]
+		},
+		{
+			"id": "zone_chaude",
+			"position": [700.0, 260.0, 0.0],
+			"rayon": 220.0,
+			"temperature": 60.0,
+			"force": 1.0,
+			"couleur": [0.85, 0.24, 0.18]
+		}
+	],
+	"couleur_zone_neutre": [0.16, 0.38, 0.20],
+	"couleur_colon": [1.0, 0.93, 0.55],
+	"taille_colon": 22.0
+}

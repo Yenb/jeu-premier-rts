@@ -1,0 +1,18 @@
+{
+	"_note": "Jetable, propre a scripts/banc_vent.gd (chantier 'vent', premiere demonstration reelle du vent sur l'odorat). 'nez' : percepteur minimal (canal odorat seul), position fixe au centre, portee_odorat SURCHARGEE localement a 250.0 pour ce banc (plus courte que le defaut de data/types.json:percevant, 300.0 -- choisie pour que le cercle de sources a 330 unites ne soit JAMAIS capte sans effet du vent, et le devienne partiellement des que le vent souffle reellement). 'sources' : nombre et rayon du cercle de sources d'odeur, positions calculees par scripts/banc_vent.gd:positions_en_cercle, jamais ecrites a la main. Le vent lui-meme n'est PAS declare ici : ce banc charge data/vent.json PARTAGE, reel, jamais surcharge -- la demonstration porte sur le VRAI catalogue de vent du depot. echelle_affichage_vent/longueur_fleche_max : mise a l'echelle purement visuelle de la fleche (Line2D), sans aucun effet sur le mecanisme.",
+	"couleur_nez": [0.2, 0.7, 0.9],
+	"couleur_captee": [0.95, 0.6, 0.1],
+	"couleur_non_captee": [0.4, 0.4, 0.45],
+	"couleur_fleche_vent": [0.9, 0.2, 0.9],
+	"nez": {
+		"position": [0.0, 0.0, 0.0],
+		"portee_odorat": 250.0
+	},
+	"sources": {
+		"nombre": 8,
+		"rayon": 330.0
+	},
+	"intervalle_print": 2.0,
+	"echelle_affichage_vent": 8.0,
+	"longueur_fleche_max": 220.0
+}

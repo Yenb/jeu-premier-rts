@@ -1,0 +1,87 @@
+{
+	"_note": "Donnee LOCALE au banc d'observation scripts/banc_economie.gd (chantier « conservation + fonte + portage + cout de trajet »), jamais un catalogue partage. AUCUN nom de propriete n'est ecrit en dur dans le .gd : les huit champs nom_* / propriete_* ci-dessous les portent tous, ce qui permet a scripts/test_banc_economie.gd de faire traverser le meme code par un domaine entierement invente. Le type de ressource (minerai_fer) est LOCAL a ce fichier (catalogue construit a la volee, patron scripts/banc_friction.gd:fabriquer_objets) -- seuls les deux types PRODUITS par la fonte (lingot_fer, scories) vivent dans data/types.json, parce que scripts/produit.gd resout type_produit contre cette table et que scripts/test_lint_donnees.gd verifie ce champ contre elle. CALIBRATION MESUREE, jamais devinee -- voir docs/prototypes.md pour les nombres releves en scene reelle.",
+
+	"nom_reserve_matiere": "matiere",
+	"nom_reserve_portage": "charge_portee",
+	"nom_reserve_energie": "energie",
+	"propriete_ressource": "ressource",
+	"propriete_valeur": "valeur_ressource",
+	"propriete_depot": "depot",
+	"propriete_fond": "fond",
+	"propriete_proche": "proche",
+	"nom_vitesse": "vitesse",
+
+	"cout_par_case": 0.01,
+	"seuil_rentabilite": 1.0,
+	"seuil_fonte": 1.0,
+
+	"terrain_largeur": 1800.0,
+	"terrain_hauteur": 900.0,
+
+	"colon": {
+		"id": "colon",
+		"position": [700.0, 500.0, 0.0],
+		"capacite_portage": 100.0,
+		"fraction_charge_max": 0.7,
+		"vitesse_base": 220.0,
+		"coef_surcout_portage": 0.02,
+		"metabolisme_base_par_s": 0.2,
+		"capacite_energie": 500.0,
+		"portee_travail": 40.0,
+		"taux_charge": 60.0,
+		"taux_decharge": 80.0,
+		"seuil_ecrasement": 0.4,
+		"canaux": ["vue"],
+		"canaux_config": {
+			"vue": { "portee": 1600.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 }
+		}
+	},
+
+	"lieux": [
+		{
+			"id": "forge",
+			"position": [700.0, 400.0, 0.0],
+			"fond": true,
+			"offset_lingot": [90.0, -70.0, 0.0],
+			"offset_scories": [-90.0, -70.0, 0.0]
+		},
+		{
+			"id": "grenier",
+			"position": [1000.0, 400.0, 0.0],
+			"fond": false
+		}
+	],
+
+	"_note_ressources": "valeur : la saillance NUE de la ressource, propriete LOCALE a ce banc (jamais data/profils_saillance.json -- ce banc ne monte pas scripts/proximite.gd, il construit ses entrees de saillance lui-meme, patron scripts/banc_grief.gd/scripts/banc_charge.gd). proche : marqueur lu par le SEUL clic (une BASCULE sortir/remettre), jamais par une decision. volume : en m3, la masse en resulte (densite du materiau x volume, scripts/objet.gd) et fixe la reserve de matiere posee par le cablage -- 0.045 m3 de minerai a 4.2 g/cm3 donnent 189.0 kg. CALIBRATION CORRIGEE APRES OBSERVATION A L'ECRAN (Yael) : le premier jet donnait 63.0 et 50.4 kg aux deux ressources proches, que le colon epuisait en MOINS DE SEPT SECONDES -- passe ce delai le clic n'avait plus rien a sortir du plateau et paraissait mort. Les proches portent desormais de quoi tenir plusieurs voyages (189.0 et 168.0 pour une charge maximale de 70.0), ce qui laisse une fenetre d'environ deux minutes pour jouer avec la bascule. Le colon ne charge JAMAIS jusqu'a sa capacite (fraction_charge_max 0.7) : a charge == capacite, vitesse_base x (1 - charge/capacite) rend EXACTEMENT 0.0 et il serait cloue au sol.",
+	"ressources": [
+		{ "id": "minerai_proche_1", "position": [500.0, 300.0, 0.0], "materiau": "minerai_fer_demo", "volume": 0.100, "valeur": 6.0, "depot": "forge", "proche": true },
+		{ "id": "minerai_proche_2", "position": [850.0, 250.0, 0.0], "materiau": "minerai_fer_demo", "volume": 0.090, "valeur": 5.0, "depot": "forge", "proche": true },
+		{ "id": "gisement_lointain", "position": [1300.0, 700.0, 0.0], "materiau": "minerai_fer_demo", "volume": 0.030, "valeur": 8.0, "depot": "forge", "proche": false },
+		{ "id": "miette_lointaine", "position": [1560.0, 780.0, 0.0], "materiau": "minerai_fer_demo", "volume": 0.002, "valeur": 1.5, "depot": "forge", "proche": false }
+	],
+
+	"fonte": {
+		"transformation_metal": "fonte_metal",
+		"transformation_scories": "fonte_scories",
+		"valeur_lingot": 9.0,
+		"depot_lingot": "grenier",
+		"ecart_empilement": 44.0,
+		"rangs_empilement": 8
+	},
+
+	"intervalle_trace_s": 2.0,
+	"attente_avant_fin_s": 1.0,
+
+	"taille_colon": 30.0,
+	"taille_ressource": 26.0,
+	"taille_lieu": 46.0,
+	"taille_produit": 22.0,
+	"couleur_fond": [0.16, 0.17, 0.19],
+	"couleur_colon": [0.95, 0.85, 0.35],
+	"couleur_ressource": [0.62, 0.42, 0.30],
+	"couleur_ressource_filtree": [0.32, 0.30, 0.30],
+	"couleur_forge": [0.85, 0.35, 0.20],
+	"couleur_grenier": [0.35, 0.65, 0.90],
+	"couleur_lingot": [0.80, 0.80, 0.86],
+	"couleur_scories": [0.45, 0.40, 0.38]
+}

@@ -1,0 +1,22 @@
+{
+	"_note": "Jetable, propre a scripts/banc_coupe.gd (chantier 'cisaillement et tranchant -- couper un objet'). Meme convention de visee que data/banc_fracture.json : 'position_source' n'existe pas ici, l'epicentre de chaque coupe est la position du CLIC (get_global_mouse_position, converti en Vector3), pas une position fixe. 'rayon_coupe' (100.0) reste petit devant l'espacement des trois cibles (400 unites) : cliquer pres d'une cible ne met JAMAIS les deux autres a portee. 'criteres' reste quasi neutre (un seul candidat generalement a portee) mais doit rester non vide pour Frappe.selectionner. 'reserve_integrite_defaut.reserve' (2.0) est calibree pour que, avec l'outil en fer (tranchant_max 9.0) par defaut : le bois (resistance_cisaillement 10.0, degat/coup ~0.9) casse en environ 3 coups, la pierre (20.0, ~0.45) en environ 5 coups, le fer (170.0, ~0.05) resiste tres longtemps (des dizaines de coups) -- 'le fer resiste beaucoup' reste observable au label (integrite qui descend a peine) sans exiger que la coupe aille a son terme pour etre credible. 'taux_emoussement' (0.05) multiplie la durete de la CIBLE a chaque coup pour reduire 'tranchant_effectif' de l'outil (durete haute = emoussement rapide) -- un outil en bois (tranchant_max 2.0, durete faible) s'emousse totalement avant d'entamer significativement la pierre ou le fer. 'materiau_outil_defaut' (fer) est l'outil au demarrage ; un clic droit fait cycler l'outil parmi ['fer','bois','pierre'] (ORDRE_MATERIAUX_OUTIL, banc_coupe.gd) et lui redonne un tranchant_effectif fraichement egal a son tranchant_max. 'transformation_coupe' par cible pointe vers data/transformations.json -- 'coupe_bois'/'coupe_pierre'/'coupe_fer', jamais vide (contrairement a banc_fracture.gd : ici TOUTE cible coupee a bout produit des debris, aucune branche 'reste deforme sans transformation').",
+	"nom_reserve_integrite": "integrite",
+	"reserve_integrite_defaut": { "reserve": 2.0, "cout_base": 0.0, "surcout_action": 0.0 },
+	"rayon_coupe": 100.0,
+	"criteres": [ { "poids": 1.0, "source": "position_z" } ],
+	"taux_emoussement": 0.05,
+	"materiau_outil_defaut": "fer",
+	"position_outil": [200.0, -220.0, 0.0],
+	"cibles": [
+		{ "id": "bois_0", "position": [200.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }], "transformation_coupe": "coupe_bois" },
+		{ "id": "pierre_0", "position": [600.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }], "transformation_coupe": "coupe_pierre" },
+		{ "id": "fer_0", "position": [1000.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }], "transformation_coupe": "coupe_fer" }
+	],
+	"couleurs": {
+		"bois_0": [0.55, 0.42, 0.28],
+		"pierre_0": [0.5, 0.5, 0.55],
+		"fer_0": [0.65, 0.68, 0.72]
+	},
+	"couleur_debris": [0.35, 0.32, 0.28],
+	"camera": { "position": [600.0, -100.0, 0.0], "zoom": 0.4 }
+}

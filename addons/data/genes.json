@@ -1,0 +1,11 @@
+{
+	"_note": "Catalogue de genes (chantier 'fondation genetique dormante', voir docs/design.md 'L'entite comme agent complet'). Reference resolue par nom_gene depuis proprietes.genes_actifs (Array de String, forme A -- voir data/types.json:dynamique). Chaque entree porte cibles (Array de { chemin, poids } -- chemin en points vers une propriete a moduler, meme patron que couplage.gd:_lire_chemin, PAS encore un ecrivain par chemin : scripts/expression.gd sait lire ce catalogue, aucun cablage ne lui passe CELUI-CI), mode_expression (String parmi dominant/recessif/additif/incomplet/codominant, un vocabulaire fixe consomme par le futur mecanisme -- PAS une reference de catalogue, meme statut que 'sens' dans data/deformations.json) et _note. Le mode s'applique a TOUTES les cibles du gene, jamais par cible -- meme convention que 'sens' pour toutes les cibles d'une source de deformation. poids porte un signe : deux cibles d'un meme gene peuvent monter l'une et descendre l'autre (effet contradictoire, 'plus fort mais plus faim'), voir data/transformations.json:defaut.a_zero.retirer pour le precedent d'une entree a plusieurs proprietes affectees a la fois. DONNEE DORMANTE : aucun mecanisme du coeur ne lit ce fichier aujourd'hui -- ni scripts/expression.gd (il sait le lire, les deux bancs genetiques lui passent un catalogue LOCAL), ni scripts/test_lint_donnees.gd (genes_actifs n'y est pas encore une reference verifiee, aucune donnee reelle ne le porte). Posee pour le jour ou le gameplay genetique s'ouvrira, meme patron que data/materiaux.json.",
+	"resonance_gravitique": {
+		"_note": "Entree hors domaine, inventee pour prouver la structure -- aucun rapport avec un contenu Orion reel (meme esprit que l'entree 'gravitique' de data/deformations.json). Deux cibles opposees : la premiere renforce un champ, la seconde en reduit la portee -- illustre l'effet contradictoire qu'un seul gene peut porter sur plusieurs proprietes a la fois.",
+		"cibles": [
+			{ "chemin": "champ_gravitique.intensite", "poids": 0.6 },
+			{ "chemin": "champ_gravitique.portee", "poids": -0.3 }
+		],
+		"mode_expression": "codominant"
+	}
+}

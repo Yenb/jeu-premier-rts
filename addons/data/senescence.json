@@ -1,0 +1,10 @@
+{
+	"_note": "Catalogue de courbes de senescence (chantier 'fondation genetique dormante', voir docs/design.md 'L'entite comme agent complet'). Chaque entree decrit une courbe de modulation par l'age : cible (chemin en points vers une propriete a moduler, meme patron que couplage.gd:_lire_chemin), age_debut (age, en annees, a partir duquel la modulation commence -- avant, aucun effet), modulateur_par_annee (magnitude ajoutee par annee ecoulee au-dela de age_debut, unite = celle de la cible), mode (String parmi lineaire/exponentiel/plafonne -- comment modulateur_par_annee compose avec les annees ecoulees, un vocabulaire fixe consomme par le futur mecanisme, PAS une reference de catalogue) et _note. Les modulateurs de senescence sont CALCULES A LA VOLEE par le futur senescence.gd, jamais stockes sur l'entite -- contrairement a deformation_etat/genes_etat, aucun champ 'senescence_etat' n'existe : seule proprietes.age (float, en annees) serait necessaire sur l'instance. REVISION (chantier 'horloge du monde -- heure et saison dans le coeur') : la phrase qui suivait, 'aucun concept de temps du monde -- tick_total/saison -- n'est implemente aujourd'hui', N'EST PLUS VRAIE -- scripts/horloge.gd calcule l'heure du jour et la saison courante, et senescence.gd:avancer les pose sur l'entite (proprietes.heure_courante / proprietes.saison) quand une horloge lui est fournie. Ce qui reste vrai : aucun accumulateur de temps global n'existe dans le moteur, le cablage fournit temps_ecoule. Voir docs/design.md, 'Simulation acceleree', et CARTE.md §2 horloge.gd. proprietes.age reste absente de data/types.json au sens de CE chantier-ci (elle y a ete ajoutee depuis, sur le paquet 'dynamique'). DONNEE DORMANTE : aucun mecanisme du coeur ne lit ce fichier aujourd'hui -- posee pour le futur senescence.gd, meme patron que data/materiaux.json.",
+	"declin_gravitique": {
+		"_note": "Entree hors domaine, inventee pour prouver la structure -- aucun rapport avec un contenu Orion reel. Passe un certain age, l'intensite du champ decline chaque annee.",
+		"cible": "champ_gravitique.intensite",
+		"age_debut": 40.0,
+		"modulateur_par_annee": -0.02,
+		"mode": "lineaire"
+	}
+}

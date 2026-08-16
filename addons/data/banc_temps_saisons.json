@@ -1,0 +1,229 @@
+{
+	"_note": "Jetable, propre a scripts/banc_temps_saisons.gd. Aucun catalogue partage n'est defini ici : les deux etats de moral vivent dans data/etats.json, leurs seuils dans data/seuils_etat.json, la reference de paliers d'integrite dans data/seuils_combustible.json, les libelles dans data/textes.json, la loi de croyance dans data/croyances.json. Ce fichier ne porte que la calibration d'observation et les NOMS de propriete que le cablage lit.\n\nDEUX DEBITS SUR LA MEME RESERVE, et c'est structurel : scripts/flux.gd ADDITIONNE (canal.reserve + quantite) au lieu d'ecrire, donc deux lignes de table visant la meme cible se composent sans se connaitre. 'soleil' porte un taux positif et sert la ligne rapide, appelee a chaque tick avec le delta reel ; 'givre' porte un taux NEGATIF (flux.gd est neutre par construction, un taux negatif decroit) et sert la ligne lente, appelee UNE SEULE FOIS par changement de saison avec delta 1.0, la quantite etant deja resolue. Chaque emetteur porte SON taux et SA portee, jamais la table : sommer les deux dans une seule ligne fondrait deux echelles de temps en un agregat illisible.\n\nQUI RECOIT QUOI EST DECIDE PAR scripts/conditions.gd, rejoue a chaque tick avec retrait : la plante gagne 'pousse' quand le miroir de saison de croissance vaut 1.0, 'dort' quand le miroir de saison froide vaut 1.0. Une ligne de flux dont la propriete receptrice est absente ne transfere rien -- le gate est ARITHMETIQUE, aucune branche n'existe nulle part.\n\nCONDITIONS ET NOMBRES NE SE COMPARENT QUE NUMERIQUEMENT : conditions.gd convertit en float ce qu'il lit, un nom de saison y vaudrait zero et la comparaison reussirait ou echouerait sans bruit. D'ou trois MIROIRS 0.0/1.0 ecrits par le cablage sur chaque plante -- unique ecrivain, tous trois toujours presents (une propriete absente fait echouer sa condition, jamais reussir).\n\nSAUTER LA SAISON FROIDE, c'est simplement NE PAS ECRIRE son miroir cette annee-la : conditions.gd ne pose alors pas 'dort', la ligne lente ne trouve aucun receveur, les reserves ne descendent pas. Rien n'est desactive, rien n'est branche : la donnee manque, l'effet manque. L'annee volcanique ecrit un miroir de PLUS, et une troisieme entree de conditions -- deux conditions en ET -- pose alors 'gel_extreme' et 'recolte_perdue' en plus de 'dort'. 'gel_extreme' est lu par le cablage pour ouvrir le cout_base de la reserve vegetale (scripts/depense.gd ne consulte jamais scripts/etat_effectif.gd, un effet declare en catalogue serait vrai et sans portee).\n\nLA CADENCE REMPLACE LE TIRAGE. Deux accumulateurs plats sur l'entite calendrier, deux seuils LUS PAR OBJET dans 'seuils_locaux' (meme format que le catalogue partage, passe tel quel a scripts/seuil_etat.gd). Un compte monte d'une unite par annee, franchit, le cablage applique la perturbation puis remet a zero -- l'etat se retire seul et la cadence repart. 'compte_saut_initial' 1.0 pour un seuil de 2.0 : la premiere saison froide est reguliere, la deuxieme est sautee, soit deux tours de cycle pour voir la chose sans attendre. Deux tirages equivalents auraient donne le meme enonce statistique sans etre rejouables.\n\nLE MORAL EST UN CHAMP DERIVE, jamais une reserve : ni scripts/depense.gd ni scripts/charge.gd ne le touchent. Le cablage le RECALCULE A NEUF chaque tick, somme ponderee sur 'poids_moral' du colon moins la penalite de zone, et l'ecrit par-dessus la valeur precedente. 'abondance' relie la ligne des saisons a celle de l'humeur : c'est le total des reserves vegetales rapporte a leur capacite, donc un hiver rude fait tomber le moral de tout le monde a la fois.\n\nCONTAGION : un colon sous le seuil de panique devient une CAUSE a sa propre position, scripts/charge.gd accumule sur les colons a portee de leur canal, le franchissement pose un marqueur que le cablage recopie en miroir 0.0/1.0. La penalite qui en decoule est un TERME de la somme ponderee, jamais une soustraction empilee. UN SEUL canal par colon, deliberement : charge.gd applique la meme liste de causes a tous les canaux d'une chose, et aucune portee ne les separe. Le paniquant se charge lui-meme (distance nulle) -- sans consequence, son moral est deja sous le seuil.\n\nCALIBRATION MESUREE, seuil de panique a 0.70 de manque : moral d'un colon serein qui n'a rien lu = 0.4 x abondance + 0.25 ; aux reserves de depart (0.6) il vaut 0.49, manque 0.51, calme. Serenite coupee : 0.24, manque 0.76, il panique. Ses voisins perdent 0.15 et tombent a 0.34, manque 0.66 -- 'moral_bas' oui, panique non, et c'est CETTE MARGE qui rend la contagion reversible : sans elle les deux se maintiendraient l'un l'autre pour toujours. Les trois chroniques lues ajoutent 0.35. Une saison froide qui vide les reserves (abondance 0.1) laisse un lecteur a 0.64, calme ; le meme sans rien de lisible tombe a 0.29, manque 0.71, il panique. L'histoire protege du froid, et ce n'est ecrit nulle part : c'est la somme ponderee qui le produit.\n\nLA FIERTE VIENT DE DEUX PARTS MULTIPLIEES, toutes deux recalculees a neuf : ce que le colon a lu (nombre de chroniques distinctes rapporte a 'chroniques_pour_fierte') et ce qui reste lisible (chroniques lisibles rapportees aux chroniques ecrites). Bruler la moitie des rayonnages coupe la fierte de moitie ; les croyances deja acquises, elles, survivent sur les lecteurs et ne s'effacent que par l'oubli de scripts/croyance.gd.\n\nLA CHRONIQUE EST UN OBJET REEL fabrique en cours de partie depuis 'types_locaux' (data/types.json n'a pas a connaitre un objet que seul ce banc fabrique), avec une composition donc une masse -- sans elle scripts/produit.gd ne saurait calculer aucun volume de cendre. 'fidelite' 0.7 : lue, une croyance vaut 0.7 x le gain d'echec du catalogue partage, donc toujours sous la resistance au dogme, donc toujours corrigible.\n\nDISTANCES, mesurees et non devinees. Le gardien est a 20 du premier rayonnage, sous la portee de travail de 25 declaree par la transformation partagee 'defaut' : il est le SEUL a pouvoir eteindre, et le SEUL rayonnage qu'il touche est le premier. Les deux autres sont a 92 et 181 : il les lit, il ne les sauve pas. Le brasier est a 100 du premier rayonnage pour une portee de propagation de 150, les rayonnages sont espaces de 90 : le feu passe de l'un a l'autre tout seul. Le colon isole est a plus de 500 de tout rayonnage et a plus de 260 de tout autre colon : il ne lit rien, il n'est jamais contamine, il est le temoin.",
+
+	"langue": "fr",
+	"periode_trace_s": 2.0,
+
+	"nom_canal_vue": "vue",
+	"canal_vue": { "portee": 1400.0, "angle": 360.0, "sensibilite": 1.0, "seuil": 0.0 },
+
+	"cycle": {
+		"duree_jour_secondes": 1.5,
+		"heures_par_jour": 24.0,
+		"heure_depart": 6.0,
+		"jours_par_saison": 6.0,
+		"latitude": 0.0,
+		"saisons": ["printemps", "ete", "automne", "hiver"]
+	},
+	"saison_froide": "hiver",
+	"saisons_de_pousse": ["printemps", "ete"],
+
+	"nom_reserve_vegetale": "reserve_vegetale",
+	"capacite_vegetale": 100.0,
+	"reserve_vegetale_initiale": 60.0,
+	"cout_gel": 6.0,
+
+	"propriete_pousse": "pousse",
+	"propriete_dormance": "dort",
+	"propriete_gel": "gel_extreme",
+	"propriete_recolte_perdue": "recolte_perdue",
+	"miroir_saison_pousse": "est_saison_pousse",
+	"miroir_saison_froide": "est_hiver",
+	"miroir_volcanique": "volcanique",
+	"propriete_source_rapide": "source_rapide",
+	"propriete_source_lent": "source_lent",
+
+	"conditions_saison": [
+		{
+			"id": "croissance",
+			"conditions": [ { "propriete": "est_saison_pousse", "operateur": ">=", "seuil": 1.0 } ],
+			"resultat": { "pousse": true }
+		},
+		{
+			"id": "dormance",
+			"conditions": [ { "propriete": "est_hiver", "operateur": ">=", "seuil": 1.0 } ],
+			"resultat": { "dort": true }
+		},
+		{
+			"id": "dormance_volcanique",
+			"conditions": [
+				{ "propriete": "est_hiver", "operateur": ">=", "seuil": 1.0 },
+				{ "propriete": "volcanique", "operateur": ">=", "seuil": 1.0 }
+			],
+			"resultat": { "dort": true, "gel_extreme": true, "recolte_perdue": true }
+		}
+	],
+
+	"sources_flux": [
+		{ "id": "soleil", "position": [-380.0, 420.0, 0.0], "propriete": "source_rapide", "taux_flux": 5.0, "portee_flux": 1200.0 },
+		{ "id": "givre", "position": [-380.0, 600.0, 0.0], "propriete": "source_lent", "taux_flux": -25.0, "portee_flux": 1200.0 }
+	],
+
+	"plantes": [
+		{ "id": "champ_ouest", "position": [-600.0, 200.0, 0.0] },
+		{ "id": "champ_centre", "position": [-380.0, 200.0, 0.0] },
+		{ "id": "champ_est", "position": [-160.0, 200.0, 0.0] }
+	],
+	"propriete_comestible": "comestible",
+
+	"calendrier": {
+		"id": "calendrier",
+		"position": [0.0, 0.0, 0.0],
+		"compte_saut_initial": 1.0,
+		"seuil_saut_hiver": 2.0,
+		"compte_volcan_initial": 0.0,
+		"seuil_hiver_volcanique": 3.0
+	},
+	"seuils_locaux": {
+		"cadence_saut_hiver": {
+			"propriete_continue": "annees_depuis_saut",
+			"seuil_propriete": "seuil_saut_hiver",
+			"etat": "saut_hiver_du"
+		},
+		"cadence_hiver_volcanique": {
+			"propriete_continue": "annees_depuis_volcan",
+			"seuil_propriete": "seuil_hiver_volcanique",
+			"etat": "hiver_volcanique_du"
+		}
+	},
+	"etat_saut_hiver": "saut_hiver_du",
+	"etat_hiver_volcanique": "hiver_volcanique_du",
+	"cle_annee_reguliere": "saison.reguliere",
+	"cle_annee_sans_hiver": "saison.hiver_saute",
+	"cle_annee_volcanique": "saison.hiver_volcanique",
+
+	"capacite_moral": 1.0,
+	"nom_moral": "moral",
+	"nom_manque_moral": "manque_moral",
+	"nom_miroir_contagion": "contagion_moral",
+	"nom_poids_moral": "poids_moral",
+	"source_abondance": "abondance",
+	"source_serenite": "serenite",
+	"source_fierte": "fierte_histoire",
+	"etat_panique": "panique",
+	"etat_moral_bas": "moral_bas",
+	"penalite_moral_zone": 0.15,
+	"nom_canal_contagion": "contagion",
+	"marqueur_contagion": "expose_contagion",
+	"canal_contagion": {
+		"charge": 0.0,
+		"seuil": 0.8,
+		"portee_charge": 260.0,
+		"taux_decroissance": 0.6,
+		"poser": { "expose_contagion": true }
+	},
+	"serenite_pleine": 1.0,
+	"serenite_effondree": 0.0,
+	"colon_choque": "colon_a",
+
+	"colons": [
+		{
+			"id": "chroniqueur",
+			"position": [250.0, -100.0, 0.0],
+			"auteur": true,
+			"rythme": 0.0,
+			"poids_moral": { "abondance": 0.4, "serenite": 0.25, "fierte_histoire": 0.35 }
+		},
+		{
+			"id": "gardien",
+			"position": [450.0, -80.0, 0.0],
+			"auteur": false,
+			"rythme": 1.0,
+			"poids_moral": { "abondance": 0.4, "serenite": 0.25, "fierte_histoire": 0.35 }
+		},
+		{
+			"id": "colon_a",
+			"position": [300.0, 60.0, 0.0],
+			"auteur": false,
+			"rythme": 0.0,
+			"poids_moral": { "abondance": 0.4, "serenite": 0.25, "fierte_histoire": 0.35 }
+		},
+		{
+			"id": "colon_b",
+			"position": [440.0, 40.0, 0.0],
+			"auteur": false,
+			"rythme": 0.0,
+			"poids_moral": { "abondance": 0.4, "serenite": 0.25, "fierte_histoire": 0.35 }
+		},
+		{
+			"id": "colon_isole",
+			"position": [1150.0, 200.0, 0.0],
+			"auteur": false,
+			"rythme": 0.0,
+			"poids_moral": { "abondance": 0.4, "serenite": 0.25, "fierte_histoire": 0.35 }
+		}
+	],
+
+	"pupitre": { "id": "pupitre", "position": [250.0, -200.0, 0.0] },
+	"brasier": { "id": "brasier", "position": [350.0, -60.0, 0.0], "propriete_dangereux": "dangereux" },
+	"propriete_menace": "brule",
+
+	"portee_ecriture": 200.0,
+	"portee_lecture": 260.0,
+	"cadence_lecture": 2.0,
+	"cadence_observation": 1.0,
+	"chroniques_pour_fierte": 2.0,
+
+	"nom_reserve_integrite": "integrite",
+	"chronique": {
+		"type": "chronique",
+		"prefixe_id": "chronique_",
+		"cle_titre": "chronique.titre",
+		"cle_illisible": "livre.illisible",
+		"propriete_illisible": "illisible",
+		"marqueur_consumee": "chronique_consumee",
+		"integrite": 24.0,
+		"cout_lisibilite": 0.1,
+		"cout_incendie": 6.0,
+		"seuils_ref": "epuisement_chronique",
+		"fidelite": 0.7,
+		"maximum": 3,
+		"positions": [
+			[450.0, -60.0, 0.0],
+			[540.0, -60.0, 0.0],
+			[630.0, -60.0, 0.0]
+		]
+	},
+	"types_locaux": {
+		"chronique": {
+			"composition": [ { "materiau": "bois", "volume": 0.03 } ],
+			"inflammable": true,
+			"portee_propagation": 150.0,
+			"delai_propagation": 1.2
+		}
+	},
+	"patron_incendie": { "travail_restant": 2.0, "transformation": "defaut" },
+	"produire_cendre": { "type_produit": "cendre", "rendement": 0.05 },
+
+	"couleurs": {
+		"fond_jour": [0.50, 0.58, 0.66],
+		"fond_nuit": [0.05, 0.06, 0.12],
+		"plante_pousse": [0.25, 0.75, 0.30],
+		"plante_dort": [0.35, 0.40, 0.30],
+		"plante_gel": [0.55, 0.70, 0.85],
+		"barre_fond": [0.14, 0.14, 0.16],
+		"barre_reserve": [0.40, 0.85, 0.45],
+		"barre_integrite": [0.90, 0.80, 0.50],
+		"source_rapide": [0.98, 0.85, 0.25],
+		"source_lent": [0.45, 0.70, 0.95],
+		"moral_haut": [0.25, 0.80, 0.35],
+		"moral_bas": [0.90, 0.55, 0.15],
+		"moral_panique": [0.90, 0.20, 0.20],
+		"cercle_contagion": [0.95, 0.35, 0.35],
+		"chronique": [0.90, 0.80, 0.55],
+		"chronique_illisible": [0.42, 0.40, 0.36],
+		"chronique_brule": [0.95, 0.45, 0.10],
+		"cendre": [0.30, 0.30, 0.32],
+		"pupitre": [0.45, 0.40, 0.35],
+		"brasier_eteint": [0.35, 0.32, 0.30],
+		"brasier_allume": [0.98, 0.40, 0.10]
+	},
+	"taille_plante": 54.0,
+	"taille_colon": 44.0,
+	"taille_chronique": 30.0,
+	"taille_objet": 34.0,
+	"largeur_barre": 90.0,
+	"hauteur_barre": 10.0,
+	"segments_cercle": 28,
+	"camera": { "position": [280.0, 90.0], "zoom": 0.42 }
+}

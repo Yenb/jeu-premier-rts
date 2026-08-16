@@ -1,0 +1,14 @@
+{
+	"gravitique_massif": {
+		"propriete": "massif",
+		"seuil_nombre": 3,
+		"seuil_force": 0.5,
+		"force_attache": 1.0
+	},
+	"generalisation_ouvrage": {
+		"propriete": "notre_ouvrage",
+		"seuil_nombre": 3,
+		"seuil_force": 0.3,
+		"force_attache": 1.0
+	}
+}

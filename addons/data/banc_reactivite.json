@@ -1,0 +1,36 @@
+{
+	"_note": "Donnees jetables du banc reactivite -- PREMIERE demonstration reelle du chantier 'reactivite'. Un acide_demo (reactivite 0.95) toggle entre une position proche (a portee_contact des trois cibles a la fois) et une position loin (hors de toute portee) au clic gauche. Trois cibles reelles (fer/pierre/bois, data/materiaux.json) portent chacune un canal charge.gd 'reaction' dont le seuil est initialise depuis data/reactions.json:seuil_reactivite (le meme, 1.0, pour les trois -- seule la ponderation score_reaction=reactivite(acide)*reactivite(cible) les distingue : fer 0.6*0.95=0.57 le plus rapide, bois 0.2*0.95=0.19 au milieu, pierre 0.1*0.95=0.095 le plus lent). Positions choisies pour que les trois cibles soient A EGALE DISTANCE (~291.5, fer/bois ; 150.0, pierre) de la position proche de l'acide, toutes sous portee_contact (320.0) avec une marge confortable. reserve_acide_defaut (3.0) et facteur_consommation_acide (0.4) sont calibres pour que la consommation ORGANIQUE de l'acide (proportionnelle aux cibles encore actives a portee) ne descende JAMAIS a zero avant que la pierre (la plus lente) n'ait fini de reagir (aire sous la courbe de consommation avant t_pierre ~= 1.26, tres en dessous de 3.0) -- voir scripts/banc_reactivite.gd, Phase 3, pour la fermeture explicite qui epuise l'acide une fois qu'il n'y a plus rien a consommer.",
+	"materiau_acide": "acide_demo",
+	"nom_canal_reaction": "reaction",
+	"marqueur_pret": "produit_reaction_pret",
+	"nom_reserve_acide": "acide",
+	"marqueur_acide_epuise": "acide_epuise",
+	"transformation_acide": "reactivite_acide_epuise",
+	"facteur_consommation_acide": 0.4,
+	"portee_contact": 320.0,
+	"canal_reaction_defaut": {
+		"charge": 0.0,
+		"seuil": 0.0,
+		"portee_charge": 320.0,
+		"taux_decroissance": 0.3,
+		"poser": { "produit_reaction_pret": true }
+	},
+	"reserve_acide_defaut": {
+		"reserve": 3.0,
+		"cout_base": 0.0,
+		"surcout_action": 0.0,
+		"seuils_ref": "epuisement_reactivite_acide"
+	},
+	"acide": {
+		"id": "acide",
+		"position_proche": [400.0, 100.0, 0.0],
+		"position_loin": [400.0, -2000.0, 0.0],
+		"composition": [ { "materiau": "acide_demo", "volume": 2.0 } ]
+	},
+	"cibles": [
+		{ "id": "fer", "position": [150.0, 250.0, 0.0], "composition": [ { "materiau": "fer", "volume": 3.0 } ] },
+		{ "id": "pierre", "position": [400.0, 250.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 3.0 } ] },
+		{ "id": "bois", "position": [650.0, 250.0, 0.0], "composition": [ { "materiau": "bois", "volume": 3.0 } ] }
+	],
+	"camera": { "position": [400.0, 250.0, 0.0], "zoom": 0.6 }
+}

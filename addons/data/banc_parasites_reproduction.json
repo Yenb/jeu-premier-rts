@@ -1,0 +1,115 @@
+{
+	"_note": "Jetable, propre a scripts/banc_parasites_reproduction.gd (chantier « parasites + reproduction animale », audit_ecosysteme_vivant_prealable.md lignes 10 et 11). Deux especes construites A LA MAIN depuis 'especes' ci-dessous (pas Objet.fabriquer, pas data/types.json -- patron dominant depuis banc_maladie.gd : demonstration de cablage, pas integration au jeu ; consequence directe, AUCUNE propriete neuve ne rejoint data/types.json, donc RIEN a enregistrer dans les registres de scripts/test_lint_donnees.gd). 'seed' fixe la RNG des destinations aleatoires ET la RNG de mutation d'heredite.gd -- aucun hasard non seede (CLAUDE.md). Les DEUX especes portent le meme gabarit de corps interne (age/stade/stades_config/mode_reproduction/espece_reproduction/stades_fertiles/reproduction_ref/genes_actifs/genes_etat/marques_epigenetiques), seules leurs VALEURS different -- sauf role_gestation 'les_deux', que seul l'hote porte (voir l'en-tete du .gd, point 3) : c'est ce qui fait passer les deux par le meme code de cycle, sans un seul cas particulier. SEUL LE PARASITE porte 'seuil_longevite' -- c'est ce qui rend l'entree de seuil 'fin_vie' inoffensive pour l'hote (seuil_etat.gd replie sur INF quand la propriete nommee par seuil_propriete est absente : un hote ne meurt jamais de vieillesse, il vieillit seulement pour ses stades). SEUL L'HOTE porte le canal 'etats.infestation' et 'charge_parasitaire_cumulee' -- c'est ce qui rend charge.gd et l'entree 'mort_parasitose' inoffensifs pour le parasite (chemins morts silencieux, jamais une alarme). Les durees d'incube_parasite/infeste vivent dans data/etats.json, jamais en champ ici. CALIBRATION -- ce que chaque nombre verrouille : canal_infestation.seuil 2.0 face a poids_parasite 1.0 = 2.0s de contact continu avec un parasite pour etre infeste ; poids_porteur 0.5 = un hote contagieux met deux fois plus longtemps qu'un parasite ; taux_decroissance 0.5 = la charge redescend si on s'eloigne (contrairement a banc_maladie.gd, cliquet a 0.0 -- ici la charge DOIT pouvoir redescendre, sans quoi la reinfestation ne serait qu'un mot). seuils_locaux.mort_parasitose.seuil 14.0 est DELIBEREMENT AU-DESSUS de la duree de 'infeste' (12.0s, data/etats.json) : la PREMIERE infestation ne tue pas, elle use ; c'est la SECONDE qui tue -- l'inverse exact du choix de banc_maladie.gd (seuil_mort 16.0 SOUS maladie_duree_s 20.0, letalite totale des la premiere fois), et c'est ce qui rend la reinfestation observable a l'ecran plutot que seulement prouvee par un test. seuil_vigueur_accouplement 60.0 sur une vigueur qui monte de 8.0/s depuis 0.0 = 7.5s avant le premier accouplement possible, et 7.5s de plus apres chaque naissance (le cablage vide la vigueur des deux parents) : c'est CE nombre, et lui seul, qui tient le rythme des naissances -- l'accumulateur d'accouplement.gd n'est qu'un ticket d'entree, paye a neuf a chaque portee. CAPACITE DE CHARGE -- RESULTAT NEGATIF DE CE CHANTIER, A NE PAS REFAIRE : le premier jet gatait la ponte du parasite sur un nombre d'hotes ABSOLU ('min_hotes_pour_pondre', 2). Ca ne freine RIEN -- chaque parasite pond independamment, aucun ne consomme la ressource, et la population double a chaque duree_gestation ; la suite de tests a reellement PENDU dessus (les DEUX especes en croissance exponentielle simultanee, aggravees par le cout O(n^2) des requetes spatiales que perception.gd signale deja dans son en-tete). Remplace par un RATIO, cote parasite ('min_hotes_par_parasite' 2 : il faut deux hotes vivants PAR parasite dans portee_ponte), et par un plafond de voisinage cote hote ('max_voisins_hote' 4 dans portee_rencontre) -- freiner les seuls parasites n'aurait fait que deplacer l'explosion sur l'autre espece, la mortalite parasitaire etant le SEUL frein des hotes et disparaissant justement quand les parasites se rarefient. C'est la ligne 3 de l'audit (« capacite de charge »), rendue par deux comptages de cablage et zero mecanisme.",
+
+	"seed": 20260814,
+	"annees_par_seconde": 2.0,
+	"facteur_temps_accelere": 4.0,
+
+	"espece_hote": "herbivore",
+	"espece_parasite": "parasite",
+
+	"zone": { "min": [60.0, 60.0, 0.0], "max": [820.0, 500.0, 0.0] },
+
+	"portee_rencontre": 90.0,
+	"portee_ponte": 130.0,
+	"min_hotes_par_parasite": 2,
+	"max_voisins_hote": 4,
+	"seuil_vigueur_accouplement": 60.0,
+	"offset_petit": [26.0, -26.0, 0.0],
+	"parasites_par_ajout": 3,
+
+	"poids_parasite": 1.0,
+	"poids_porteur": 0.5,
+
+	"canal_infestation": {
+		"charge": 0.0,
+		"seuil": 2.0,
+		"portee_charge": 70.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_parasite": true }
+	},
+
+	"canal_vigueur": {
+		"capacite": 100.0,
+		"reserve": 0.0,
+		"cout_base": -8.0,
+		"surcout_action": 0.0
+	},
+
+	"seuils_locaux": {
+		"_note": "Format EXACT de data/seuils_etat.json, passe TEL QUEL a SeuilEtat.avancer -- catalogue LOCAL au banc, le catalogue PARTAGE n'est jamais touche ni meme lu par ce banc (patron data/banc_elimination_salete.json:seuils_elimination, data/banc_psycho_social.json:seuils_locaux). Les deux entrees sont mutuellement inoffensives par la SEULE ARITHMETIQUE, jamais par une branche : un parasite ne porte pas 'charge_parasitaire_cumulee' (chemin mort avant toute ecriture de memoire), un hote ne porte pas 'seuil_longevite' (repli INF).",
+		"mort_parasitose": {
+			"propriete_continue": "charge_parasitaire_cumulee",
+			"seuil": 14.0,
+			"etat": "mort_parasite"
+		},
+		"fin_vie": {
+			"propriete_continue": "age",
+			"seuil_propriete": "seuil_longevite",
+			"etat": "mort_vieillesse"
+		}
+	},
+
+	"catalogue_genes": {
+		"_note": "LOCAL au banc, jamais data/genes.json -- meme discipline que data/banc_reproduction.json:catalogue_genes et data/banc_genetique.json (une regle de banc de demonstration ne rejoint le catalogue partage que si un second banc en a besoin). Un seul gene, une seule cible : la preuve porte sur le fait que l'enfant HERITE, pas sur un arbitrage multi-cibles deja demontre ailleurs. Poids 12.0 en mode additif sur une vitesse de base de 70.0 : un petit ne de deux parents [1,1] nait a 94.0, de deux parents [-1,-1] a 46.0 -- l'ecart est visible au label sans qu'un parent devienne immobile ni ne traverse l'ecran.",
+		"endurance_course": {
+			"cibles": [
+				{ "chemin": "vitesse", "poids": 12.0 }
+			],
+			"mode_expression": "additif"
+		}
+	},
+
+	"couleurs": {
+		"sain": [0.25, 0.75, 0.30],
+		"incubation": [0.90, 0.85, 0.15],
+		"infeste": [0.92, 0.52, 0.10],
+		"mort": [0.75, 0.15, 0.15],
+		"petit": [0.45, 0.75, 0.95],
+		"parasite": [0.08, 0.08, 0.10]
+	},
+
+	"especes": {
+		"herbivore": {
+			"_note": "Gabarit d'un hote. 'vitesse' est la BASE : le gene 'endurance_course' l'ecarte a la fabrication (ExpressionGenetique.appliquer), 'infeste' la module ensuite par 0.6 et 'mort_parasite' l'ecrase a 0.0. stades_config en ANNEES : adulte a 5.0 annees = 2.5s reelles a annees_par_seconde 2.0.",
+			"vitesse": 70.0,
+			"taille": 26.0,
+			"mode_reproduction": "sexuee",
+			"role_gestation": "les_deux",
+			"stades_fertiles": ["adulte"],
+			"reproduction_ref": "herbivore",
+			"stades_config": [
+				{ "nom": "nouveau_ne", "age_seuil": 0.0 },
+				{ "nom": "jeune", "age_seuil": 2.0 },
+				{ "nom": "adulte", "age_seuil": 5.0 }
+			],
+			"genes_actifs": ["endurance_course"]
+		},
+		"parasite": {
+			"_note": "Gabarit d'un parasite. Ni canal 'etats.infestation' ni 'charge_parasitaire_cumulee' : il n'est jamais receveur, seulement CAUSE. 'seuil_longevite' 40.0 annees = 20.0s reelles a annees_par_seconde 2.0. Plus lent que l'hote (45.0 contre 70.0) : il ne pourchasse pas, il derive et attend. genes_actifs VIDE -- heredite.gd traverse alors sans rien produire (kit vide, aucune alarme, point neutre legitime de son en-tete) : la preuve genetique porte sur les hotes, la dupliquer ici n'apprendrait rien.",
+			"vitesse": 45.0,
+			"taille": 12.0,
+			"mode_reproduction": "asexuee",
+			"stades_fertiles": ["adulte"],
+			"reproduction_ref": "parasite",
+			"seuil_longevite": 40.0,
+			"stades_config": [
+				{ "nom": "larve", "age_seuil": 0.0 },
+				{ "nom": "adulte", "age_seuil": 1.0 }
+			],
+			"genes_actifs": []
+		}
+	},
+
+	"individus": [
+		{ "id": "hote_0", "espece": "herbivore", "position": [180.0, 150.0, 0.0], "age": 6.0, "genes_etat": { "endurance_course": { "alleles": [1.0, 1.0] } } },
+		{ "id": "hote_1", "espece": "herbivore", "position": [300.0, 150.0, 0.0], "age": 6.0, "genes_etat": { "endurance_course": { "alleles": [-1.0, -1.0] } } },
+		{ "id": "hote_2", "espece": "herbivore", "position": [440.0, 280.0, 0.0], "age": 6.0, "genes_etat": { "endurance_course": { "alleles": [1.0, -1.0] } } },
+		{ "id": "hote_3", "espece": "herbivore", "position": [560.0, 280.0, 0.0], "age": 6.0, "genes_etat": { "endurance_course": { "alleles": [-1.0, 1.0] } } },
+		{ "id": "hote_4", "espece": "herbivore", "position": [680.0, 420.0, 0.0], "age": 6.0, "genes_etat": { "endurance_course": { "alleles": [1.0, 1.0] } } },
+		{ "id": "hote_5", "espece": "herbivore", "position": [780.0, 420.0, 0.0], "age": 6.0, "genes_etat": { "endurance_course": { "alleles": [-1.0, -1.0] } } },
+		{ "id": "parasite_0", "espece": "parasite", "position": [240.0, 190.0, 0.0], "age": 2.0, "genes_etat": {} },
+		{ "id": "parasite_1", "espece": "parasite", "position": [500.0, 320.0, 0.0], "age": 2.0, "genes_etat": {} },
+		{ "id": "parasite_2", "espece": "parasite", "position": [730.0, 460.0, 0.0], "age": 2.0, "genes_etat": {} }
+	]
+}

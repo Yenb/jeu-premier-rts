@@ -1,0 +1,23 @@
+{
+	"_note": "positions_colons_initiaux[0]/[1] sont les deux colons verts de la phase 1, distants de 150 unites (largement sous portee_ecoute 400 et sous les portees par defaut de data/types.json:colon:canaux_config). position_apparition_troisieme reste hors de TOUTE portee de perception des deux premiers -- distance au colon_vert_2 le plus proche (1700 unites) strictement superieure au plus grand rayon possible (vue 1600, marge 100 unites, deterministe -- aucun risque de derive flottante, la position est fixe au moment de l'instanciation, avant tout mouvement) -- mais RAPPROCHEE (session correction 'banc invisible', ancienne valeur 4000/4000 hors de tout ecran possible ET trajet interminable a 150 u/s) pour rester a quelques secondes de trajet du point d'arret, hors du champ de la Camera2D (voir banc_vecu_inter_colon.gd:_ready) qui ne cadre que la zone d'arrivee, jamais le transit. position_arret_troisieme est le MILIEU geometrique exact entre les deux positions initiales, decale en Y pour ne jamais etre colineaire avec eux a l'ecran -- distance calculee a 125 unites de chacun, strictement superieure a DISTANCE_ARRET_COLON (30, repliquee depuis banc_p1.gd) et strictement inferieure a portee_ecoute (400) : le troisieme s'arrete donc naturellement a portee d'ecoute des deux sans jamais les chevaucher visuellement, sans calcul geometrique a l'execution.",
+	"positions_colons_initiaux": [
+		[0.0, 0.0, 0.0],
+		[150.0, 0.0, 0.0]
+	],
+	"position_apparition_troisieme": [1850.0, 0.0, 0.0],
+	"position_arret_troisieme": [75.0, 100.0, 0.0],
+	"delai_apparition_troisieme": 60.0,
+	"portee_ecoute": 400.0,
+	"ref_croissance_verts": "venere_arbres_verts_croissance",
+	"ref_croissance_troisieme": "venere_arbres_verts_et_rouges_croissance",
+	"seuil_nombre_colon_vert": 1,
+	"force_attache_rouge_initiale": 1.0,
+	"catalogue_attaches_par_trait": {
+		"generalisation_verts": {
+			"propriete": "venere_arbres_verts",
+			"seuil_nombre": 2,
+			"seuil_force": 0.9,
+			"force_attache": 1.0
+		}
+	}
+}

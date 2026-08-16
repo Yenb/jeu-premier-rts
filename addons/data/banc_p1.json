@@ -1,0 +1,71 @@
+{
+	"couleurs_types": {
+		"arbre": [0.2, 0.6, 0.2],
+		"batisse": [0.2, 0.35, 0.75],
+		"feu": [1.0, 0.5, 0.0],
+		"bloc": [0.2, 0.4, 0.9],
+		"menace": [0.5, 0.0, 0.7],
+		"placide": [0.8, 0.1, 0.1],
+		"fanatique": [0.1, 0.9, 0.1],
+		"batisseur": [0.3, 0.6, 0.95],
+		"cendre": [0.4, 0.38, 0.36],
+		"cendre_consumee": [0.12, 0.11, 0.1]
+	},
+	"couleurs_reserves": {
+		"energie": [1.0, 0.85, 0.2],
+		"faim": [0.9, 0.55, 0.15],
+		"soif": [0.3, 0.55, 0.95],
+		"sommeil": [0.6, 0.4, 0.9],
+		"chaleur": [0.9, 0.25, 0.2]
+	},
+	"reserves_max": {
+		"energie": 100.0,
+		"faim": 100.0,
+		"soif": 100.0,
+		"sommeil": 100.0,
+		"chaleur": 100.0
+	},
+	"instances": [
+		{ "type": "arbre", "position": [220.0, 220.0, 0.0] },
+		{ "type": "arbre", "position": [260.0, 200.0, 0.0] },
+		{ "type": "arbre", "position": [240.0, 260.0, 0.0] },
+		{ "type": "arbre", "position": [280.0, 250.0, 0.0] },
+		{ "type": "arbre", "position": [210.0, 190.0, 0.0] },
+		{ "type": "batisse", "position": [700.0, 350.0, 0.0] },
+		{ "type": "batisse", "position": [740.0, 330.0, 0.0] },
+		{ "type": "batisse", "position": [720.0, 380.0, 0.0] },
+		{ "type": "batisse", "position": [760.0, 360.0, 0.0] }
+	],
+	"colons": {
+		"placide": {
+			"position": [450.0, 450.0, 0.0],
+			"attaches": [],
+			"forme": { "gain_inertie": 0.2 },
+			"poids_verbes": {}
+		},
+		"fanatique": {
+			"position": [500.0, 500.0, 0.0],
+			"attaches": [ { "propriete": "irremplacable", "force": 4.0 } ],
+			"forme": {
+				"rayon_liaison": 220.0,
+				"gain_haut": 3.0,
+				"plafond_haut": 10.0,
+				"gain_inertie": 2.0,
+				"seuil_ecrasement": 2.5
+			},
+			"poids_verbes": { "approcher": 1.0 }
+		},
+		"batisseur": {
+			"position": [400.0, 500.0, 0.0],
+			"attaches": [ { "propriete": "notre_ouvrage", "force": 2.5 } ],
+			"forme": {
+				"rayon_liaison": 220.0,
+				"gain_haut": 2.0,
+				"plafond_haut": 6.0,
+				"gain_inertie": 0.4,
+				"seuil_ecrasement": 2.0
+			},
+			"poids_verbes": { "approcher": 1.0 }
+		}
+	}
+}

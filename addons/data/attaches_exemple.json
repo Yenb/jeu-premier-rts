@@ -1,0 +1,24 @@
+{
+	"colons": {
+		"stresse": {
+			"attaches": [
+				{ "propriete": "trait_x", "force": 2.0 }
+			],
+			"forme": {
+				"rayon_liaison": 80.0,
+				"gain_haut": 1.0,
+				"plafond_haut": 3.0
+			}
+		},
+		"placide": {
+			"attaches": [
+				{ "propriete": "trait_x", "force": 2.0 }
+			],
+			"forme": {
+				"rayon_liaison": 15.0,
+				"gain_haut": 1.0,
+				"plafond_haut": 3.0
+			}
+		}
+	}
+}

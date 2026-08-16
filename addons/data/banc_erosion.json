@@ -1,0 +1,48 @@
+{
+	"_note": "Jetable, propre au banc « érosion par vent et eau -- le sol part et se dépose » (scripts/banc_erosion.gd). Grille grille_lignes x grille_colonnes de cases-objets CONSTRUITES À LA MAIN (patron scripts/banc_ecoulement.gd, jamais Objet.fabriquer -- une case n'a pas de composition). 'position' des cases reste un FAIT SPATIAL PUR en unités de grille (x=colonne, y=ligne, z=0.0 toujours) : rayon_voisinage=1.5 couvre les 8 voisins adjacents (orthogonaux à 1.0, diagonaux à sqrt(2)≈1.414). L'altitude vit dans proprietes.altitude (nom_altitude), DÉCOUPLÉE de position -- décroît linéairement de altitude_max (colonne 0, gauche) à altitude_min (dernière colonne, droite). LE SOL EST UNE RÉSERVE CONSERVÉE : proprietes.reserves.<nom_reserve_sol> = { reserve: sol_initial, capacite: sol_capacite } sur CHAQUE case ; 'capacite' n'est lue par AUCUN mécanisme (depense.gd n'intervient jamais dans ce banc -- le sol ne disparaît pas, il se déplace), elle sert de RÉFÉRENCE D'AFFICHAGE pour la couleur d'épaisseur, et le dépôt en aval peut donc légitimement la dépasser. eau_initiale posée sur les cases de la colonne 0 seulement. couvert_gauche/couvert_droite : proprietes.<nom_couvert> de la moitié gauche (protégée) et de la moitié droite (sol nu), lue via scripts/etat_effectif.gd (donc modulable par un état futur sans une ligne de code). coefficient_erosion_eau : fraction du DÉBIT D'EAU rendu par scripts/ecoulement.gd:avancer qui est convertie en sol emporté sur la MÊME paire de cases (entraînement, jamais une gravité propre au sol). taux_erosion_vent : quantité de sol emportée par seconde = force_vent * taux_erosion_vent * (1 - couvert_vegetal), vers CHAQUE voisin réellement sous le vent. 'vent' : catalogue AU FORMAT de scripts/vent.gd (entrée sentinelle 'defaut'), PROPRE À CE BANC et distinct de data/vent.json -- variation_lente et rafales délibérément à 0.0 pour un vent CONSTANT de gauche à droite (data/vent.json, partagé, porte au contraire une direction qui tourne de ±35° et des rafales : illisible pour observer une érosion orientée). reference_force égale la force de fond, donc l'effet directionnel est toujours PLEIN. facteur_min_contre_vent (0.4) et le point milieu perpendiculaire (toujours exactement 1.0, propriété de vent.gd:facteur_directionnel) rendent la gate 'facteur > 1.0' STRICTEMENT équivalente à 'ce voisin est sous le vent' -- voir scripts/banc_erosion.gd, en-tête. 'sources_vent' : porte d'entrée des perturbations locales de vent.gd (Array de { position: {x,y,z}, rayon, vecteur: {x,y,z} }), DÉCLARÉE ET VIDE -- aucune source posée, exactement comme vent.gd n'en câble aucune ; en ajouter une ici suffit à perturber le vent du banc, zéro ligne de code.",
+	"grille_lignes": 8,
+	"grille_colonnes": 8,
+	"altitude_max": 20.0,
+	"altitude_min": 2.0,
+	"rayon_voisinage": 1.5,
+	"taux_ecoulement": 5.0,
+	"eau_initiale": 10.0,
+	"sol_initial": 100.0,
+	"sol_capacite": 100.0,
+	"couvert_gauche": 0.8,
+	"couvert_droite": 0.0,
+	"coefficient_erosion_eau": 0.05,
+	"taux_erosion_vent": 0.08,
+	"nom_reserve_sol": "sol",
+	"nom_reserve_eau": "niveau_eau",
+	"nom_altitude": "altitude",
+	"nom_couvert": "couvert_vegetal",
+	"ajout_eau_clic": 5.0,
+	"sources_vent": [],
+	"vent": {
+		"defaut": {
+			"fond": {
+				"direction": { "x": 1.0, "y": 0.0, "z": 0.0 },
+				"force": 6.0
+			},
+			"variation_lente": {
+				"amplitude_angle": 0.0,
+				"periode_angle": 0.0,
+				"amplitude_force": 0.0,
+				"periode_force": 0.0
+			},
+			"rafales": {
+				"amplitude": 0.0,
+				"frequence": 0.0
+			},
+			"attenuation_source": {
+				"exposant": 1.0
+			},
+			"directionnel": {
+				"reference_force": 6.0,
+				"facteur_max_sous_vent": 2.2,
+				"facteur_min_contre_vent": 0.4
+			}
+		}
+	}
+}

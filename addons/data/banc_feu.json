@@ -1,0 +1,59 @@
+{
+	"couleurs_types": {
+		"eau": [0.2, 0.5, 0.9],
+		"pierre": [0.55, 0.55, 0.55],
+		"feu": [1.0, 0.5, 0.0],
+		"cendre": [0.4, 0.38, 0.36],
+		"prudent": [0.2, 0.8, 0.4],
+		"peureux": [0.9, 0.7, 0.1],
+		"mesure": [0.6, 0.3, 0.8]
+	},
+	"types": {
+		"eau": { "abrite": true },
+		"pierre": { "abrite": true },
+		"feu": { "profil_saillance": "feu", "brule": true },
+		"colon": { "rythme": 1.5, "canaux": ["vue"], "canaux_config": { "vue": { "portee": 1600.0 } }, "vitesse": 150.0 }
+	},
+	"catalogue_local": {
+		"abrite": { "verbes": ["se_proteger", "s_eloigner"] }
+	},
+	"instances": [
+		{ "type": "eau", "position": [180.0, 520.0, 0.0] },
+		{ "type": "pierre", "position": [220.0, 560.0, 0.0] }
+	],
+	"colons": {
+		"prudent": {
+			"position": [420.0, 300.0, 0.0],
+			"attaches": [],
+			"forme": {
+				"gain_jugement": 0.2,
+				"plafond_jugement": 10.0,
+				"gain_inertie": 1.0,
+				"seuil_ecrasement": 2.0
+			},
+			"poids_verbes": { "approcher": 1.0, "se_proteger": 1.0, "s_eloigner": 0.0 }
+		},
+		"peureux": {
+			"position": [500.0, 300.0, 0.0],
+			"attaches": [],
+			"forme": {
+				"gain_jugement": 0.8,
+				"plafond_jugement": 10.0,
+				"gain_inertie": 1.0,
+				"seuil_ecrasement": 2.0
+			},
+			"poids_verbes": { "approcher": 1.0, "se_proteger": 0.0, "s_eloigner": 1.0 }
+		},
+		"mesure": {
+			"position": [460.0, 380.0, 0.0],
+			"attaches": [],
+			"forme": {
+				"gain_jugement": 0.24,
+				"plafond_jugement": 10.0,
+				"gain_inertie": 1.0,
+				"seuil_ecrasement": 2.0
+			},
+			"poids_verbes": { "approcher": 1.0, "se_proteger": 1.0, "s_eloigner": 0.5 }
+		}
+	}
+}

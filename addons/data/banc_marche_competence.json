@@ -1,0 +1,139 @@
+{
+	"_note": "Donnees propres a scripts/banc_marche_competence.gd (Scene/banc_marche_competence.tscn), chantier « prix + specialisation + habitude + competence » (audit_economie_logistique_prealable.md, lignes 9, 10, 11 et 12 -- les QUATRE au verdict CABLABLE, confirme a l'ecriture). JETABLE, propre au banc : rien ici n'est un catalogue partage. Les DEUX marques (competence_forge/habitude_forge), les DEUX sources de deformation du meme nom, le profil de saillance de la forge et la regle de comptage de la demande vivent, eux, dans les catalogues PARTAGES data/epigenetique.json, data/deformations.json, data/profils_saillance.json et data/comptages.json -- ce fichier ne les redeclare jamais, il ne porte que la scene d'observation et la calibration.\n\nLE PRIX VIT PAR COLON, JAMAIS DANS UN OBJET-MARCHE (docs/design.md, « Les collectifs n'existent pas » ; audit ligne 9). Il n'y a aucune entite 'marche' dans ce banc : chaque colon porte SES propres champs derives 'prix_lingot'/'prix_bois', RECALCULES A NEUF chaque tick et ecrits PAR-DESSUS (patron banc_bonheur.gd:poser_bonheur, jamais un '+='). Et parce que l'offre est calculee sur ce que CE colon PERCOIT, deux colons n'estiment pas le meme prix sans qu'une ligne ne le demande : le novice, poste au comptoir avec une longue vue, voit les trois tas de lingots (75 de masse) ; les deux forgerons, a l'atelier avec une portee de 320, ne voient que le tas de l'atelier (15). Prix du lingot a deux colons affames : 300 * (2/75) = 8.0 pour le novice, 300 * (2/15) = 40.0 pour le forgeron. Celui qui ne voit pas le stock le croit rare -- c'est la ligne 9 rendue visible a l'oeil, pas un reglage.\n\nCALIBRATION DES POSITIONS, calculee et non devinee, parce que TOUTE la demonstration de perception en depend. Forge (250,300), forgeron (300,240) a 78 unites, apprenti (300,360) a 78, novice (700,300) a 450. portee_forge 150 : les deux premiers sont a portee, le novice ne l'est PAS -- il ne peut ni forger ni accumuler, quoi qu'on clique. portee_vue 320 pour les forgerons : ils voient la forge (78), le tas lingot_atelier (178 / 112) et bois_atelier (100 / 164), jamais les tas du comptoir (490+). portee_vue 900 pour le novice : il voit tout (le plus loin est a 516). Deplacer un tas de plus de quelques dizaines d'unites casse cette demonstration en silence -- les distances sont verrouillees par test.\n\nCALIBRATION DES ENERGIES. capacite 100, metabolisme 0.5/s, surcout de forge 1.5/s. Forgeron et apprenti naissent a 60 (manque 40, au-dessus du seuil 20.0 de data/comptages.json:colons_affames_marche) donc AFFAMES ; le novice nait a 95 (manque 5) donc pas affame. La demande vaut donc 2 au premier tick et monte a 3 quand le novice a brule 15 d'energie, soit 30 s. Forger coute quatre fois le metabolisme : un colon force a forger devient affame plus vite, donc fait monter la demande, donc le prix. La boucle est fermee dans l'autre sens aussi -- forger PRODUIT du lingot dans le tas de l'atelier, ce qui fait monter l'offre percue par les forgerons et REDESCENDRE leur prix. Aucun test n'assert ces durees : seuls les enchainements le sont.\n\nLES QUATRE PLAFONDS (plafond_competence, plafond_habitude, et les deux plafonds de biais) NE SONT PAS DES REGLAGES DE CONFORT. epigenetique.gd n'a AUCUNE borne haute (poser() ajoute sans plafond) et deformation.gd non plus (avancer() decroit par SOUSTRACTION FIXE, il n'existe donc AUCUN equilibre naturel : tant que le debit de pose depasse le taux, le registre monte lineairement et sans borne -- resultat negatif deja mesure quatre fois, voir data/deformations.json). Sans plafond_habitude, vitesse_forge_effective croitrait sans fin ; sans les deux plafonds de biais, la forge finirait par ecraser tout le reste et le banc ne montrerait plus de contraste. Les quatre sont verrouilles par test.\n\nplafond_competence ET plafond_habitude BORNENT AUSSI LA POSE, pas seulement la lecture, et c'est une CONDITION D'OBSERVABILITE trouvee EN LANCANT LA SCENE, jamais au test : sans ce gate (banc_marche_competence.gd:_poser_une_marque), 45 s de forge continue portaient les DEUX modulateurs bruts a 7.6. Rien n'etait faux -- le clamp a la lecture tenait, vitesse et saillance restaient bornees -- mais la barre de competence saturait en sept secondes et la decroissance qui porte tout le sujet des lignes 11 et 12 demandait 150 s au lieu de 20 (un modulateur doit redescendre de 7.6, pas de 1.0). Le clamp a la lecture RESTE et ne fait pas double emploi : lui seul protege des valeurs posees a la main (test, sauvegarde, chantier futur), que le gate ne voit jamais. plafond_competence gradue en plus la barre de competence a l'ecran -- un seul nombre, jamais un maximum d'affichage recopie a cote.\n\nINTERVALLE_POSE_MARQUE_S (0.2 s) EST CONTRAINT PAR LE CATALOGUE, il n'est pas libre. epigenetique.gd:poser ajoute un montant FIXE sans delta : appele a chaque image, la marque monterait a une vitesse dependant de la machine. Poser par intervalle de TEMPS rend l'accumulation reproductible -- mais l'intervalle doit rester SOUS la duree de survie d'une marque fraiche pour LES DEUX marques, sinon elle est effacee entre deux poses et n'accumule JAMAIS rien. La borne mordante est celle de 'habitude_forge' : (0.05 - 0.02) / 0.08 = 0.375 s, contre 0.4 s pour 'competence_forge'. Verrouille par test contre les nombres REELS du disque.\n\nPLANCHER_COMPETENCE EST UNE DONNEE PAR COLON, JAMAIS UNE CONSTANTE DU CABLAGE, et c'est la seule facon de tenir la ligne 12 sans mentir. 'plancher_suppression' (data/epigenetique.json) n'est PAS un plancher de valeur : sous lui, epigenetique.gd RETIRE l'entree entiere. Le plancher reel est donc un CLAMP A LA LECTURE dans le cablage -- competence_effective = max(plancher_competence, modulateur). Applique inconditionnellement, il donnerait 0.3 au NOVICE aussi (marque absente -> modulateur 0.0), ce qui contredirait « la forge n'est pas plus attractive pour lui ». Le forgeron veteran porte donc 0.3 et les deux autres 0.0 : le veteran rouille n'est pas un novice, et le novice n'est pas un veteran rouille. Patron exact : biais_combat_base de data/banc_psycho_social.json.\n\nNOMS DE PROPRIETES, DE MARQUES ET DE SOURCES EN DONNEE (nom_reserve_energie/nom_reserve_masse/nom_reserve_minerai/nom_manque_energie/nom_plancher_competence/nom_marque_competence/nom_marque_habitude/source_deformation_competence/source_deformation_habitude/cible_deformation, plus 'propriete'/'nom_prix' par marchandise) : le .gd ne porte aucun de ces noms en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente.\n\nDEUX CHAMPS DE CE FICHIER SONT DES REFERENCES DE CATALOGUE au sens de scripts/test_lint_donnees.gd:REFERENCES et sont verifies au chargement : 'canaux' (contre data/canaux.json), 'deformation_sources' (contre data/deformations.json), 'comptage_ref' (contre data/comptages.json) et le 'profil_saillance' de la forge (contre data/profils_saillance.json). data/types.json n'est PAS touche (colons, forge et tas construits a la main) : rien a enregistrer dans les registres de scripts/test_lint_donnees.gd.",
+
+	"terrain_largeur": 1000.0,
+	"terrain_hauteur": 620.0,
+
+	"canaux": ["vue"],
+	"deformation_sources": ["competence_forge", "habitude_forge"],
+	"comptage_ref": "colons_affames_marche",
+
+	"nom_reserve_energie": "energie",
+	"nom_reserve_masse": "masse",
+	"nom_reserve_minerai": "minerai",
+	"nom_manque_energie": "manque_energie",
+	"nom_plancher_competence": "plancher_competence",
+	"nom_marque_competence": "competence_forge",
+	"nom_marque_habitude": "habitude_forge",
+	"source_deformation_competence": "competence_forge",
+	"source_deformation_habitude": "habitude_forge",
+	"cible_deformation": "forgeable",
+
+	"capacite_energie": 100.0,
+	"metabolisme_base_par_s": 0.5,
+	"cout_forge_par_s": 1.5,
+
+	"portee_forge": 150.0,
+	"vitesse_forge_base": 1.2,
+	"plafond_competence": 1.0,
+	"plafond_habitude": 0.5,
+	"plafond_biais_competence": 2.0,
+	"plafond_biais_habitude": 0.6,
+	"gain_deformation_competence_par_s": 2.0,
+	"gain_deformation_habitude_par_s": 2.0,
+	"intervalle_pose_marque_s": 0.2,
+	"intervalle_trace_s": 3.0,
+
+	"marchandises": [
+		{
+			"nom": "lingot",
+			"propriete": "lingot",
+			"nom_prix": "prix_lingot",
+			"poids_offre_demande": 300.0,
+			"elasticite": 1.0,
+			"couleur": [0.85, 0.85, 0.92]
+		},
+		{
+			"nom": "bois",
+			"propriete": "bois",
+			"nom_prix": "prix_bois",
+			"poids_offre_demande": 60.0,
+			"elasticite": 0.6,
+			"couleur": [0.62, 0.42, 0.20]
+		}
+	],
+
+	"forge": {
+		"id": "forge",
+		"position": [250.0, 300.0, 0.0],
+		"taille": 46.0,
+		"couleur": [0.90, 0.45, 0.18],
+		"proprietes": {
+			"forgeable": true,
+			"profil_saillance": "forge_atelier",
+			"reserves": {
+				"minerai": { "reserve": 500.0, "cout_base": 0.0, "surcout_action": 0.0 }
+			}
+		}
+	},
+
+	"comptoir": {
+		"_note": "DECOR PUR, jamais une entite : il n'entre pas dans le Monde, personne ne le percoit, aucun mecanisme ne le lit. Les vraies entites du commerce sont les TAS ci-dessous, qui portent les reserves.",
+		"position": [760.0, 300.0, 0.0],
+		"largeur": 150.0,
+		"hauteur": 210.0,
+		"couleur": [0.35, 0.28, 0.20]
+	},
+
+	"tas": [
+		{ "id": "lingot_atelier", "marchandise": "lingot", "position": [190.0, 380.0, 0.0], "masse": 15.0 },
+		{ "id": "lingot_comptoir_a", "marchandise": "lingot", "position": [790.0, 250.0, 0.0], "masse": 30.0 },
+		{ "id": "lingot_comptoir_b", "marchandise": "lingot", "position": [790.0, 350.0, 0.0], "masse": 30.0 },
+		{ "id": "bois_atelier", "marchandise": "bois", "position": [200.0, 230.0, 0.0], "masse": 20.0 },
+		{ "id": "bois_comptoir", "marchandise": "bois", "position": [730.0, 380.0, 0.0], "masse": 40.0 }
+	],
+	"tas_retirables": ["lingot_comptoir_a", "lingot_comptoir_b", "bois_comptoir", "bois_atelier"],
+	"tas_production": "lingot_atelier",
+
+	"colons": [
+		{
+			"id": "forgeron",
+			"position": [300.0, 240.0, 0.0],
+			"portee_vue": 320.0,
+			"energie_initiale": 60.0,
+			"modulateur_competence_depart": 0.9,
+			"plancher_competence": 0.3,
+			"forge_au_depart": true,
+			"couleur": [0.95, 0.80, 0.30]
+		},
+		{
+			"id": "apprenti",
+			"position": [300.0, 360.0, 0.0],
+			"portee_vue": 320.0,
+			"energie_initiale": 60.0,
+			"modulateur_competence_depart": 0.0,
+			"plancher_competence": 0.0,
+			"forge_au_depart": true,
+			"couleur": [0.55, 0.80, 0.95]
+		},
+		{
+			"id": "novice",
+			"position": [700.0, 300.0, 0.0],
+			"portee_vue": 900.0,
+			"energie_initiale": 95.0,
+			"modulateur_competence_depart": 0.0,
+			"plancher_competence": 0.0,
+			"forge_au_depart": false,
+			"couleur": [0.70, 0.70, 0.70]
+		}
+	],
+
+	"couleur_fond": [0.13, 0.14, 0.17],
+	"couleur_portee_forge": [0.35, 0.20, 0.12],
+	"couleur_portee_vue": [0.24, 0.26, 0.32],
+	"couleur_fond_barre": [0.08, 0.08, 0.10],
+	"couleur_barre_competence": [0.95, 0.60, 0.25],
+	"couleur_barre_habitude": [0.40, 0.85, 0.60],
+	"couleur_plancher": [1.0, 0.25, 0.25],
+	"couleur_tas_retire": [0.30, 0.10, 0.10],
+	"taille_colon": 26.0,
+	"taille_tas_min": 10.0,
+	"taille_tas_par_masse": 0.45,
+	"largeur_barre": 190.0,
+	"hauteur_barre": 12.0,
+	"espacement_barre": 16.0,
+	"marge_bloc": 10.0,
+	"taille_police_label": 12,
+	"taille_police_compteur": 15,
+	"taille_police_aide": 12
+}

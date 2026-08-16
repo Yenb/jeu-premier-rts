@@ -1,0 +1,29 @@
+{
+	"_note": "Catalogue du chantier 'proprietes emergentes -- capacites conditionnelles a la fabrication' (scripts/objet.gd:_evaluer_emergences, dernier pas de fabriquer()). Chaque entree : conditions (Array de {propriete, operateur, seuil}, TOUTES vraies pour declencher, ET logique) + resultat (Dictionary fusionne sur proprietes si toutes les conditions passent). Operateurs : >=, <=, >, <, ==. UNITE : les proprietes lues ici sont EXACTEMENT celles ecrites sur proprietes par objet.gd -- 'densite' est en kg/m3 (SI, conversion deja faite depuis materiaux.json qui porte g/cm3, voir objet.gd G_CM3_VERS_KG_M3), 'conductivite_electrique'/'conductivite_thermique'/'point_fusion'/'resistance_impact' restent dans l'unite de materiaux.json (S/m, W/(m.K), degres C, MPa -- aucune conversion). 'canalise_mana' (conductivite_electrique>=1e5 S/m ET sensibilite_magique>=0.3) : un objet compose a la fois d'un bon conducteur (fer, 1e7 S/m) et d'une matiere sensible a la magie canalise le mana -- aucun des deux materiaux seuls (fer sensibilite_magique 0.2, sous le seuil) ne suffit. 'flotte' (densite<=500.0 kg/m3 ET resistance_impact>=2.0) : seuil choisi sous bois (600 kg/m3) et au-dessus de balsa_demo (200 kg/m3) -- une matiere nettement plus legere que l'eau (1000 kg/m3) ET assez resistante pour ne pas se briser flotte ; resistance_impact evite qu'une matiere simplement legere mais friable (verre_demo, resistance_impact 1.0) ne flotte par accident. 'incandescent' (conductivite_thermique>=200 W/(m.K) ET point_fusion>=1500 degres C) : aucun materiau reel du depot ne remplit encore les deux (fer : 80/1538) -- entree DORMANTE en jeu, verifiee uniquement par scripts/test_emergences.gd sur des proprietes fictives, prete pour un futur materiau demo (cuivre pur reel : ~400 W/(m.K), point_fusion 1085 -- ne suffirait pas non plus, un metal fictif serait necessaire).",
+	"emergences": [
+		{
+			"id": "canalise_mana",
+			"conditions": [
+				{ "propriete": "conductivite_electrique", "operateur": ">=", "seuil": 100000.0 },
+				{ "propriete": "sensibilite_magique", "operateur": ">=", "seuil": 0.3 }
+			],
+			"resultat": { "canalise_mana": true }
+		},
+		{
+			"id": "flotte",
+			"conditions": [
+				{ "propriete": "densite", "operateur": "<=", "seuil": 500.0 },
+				{ "propriete": "resistance_impact", "operateur": ">=", "seuil": 2.0 }
+			],
+			"resultat": { "flotte": true }
+		},
+		{
+			"id": "incandescent",
+			"conditions": [
+				{ "propriete": "conductivite_thermique", "operateur": ">=", "seuil": 200.0 },
+				{ "propriete": "point_fusion", "operateur": ">=", "seuil": 1500.0 }
+			],
+			"resultat": { "incandescent": true }
+		}
+	]
+}

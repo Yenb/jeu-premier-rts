@@ -1,0 +1,49 @@
+{
+	"_note": "JETABLE, propre a scripts/banc_memoire_navigation.gd -- chantier « memoire spatiale + navigation par memoire » (audit_perception_croyance_memoire_prealable.md, lignes 5 et 6). AUCUN catalogue partage ici : la loi de l'oubli vit dans data/memoire_spatiale.json (partagee, lue par le mecanisme du coeur), ce fichier ne porte que la calibration d'observation. 'cycle' : l'heure passe par scripts/horloge.gd (mecanisme du coeur), jamais par un fmod recopie -- ce banc est le TROISIEME demandeur, celui qui a fait franchir le seuil que banc_fatigue_circadien.gd avait nomme sans le franchir. 'duree_jour_secondes' 0.0 : point LEGITIME et documente de horloge.gd (« le temps du monde est simplement arrete », aucune alarme) -- heure() rend alors exactement l'heure de depart, que la bascule JOUR/NUIT choisit parmi 'heure_jour' et 'heure_nuit'. CE N'EST PAS UN CONTOURNEMENT, c'est le sujet du banc : l'erreur a DEUX causes (memoire faible, obscurite), le banc existe pour les separer, et une heure qui derive en continu ferait varier la luminosite sous chaque mesure. Faire tourner le jour = ce seul nombre, zero ligne de code. 'latitude' 0.0 : CHOIX de calibration, jamais une geographie -- lumiere.gd:soleil multiplie l'intensite par cos(latitude), et seule une latitude nulle rend EXACTEMENT 1.0 a midi et 0.0 a minuit ; a 45 degres midi vaudrait 0.707 et la part « nuit » de l'erreur ne serait jamais nulle en plein jour, si bien que le banc melangerait ses deux causes et qu'on ne pourrait plus attribuer une derive a l'une plutot qu'a l'autre. 'plafond_force' 1.0 : LE PLAFOND VIT AU CABLAGE, le coeur ne borne jamais le haut (constat banc_fertilite.gd, repete cinq fois) -- memoriser() est appele CHAQUE TICK tant que le puits est vu, sans cet ecretage la force monterait sans fin. 1.0 exactement, parce que erreur_base = (1 - force) * coef : un souvenir sature doit rendre une erreur de memoire NULLE, pas seulement petite. 'facteur_temps_accelere' 12.0 : SEULE l'horloge de l'oubli accelere, jamais le deplacement ni la perception -- taux_decroissance 0.02/s (data/memoire_spatiale.json) fait 50 s de temps de simulation pour vider un souvenir plein, soit ~4 s sous acceleration. 'delai_deplacement' 4.0 : le puits reste a portee assez longtemps pour que la force sature (deux observations suffisent, force_initiale 0.5) et que le colon ait commence a marcher, puis il part. Les TROIS positions du puits : 'position_initiale' (340, 0) est a 340 px du colon, sous sa portee_vue de 420 -- il est vu ; 'position_lointaine' (340, 600) est a 600 px du souvenir, tres au-dela de la portee, et le reste meme quand le colon a fini sa marche -- posee la et pas plus loin pour rester dans le champ de la camera declaree, sans quoi le carre bleu sortirait de l'ecran et l'ecart entre le reel et le memorise ne se VERRAIT plus ; 'position_proche' (140, -300) n'est NI l'une NI l'autre, exprès -- ramener le puits a sa position de depart ne montrerait qu'un renforcement, alors que le sujet est que la position MEMORISEE est REECRITE (le carre orange saute ailleurs). 'biais' 90.0 sur le colon : l'AMPLITUDE de la deviation en pixels, propriete de l'individu (proprietes.forme.biais, seule cle que memoire_spatiale.gd lise du percevant) -- avec coef_memoire_faible 1.0 et coef_nuit 0.6, un souvenir vide en pleine nuit devie de 90 * 1.6 = 144 px, lisible a l'ecran sans sortir du cadre ; la DIRECTION, elle, n'est nulle part en donnee, elle derive du hash de l'id du puits (aucun RNG dans le depot). 'nom_propriete_repere' : le cablage ne teste JAMAIS un type -- il teste cette propriete sur ce qu'il percoit, meme discipline que le coeur, alors meme qu'un banc jetable aurait le droit de nommer une categorie.",
+
+	"cycle": {
+		"duree_jour_secondes": 0.0,
+		"heures_par_jour": 24.0,
+		"heure_jour": 12.0,
+		"heure_nuit": 0.0,
+		"latitude": 0.0
+	},
+
+	"nom_canal_vue": "vue",
+	"nom_propriete_repere": "repere",
+	"nom_propriete_vitesse": "vitesse",
+
+	"plafond_force": 1.0,
+	"facteur_temps_normal": 1.0,
+	"facteur_temps_accelere": 12.0,
+	"delai_deplacement": 4.0,
+
+	"colon": {
+		"id": "colon_marcheur",
+		"type": "colon",
+		"position": [0.0, 0.0, 0.0],
+		"vitesse": 70.0,
+		"biais": 90.0,
+		"portee_vue": 420.0
+	},
+
+	"puits": {
+		"id": "puits_nord",
+		"type": "puits",
+		"position_initiale": [340.0, 0.0, 0.0],
+		"position_lointaine": [340.0, 600.0, 0.0],
+		"position_proche": [140.0, -300.0, 0.0]
+	},
+
+	"couleurs": {
+		"fond_jour": [0.55, 0.62, 0.70],
+		"fond_nuit": [0.06, 0.07, 0.14],
+		"colon": [0.30, 0.82, 0.42],
+		"puits_reel": [0.20, 0.45, 0.98],
+		"puits_memorise": [0.98, 0.60, 0.10],
+		"ligne_visee": [0.98, 0.60, 0.10]
+	},
+
+	"camera": { "position": [170.0, 150.0], "zoom": 0.62 },
+	"intervalle_print": 1.0
+}

@@ -1,0 +1,30 @@
+{
+	"_note": "Catalogue du vent (chantier 'vent'), lu par scripts/vent.gd. Une seule entree, 'defaut' -- meme convention sentinelle que data/liens_personnels.json:defaut/data/usure_attaches.json:defaut : le vent est UNIVERSEL a la scene, jamais une regle choisie par canal ou par entite. TROIS COUCHES ADDITIVES, chacune desactivable independamment (amplitude/force a 0.0) sans casser les deux autres. 'fond' : direction (Vector3 serialise {x,y,z}, normalisee a la lecture -- convention Vector3 partout meme si z reste a 0 aujourd'hui, voir CLAUDE.md) et force de depart. 'variation_lente' : fait tourner la direction et onduler la force au fil du temps -- amplitude_angle (degres, ecart max de la direction autour du fond), periode_angle (secondes pour un cycle complet), dephasage_angle (facultatif, secondes, decale l'oscillation dans le temps) ; amplitude_force/periode_force/dephasage_force, meme forme pour la force. 'rafales' : variation RAPIDE de la force autour de sa valeur courante -- amplitude, frequence (Hz, cycles par seconde), dephasage facultatif. 'attenuation_source' : exposant de la courbe d'attenuation d'une source locale de perturbation (1.0 = lineaire, plus grand = chute plus rapide pres du bord du rayon) -- forme UNIQUE, partagee par toutes les sources locales d'un meme appel, jamais par source (voir scripts/vent.gd, en-tete, pour qui pose une source et comment deux sources se composent). 'directionnel' : traduit l'angle entre le vent et une direction cible en facteur de portee -- reference_force (force du vent au-dela de laquelle l'effet directionnel est PLEIN ; en-deca, il s'attenue lineairement jusqu'a 1.0 a force nulle -- c'est CE mecanisme, pas un cas special de code, qui garantit qu'un vent nul rend un facteur exactement 1.0), facteur_max_sous_vent (multiplicateur de portee quand la cible est exactement dans le sens du vent, produit scalaire = 1.0), facteur_min_contre_vent (multiplicateur quand la cible est exactement a l'oppose du vent, produit scalaire = -1.0). PERPENDICULAIRE (produit scalaire = 0.0) VAUT TOUJOURS EXACTEMENT 1.0, jamais une valeur de donnee -- voir scripts/vent.gd:facteur_directionnel pour la justification (interpolation en deux morceaux, jamais une seule droite entre facteur_min et facteur_max).",
+	"defaut": {
+		"fond": {
+			"direction": { "x": 1.0, "y": 0.0, "z": 0.0 },
+			"force": 6.0
+		},
+		"variation_lente": {
+			"amplitude_angle": 35.0,
+			"periode_angle": 45.0,
+			"dephasage_angle": 0.0,
+			"amplitude_force": 2.5,
+			"periode_force": 27.0,
+			"dephasage_force": 6.0
+		},
+		"rafales": {
+			"amplitude": 3.0,
+			"frequence": 0.35,
+			"dephasage": 1.5
+		},
+		"attenuation_source": {
+			"exposant": 1.0
+		},
+		"directionnel": {
+			"reference_force": 8.0,
+			"facteur_max_sous_vent": 2.2,
+			"facteur_min_contre_vent": 0.4
+		}
+	}
+}

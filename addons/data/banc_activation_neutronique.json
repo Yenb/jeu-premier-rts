@@ -1,0 +1,46 @@
+{
+	"_note": "Jetable, propre a scripts/banc_activation_neutronique.gd (chantier « activation neutronique -- objet irradie devient source secondaire »). source_primaire (hand-built, patron banc_radiation.gd:fabriquer_source, force_radiation=6.0, PAS de reserve -- toggle tout-ou-rien au clic, jamais une depletion progressive) au centre (0,0,0). bois_active/pierre_active (200,+-60,0) et fer_active (280,0,0) : a egale portee de la source primaire (portee_perception_primaire 500.0), leur sensibilite_radiation deja fusionnee (bois 0.3/pierre 0.1/fer 0.2, data/proprietes_immuables_composition.json) fixe leur vitesse d'accumulation de dose_radiation_objet -- a force_radiation_primaire=6.0, bois franchit le seuil 30.0 vers t=16.7s, fer vers t=25s, pierre vers t=50s (exposition continue, delta=1.0s). colon_active (600,0,0) : hors de portee de la source primaire (distance 600 > portee_perception_primaire 500 -- ne la percoit jamais, mecaniquement il ne l'interroge d'ailleurs jamais, seuls les objets actives sont des causes pour lui) mais a portee des trois objets (distances 320-405 < portee_perception_secondaire 500) une fois qu'ils deviennent sources secondaires. reserve_acquise_defaut (capacite/reserve 20.0, cout_base 1.0) s'epuise en 20s de simulation continue une fois l'objet active -- force_radiation retombe alors a 0.0. canal_mutation_defaut/canal_nausee_defaut : memes seuils/portees/decroissances de demonstration que data/banc_produit_nucleaire.json, recopies ici (deux bancs jetables ne se referencent jamais entre eux). dose_par_s (0.5) : a exposition continue aux sources secondaires, le seuil syndrome_radiation (50.0, data/seuils_etat.json, catalogue PARTAGE reutilise tel quel) tombe vers t=100s apres le debut de l'exposition du colon, mort_radiation (100.0) vers t=200s -- ordres de grandeur choisis pour rester observables sur une suite de tests headless, ajustables au playtest.",
+
+	"nom_canal_radiation": "radiation",
+	"canal_radiation_defaut": { "charge": 0.0, "seuil": 5.0, "portee_charge": 600.0, "taux_decroissance": 0.5, "poser": {} },
+
+	"portee_perception_primaire": 500.0,
+	"seuil_perception_primaire": 0.001,
+
+	"force_radiation_secondaire_base": 1.8,
+	"reserve_acquise_defaut": { "capacite": 20.0, "reserve": 20.0, "cout_base": 1.0, "surcout_action": 0.0 },
+
+	"portee_perception_secondaire": 500.0,
+	"seuil_perception_secondaire": 0.001,
+
+	"nom_canal_mutation": "exposition_radioactive",
+	"declencheur_mutation": "expose_radiation_chronique",
+	"canal_mutation_defaut": {
+		"charge": 0.0,
+		"seuil": 5.0,
+		"portee_charge": 500.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_radiation_chronique": true }
+	},
+	"nom_marque_epigenetique": "exposition_radioactive",
+
+	"nom_canal_nausee": "nausee_radiation",
+	"declencheur_nausee": "expose_nausee_radiation",
+	"canal_nausee_defaut": {
+		"charge": 0.0,
+		"seuil": 2.0,
+		"portee_charge": 500.0,
+		"taux_decroissance": 0.5,
+		"poser": { "expose_nausee_radiation": true }
+	},
+	"nom_etat_nausee": "nausee_radiation",
+	"dose_par_s": 0.5,
+
+	"source": { "id": "source_primaire", "position": [0.0, 0.0, 0.0], "force_radiation": 6.0 },
+	"objets": [
+		{ "id": "bois_active", "position": [200.0, 60.0, 0.0], "composition": [ { "materiau": "bois", "volume": 0.05 } ] },
+		{ "id": "pierre_active", "position": [200.0, -60.0, 0.0], "composition": [ { "materiau": "pierre", "volume": 0.05 } ] },
+		{ "id": "fer_active", "position": [280.0, 0.0, 0.0], "composition": [ { "materiau": "fer", "volume": 0.05 } ] }
+	],
+	"colon": { "id": "colon_active", "position": [600.0, 0.0, 0.0] }
+}

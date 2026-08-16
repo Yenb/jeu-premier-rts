@@ -1,0 +1,221 @@
+{
+	"_note": "Donnees propres a scripts/banc_stress_thermo_vivant.gd (Scene/banc_stress_thermo_vivant.tscn), chantier « stress plante + thermoregulation vivant » (audit_ecosysteme_vivant_prealable.md, lignes 8 et 9, toutes deux au verdict CABLABLE). JETABLE, propre au banc : rien ici n'est un catalogue partage. Les deux etats NEUFS ('stress_leger'/'mort_stress') vivent, eux, dans le catalogue PARTAGE data/etats.json -- ce fichier ne les redeclare jamais.\n\nLE CATALOGUE DE SEUILS EST LOCAL ('seuils_locaux', format EXACT de data/seuils_etat.json, passe tel quel a SeuilEtat.avancer -- patron data/banc_elimination_salete.json:seuils_elimination et data/banc_psycho_social.json:seuils_locaux). DECISION DU CHANTIER, motivee par audit_ecosysteme_vivant_prealable.md ligne 9 : les entrees thermiques du catalogue PARTAGE ('frisson' 5.0, 'hypothermie' 15.0, 'hyperthermie' 5.0) portent un champ 'seuil' UNIVERSEL ; les basculer vers 'seuil_propriete' pour qu'elles varient par espece toucherait scripts/banc_faim_thermo.gd, fichier d'un autre chantier. Le catalogue local, lui, peut utiliser 'seuil_propriete' librement -- chaque vivant porte SES trois seuils thermiques en cles plates. data/seuils_etat.json N'EST NI TOUCHE NI MEME CHARGE par ce banc : ses entrees ne sont donc pas des chemins morts ici, elles ne sont tout simplement jamais evaluees, et aucune collision de nom d'etat n'est possible.\n\nLES TROIS ETATS THERMIQUES SONT LES ETATS PARTAGES EXISTANTS ('frisson'/'hypothermie'/'hyperthermie', data/etats.json), reposes depuis un catalogue LOCAL -- meme geste deliberement partage que 'sublimation' posant le meme 'gaz' que 'point_ebullition', et rendu sur par la MEMOIRE PAR ENTREE de seuil_etat.gd. Aucun etat thermique neuf n'a ete ajoute au catalogue partage : la consigne n'en demandait pas, et un etat de plus dans un catalogue partage se paie pour tout le depot.\n\nQUATRE SOURCES DE STRESS, TOUTES EN DONNEE, AUCUNE NOMMEE DANS LE .gd : 'poids_stress' est un Dictionary source -> poids porte par CHAQUE plante, et calculer_stress boucle dessus (patron EXACT de banc_bonheur.gd:calculer_bonheur). La consigne n'en citait que trois (froid, exces d'eau, secheresse) ; 'chaud_ressenti' est la QUATRIEME, ajoutee par ce chantier et signalee -- sans elle « l'arctique meurt de chaud » est infaisable. Elle coute ZERO ligne de code, exactement comme un cinquieme temperament dans banc_bonheur. Une source ABSENTE du 'poids_stress' d'une plante (ex. 'froid_ressenti' chez l'arctique, 'exces_eau' chez la tropicale) ne contribue jamais -- « je n'y mets rien » et « j'y mets zero » ne se disent pas pareil, l'affichage les distingue.\n\nJAMAIS UN abs() POUR COMBINER : le froid bascule sous 'temp_cible' et le chaud au-dessus de 'seuil_chaud' (deux nombres DIFFERENTS par vivant) ; la secheresse bascule sous 'seuil_sec' et l'exces d'eau au-dessus de 'seuil_humide' (deux nombres DIFFERENTS par plante), avec quatre poids differents. Un abs() unique aurait impose une symetrie physiquement fausse -- decision deja prise et motivee pour data/etats.json:hyperthermie, reprise ici a l'identique sur l'eau.\n\nLE STRESS EST RECALCULE A NEUF CHAQUE TICK, JAMAIS '+='. C'est ce recalcul, et lui seul, qui empeche un champ derive de DERIVER (resultat negatif deja mesure deux fois sur expression.gd, voir data/epigenetique.json). Consequence : la comparaison vers le HAUT de seuil_etat.gd tombe juste SANS AUCUN MIROIR -- le stress monte quand la situation empire, contrairement au bonheur.\n\ntemp_cible ET LES DEUX COUTS PAR DEGRE VIVENT SUR CHAQUE VIVANT, jamais dans une config globale de scene (audit ligne 9 : « aujourd'hui non -- ce sont des cles du fichier de BANC, globales a la scene »). Le cablage les lit sur l'entite. Precedent exact : 'seuil_rupture' pose par colon dans banc_grief.gd, 'volatilite_magique' dans banc_sorts.gd. 'cout_par_degre' de la consigne est SCINDE EN DEUX (froid/chaud), meme raison que temp_cible/seuil_chaud : un cout unique aurait reintroduit la symetrie interdite.\n\nAUCUNE TEMPERATURE DE CORPS (choix impose par la consigne) : temperature.gd:avancer n'est JAMAIS appele, aucun vivant ne porte de propriete 'temperature', et les deux miroirs thermiques lisent la temperature LOCALE (temperature.gd:locale). Un animal a vraie inertie thermique exigerait conductivite_thermique/chaleur_specifique, donc une composition et Objet.fabriquer -- autre chantier.\n\nCATALOGUE DE TEMPERATURE LOCAL ('temperature' + 'paliers') : temperature.gd recoit TOUJOURS son catalogue en parametre, jamais charge par lui. Le banc en construit un au format EXACT de data/temperature.json ('defaut.ambiante' + 'defaut.attenuation.exposant') avec l'ambiante du palier courant -- c'est ce qui rend le clic gauche possible. data/temperature.json n'est ni lu ni touche : recopier son ambiante ici aurait cree deux nombres a garder d'accord pour rien, le banc CHANGE la sienne a chaque clic.\n\nCALIBRATION, MESUREE ET NON DEVINEE. Les deux zones ont force 0.5 : au centre d'une source, temperature.gd rend ambiante + force x (T_source - ambiante), donc 0.5 x ambiante + 0.5 x T_source -- avec force 1.0 le centre vaudrait T_source QUELLE QUE SOIT l'ambiante et le clic n'aurait aucun effet sur les deux plantes de zone. Locales obtenues (A = ambiante du palier) : arctique (centre zone froide) 0.5A - 5 ; temperee et animal (bande neutre) A ; tropicale (centre zone chaude) 0.5A + 22. Aux trois paliers (20 / -16 / 60) : arctique 5 / -13 / 25 ; temperee 20 / -16 / 60 ; tropicale 32 / 14 / 52. Les deux zones sont separees de 720 pour 260+260 de rayons : elles NE SE CHEVAUCHENT JAMAIS -- temperature.gd superpose ADDITIVEMENT, deux zones qui se recouvrent s'annuleraient en partie et le banc mentirait sur ce qu'il montre.\n\nSTRESS ATTENDU AUX TROIS PALIERS, arrosage ACTIF (humidite normalisee 1.0) -- tout est verrouille par test : tempere -> tropicale 0.000, temperee 0.150, arctique 0.360, AUCUN etat ; grand froid -> tropicale 1.600 (MORTE, seuil 1.40), temperee 1.080 (stress_leger, seuil 0.70), arctique 0.360 (rien -- elle n'a aucun poids sur le froid) ; canicule -> tropicale 0.120 (rien), temperee 1.170 (stress_leger), arctique 1.860 (MORTE, seuil 1.40). Arrosage COUPE au palier tempere : tropicale 0.660 (stress_leger par la SECHERESSE seule), temperee 0.210, arctique 0.005.\n\nL'HUMIDITE PASSE PAR charge.gd (canal 'humidite', une cause = la source d'eau a portee), normalisee par clamp(charge/seuil, 0, 1) -- JAMAIS la charge brute, que charge.gd ne borne pas par le haut (patron banc_croissance.gd:charge_humidite_normalisee). La charge est en plus PLAFONNEE A SON SEUIL par le cablage apres chaque appel : sans ce plafond, un arrosage prolonge accumulerait sans borne et l'assechement mettrait des minutes -- aucun mecanisme du coeur ne borne le HAUT d'une charge (meme constat que banc_fertilite.gd sur les reserves).\n\nLA CROISSANCE EST LE CONSOMMATEUR REEL DE 'stress_leger'/'mort_stress' (audit, constat A : declarer un effet dans data/etats.json ne produit RIEN tant qu'un cablage n'appelle pas EtatEffectif.valeur). Le cablage compose 'croissance' effective puis la passe a flux.gd comme taux d'un emetteur SYNTHETIQUE (patron exact banc_croissance.gd:avancer), la reserve 'maturite' etant plafonnee a 1.0 PAR LE CABLAGE (flux.gd ne borne jamais rien). Sans cette chaine, le x0.5 de 'stress_leger' serait vrai dans le catalogue et sans le moindre effet, EN SILENCE. L'effet de 'mort_stress' sur 'vitesse' reste DORMANT ici (aucun vivant de ce banc ne se deplace) -- declare parce que l'audit ligne 8 le demande, jamais observable dans cette scene, dit plutot que masque.\n\nNOMS DE PROPRIETES EN DONNEE : le .gd ne porte aucun de ces noms en dur, ce qui permet au test de faire traverser le meme code par un domaine entierement invente. Les noms de miroir doivent rester d'accord avec 'propriete_continue' des cinq entrees de 'seuils_locaux' -- accord verrouille par test, jamais suppose. AUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES : rien a y ajouter. Aucun RNG : pas un seul tirage dans ce banc, rien a seeder.",
+
+	"terrain_largeur": 1200.0,
+	"terrain_hauteur": 620.0,
+
+	"temperature": {
+		"exposant": 1.0
+	},
+	"paliers": [
+		{ "nom": "tempere", "ambiante": 20.0, "couleur_fond": [0.16, 0.38, 0.20] },
+		{ "nom": "grand_froid", "ambiante": -16.0, "couleur_fond": [0.13, 0.22, 0.34] },
+		{ "nom": "canicule", "ambiante": 60.0, "couleur_fond": [0.42, 0.30, 0.12] }
+	],
+	"zones": [
+		{
+			"id": "zone_froide",
+			"position": [240.0, 300.0, 0.0],
+			"rayon": 260.0,
+			"temperature": -10.0,
+			"force": 0.5,
+			"couleur": [0.20, 0.42, 0.85]
+		},
+		{
+			"id": "zone_chaude",
+			"position": [960.0, 300.0, 0.0],
+			"rayon": 260.0,
+			"temperature": 44.0,
+			"force": 0.5,
+			"couleur": [0.85, 0.24, 0.18]
+		}
+	],
+
+	"source_eau": {
+		"id": "source_eau",
+		"position": [600.0, 110.0, 0.0],
+		"poids": 1.0
+	},
+	"canal_humidite_defaut": {
+		"charge": 6.0,
+		"seuil": 6.0,
+		"portee_charge": 900.0,
+		"taux_decroissance": 3.0,
+		"poser": {}
+	},
+
+	"nom_canal_humidite": "humidite",
+	"nom_reserve_energie": "energie",
+	"nom_reserve_maturite": "maturite",
+	"nom_croissance": "croissance",
+	"nom_vitesse": "vitesse",
+	"nom_stress": "stress_plante",
+	"nom_froid_ressenti": "froid_ressenti",
+	"nom_chaud_ressenti": "chaud_ressenti",
+	"nom_exces_eau": "exces_eau",
+	"nom_secheresse": "secheresse",
+	"nom_poids_stress": "poids_stress",
+	"nom_temp_cible": "temp_cible",
+	"nom_seuil_chaud": "seuil_chaud",
+	"nom_cout_par_degre_froid": "cout_par_degre_froid",
+	"nom_cout_par_degre_chaud": "cout_par_degre_chaud",
+	"nom_seuil_humide": "seuil_humide",
+	"nom_seuil_sec": "seuil_sec",
+	"nom_capacite_energie": "capacite_energie",
+	"nom_cout_base": "cout_base",
+	"nom_recoit_eau": "recoit_eau",
+	"nom_couleur": "couleur",
+	"nom_seuil_stress_mortel": "seuil_stress_mortel",
+
+	"propriete_source_croissance": "source_croissance",
+	"propriete_receptrice_croissance": "recoit_croissance",
+	"portee_flux_croissance": 1.0,
+	"maturite_max": 1.0,
+
+	"etat_stress_leger": "stress_leger",
+	"etat_mort_stress": "mort_stress",
+
+	"seuils_locaux": {
+		"stress_leger": {
+			"propriete_continue": "stress_plante",
+			"seuil_propriete": "seuil_stress_leger",
+			"etat": "stress_leger"
+		},
+		"mort_stress": {
+			"propriete_continue": "stress_plante",
+			"seuil_propriete": "seuil_stress_mortel",
+			"etat": "mort_stress"
+		},
+		"froid_leger": {
+			"propriete_continue": "froid_ressenti",
+			"seuil_propriete": "seuil_froid_leger",
+			"etat": "frisson"
+		},
+		"froid_grave": {
+			"propriete_continue": "froid_ressenti",
+			"seuil_propriete": "seuil_froid_grave",
+			"etat": "hypothermie"
+		},
+		"chaud_grave": {
+			"propriete_continue": "chaud_ressenti",
+			"seuil_propriete": "seuil_chaud_grave",
+			"etat": "hyperthermie"
+		}
+	},
+
+	"vivants": [
+		{
+			"id": "arctique",
+			"position": [240.0, 300.0, 0.0],
+			"temp_cible": 5.0,
+			"seuil_chaud": 10.0,
+			"cout_par_degre_froid": 0.006,
+			"cout_par_degre_chaud": 0.006,
+			"capacite_energie": 100.0,
+			"cout_base": 0.05,
+			"seuil_froid_leger": 12.0,
+			"seuil_froid_grave": 30.0,
+			"seuil_chaud_grave": 6.0,
+			"croissance": 0.040,
+			"recoit_eau": true,
+			"seuil_sec": 0.10,
+			"seuil_humide": 0.70,
+			"poids_stress": {
+				"chaud_ressenti": 0.100,
+				"exces_eau": 1.200,
+				"secheresse": 0.050
+			},
+			"seuil_stress_leger": 0.60,
+			"seuil_stress_mortel": 1.40
+		},
+		{
+			"id": "temperee",
+			"position": [600.0, 300.0, 0.0],
+			"temp_cible": 15.0,
+			"seuil_chaud": 26.0,
+			"cout_par_degre_froid": 0.006,
+			"cout_par_degre_chaud": 0.006,
+			"capacite_energie": 100.0,
+			"cout_base": 0.05,
+			"seuil_froid_leger": 10.0,
+			"seuil_froid_grave": 25.0,
+			"seuil_chaud_grave": 10.0,
+			"croissance": 0.040,
+			"recoit_eau": true,
+			"seuil_sec": 0.35,
+			"seuil_humide": 0.75,
+			"poids_stress": {
+				"froid_ressenti": 0.030,
+				"chaud_ressenti": 0.030,
+				"exces_eau": 0.600,
+				"secheresse": 0.600
+			},
+			"seuil_stress_leger": 0.70,
+			"seuil_stress_mortel": 1.80
+		},
+		{
+			"id": "tropicale",
+			"position": [960.0, 300.0, 0.0],
+			"temp_cible": 30.0,
+			"seuil_chaud": 40.0,
+			"cout_par_degre_froid": 0.006,
+			"cout_par_degre_chaud": 0.006,
+			"capacite_energie": 100.0,
+			"cout_base": 0.05,
+			"seuil_froid_leger": 6.0,
+			"seuil_froid_grave": 14.0,
+			"seuil_chaud_grave": 6.0,
+			"croissance": 0.040,
+			"recoit_eau": true,
+			"seuil_sec": 0.55,
+			"seuil_humide": 1.00,
+			"poids_stress": {
+				"froid_ressenti": 0.100,
+				"chaud_ressenti": 0.010,
+				"secheresse": 1.200
+			},
+			"seuil_stress_leger": 0.60,
+			"seuil_stress_mortel": 1.40
+		},
+		{
+			"id": "animal",
+			"position": [600.0, 470.0, 0.0],
+			"temp_cible": 37.0,
+			"seuil_chaud": 40.0,
+			"cout_par_degre_froid": 0.030,
+			"cout_par_degre_chaud": 0.040,
+			"capacite_energie": 100.0,
+			"cout_base": 0.30,
+			"seuil_froid_leger": 20.0,
+			"seuil_froid_grave": 40.0,
+			"seuil_chaud_grave": 10.0,
+			"vitesse": 90.0,
+			"couleur": [0.95, 0.80, 0.45]
+		}
+	],
+
+	"taille_vivant": 46.0,
+	"largeur_barre": 130.0,
+	"hauteur_barre": 11.0,
+	"espacement_barre": 15.0,
+	"marge_bloc": 12.0,
+	"taille_police_nom": 17,
+	"taille_police_label": 13,
+	"taille_police_compteur": 17,
+	"taille_police_aide": 13,
+	"couleur_fond_barre": [0.18, 0.18, 0.18],
+	"couleur_barre_energie": [0.95, 0.75, 0.20],
+	"couleur_barre_maturite": [0.25, 0.80, 0.35],
+	"couleur_stress_bas": [0.16, 0.74, 0.26],
+	"couleur_stress_moyen": [0.92, 0.84, 0.16],
+	"couleur_stress_haut": [0.88, 0.20, 0.16],
+	"couleur_mort": [0.28, 0.22, 0.18],
+	"couleur_source_eau_active": [0.20, 0.55, 0.95],
+	"couleur_source_eau_coupee": [0.35, 0.35, 0.35],
+	"taille_source_eau": 34.0,
+	"periode_trace_s": 2.0,
+	"camera": {
+		"position": [600.0, 310.0],
+		"zoom": 0.72
+	}
+}

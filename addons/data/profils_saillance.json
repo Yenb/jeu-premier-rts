@@ -1,0 +1,77 @@
+{
+	"feu": { "saillance_intrinseque": 3.0, "portee_saillance": 900.0 },
+	"bloc": { "saillance_intrinseque": 3.0, "portee_saillance": 900.0 },
+	"menace_1": { "saillance_intrinseque": 3.0, "portee_saillance": 1600.0 },
+	"menace_2": { "saillance_intrinseque": 8.0, "portee_saillance": 1600.0 },
+	"menace_3": { "saillance_intrinseque": 20.0, "portee_saillance": 1600.0 },
+	"colon": {
+		"saillance_intrinseque": 1.0,
+		"portee_saillance": 350.0,
+		"_note": "Un colon est saillant pour un autre colon (vecu inter-colon). Aujourd'hui un seul type saillant decideur, valeurs posees sur le type lui-meme comme feu/menace_1. Si un futur type saillant (golem, animal) partage exactement ces valeurs, ouvrir un chantier de refactor vers un paquet 'saillant_par_soi' -- cout moyen, precedent entite (voir CARTE.md, chantier corps interne)."
+	},
+	"allie_blesse": {
+		"saillance_intrinseque": 3.2,
+		"portee_saillance": 900.0,
+		"_note": "Rejoint le catalogue PARTAGE et non une table locale au banc, pour la MEME raison exacte que 'nourriture' ci-dessous : scripts/test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- une entree locale a data/banc_psycho_social.json rougirait le linter. 3.2 contre 3.0 pour 'feu' : les deux cibles du dilemme sont VOLONTAIREMENT proches sans etre egales (a distance egale, ecart de saillance 0.13 -- sous le seuil_ecart du banc, donc conflit ; et l'allie l'emporte de justesse, ce qui rend la desobeissance a la directive « va au feu » observable a l'oeil)."
+	},
+	"adversaire": {
+		"saillance_intrinseque": 4.0,
+		"portee_saillance": 900.0,
+		"_note": "la cible que le colon COMBAT, et dont la seule presence fait accumuler la marque 'experience_combat'. Distincte de 'menace_1'/'menace_2'/'menace_3' (portee 1600, saillance croissante) : celles-la servent l'escalade de menace de banc_p1.gd, jamais un adversaire au corps a corps ; reutiliser 'menace_1' aurait couple deux bancs par une valeur partagee que ni l'un ni l'autre ne peut plus regler seul."
+	},
+	"proie_exposee": {
+		"saillance_intrinseque": 6.0,
+		"portee_saillance": 600.0,
+		"_note": "PAIRE avec 'proie_cachee' ci-dessous : les deux profils decrivent LA MEME proie, dans deux etats de dissimulation, et c'est le CABLAGE qui reecrit chaque tick la cle plate proprietes.profil_saillance de l'un vers l'autre selon la 'fraction_refuge' du biome sous elle (precedents exacts de l'ecriture directe d'une propriete par un cablage : 'porteur' dans banc_maladie.gd, 'stade' dans banc_succession.gd, 'force_radiation' dans banc_activation_neutronique.gd). LES DEUX AUTRES VOIES ONT ETE ECARTEES, et l'audit dit pourquoi : moduler la PORTEE de perception du predateur (perception.gd:_portee_effective lit portee/sensibilite sur le PERCEPTEUR, jamais sur la chose percue -- l'ecraser rend le predateur aveugle a TOUT, y compris aux proies a decouvert) ; declarer un etat 'cache' qui modulerait 'saillance_intrinseque' via etat_effectif.gd (proximite.gd lit ce nombre DANS CE CATALOGUE, jamais sur l'objet, et n'appelle JAMAIS EtatEffectif -- l'etat serait vrai dans data/etats.json et sans le moindre effet, EN SILENCE). Rejoint le catalogue PARTAGE et non une table locale au banc pour la meme raison que 'nourriture'/'allie_blesse' ci-dessous : scripts/test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source. PORTEE 600.0 et non 900.0 : le terrain du banc fait 8x8 cases de 96 unites (diagonale ~950), une portee de 900 rendrait le facteur de distance de proximite.gd quasiment plat et le territoire du predateur sans consequence observable."
+	},
+	"proie_cachee": {
+		"saillance_intrinseque": 0.8,
+		"portee_saillance": 600.0,
+		"_note": "Voir 'proie_exposee' ci-dessus pour la paire et les deux voies ecartees. CALIBRATION, et c'est elle qui porte tout le chantier : le cablage ne retient une proie que si sa saillance depasse 'seuil_perception_proie' (1.5, data/banc_ecosysteme_terrain.json). 0.8 est le PLAFOND absolu de ce profil (facteur de distance <= 1.0, atteint a distance nulle) -- une proie cachee reste donc SOUS le seuil A TOUTE DISTANCE, y compris collee au predateur, alors qu'une proie exposee a 6.0 le franchit jusqu'a 450 unites. Ce n'est PAS proximite.gd qui l'exclut (il n'exclut qu'une saillance nulle ou hors portee) : la proie cachee est bel et bien percue par perception.gd et evaluee par proximite.gd, c'est le SEUIL DE DECISION du predateur, au cablage, qui la laisse tomber."
+	},
+	"proie_predation": {
+		"saillance_intrinseque": 4.0,
+		"portee_saillance": 600.0,
+		"_note": "AJOUT NON DEMANDE PAR LA CONSIGNE DU CHANTIER, et il n'etait pas evitable : scripts/test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- une table locale a data/banc_predation.json rougirait le linter (meme raison exacte que 'nourriture'/'allie_blesse'/'proie_exposee'). DISTINCTE de 'proie_exposee'/'proie_cachee' ci-dessus malgre le mot commun : celles-la sont une PAIRE reecrite chaque tick selon le refuge du biome (banc_ecosysteme_terrain.gd, ligne 1 du meme audit, session concurrente), celle-ci est un profil UNIQUE et fixe -- ce banc-ci n'a ni terrain ni refuge, il porte la predation, la hierarchie et l'agression. Les partager coupleraient deux bancs par un nombre qu'aucun des deux ne pourrait plus regler seul (meme raison que 'adversaire' contre 'menace_1'). CALIBRATION, mesuree et non devinee : 3.0 contre 6.0 pour le predateur ci-dessous -- a distance egale un predateur voit donc d'abord ses CONGENERES, et c'est la DEFORMATION 'agression_faim' (data/deformations.json, plafond de biais 3.0 au cablage, saillance x4) qui renverse l'ordre et le fait choisir une proie. Sans elle il resoudrait bien 'approcher', mais sur un autre predateur (audit, constat D) -- et le banc montrerait des predateurs qui se rassemblent sans jamais chasser, tous tests verts. CONSEQUENCE VOULUE de ce meme rapport : un predateur RASSASIE (charge d'agression sous son seuil, aucune deformation posee) redevient gregaire, il rejoint ses congeneres au lieu de chasser -- aucun cas particulier code, c'est la meme arithmetique lue dans l'autre sens. Portee 600.0 sur une zone de 1000x640 : un predateur ne voit pas tout le terrain d'un coup, il doit s'y deplacer."
+	},
+	"predateur_predation": {
+		"saillance_intrinseque": 2.0,
+		"portee_saillance": 600.0,
+		"_note": "voir 'proie_predation' ci-dessus pour la raison de l'ajout au catalogue PARTAGE. UN SEUL profil pour DEUX lectures opposees (une proie le fuit, un autre predateur le charge) : ce qui les separe ne vit pas dans la saillance mais dans poids_verbes, par espece (agir.gd choisit la CIBLE au score, puis le VERBE par poids_verbes seul -- deux gestes disjoints, audit constat D).\n\n2.0, DONC SOUS LA PROIE (4.0) -- ET C'EST UN RESULTAT NEGATIF MESURE, ecrit ici pour qu'il ne soit pas repaye. Premiere calibration : predateur 6.0 contre proie 3.0, en tablant sur la deformation 'agression_faim' pour renverser l'ordre. Le test a montre que ca ne tient pas : les predateurs se voyaient mutuellement plus saillants que les proies, se rejoignaient donc AVANT d'avoir accumule assez de charge pour bifurquer, se rapprochaient encore (ce qui montait leur saillance mutuelle) et ne chassaient JAMAIS -- zero repas sur 60 s de config reelle, alors que tous les cas de mecanique isoles restaient verts. L'inversion est la seule voie qui tienne LES DEUX sens a la fois : la proie est saillante par nature (elle est ce qu'on cherche), le predateur ne le devient QUE par une deformation -- 'vigilance_proie' cote proie (data/deformations.json), 'agression_territoire' cote predateur. Chaque camp paie donc sa propre lecture, aucun ne subit celle de l'autre."
+	},
+	"grenier_stockage": {
+		"saillance_intrinseque": 2.0,
+		"portee_saillance": 900.0,
+		"_note": "AJOUT NON DEMANDE PAR LA CONSIGNE DU CHANTIER, et il n'etait pas evitable : scripts/test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- une table locale a data/banc_temps_anticipation.json rougirait le linter (meme raison exacte que 'nourriture'/'allie_blesse'/'proie_exposee'/'proie_predation'). DISTINCTE de 'nourriture' ci-dessous malgre la parente : celle-la est ce qu'on CONSOMME (consommer.gd, banc_manger), celle-ci ce qu'on REMPLIT avant d'en avoir besoin -- les partager coupleraient deux bancs par un nombre qu'aucun des deux ne pourrait plus regler seul. CALIBRATION : 2.0 a 900.0 de portee, donc a 300 unites la saillance nue vaut 2.0 * (1 - 300/900) = 1.33 -- assez basse pour qu'un colon NON prevoyant ne fasse rien de particulier, et le biais d'anticipation plafonne a 2.0 (data/deformations.json:anticipation) la porte a 4.0, soit x3. C'est cet ecart, et lui seul, qui rend l'anticipation VISIBLE a l'oeil : sans lui le grenier serait deja saillant pour tout le monde et le vieux ne se distinguerait pas du jeune."
+	},
+	"forge_atelier": {
+		"saillance_intrinseque": 2.0,
+		"portee_saillance": 600.0,
+		"_note": "AJOUT NON DEMANDE PAR LA CONSIGNE DU CHANTIER, et il n'etait pas evitable : scripts/test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- une table locale a data/banc_marche_competence.json rougirait le linter (meme raison exacte que 'nourriture'/'allie_blesse'/'proie_predation'/'grenier_stockage'). CALIBRATION : 2.0 a 600.0 de portee, meme couple exact que 'grenier_stockage' et pour la meme raison -- assez bas pour qu'un colon SANS competence ne voie rien de particulier dans la forge, pendant que le biais compose des deux deformations du chantier (competence plafonnee a 2.0 et habitude plafonnee a 0.6, data/deformations.json) la porte a x3.0 puis x1.6, soit x4.8 au total pour un forgeron installe. C'est cet ecart, et lui seul, qui rend la specialisation VISIBLE : meme forge, meme instant, meme distance, deux saillances qui n'ont rien a voir."
+	},
+	"repas_choix": {
+		"saillance_intrinseque": 2.5,
+		"portee_saillance": 700.0,
+		"_note": "TRIO avec 'bois_choix' et 'forge_choix' ci-dessous : trois profils calibres ENSEMBLE, qui n'ont de sens que les uns par rapport aux autres -- les separer ou en reutiliser un ailleurs casserait l'arbitrage en silence. AJOUT NON DEMANDE PAR LA CONSIGNE ET NON EVITABLE : scripts/test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- une table locale a data/banc_affordances_choix.json rougirait le linter (meme raison exacte que 'nourriture'/'allie_blesse'/'forge_atelier'/'grenier_stockage'). DISTINCT de 'nourriture' ci-dessous malgre la parente : celle-la sert banc_manger.gd (ce qu'on CONSOMME), et les partager coupleraient deux bancs par un nombre qu'aucun des deux ne pourrait plus regler seul.\n\nCALIBRATION, calculee et non devinee. Le colon est POSE (il ne se deplace pas), le repas a 500 unites : saillance nue 2.5 * (1 - 500/700) = 0.714, la PLUS BASSE des trois -- un repas lointain qu'un colon rassasie ignore. Le biais 'urgence_repas' plafonne a 6.0 (data/banc_affordances_choix.json) la porte a 0.714 * 7 = 5.0, au-dessus du bois proche (3.0) MEME augmente de gain_inertie et du poids d'engagement (3.75 au total). C'est cet ecart, et lui seul, qui rend la ligne 11 observable : le besoin vital arrache une decision deja prise et deja verrouillee."
+	},
+	"bois_choix": {
+		"saillance_intrinseque": 5.0,
+		"portee_saillance": 300.0,
+		"_note": "Voir 'repas_choix' ci-dessus pour le trio et la raison du catalogue PARTAGE. CE PROFIL PORTE A LUI SEUL LE 'poids_distance' DE LA LIGNE 11, et c'est la correction de voie du chantier : poids_distance N'EXISTE PAS comme poids, et rien dans proximite.gd ne prend d'exposant -- la distance entre par une attenuation LINEAIRE FIXE, clamp(1 - distance/portee). Le SEUL reglage est 'portee_saillance', PAR PROFIL. Peser la distance plus fort, c'est raccourcir la portee, rien d'autre.\n\nD'ou le couple 5.0/300.0, le plus contraste des trois : intrinseque HAUTE, portee COURTE. A 120 unites la saillance nue vaut 5.0 * 0.6 = 3.0 et bat les deux autres SANS aucune deformation -- c'est la seule des trois cibles qui gagne par sa seule position. A 280 unites elle tombe a 5.0 * 0.0667 = 0.333 et perd contre tout. Le meme objet, le meme instant, le meme colon : 160 unites de plus et il n'existe plus. Une portee longue (900, comme 'feu') aurait rendu le facteur de distance quasiment plat entre 120 et 280 et le toggle sans consequence observable -- meme piege deja nomme sur 'proie_exposee'."
+	},
+	"forge_choix": {
+		"saillance_intrinseque": 2.0,
+		"portee_saillance": 900.0,
+		"_note": "Voir 'repas_choix' ci-dessus pour le trio et la raison du catalogue PARTAGE. DISTINCT de 'forge_atelier' (2.0/600.0, banc_marche_competence.gd) malgre le mot commun et la valeur intrinseque identique : la portee differe (900 contre 600) parce que la forge est ici a 400 unites d'un colon pose, contre 78 la-bas -- reutiliser l'entree aurait donne 2.0 * (1 - 400/600) = 0.667 et l'habitude n'aurait jamais pu faire gagner la forge. Deux bancs, deux geometries, deux profils.\n\nCALIBRATION : a 400 unites, saillance nue 2.0 * 0.5556 = 1.111 -- au-dessus du repas rassasie (0.714), sous le bois proche (3.0). Le biais 'habitude_atelier' plafonne a 0.8 la porte a 2.0, ce qui la fait gagner des que le bois s'eloigne, et JAMAIS contre un bois proche : une habitude est un pli, pas un besoin. C'est le troisieme des trois poids de la ligne 11, et le seul qui ne renverse rien tout seul."
+	},
+	"objet_inconnu_savoir": {
+		"saillance_intrinseque": 6.0,
+		"portee_saillance": 400.0,
+		"_note": "AJOUT NON DEMANDÉ PAR LA CONSIGNE DU CHANTIER, et il n'était pas évitable : scripts/test_lint_donnees.gd vérifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- une table locale à data/banc_affordances_connaissance.json rougirait le linter (même raison exacte que 'nourriture' ci-dessous, 'grenier_stockage' et 'forge_atelier' ci-dessus). CALIBRATION, mesurée sur la scène réelle et non devinée -- le couple 6.0/400.0 fait DEUX choses qu'aucun autre couple ne fait ensemble : (a) à 240 unités il rend 6.0 x (1 - 240/400) = 2.40, au-dessus des 1.53 du fruit le plus proche du colon curieux -- l'objet inconnu l'emporte donc dans son argmax et 'experimenter' est le verbe RÉSOLU, jamais un verbe déclaré sans cible ; (b) au-delà de 400 unités la saillance est nulle et proximite.gd retire l'entrée -- les deux autres colons (à 340 et 500) ne voient donc pas l'objet peser sur leur décision, et leur gate fermé (poids_verbes.experimenter à 0.0) reste observable SANS que l'objet vienne écraser le fruit qu'ils veulent manger. Une portée de 900 comme 'nourriture' aurait fait gagner l'objet inconnu chez TOUT LE MONDE et le banc n'aurait plus montré personne manger."
+	},
+	"nourriture": {
+		"saillance_intrinseque": 2.0,
+		"portee_saillance": 900.0,
+		"_note": "Rejoint le catalogue PARTAGE (jamais une table locale a banc_manger.json) : test_lint_donnees.gd verifie tout champ 'profil_saillance' de data/*.json contre CE fichier, quel que soit le fichier source -- meme collision fermee que leger_golem/aimant_metal (data/materiaux.json, chantier champ.gd/banc_champ)."
+	}
+}

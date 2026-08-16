@@ -1,0 +1,24 @@
+{
+	"_note": "Catalogue de lumiere (chantier 'lumiere ambiante -- scalaire ambiant avec temperature de couleur'), lu par scripts/lumiere.gd. Une seule entree, 'defaut' -- meme convention sentinelle que data/vent.json:defaut/data/temperature.json:defaut : la lumiere est UNIVERSELLE a la scene, jamais une regle choisie par objet. 'ambiante' ({intensite, couleur}) : valeur de repli lue par locale()/avancer() TANT QUE l'appelant n'a pas ecrit le resultat de soleil(heure, latitude, catalogue) a sa place -- l'appelant est cense rafraichir ce champ CHAQUE TICK depuis soleil() (voir scripts/lumiere.gd, en-tete) ; intensite laissee a 0.0 et couleur a 0.9 (bleu froid nocturne) pour qu'un appel qui oublie cette mise a jour retombe sur une nuit sombre et bleue, jamais une lumiere ou une teinte inventee. 'attenuation.exposant' : courbe d'attenuation d'une source a la distance (1.0 = lineaire, plus grand = chute plus rapide pres du bord du rayon) -- forme UNIQUE, partagee par toutes les sources d'un meme appel, jamais par source, meme patron que data/temperature.json:attenuation.exposant/data/vent.json:attenuation_source.exposant. 'cycle.heures_par_jour'/'cycle.heure_midi' : parametres de soleil() -- l'angle horaire (intensite) est mesure par rapport a heure_midi sur un cycle de heures_par_jour heures, jamais en dur dans le code. 'courbe_couleur' (Array de {heure, couleur}, TRIEE par heure croissante, premier ET dernier point a la meme couleur pour boucler sans code special -- voir scripts/lumiere.gd:_couleur_courbe) : la teinte du soleil selon l'heure, interpolee LINEAIREMENT entre points -- minuit et midi bleu/blanc-jaune, aube et crepuscule orange, jamais une formule fermee. 'latitude_demonstration' : latitude illustrative pour un banc ou un test qui a besoin d'une valeur sans en inventer une localement -- ni soleil() ni locale() ne LISENT ce champ eux-memes, la latitude reste un parametre explicite de soleil() (voir scripts/lumiere.gd).",
+	"defaut": {
+		"ambiante": {
+			"intensite": 0.0,
+			"couleur": 0.9
+		},
+		"attenuation": {
+			"exposant": 1.0
+		},
+		"cycle": {
+			"heures_par_jour": 24.0,
+			"heure_midi": 12.0
+		},
+		"courbe_couleur": [
+			{ "heure": 0.0, "couleur": 0.9 },
+			{ "heure": 6.0, "couleur": 0.2 },
+			{ "heure": 12.0, "couleur": 0.5 },
+			{ "heure": 18.0, "couleur": 0.2 },
+			{ "heure": 24.0, "couleur": 0.9 }
+		],
+		"latitude_demonstration": 45.0
+	}
+}

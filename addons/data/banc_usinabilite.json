@@ -1,0 +1,15 @@
+{
+	"_note": "Jetable, propre a scripts/banc_usinabilite.gd (chantier 'usinabilite -- temps de fabrication par materiau'). Trois objets FABRIQUES via Objet.fabriquer/composition/materiaux.json (jamais construits a la main), un materiau reel chacun (bois/pierre/fer, data/materiaux.json -- usinabilite 0.8/0.3/0.5). Chaque objet porte une reserve depense.gd nommee 'travail' (travail_restant, meme valeur initiale 'travail_initial' pour les trois), consommee UNIQUEMENT quand la fabrication est active (clic gauche bascule les trois a la fois) a un cout_effectif = cout_base_reference * usinabilite_effective -- voir banc_usinabilite.gd:cout_effectif. 'intervalle_log' : la console imprime une ligne recapitulative (travail restant des trois) a cet intervalle, jamais a chaque frame.",
+	"objets": [
+		{ "id": "bois_usinabilite", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "pierre_usinabilite", "position": [0.0, 150.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }] },
+		{ "id": "fer_usinabilite", "position": [0.0, 300.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] }
+	],
+	"travail_initial": 10.0,
+	"cout_base_reference": 1.0,
+	"intervalle_log": 2.0,
+	"taille": 60.0,
+	"couleur_en_cours": [0.55, 0.42, 0.28],
+	"couleur_fabrique": [0.2, 0.75, 0.3],
+	"camera": { "position": [0.0, 150.0, 0.0], "zoom": 0.5 }
+}

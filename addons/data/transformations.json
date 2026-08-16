@@ -1,0 +1,207 @@
+{
+	"patron": {
+		"travail_restant": 3.0,
+		"travail_initial": 3.0,
+		"profil_saillance": "feu",
+		"transformation": "defaut",
+		"reserves": {
+			"combustible": {
+				"reserve": 5.0,
+				"cout_base": 1.0,
+				"surcout_action": 0.0,
+				"seuils_ref": "epuisement"
+			}
+		}
+	},
+	"patron_bloc": {
+		"travail_restant": 15.0,
+		"travail_initial": 15.0,
+		"profil_saillance": "bloc",
+		"transformation": "bloc_defaut"
+	},
+	"transformations": {
+		"defaut": {
+			"portee_travail": 25.0,
+			"a_zero": { "retirer": ["brule", "profil_saillance"] }
+		},
+		"bloc_defaut": {
+			"portee_travail": 25.0,
+			"a_zero": { "retirer": ["cassable", "profil_saillance"] }
+		},
+		"combustion_bois": {
+			"_note": "Chantier 'transformation produit un objet neuf'. rendement 0.30 : rendement massique usuel de la pyrolyse du bois en charbon de bois (charbonnage traditionnel ~25%, four moderne jusqu'a ~33% -- 0.30 retenue comme valeur mediane realiste). patron_produit rallume immediatement le charbon produit dans son propre chantier (combustion_charbon) -- scripts/produit.gd, scripts/extinction.gd ne connaissent ni bois ni charbon, ce sont des donnees.",
+			"portee_travail": 25.0,
+			"a_zero": {
+				"produire": {
+					"type_produit": "charbon",
+					"rendement": 0.30,
+					"patron_produit": {
+						"brule": true,
+						"profil_saillance": "feu",
+						"travail_restant": 3.0,
+						"travail_initial": 3.0,
+						"transformation": "combustion_charbon"
+					}
+				}
+			}
+		},
+		"combustion_charbon": {
+			"_note": "Chantier 'transformation produit un objet neuf'. rendement 0.05 : teneur en cendre usuelle du charbon de bois une fois entierement consume (plage courante 2%-5% de la masse de charbon -- 0.05 retenue comme valeur haute realiste). Pas de patron_produit : la cendre ne brule plus, aucun nouveau chantier ne repart.",
+			"portee_travail": 25.0,
+			"a_zero": {
+				"produire": {
+					"type_produit": "cendre",
+					"rendement": 0.05
+				}
+			}
+		},
+		"pourriture_bois": {
+			"_note": "Chantier 'pourriture'. Cette entree n'est JAMAIS lue par extinction.gd (aucune chose ne porte 'travail_restant'/'transformation' pointant ici, donc pas de 'portee_travail' -- il n'aurait aucun sens, ce chantier n'a pas d'agents a distance) : scripts/banc_pourriture.gd la lit DIRECTEMENT (transformations['pourriture_bois'].a_zero.produire), au moment ou la reserve d'integrite (scripts/depense.gd, sans portee) atteint zero, et appelle lui-meme scripts/produit.gd:transformer -- meme geste que extinction.gd:_appliquer_a_zero, rejoue au niveau du cablage puisque depense.gd n'a pas de branche 'produire' (contrairement a extinction.gd). Seule la FORME de la donnee (a_zero.produire, memes trois cles) est reutilisee pour rester lisible a cote de combustion_bois/combustion_charbon -- jamais le mecanisme qui la consomme. rendement 0.35 : le compostage reduit la masse organique par decomposition/lessivage, plage usuelle de matiere seche finale 30%-50% du depart -- 0.35 retenue comme valeur basse plausible (beaucoup se perd en gaz et en eau). Pas de patron_produit : le compost ne pourrit plus une deuxieme fois (pas de composition['materiau'] == 'bois'), aucun nouveau chantier ne repart.",
+			"a_zero": {
+				"produire": {
+					"type_produit": "compost",
+					"rendement": 0.35
+				}
+			}
+		},
+		"corrosion_fer": {
+			"_note": "Chantier 'corrosion', meme patron que 'pourriture_bois' (chantier jumeau). Cette entree n'est JAMAIS lue par extinction.gd (pas de 'portee_travail' -- ce chantier n'a pas d'agents a distance) : scripts/banc_corrosion.gd la lit DIRECTEMENT (transformations['corrosion_fer'].a_zero.produire), au moment ou la reserve d'integrite (scripts/depense.gd, sans portee) atteint zero, et appelle lui-meme scripts/produit.gd:transformer -- meme geste que extinction.gd:_appliquer_a_zero, rejoue au niveau du cablage puisque depense.gd n'a pas de branche 'produire'. rendement 0.85 : contrairement au compostage (lessivage important), l'oxydation du fer conserve l'essentiel de la masse -- une petite part se perd en ecailles de rouille qui se detachent. Pas de patron_produit : la rouille ne se corrode plus (corrodable absent de sa fiche materiau, retombe a 0.0 par le defaut facultatif du patron de fusion), aucun nouveau chantier ne repart.",
+			"a_zero": {
+				"produire": {
+					"type_produit": "rouille",
+					"rendement": 0.85
+				}
+			}
+		},
+		"dissolution_sel_demo": {
+			"_note": "Chantier 'solubilite', meme patron que 'pourriture_bois'/'corrosion_fer'. Cette entree n'est JAMAIS lue par extinction.gd (pas de 'portee_travail' -- ce chantier n'a pas d'agents a distance) : scripts/banc_solubilite.gd la lit DIRECTEMENT (transformations['dissolution_sel_demo'].a_zero.produire), au moment ou la reserve d'integrite (scripts/depense.gd, sans portee) atteint zero, et appelle lui-meme scripts/produit.gd:transformer. rendement 0.02 : contrairement au compostage (0.35) ou a la rouille (0.85), une dissolution dans l'eau ne conserve presque rien de la masse d'origine -- le sel part presque integralement en solution, seule une trace insoluble/un sediment negligeable subsiste (data/materiaux.json:residu_dissous). Pas de patron_produit : le residu ne se dissout plus (solubilite absent de sa fiche materiau, retombe a 0.0 par le defaut facultatif du patron de fusion), aucun nouveau chantier ne repart.",
+			"a_zero": {
+				"produire": {
+					"type_produit": "residu_dissous",
+					"rendement": 0.02
+				}
+			}
+		},
+		"fracture_pierre": {
+			"_note": "Chantier 'resistance_impact -- fracture par choc', meme patron que 'pourriture_bois'/'corrosion_fer'/'dissolution_sel_demo'. Cette entree n'est JAMAIS lue par extinction.gd (pas de 'portee_travail' -- ce chantier n'a pas d'agents a distance) : scripts/banc_fracture.gd la lit DIRECTEMENT (transformations['fracture_pierre'].a_zero.produire), au moment ou scripts/seuil_etat.gd pose 'fracture' SUR UN OBJET DONT LA FRAGILITE DEPASSE UN SEUIL LOCAL AU BANC (data/banc_fracture.json:seuil_fragilite_eclats) -- pas au moment ou une reserve s'epuise, difference avec les trois entrees jumelles ci-dessus, la fracture est un evenement unique, pas un epuisement progressif. rendement 0.9 : un choc qui fracture la pierre la fragmente, la masse totale des eclats reste proche de la masse d'origine (peu de matiere reellement perdue, contrairement a une dissolution ou un compostage). Pas de patron_produit : les eclats ne se fracturent pas une seconde fois dans ce chantier (resistance_impact/fragilite absentes de la fiche materiau 'eclats_pierre', retombent a 0.0 par le defaut facultatif du patron de fusion). SEULE la pierre utilise cette entree -- le fer (fragilite basse) se deforme sans jamais transformer, voir scripts/banc_fracture.gd.",
+			"a_zero": {
+				"produire": {
+					"type_produit": "eclats_pierre",
+					"rendement": 0.9
+				}
+			}
+		},
+		"fracture_verre": {
+			"_note": "Chantier 'fracture par son', MEME PATRON que 'fracture_pierre' -- cette entree n'est JAMAIS lue par extinction.gd (pas de 'portee_travail'), scripts/banc_fracture_sonore.gd la lit DIRECTEMENT (transformations['fracture_verre'].a_zero.produire), au moment ou scripts/seuil_etat.gd pose 'fracture' (data/seuils_etat.json:fracture_sonore, DECLENCHEUR different de 'fracture_pierre' -- intensite_sonore_cumulee au lieu de degats_impact_cumules, deux entrees INDEPENDANTES visant le meme etat 'fracture') sur un objet dont la fragilite depasse le seuil local au banc. rendement 0.95 : un verre qui casse sous un son intense se fragmente en eclats, la masse totale reste quasiment inchangee -- encore plus proche de 1.0 que la pierre (0.9), un eclatement de verre ne perd presque rien. Pas de patron_produit : les eclats de verre ne se fracturent pas une seconde fois (resistance_impact/fragilite absentes de la fiche materiau 'eclats_verre', retombent a 0.0 par le defaut facultatif du patron de fusion). SEUL le verre utilise cette entree -- le fer (fragilite basse) se deforme sans jamais transformer, voir scripts/banc_fracture_sonore.gd.",
+			"a_zero": {
+				"produire": {
+					"type_produit": "eclats_verre",
+					"rendement": 0.95
+				}
+			}
+		},
+			"coupe_bois": {
+				"_note": "Chantier 'cisaillement et tranchant -- couper un objet', MEME PATRON que 'pourriture_bois'/'corrosion_fer'/'dissolution_sel_demo' (pas 'fracture_pierre' -- pas de seuil_etat.gd ici). Cette entree n'est JAMAIS lue par extinction.gd (pas de 'portee_travail' -- ce chantier n'a pas d'agents a distance) : scripts/banc_coupe.gd la lit DIRECTEMENT (transformations['coupe_bois'].a_zero.produire), au moment ou la reserve d'integrite (Frappe.frapper, bornee a zero) atteint zero, et appelle lui-meme scripts/produit.gd:transformer. rendement 0.9 : une coupe nette perd peu de matiere (copeaux), la masse totale des copeaux reste proche de la masse d'origine. Pas de patron_produit : les copeaux ne se coupent plus une seconde fois (resistance_cisaillement/tranchant_max absentes de la fiche materiau 'copeaux_bois', retombent a 0.0 par le defaut facultatif du patron de fusion).",
+				"a_zero": {
+					"produire": {
+						"type_produit": "copeaux_bois",
+						"rendement": 0.9
+					}
+				}
+			},
+			"coupe_pierre": {
+				"_note": "Chantier 'cisaillement et tranchant -- couper un objet', MEME PATRON que 'coupe_bois'. scripts/banc_coupe.gd la lit DIRECTEMENT au moment ou la reserve d'integrite (Frappe.frapper, bornee a zero) atteint zero. REUTILISE 'eclats_pierre' (data/materiaux.json/data/types.json, deja cree par le chantier 'resistance_impact -- fracture par choc') -- la pierre fragmentee par une coupe est physiquement la meme matiere que la pierre fragmentee par un choc, aucun nouveau materiau necessaire. rendement 0.9 : identique a 'fracture_pierre', meme raisonnement (peu de matiere reellement perdue).",
+				"a_zero": {
+					"produire": {
+						"type_produit": "eclats_pierre",
+						"rendement": 0.9
+					}
+				}
+			},
+			"coupe_fer": {
+				"_note": "Chantier 'cisaillement et tranchant -- couper un objet', MEME PATRON que 'coupe_bois'. scripts/banc_coupe.gd la lit DIRECTEMENT au moment ou la reserve d'integrite (Frappe.frapper, bornee a zero) atteint zero. rendement 0.9 : une coupe nette perd peu de matiere (limaille), meme raisonnement que 'coupe_bois'. Pas de patron_produit : la limaille ne se coupe plus une seconde fois (resistance_cisaillement/tranchant_max absentes de la fiche materiau 'limaille_fer', retombent a 0.0 par le defaut facultatif du patron de fusion).",
+				"a_zero": {
+					"produire": {
+						"type_produit": "limaille_fer",
+						"rendement": 0.9
+					}
+				}
+			},
+			"reactivite_acide_epuise": {
+				"_note": "Chantier 'reactivite -- reaction chimique entre deux objets', MEME PATRON que 'pourriture_bois'/'corrosion_fer'/'dissolution_sel_demo' (pas de 'portee_travail' -- jamais lue par extinction.gd, aucun agent a distance). scripts/banc_reactivite.gd la lit DIRECTEMENT (transformations['reactivite_acide_epuise'].a_zero.produire), au moment ou la reserve nommee 'acide' (scripts/depense.gd, sans portee) atteint zero -- CETTE reserve decroit proportionnellement au nombre de cibles reactives encore en contact (voir scripts/banc_reactivite.gd), et est forcee a zero des qu'aucune cible reconnue par data/reactions.json ne reste a transformer (l'acide n'a plus rien a consommer). rendement 0.05 : comme une dissolution (0.02), l'acide part presque integralement consomme par ses reactions, seule une trace residuelle subsiste (data/materiaux.json:residu_acide). Pas de patron_produit : le residu ne reagit plus (reactivite absente de sa fiche materiau, retombe a 0.0 par le defaut facultatif du patron de fusion).",
+				"a_zero": {
+					"produire": {
+						"type_produit": "residu_acide",
+						"rendement": 0.05
+					}
+				}
+			},
+			"decomposition_cadavre_demo": {
+				"_note": "Chantier « fertilité -- le sol s'épuise et se refait », MEME PATRON que 'pourriture_bois'/'corrosion_fer'/'dissolution_sel_demo' (pas de 'portee_travail' -- jamais lue par extinction.gd, aucun agent a distance). scripts/banc_fertilite.gd la lit DIRECTEMENT (transformations['decomposition_cadavre_demo'].a_zero.produire, champ 'transformation_terminale' de data/banc_fertilite.json -- meme nom de champ que data/banc_pourriture.json, jamais 'transformation', qui est la reference resolue par extinction.gd et verifiee comme telle par scripts/test_lint_donnees.gd) et appelle lui-meme scripts/produit.gd:transformer, au moment ou la reserve nommee 'matiere_organique' du cadavre atteint zero -- CETTE reserve ne decroit pas par depense.gd mais par scripts/consommer.gd:transferer (transfert DESTRUCTIF conserve : ce que le cadavre perd, la case de sol sous lui le gagne exactement, au meme tick), difference avec les trois entrees jumelles ci-dessus ou la reserve se consume sans receveur. rendement 0.30 : la decomposition d'un corps perd l'essentiel de sa masse en eau et en gaz (respiration microbienne) -- valeur alignee sur le compostage (0.35) et legerement sous lui, un cadavre est bien plus riche en eau qu'un tas de bois. Pas de patron_produit : l'humus ne se decompose plus une seconde fois (biodegradabilite absente de data/materiaux.json:humus, retombe a 0.0 par le defaut facultatif du patron de fusion), aucun nouveau transfert ne repart.",
+				"a_zero": {
+					"produire": {
+						"type_produit": "humus",
+						"rendement": 0.30
+					}
+				}
+			},
+			"epuisement_source_radiation": {
+				"_note": "Chantier « Produit nucléaire -- contamination, mutation, maladie », MEME PATRON que 'reactivite_acide_epuise' (pas de 'portee_travail' -- jamais lue par extinction.gd, aucun agent a distance). scripts/banc_produit_nucleaire.gd la lit DIRECTEMENT (transformations['epuisement_source_radiation'].a_zero.produire), au moment ou la reserve nommee 'radioactivite' de la source (scripts/depense.gd, sans portee, seuils_ref data/seuils_combustible.json:epuisement_radioactivite) atteint zero. La source hand-built porte une 'masse' posee a la main (comme force_radiation, voir scripts/banc_radiation.gd) pour que scripts/produit.gd:transformer puisse calculer un volume de residu non nul -- un point d'emission SANS masse produirait un residu de volume total 0.0, fabrication refusee (voir objet.gd, ECHEC FORT). rendement 0.8 : une source epuisee laisse le plus gros de sa masse en residu solide (contrairement a une dissolution ou une reaction chimique, aucune matiere ne part en solution ou en gaz ici). Pas de patron_produit : Produit.transformer ne relaie aucune propriete immuable (constat systemique, audit_produit_nucleaire_prealable.md) -- c'est le cablage du banc qui pose A LA MAIN 'force_radiation' (plus faible que la source d'origine) et une NOUVELLE reserve 'radioactivite_residuelle' sur le residu, apres l'appel a Produit.transformer, exactement comme scripts/banc_radiation.gd pose 'force_radiation' sur sa source hand-built.",
+				"a_zero": {
+					"produire": {
+						"type_produit": "residu_radioactif",
+						"rendement": 0.8
+					}
+				}
+			},
+			"fonte_metal": {
+				"_note": "Chantier « conservation + fonte + portage + coût de trajet », MEME PATRON que 'pourriture_bois'/'corrosion_fer' (pas de 'portee_travail' -- jamais lue par extinction.gd, aucun agent a distance) : scripts/banc_economie.gd la lit DIRECTEMENT et appelle lui-meme scripts/produit.gd:transformer, au moment ou le tas de minerai depose a la forge est fondu. CE QUI EST NEUF DANS LE DEPOT, et la raison d'etre de la PAIRE fonte_metal/fonte_scories : toutes les entrees 'produire' ci-dessus perdent la masse complementaire de leur rendement SANS DESTINATION (scripts/produit.gd, en-tete : « la masse perdue disparait simplement (elle n'est nulle part) »). Ici DEUX appels a Produit.transformer sont faits sur le MEME proprietes_ancien, AVANT tout ecrasement -- 0.85 en lingot par cette entree, 0.15 en scories par la suivante -- et 0.85 + 0.15 = 1.0 : la somme est EXACTE, plus rien ne disparait. Passer par extinction.gd est FERME : a_zero.produire ne lit qu'UN SEUL produit, il n'y a nulle part ou mettre le second objet (il REMPLACE les proprietes sur la meme instance, meme id, meme position). rendement 0.85 : valeur de la CONSERVATION, jamais un rendement metallurgique reel (un minerai a 60% de fer donnerait ~0.6 de metal) -- la paire est calibree pour sommer a 1.0, c'est ce que le banc existe pour montrer. Pas de patron_produit : le lingot ne se refond pas une seconde fois.",
+				"a_zero": {
+					"produire": {
+						"type_produit": "lingot_fer",
+						"rendement": 0.85
+					}
+				}
+			},
+			"chantier_coupe_arbre": {
+				"_note": "SEULE des quatre entrees de ce chantier a etre resolue par scripts/extinction.gd -- c'est elle que porte 'transformation' sur un arbre en cours de coupe, et elle EXISTE PARCE QU'EXTINCTION L'EXIGE : une chose qui porte travail_restant sans 'transformation' resolue, ou dont l'entree resolue ne porte pas 'portee_travail', alerte (push_error) et n'accomplit rien. Les trois entrees 'couper_arbre_*' ci-dessous ne portent PAS de portee_travail et ne sont JAMAIS lues par extinction.gd : elles ne decrivent pas un chantier mais son ISSUE, lue directement par le cablage.\n\nAUCUN 'a_zero', ET C'EST LE POINT : quand travail_restant atteint zero, extinction.gd:_appliquer_a_zero retire simplement 'travail_restant' et 'transformation' (a_zero absente : ni retirer, ni poser, ni produire -- chemin legitime, jamais une alarme). L'objet reste donc intact, masse comprise, et c'est le CABLAGE qui prend la main sur l'id rendu dans 'accomplis' : scripts/bifurcation.gd tranche l'issue, puis scripts/produit.gd:transformer est appele SUR L'ISSUE GAGNANTE, hors d'extinction.gd. Passer par a_zero.produire est FERME et ce n'est pas un oubli -- il ne lit qu'UN SEUL produit, fige a l'avance en donnee, alors que l'issue n'est connue qu'a l'instant ou le chantier s'acheve (patron scripts/banc_economie.gd:fondre, meme raison).\n\nportee_travail 45.0 : de quoi qu'un colon arrete a la portee de travail du banc compte comme coupeur, jamais un rayon en dur dans le .gd (scripts/banc_commun.gd:verbe_action resout le meme couple).",
+				"portee_travail": 45.0
+			},
+			"couper_arbre_reussite": {
+				"_note": "Chantier « travail + coupe + résultat », ISSUE 1 sur 3 (audit_affordances_prealable.md, ligne 10 -- « rater produit autre chose »). MEME PATRON que 'coupe_bois'/'fracture_pierre' (pas de 'portee_travail' -- jamais lue par extinction.gd, voir 'chantier_coupe_arbre' ci-dessus) : scripts/banc_affordances_travail.gd la lit DIRECTEMENT et appelle lui-meme scripts/produit.gd:transformer, au moment ou scripts/bifurcation.gd:selectionner rend 'reussite'. CE QUI CHOISIT L'ISSUE N'EST PAS UN DE (aucun RNG n'existe dans ce depot, CLAUDE.md) : c'est un argmax deterministe sur un 'biais' compose par colon et par tick (adresse, fatigue), la 'grandeur' ne jouant qu'un GATE et une echelle -- limite ecrite dans l'en-tete de bifurcation.gd, jamais contournee ici.\n\ntype_produit 'buche' (data/types.json, type NEUF de ce chantier, materiau 'bois' deja existant) : un arbre bien abattu donne du bois d'oeuvre, pas des copeaux. rendement 0.85 : une coupe reussie garde l'essentiel du tronc, le complement part en sciure et en chutes -- meme ordre de grandeur que 'coupe_bois' (0.9), legerement sous lui parce qu'abattre un arbre entier perd plus qu'un simple trait de scie. LA MASSE COMPLEMENTAIRE N'EST NULLE PART (scripts/produit.gd, en-tete) : contrairement a la paire fonte_metal/fonte_scories, ces trois issues ne somment PAS a 1.0 -- le cablage du banc COMPTE ce qui se perd (masse_perdue) et affiche 'monde + perdu', qui reste constant, plutot que de faire croire a une conservation qui n'existe pas. Pas de patron_produit : une buche ne se recoupe pas dans ce chantier.",
+				"a_zero": {
+					"produire": {
+						"type_produit": "buche",
+						"rendement": 0.85
+					}
+				}
+			},
+			"couper_arbre_eclats": {
+				"_note": "Chantier « travail + coupe + résultat », ISSUE 2 sur 3 -- voir 'couper_arbre_reussite' ci-dessus pour la doctrine complete (jamais lue par extinction.gd, appelee par le cablage sur la sortie de bifurcation.gd). REUTILISE 'copeaux_bois' (data/types.json/data/materiaux.json, deja cree par le chantier 'cisaillement et tranchant -- couper un objet') : du bois deja reduit en copeaux par une coupe est physiquement la meme matiere, quel que soit l'outil qui l'a produite -- aucun materiau neuf n'est necessaire, et l'audit le nommait deja comme reutilisable (ligne 10). rendement 0.35 : une coupe ratee eclate le tronc, l'essentiel part en debris trop courts pour etre utilises, un tiers seulement reste recuperable en copeaux. Pas de patron_produit : les copeaux ne se recoupent pas (resistance_cisaillement/tranchant_max absentes de leur fiche materiau, retombent a 0.0 par le defaut facultatif du patron de fusion).",
+				"a_zero": {
+					"produire": {
+						"type_produit": "copeaux_bois",
+						"rendement": 0.35
+					}
+				}
+			},
+			"couper_arbre_debris": {
+				"_note": "Chantier « travail + coupe + résultat », ISSUE 3 sur 3 -- voir 'couper_arbre_reussite' ci-dessus pour la doctrine complete. REUTILISE 'residu_organique' (data/types.json/data/materiaux.json, deja cree par le chantier 'reactivite') : un arbre massacre par un colon epuise avec un mauvais outil ne donne plus du bois mais de la matiere organique dechiquetee, exactement ce que ce materiau represente deja -- meme convention de reutilisation que 'coupe_pierre' reprenant 'eclats_pierre'. rendement 0.10 : la pire issue, presque tout est perdu -- valeur choisie du meme ordre que 'reactivite_acide_epuise' (0.05) et 'dissolution_sel_demo' (0.02), les deux autres issues du depot ou il ne reste qu'une trace. Pas de patron_produit : le residu est terminal.",
+				"a_zero": {
+					"produire": {
+						"type_produit": "residu_organique",
+						"rendement": 0.10
+					}
+				}
+			},
+			"fonte_scories": {
+				"_note": "Chantier « conservation + fonte + portage + coût de trajet » -- SECONDE MOITIE de la paire, voir 'fonte_metal' ci-dessus pour la doctrine complete (jamais lue par extinction.gd, deux appels sur le meme proprietes_ancien, somme exacte). rendement 0.15 : complement exact de 0.85. Ce que produit cette entree est un TAS QUI RESTE AU SOL -- fabrique par le cablage (Objet.fabriquer via Produit.transformer, puis Monde.ajouter, patron scripts/banc_elimination_salete.gd:fabriquer_dechet) et plus jamais ramasse : les scories ne portent pas la propriete de ressource que le colon cherche. Pas de patron_produit : les scories sont un materiau terminal (data/materiaux.json:scories).",
+				"a_zero": {
+					"produire": {
+						"type_produit": "scories",
+						"rendement": 0.15
+					}
+				}
+			}
+		}
+	}

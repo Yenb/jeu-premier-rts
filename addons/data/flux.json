@@ -1,0 +1,4 @@
+[
+	{ "source": "lumineux", "receptrice": "phototrophe", "cible": "energie" },
+	{ "source": "nourrissant", "receptrice": "brouteur", "cible": "matiere" }
+]

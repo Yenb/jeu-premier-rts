@@ -1,0 +1,17 @@
+{
+	"_note": "Jetable, propre a ce banc. Six lucioles en cercle, chacune un bool 'luit' qui bascule au hasard (RNG seede, jamais de hasard non seede -- voir CLAUDE.md). comptage_ref vise data/comptages.json:poissons_luisants (mode presente sur 'luit'), deja existant, aucun enrichissement de ce catalogue partage.",
+	"seed": 20260801,
+	"seuil_bascule": 0.02,
+	"fenetre_moyenne": 60,
+	"couleur_luit": [1.0, 0.9, 0.2],
+	"couleur_eteinte": [0.35, 0.35, 0.35],
+	"comptage_ref": "poissons_luisants",
+	"positions": [
+		{ "x": 550.0, "y": 300.0, "z": 0.0 },
+		{ "x": 475.0, "y": 430.0, "z": 0.0 },
+		{ "x": 325.0, "y": 430.0, "z": 0.0 },
+		{ "x": 250.0, "y": 300.0, "z": 0.0 },
+		{ "x": 325.0, "y": 170.0, "z": 0.0 },
+		{ "x": 475.0, "y": 170.0, "z": 0.0 }
+	]
+}

@@ -1,0 +1,180 @@
+{
+	"_note": "Donnees propres a scripts/banc_social_paire.gd (Scene/banc_social_paire.tscn), chantier « relation par paire » -- lignes 1, 2, 3, 11 et 14 du tableau Social et relations. JETABLE, propre au banc : rien ici n'est un catalogue partage. Les NEUF entrees partagees de ce chantier vivent ailleurs et ne sont JAMAIS recopiees ici -- data/etats.json:confiant_combattre + confiant_obeir + rancunier, data/seuils_etat.json:confiance_combattre + confiance_obeir + rancune, data/epigenetique.json:confiance + lien_negatif + service_rendu. data/liens_personnels.json est lu TEL QUEL, sans ajout.\n\nQUATRE REGISTRES PAR PAIRE, ET UN SEUL EST UN LIEN PERSONNEL. lien_positif(A,B) vit dans proprietes.liens_personnels[B] (lien_personnel.gd, INCHANGE et POSITIF SEULEMENT -- max(0.0, force - taux*delta) ramene toute valeur negative a 0.0). Les TROIS autres -- confiance(A,B), lien_negatif(A,B), service_rendu(A,B) -- sont des MARQUES EPIGENETIQUES a nom compose 'base:cible', posees contre un catalogue LOCAL derive de data/epigenetique.json (voir marques ci-dessous). Raison structurelle, jamais un gout : proprietes.marques_epigenetiques est un Dictionary PLAT nom -> { modulateur, age_marque }, et epigenetique.gd:poser ALARME sur un nom absent du catalogue -- la paire ne peut donc s'obtenir que par un nom compose ET un catalogue etendu par paire. Precedent du catalogue local au format exact du partage : data/banc_psycho_social.json:seuils_locaux, banc_menace_combat.gd:comptages, banc_predation.gd:comptages.\n\nLA HAINE N'EST PAS UN LIEN NEGATIF : c'est un SECOND REGISTRE POSITIF. lien_personnel.gd ne peut pas porter de valeur negative (voir ci-dessus), et le rendre signe toucherait cinq fichiers du coeur -- interdit par ce chantier. score_net(A,B) = lien_positif - lien_negatif est donc une LECTURE du cablage, refaite a neuf a chaque appel, jamais une valeur stockee. Les QUATRE lecteurs existants de lien_personnel.gd (lien_personnel_saillance.gd, lien_personnel_attraction.gd, lien_personnel_croissance.gd, attache_par_trait.gd) continuent de lire le POSITIF SEUL, sans une ligne changee.\n\nLA DETTE EST UNE DIFFERENCE, PAS UN COMPTEUR SIGNE. Un seul registre 'service_rendu:cible', toujours positif, pose sur celui qui REND le service. dette(A,B) = service_rendu(A,B) - service_rendu(B,A) -- lu dans les deux sens sur deux entites differentes. Un colon qui RECOIT plus qu'il ne rend a une dette NEGATIVE, et c'est elle qui produit la rancune (voir data/seuils_etat.json:rancune). Le sens est celui de la consigne, litteralement : « le score net (services rendus - services recus) passe sous seuil_rancune ».\n\nLES CADENCES SONT CONTRAINTES PAR LES PLANCHERS DE SUPPRESSION, resultat negatif deja mesure TROIS fois dans le depot (data/epigenetique.json : accoutumance_froid, experience_combat, competence_forge) -- interdit de le refaire. Survie d'une marque fraiche sans renouvellement : confiance (0.05-0.03)/0.02 = 1.00 s, lien_negatif (0.08-0.04)/0.03 = 1.33 s, service_rendu (0.06-0.03)/0.02 = 1.50 s. intervalle_interaction_s = 0.25 s reste sous la plus courte des trois (1.00 s), avec un facteur 4 de marge. Verrouille par test contre les nombres REELS du disque.\n\nAUCUNE BORNE HAUTE DANS epigenetique.gd (poser() ajoute sans plafond) : les trois plafonds vivent donc ICI, au cablage, patron banc_psycho_social.json:plafond_modification et banc_marche_competence.json:plafond_habitude. plafond_confiance est PAR COLON (patron banc_marche_competence.json:colons[].plancher_competence) et c'est le coeur de l'escalier : l'ami plafonne a 0.50, entre seuil_combattre (0.20) et seuil_obeir (0.70) -- il se bat aux cotes du chef et n'obeit jamais a ses ordres. Ce n'est pas un archetype, c'est un POIDS individuel, exactement comme biais_grief (data/banc_grief.json) ou poids_bonheur (data/banc_bonheur.json).\n\nCALIBRATION, mesuree et non devinee, a intervalle_interaction_s = 0.25 s. Montee nette de la confiance : 0.05/0.25 - 0.02 = 0.18/s. Le soldat (plafond 1.00) franchit seuil_combattre 0.20 a t=1.1 s, seuil_obeir 0.70 a t=3.9 s, plateau a t=5.6 s. L'ami (plafond 0.50) franchit 0.20 a t=1.1 s et plafonne a 2.8 s -- jamais 0.70. L'ennemi n'a AUCUN temps partage declare : sa confiance reste exactement 0.0, il ne franchit rien. Montee nette du service : 0.06/0.25 - 0.02 = 0.22/s, donc la dette de l'ennemi envers le chef passe sous -1.00 a t=4.5 s et l'etat 'rancunier' se pose. Montee nette de la haine : 0.08/0.25 - 0.03 = 0.29/s, plafond 2.0 atteint en 6.9 s.\n\nLES DEUX GATES DE L'ORDRE NE SONT PAS REDONDANTS. 'confiant_obeir' dit ce que le colon a ACCUMULE avec le chef (temps partage, seuil_etat.gd) ; la cession dit ce que le chef PESE face au cout du conflit ici et maintenant (score_net vers le chef + son score de hierarchie, contre cout_conflit, tranche par bifurcation.gd). Un colon peut avoir assez confiance pour obeir en principe et resister quand meme si le conflit lui coute moins cher que la soumission. Les deux sont demandes par la consigne (lignes 1 et 14), ce sont deux mecanismes differents.\n\nSCORE DE CESSION : le terme de lien est le SCORE NET (lien_positif - lien_negatif), jamais LienPersonnel.force nue. Sans cela « un chef HAI se fait resister » n'est pas observable -- la haine n'entrerait dans aucun calcul. C'est la meme lecture de paire que partout ailleurs dans ce banc. Calibration : score_hierarchie(chef) = 0.01 x 85 + 0.2 x 9 = 2.65 ; soldat net vers chef 0.90 -> cession 3.55 contre cout_conflit 2.0, il CEDE ; ami net 0.50 -> 3.15 contre 4.0, il RESISTE ; ennemi net 0.10 -> 2.75 contre 5.0, il RESISTE. Un chef affaibli (masse/force basses) fait tomber le terme commun aux trois et le soldat resiste a son tour -- verrouille par test.\n\nSEUIL_ATTACHE 1.0 : seul le lien soldat->ami (1.4) le depasse. C'est LUI, et rien d'autre, qui retire l'entree de l'ordre de 'resultats' avant dominance.gd (patron banc_economie.gd:filtrer_rentables, qui rend { gardes, retires } pour que l'ecarte reste lisible). L'ennemi n'a aucun lien vers l'ami : son entree d'ordre passe le gate du lien sans probleme -- et tombe sur celui de 'confiant_obeir', qu'il n'a pas.\n\nL'ORDRE A TROIS ETATS, pas deux (aucun / donne / force), cycle au clic gauche -- patron banc_bonheur.gd:source_suivante, banc_nutrition.gd:repas_suivant. C'est ce qui rend l'arc entier visible sans quitter la scene : rien, puis le soldat CEDE au chef mais REFUSE de tuer son ami et retourne a son ouvrage, puis l'ordre force passe outre le lien et le grief de transgression monte jusqu'a poser 'transgresseur' (charge.gd, canal a portee 0.0, cause synthetisee sur le colon lui-meme -- patron banc_menace_combat.gd:causes_de_menace).\n\nLA CIBLE DE L'ORDRE EST LE COLON 'ami' LUI-MEME, jamais un cinquieme objet : c'est ce qui fait que la paire affichee (soldat->ami, lien_positif 1.4) EST le nombre qui declenche le refus. Un allie-objet separe aurait dedouble la lecture. Les destinataires de l'ordre sont calcules (tous sauf l'emetteur et la cible), jamais listes en donnee.\n\nAUCUN champ de ce fichier n'est une reference de catalogue au sens de scripts/test_lint_donnees.gd:REFERENCES -- ni 'profil_saillance' (ce banc ne monte ni perception.gd ni proximite.gd : ses trois entrees de saillance sont CONSTRUITES par le cablage, patron banc_grief.gd), ni 'canaux', ni 'deformation_sources', ni 'etats_actifs'. data/types.json n'est pas touche (colons construits a la main) : aucun registre du linter a etendre.",
+
+	"chef_id": "chef",
+	"cible_ordre_id": "ami",
+
+	"nom_confiance": "confiance",
+	"nom_dette_negative": "dette_negative",
+	"nom_masse": "masse",
+	"nom_force": "force",
+	"nom_plafond_confiance": "plafond_confiance",
+	"nom_cout_conflit": "cout_conflit",
+	"nom_reference": "reference_confiance",
+	"nom_marqueur_transgression": "transgresseur",
+	"nom_canal_transgression": "grief_transgression",
+
+	"etat_confiant_combattre": "confiant_combattre",
+	"etat_confiant_obeir": "confiant_obeir",
+	"etat_rancunier": "rancunier",
+	"ref_seuil_combattre": "confiance_combattre",
+	"ref_seuil_obeir": "confiance_obeir",
+	"ref_seuil_rancune": "rancune",
+
+	"marques": {
+		"confiance": "confiance",
+		"lien_negatif": "lien_negatif",
+		"service": "service_rendu"
+	},
+
+	"plafond_lien_negatif": 2.0,
+	"plafond_service": 3.0,
+
+	"portee_interaction": 700.0,
+	"intervalle_interaction_s": 0.25,
+
+	"seuil_attache": 1.0,
+	"poids_lien_cession": 1.0,
+	"poids_hierarchie_cession": 1.0,
+	"hierarchie": { "poids_masse": 0.01, "poids_force": 0.2 },
+	"sorties_cession": ["ceder", "resister"],
+
+	"saillance_menace": 2.0,
+	"saillance_ouvrage": 1.0,
+	"bonus_ordre": 4.0,
+
+	"propriete_menace": "hostile",
+	"propriete_cible_ordre": "cible_ordre",
+	"propriete_ouvrage": "ouvrage",
+
+	"catalogue_local": {
+		"hostile": { "verbes": ["combattre"] },
+		"cible_ordre": { "verbes": ["tuer"] },
+		"ouvrage": { "verbes": ["travailler"] }
+	},
+
+	"poids_verbes_colon": {
+		"combattre": 1.0,
+		"tuer": 1.0,
+		"travailler": 1.0
+	},
+
+	"forme_colon": {
+		"seuil_ecrasement": 3.5,
+		"gain_inertie": 0.1,
+		"rayon_liaison": 0.0,
+		"gain_bas": 0.1,
+		"plafond_bas": 0.5,
+		"gain_haut": 1.0,
+		"plafond_haut": 1.0
+	},
+
+	"canal_transgression": {
+		"charge": 0.0,
+		"seuil": 1.0,
+		"portee_charge": 0.0,
+		"taux_decroissance": 0.5,
+		"poser": { "transgresseur": true }
+	},
+	"cout_transgression": 1.0,
+
+	"menace": {
+		"id": "menace",
+		"position": [180.0, 140.0, 0.0]
+	},
+
+	"colons": [
+		{
+			"id": "chef",
+			"position": [600.0, 140.0, 0.0],
+			"ouvrage": [600.0, 40.0, 0.0],
+			"masse": 85.0,
+			"force": 9.0,
+			"plafond_confiance": 0.90,
+			"cout_conflit": 9.9,
+			"reference_confiance": "soldat",
+			"liens_initiaux": { "soldat": 0.8, "ami": 0.5 }
+		},
+		{
+			"id": "soldat",
+			"position": [360.0, 360.0, 0.0],
+			"ouvrage": [180.0, 360.0, 0.0],
+			"masse": 78.0,
+			"force": 7.0,
+			"plafond_confiance": 1.00,
+			"cout_conflit": 2.0,
+			"reference_confiance": "chef",
+			"liens_initiaux": { "chef": 0.9, "ami": 1.4 }
+		},
+		{
+			"id": "ami",
+			"position": [840.0, 360.0, 0.0],
+			"ouvrage": [1020.0, 360.0, 0.0],
+			"masse": 70.0,
+			"force": 5.0,
+			"plafond_confiance": 0.50,
+			"cout_conflit": 4.0,
+			"reference_confiance": "chef",
+			"liens_initiaux": { "chef": 0.5, "soldat": 1.4 }
+		},
+		{
+			"id": "ennemi",
+			"position": [600.0, 600.0, 0.0],
+			"ouvrage": [600.0, 680.0, 0.0],
+			"masse": 90.0,
+			"force": 8.0,
+			"plafond_confiance": 1.00,
+			"cout_conflit": 5.0,
+			"reference_confiance": "chef",
+			"liens_initiaux": { "chef": 0.1 }
+		}
+	],
+
+	"interactions": {
+		"service": [
+			{ "source": "soldat", "cible": "chef", "genre": "temps_partage" },
+			{ "source": "chef", "cible": "soldat", "genre": "temps_partage" },
+			{ "source": "ami", "cible": "chef", "genre": "temps_partage" },
+			{ "source": "chef", "cible": "ami", "genre": "temps_partage" },
+			{ "source": "ami", "cible": "soldat", "genre": "temps_partage" },
+			{ "source": "soldat", "cible": "ami", "genre": "temps_partage" },
+			{ "source": "chef", "cible": "ennemi", "genre": "service" }
+		],
+		"agression": [
+			{ "source": "soldat", "cible": "chef", "genre": "temps_partage" },
+			{ "source": "chef", "cible": "soldat", "genre": "temps_partage" },
+			{ "source": "ami", "cible": "chef", "genre": "temps_partage" },
+			{ "source": "chef", "cible": "ami", "genre": "temps_partage" },
+			{ "source": "ami", "cible": "soldat", "genre": "temps_partage" },
+			{ "source": "soldat", "cible": "ami", "genre": "temps_partage" },
+			{ "source": "ennemi", "cible": "soldat", "genre": "agression" },
+			{ "source": "ennemi", "cible": "ami", "genre": "agression" }
+		]
+	},
+
+	"terrain_largeur": 1200.0,
+	"terrain_hauteur": 760.0,
+	"periode_trace_s": 2.0,
+
+	"taille_colon": 34.0,
+	"taille_chose": 24.0,
+	"largeur_ligne": 3.0,
+	"taille_police_label": 12,
+	"taille_police_paire": 11,
+	"taille_police_compteur": 15,
+
+	"couleurs": {
+		"neutre": [0.58, 0.58, 0.60],
+		"confiant_combattre": [0.30, 0.55, 0.95],
+		"confiant_obeir": [0.25, 0.80, 0.40],
+		"rancunier": [0.88, 0.55, 0.15],
+		"transgresseur": [0.85, 0.15, 0.15],
+		"menace": [0.80, 0.20, 0.25],
+		"ouvrage": [0.55, 0.45, 0.30],
+		"lien_positif": [0.25, 0.80, 0.35],
+		"lien_negatif": [0.90, 0.25, 0.20],
+		"lien_nul": [0.45, 0.45, 0.48]
+	},
+
+	"camera": { "position": [600.0, 380.0], "zoom": 0.80 }
+}

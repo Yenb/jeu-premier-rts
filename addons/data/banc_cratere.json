@@ -1,0 +1,23 @@
+{
+	"_note": "Jetable, propre au banc « cratère + érosion — trace d'impact qui s'efface » (scripts/banc_cratere.gd), audit préalable audit_terrain_et_monde_prealable.md §3. Grille grille_lignes x grille_colonnes de cases-objets CONSTRUITES À LA MAIN (patron scripts/banc_ecoulement.gd:construire_grille, jamais Objet.fabriquer -- une case n'a pas de composition). Terrain PLAT : 'altitude' vaut altitude_plate sur TOUTE la grille, le seul relief du banc vient du creusement. 'position' reste un FAIT SPATIAL PUR en unités de grille (x=colonne, y=ligne, z=0.0 toujours) : rayon_voisinage=1.5 couvre les 8 voisins adjacents (orthogonaux à 1.0, diagonaux à sqrt(2)). nom_altitude_base ('altitude') n'est JAMAIS réécrite ; le câblage dérive chaque tick nom_altitude_effective ('altitude_effective') = altitude - creusement et c'est ELLE seule qui est passée à scripts/ecoulement.gd -- ecoulement.gd ne connaît pas 'creusement'. IMPACT : Frappe.frapper décrémente reserves.<nom_reserve_integrite> de degats_impact ; le câblage lit le franchissement (réserve retombée à seuil_creusement) et écrit proprietes.creusement = profondeur_impact * (degats_reels / degats_reference), puis REARME l'intégrité à integrite_sol_max (une case doit rester réimpactable indéfiniment -- l'intégrité mesure la résistance à UN impact, jamais une usure cumulée). EFFACEMENT : le même impact recharge reserves.<nom_reserve_trace> à duree_effacement et vide ses seuils_franchis ; scripts/depense.gd la consomme à cout_base_trace par seconde (cout_base_trace=1.0 rend trace_age directement lisible en secondes restantes) et applique seuils_ref au zéro, qui repose creusement à 0.0 (data/seuils_combustible.json:effacement_trace). AUCUNE absorption ni évaporation dans ce banc (cout_base/surcout_action du canal d'eau à 0.0, contrairement à data/banc_ecoulement.json) : la variable observée est le cratère, pas la perte d'eau -- l'eau totale reste constante et rend l'accumulation dans le cratère lisible.",
+	"grille_lignes": 6,
+	"grille_colonnes": 6,
+	"altitude_plate": 10.0,
+	"rayon_voisinage": 1.5,
+	"taux_ecoulement": 5.0,
+	"eau_initiale": 12.0,
+	"eau_reference_couleur": 4.0,
+	"nom_reserve_eau": "niveau_eau",
+	"nom_altitude_base": "altitude",
+	"nom_altitude_effective": "altitude_effective",
+	"nom_reserve_integrite": "integrite_sol",
+	"nom_reserve_trace": "trace_age",
+	"integrite_sol_max": 10.0,
+	"degats_impact": 12.0,
+	"degats_reference": 10.0,
+	"seuil_creusement": 0.0,
+	"profondeur_impact": 2.0,
+	"duree_effacement": 8.0,
+	"cout_base_trace": 1.0,
+	"seuils_ref": "effacement_trace"
+}

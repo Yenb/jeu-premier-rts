@@ -1,0 +1,15 @@
+{
+	"_note": "Jetable, propre a scripts/banc_friction.gd (chantier 'friction -- fusionner et cabler'). Trois objets FABRIQUES via Objet.fabriquer/composition/materiaux.json (jamais construits a la main -- contrairement a banc_dilatation.gd/banc_temperature.gd, ce chantier demontre justement que 'friction' est desormais FUSIONNEE a la fabrication), un materiau reel chacun (bois/pierre/fer, data/materiaux.json -- friction 0.4/0.65/0.5). 'vitesse_base'/'direction' : une force identique pousse les trois en meme temps, depuis t=0, sans bouton -- vitesse_effective = vitesse_base * (1.0 - friction_effective), voir banc_friction.gd:vitesse_effective. 'intervalle_log' : la console imprime une ligne recapitulative (distance des trois) a cet intervalle, jamais a chaque frame.",
+	"objets": [
+		{ "id": "bois_friction", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "pierre_friction", "position": [0.0, 150.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }] },
+		{ "id": "fer_friction", "position": [0.0, 300.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] }
+	],
+	"vitesse_base": 120.0,
+	"direction": [1.0, 0.0, 0.0],
+	"intervalle_log": 2.0,
+	"taille": 60.0,
+	"couleur_sec": [0.55, 0.42, 0.28],
+	"couleur_mouille": [0.15, 0.35, 0.85],
+	"camera": { "position": [900.0, 150.0, 0.0], "zoom": 0.5 }
+}

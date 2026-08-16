@@ -1,0 +1,31 @@
+{
+	"_note": "Jetable, propre a scripts/banc_sorts.gd (chantier « sorts -- cablage de base + banc de demonstration »). Un caster (colon, affinite_magique 1.5 -- MULTIPLICATEUR de grandeur, jamais fusionne par composition, pose directement sur cette declaration) entoure de quatre cibles FABRIQUEES a EGALE distance (150.0, disposees en croix : fer +X, bois +Y, pierre -X, verre -Y) -- fer_sort est la SEULE des quatre a porter une conductivite_electrique haute (1e7, data/materiaux.json), 'eclair' (critere source 'materiau') la selectionne donc systematiquement tant qu'aucune autre cible ne change de composition. 'volatilite_magique' des quatre cibles est POSEE A LA MAIN apres fabrication (jamais fusionnee par composition depuis data/materiaux.json) -- DECISION YAEL (chantier « sorts », question posee avant d'ecrire) : les valeurs dormantes existantes de data/materiaux.json (bois 0.3/pierre 0.1/fer 0.05) sont hors d'echelle avec des degats de sort (3.0-10.0 par coup, un seul coup les depasserait toutes) ET dans un ordre qui contredirait la demonstration voulue (fer y est la valeur la PLUS BASSE, pas la plus haute) -- bois/pierre/fer restent inchanges PARTOUT ailleurs dans le depot, ces quatre valeurs ne vivent que sur les objets FABRIQUES par CE banc. verre_sort (8.0, le plus bas) explose apres environ deux 'eclair'/un peu plus d'une 'explosion' ; fer_sort (60.0, le plus haut) resiste sur toute la duree d'observation normale. Une source de mana AMBIANTE (hand-built, patron banc_animal.gd/banc_mana_conduction.gd -- 'source_mana': true, taux_flux/portee_flux poses a la fabrication, jamais dans une table partagee) recharge en continu proprietes.reserves.mana du caster via flux.gd (table_flux locale, propriete receptrice 'capte_mana' posee sur le caster).",
+	"caster": {
+		"id": "caster",
+		"type": "colon",
+		"position": [0.0, 0.0, 0.0],
+		"affinite_magique": 1.5,
+		"resistance_impact_base": 2.0,
+		"reserve_mana_defaut": { "reserve": 30.0, "cout_base": 0.0, "surcout_action": 0.0 },
+		"reserve_sante_defaut": { "reserve": 50.0, "cout_base": 0.0, "surcout_action": 0.0 }
+	},
+	"cibles": [
+		{ "id": "fer_sort",   "position": [150.0, 0.0, 0.0],  "composition": [ { "materiau": "fer",   "volume": 0.05 } ], "volatilite_magique": 60.0 },
+		{ "id": "bois_sort",  "position": [0.0, 150.0, 0.0],  "composition": [ { "materiau": "bois",  "volume": 0.05 } ], "volatilite_magique": 20.0 },
+		{ "id": "pierre_sort","position": [-150.0, 0.0, 0.0], "composition": [ { "materiau": "pierre","volume": 0.05 } ], "volatilite_magique": 35.0 },
+		{ "id": "verre_sort", "position": [0.0, -150.0, 0.0], "composition": [ { "materiau": "verre_demo", "volume": 0.05 } ], "volatilite_magique": 8.0 }
+	],
+	"reserve_integrite_defaut": { "reserve": 30.0, "cout_base": 0.0, "surcout_action": 0.0 },
+
+	"source_mana": { "id": "source_mana", "position": [0.0, 0.0, -80.0], "taux_flux": 3.0, "portee_flux": 9999.0 },
+	"propriete_source_mana": "source_mana",
+	"propriete_capte_mana": "capte_mana",
+	"nom_reserve_mana": "mana",
+	"nom_reserve_sante": "sante",
+	"nom_reserve_integrite": "integrite",
+
+	"rayon_explosion_volatilite": 220.0,
+	"degats_explosion_volatilite": 4.0,
+
+	"camera": { "position": [0.0, 0.0], "zoom": 0.55 }
+}

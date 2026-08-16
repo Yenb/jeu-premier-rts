@@ -1,0 +1,10 @@
+{
+	"_note": "Jetable, propre a scripts/banc_acide.gd (chantier 'resistance_acide -- corrosion par acide'). Trois objets FABRIQUES via Objet.fabriquer/composition/materiaux.json (jamais construits a la main), un materiau reel chacun (bois/pierre/fer, data/materiaux.json -- resistance_acide 0.5/0.3/0.1). 'exposition_valeur' : intensite de la source d'acide accumulee par seconde (exposition_acide_cumulee += exposition_valeur*delta) tant que la source est active (toggle au clic gauche, aucune exposition au demarrage) -- voir banc_acide.gd:avancer_exposition. Avec ces valeurs, le fer (resistance_acide 0.1) corrode vers t=2s, la pierre (0.3) vers t=6s, le bois (0.5) vers t=10s.",
+	"objets": [
+		{ "id": "bois_acide", "position": [0.0, 0.0, 0.0], "composition": [{ "materiau": "bois", "volume": 1.0 }] },
+		{ "id": "pierre_acide", "position": [150.0, 0.0, 0.0], "composition": [{ "materiau": "pierre", "volume": 1.0 }] },
+		{ "id": "fer_acide", "position": [300.0, 0.0, 0.0], "composition": [{ "materiau": "fer", "volume": 1.0 }] }
+	],
+	"exposition_valeur": 0.05,
+	"camera": { "position": [150.0, 0.0, 0.0], "zoom": 0.5 }
+}

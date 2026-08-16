@@ -1,0 +1,43 @@
+{
+	"_note": "Donnees JETABLES, propres a scripts/banc_reflectivite.gd -- ne charge jamais data/types.json (aucun colon ici). 'lampe' : source primaire FIXE, TOGGLABLE au clic gauche (_lampe_active, banc_reflectivite.gd -- meme geste que la source d'humidite de banc_humidite.gd) -- torche neutre, couleur 0.5. 'source_mobile' : DEUXIEME source, TOUJOURS active (independante du toggle) -- centre/amplitude/periode d'un mouvement sinusoidal 1D le long de X (patron banc_temperature.gd:position_source_mobile/banc_lumiere.gd:position_lanterne, jamais leur code), rayon assez large pour atteindre chaque objet sur une partie de son trajet seulement (traverse pres de bois_0/cuivre_patine_0 chacun sur sa moitie de la course, pres d'argent_0 seulement en passant par le centre) -- c'est ce qui rend lumiere_locale/chaleur_absorbee visiblement VARIABLES dans le temps, meme lampe coupee. 'objets' : trois choses fabriquees par composition (voir data/materiaux.json) a EGALE DISTANCE de la lampe (rayon 130, angles -90/30/150 degres) -- seule leur composition/etats_actifs diverge, isolant reflectivite comme unique variable quand seule la lampe fixe est active. cuivre_patine_0 porte 'patine_verte' EN DUR des la fabrication (jamais via charge.gd/etat_duree.gd -- ce banc montre une reflectivite MODULEE, statique, pas une corrosion qui progresse comme banc_corrosion.gd). 'temoins' : trois lecteurs lumiere.gd (Dictionary bruts, jamais Objet.fabriquer -- meme decision de perimetre que banc_lumiere.gd) a EGALE DISTANCE de la lampe (rayon 220, MEMES angles que leur objet respectif, donc a 90 unites au-dela de lui sur le meme rayon) -- assez loin de la lampe (hors de son rayon 240 x ratio quasi nul) et assez proches de leur seul objet (dans le rayon de reflet 150) pour que la lumiere qu'ils recoivent vienne presque entierement du reflet de CET objet, jamais des deux autres (separation angulaire 120 degres, distance objet-a-temoin-voisin bien au-dela de rayon_reflet -- verifie a l'ecriture). 'config' : rayon_reflet (portee de la source secondaire posee a la position de chaque objet, force = reflectivite effective, intensite = lumiere_locale recue par l'objet -- voir scripts/lumiere.gd, contribution = intensite*force*attenuation) ; temperature_couleur_reflet (le reflet garde la couleur de la lampe, aucune teinte de materiau modelisee ici) ; rayon_radiant (minuscule, 5.0 -- couvre uniquement l'objet lui-meme, aucune contamination croisee entre objets) ; temperature_radiante (reference chaude illustrative, PAS une temperature reelle de soleil) ; temperature_depart/conductivite_thermique_demo/chaleur_specifique_demo (valeurs LOCALES partagees par les trois objets, poseees directement sur proprietes apres fabrication -- argent/cuivre n'ont pas de fiche conductivite_thermique/chaleur_specifique reelle dans data/materiaux.json (fiches MINIMALES), les lire depuis la composition aurait laisse argent/cuivre thermiquement INERTES par un defaut generique sans rapport avec ce chantier, jamais a cause de leur reflectivite -- isoler chaleur_absorbee comme unique cause de l'ecart de temperature exige donc une conductivite/chaleur_specifique IDENTIQUE et explicite pour les trois, meme methode que banc_temperature.gd:objet_test). RETOUCHE (session ulterieure, retour Yael -- premier jet trop lent pour se voir monter a l'ecran) : conductivite_thermique_demo/chaleur_specifique_demo remontes de 0.3/500.0 a 1.5/25.0 (ratio x25) -- constante de temps ~17s au lieu de ~1700s, visible sur quelques rapports console au lieu d'etre imperceptible sur toute une session.",
+	"lampe": {
+		"position": [0.0, 0.0, 0.0],
+		"rayon": 240.0,
+		"intensite": 0.9,
+		"temperature_couleur": 0.5,
+		"force": 1.0
+	},
+	"source_mobile": {
+		"centre": [0.0, -30.0, 0.0],
+		"amplitude": 280.0,
+		"periode": 26.0,
+		"rayon": 200.0,
+		"intensite": 0.6,
+		"temperature_couleur": 0.6,
+		"force": 1.0
+	},
+	"objets": [
+		{ "id": "argent_0", "position": [0.0, -130.0, 0.0], "composition": [ { "materiau": "argent", "volume": 1.0 } ], "etats_actifs": [] },
+		{ "id": "bois_0", "position": [112.6, 65.0, 0.0], "composition": [ { "materiau": "bois", "volume": 1.0 } ], "etats_actifs": [] },
+		{ "id": "cuivre_patine_0", "position": [-112.6, 65.0, 0.0], "composition": [ { "materiau": "cuivre", "volume": 1.0 } ], "etats_actifs": ["patine_verte"] }
+	],
+	"temoins": [
+		{ "id": "temoin_argent", "position": [0.0, -220.0, 0.0] },
+		{ "id": "temoin_bois", "position": [190.5, 110.0, 0.0] },
+		{ "id": "temoin_cuivre", "position": [-190.5, 110.0, 0.0] }
+	],
+	"config": {
+		"rayon_reflet": 150.0,
+		"temperature_couleur_reflet": 0.5,
+		"rayon_radiant": 5.0,
+		"temperature_radiante": 100.0,
+		"temperature_depart": 20.0,
+		"conductivite_thermique_demo": 1.5,
+		"chaleur_specifique_demo": 25.0
+	},
+	"intervalle_print": 3.0,
+	"camera": {
+		"position": [0.0, -40.0, 0.0],
+		"zoom": 0.34
+	}
+}
