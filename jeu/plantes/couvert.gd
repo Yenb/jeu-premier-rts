@@ -25,6 +25,17 @@ extends Node3D
 # entier perdrait son nom, donc le lien avec la plante simulee, et le game
 # designer ne retrouverait plus ce qu'il a pose.
 #
+# ---- ET UN TRONC, QUAND L'ESPECE EN DECLARE UN ----
+# Une espece qui pose un `rayon_collision` recoit, sous le meme porteur, un
+# StaticBody3D nomme d'apres son role : un cylindre de ce rayon, haut comme la
+# stature du stade, qu'aucune unite ne traverse. Il est ECHANGE AVEC LE MODELE a
+# chaque changement de stade -- une pousse ne barre pas le passage comme un arbre
+# mature. A rayon nul, aucun corps n'est pose : c'est le cas de l'herbe, et le
+# defaut.
+#
+# LA FORME EST PARTAGEE PAR TOUTES LES PLANTES D'UNE ESPECE ET D'UN STADE : une
+# Shape3D est une ressource, la decrire une fois suffit pour mille arbres.
+#
 # ---- DEUX FACONS D'AVOIR UN CORPS ----
 # Une espece qui declare des chemins de modeles recoit ses .glb. Une espece qui
 # n'en declare AUCUN recoit une TOUFFE fabriquee ici a l'execution, haute comme
@@ -62,6 +73,7 @@ const PlanteScript = preload("res://jeu/plantes/plante.gd")
 const EspeceScript = preload("res://jeu/plantes/espece.gd")
 
 const NOM_MODELE := "Modele"
+const NOM_TRONC := "Tronc"
 
 # ---- LES REGLAGES DE L'INSPECTEUR ----
 #
@@ -372,7 +384,33 @@ func _preparer_les_rendus() -> void:
 		var produit := _corps_touffe(largeur, largeur, brins, type.couleur)
 		if String(type.modele_produit) != "":
 			produit = _corps_depuis_chemin(String(type.modele_produit))
-		_rendus[nom] = {"stades": stades, "produit": produit}
+		# UNE FORME PAR STADE, PARTAGEE PAR TOUTES LES PLANTES DE L'ESPECE. Une
+		# Shape3D est une ressource : mille arbres au meme stade pointent la meme,
+		# et le moteur physique ne la decrit qu'une fois. En fabriquer une par
+		# plante multiplierait la memoire par la population sans rien changer a
+		# l'ecran. Vide quand l'espece ne declare aucun rayon.
+		var troncs: Array = []
+		for i in range((type.stades as Array).size()):
+			troncs.append(forme_de_tronc(
+				float(type.rayon_collision),
+				float((type.stades as Array)[i].get("stature", 0.0))))
+		_rendus[nom] = {"stades": stades, "produit": produit, "troncs": troncs}
+
+# LE FUT D'UNE PLANTE : un cylindre du rayon declare par l'espece, haut comme la
+# stature du stade, POSE SUR LE SOL -- une CylinderShape3D est centree sur son
+# origine, il faut donc la remonter d'une demi-hauteur pour que sa base touche
+# y = 0, la ou la plante est posee. Sans ce decalage la moitie du tronc serait
+# enterree et l'autre flotterait.
+#
+# Rend null quand le rayon ou la stature est nul : une plante sans fut ne recoit
+# aucun corps, ce qui est le cas de l'herbe et de tout stade de stature zero.
+static func forme_de_tronc(rayon: float, hauteur: float) -> CylinderShape3D:
+	if rayon <= 0.0 or hauteur <= 0.0:
+		return null
+	var forme := CylinderShape3D.new()
+	forme.radius = rayon
+	forme.height = hauteur
+	return forme
 
 # Un corps charge depuis un .glb ou une scene, avec son recentrage MESURE.
 func _corps_depuis_chemin(chemin: String) -> Dictionary:
@@ -504,10 +542,11 @@ func _poser_plante(plante: Dictionary) -> void:
 # queue_free ne prend effet qu'en fin d'image, si bien que deux corps se
 # superposeraient le temps d'une frame.
 func _poser_modele(noeud: Node3D, espece: String, numero: int) -> void:
-	var ancien := noeud.get_node_or_null(NodePath(NOM_MODELE))
-	if ancien != null:
-		noeud.remove_child(ancien)
-		ancien.queue_free()
+	for nom in [NOM_MODELE, NOM_TRONC]:
+		var ancien := noeud.get_node_or_null(NodePath(String(nom)))
+		if ancien != null:
+			noeud.remove_child(ancien)
+			ancien.queue_free()
 	if not _rendus.has(espece):
 		return
 	var stades: Array = _rendus[espece].stades
@@ -516,6 +555,31 @@ func _poser_modele(noeud: Node3D, espece: String, numero: int) -> void:
 	var corps := _instancier(stades[numero - 1])
 	if corps != null:
 		noeud.add_child(corps)
+	# LE TRONC SUIT LE STADE, comme le modele : une pousse ne barre pas le passage
+	# comme un arbre mature. Il est echange au meme instant et par le meme geste.
+	var tronc := _corps_solide(_rendus[espece].troncs, numero)
+	if tronc != null:
+		noeud.add_child(tronc)
+
+# LE CORPS SOLIDE D'UN STADE : un StaticBody3D qui porte la forme partagee. C'est
+# lui qui BLOQUE -- une Area3D detecterait sans arreter, ce qui n'est pas ce qu'un
+# tronc fait. Rend null quand le stade ne declare aucune forme, auquel cas la
+# plante n'a tout simplement pas d'enfant de collision.
+#
+# CE NOEUD N'EXISTE QUE POUR LE MOTEUR PHYSIQUE. La simulation ne le lit jamais et
+# tourne identiquement sans lui (CLAUDE.md, « La simulation ne depend JAMAIS de
+# l'affichage ») : jeu/plantes/vegetation.gd ignore jusqu'a son existence.
+func _corps_solide(troncs: Array, numero: int) -> StaticBody3D:
+	if numero < 1 or numero > troncs.size() or troncs[numero - 1] == null:
+		return null
+	var forme: CylinderShape3D = troncs[numero - 1]
+	var corps := StaticBody3D.new()
+	corps.name = NOM_TRONC
+	var collision := CollisionShape3D.new()
+	collision.shape = forme
+	collision.position = Vector3(0.0, forme.height * 0.5, 0.0)
+	corps.add_child(collision)
+	return corps
 
 # Un corps neuf depuis son entree, qu'elle porte une scene ou un maillage. Rend
 # null pour une entree vide -- un modele manquant laisse la plante invisible, ce

@@ -119,6 +119,23 @@ extends Node
 
 @export_file("*.glb", "*.tscn", "*.scn") var modele_produit: String = ""
 
+@export_group("Collision")
+
+# LE RAYON DU TRONC, en metres. Une plante qui en declare un recoit un corps
+# solide que rien ne traverse : un cylindre de ce rayon, haut comme la STATURE de
+# son stade -- il grandit donc avec elle, sans qu'une valeur soit a saisir par
+# stade.
+#
+# C'EST LE TRONC, PAS L'ARBRE. Bloquer l'encombrement entier ferait de chaque
+# arbre mature un mur de plusieurs metres et fermerait la foret a toute unite ; on
+# circule sous la canopee, on contourne le fut.
+#
+# A ZERO, AUCUN CORPS N'EST POSE, et c'est le defaut : une herbe ne bloque
+# personne, et une scene existante ne change pas de comportement en silence. Le
+# gate est arithmetique, jamais une branche qui nommerait une espece (CLAUDE.md,
+# ADN) -- meme idiome qu'« un objet sans point_fusion ne fond jamais ».
+@export var rayon_collision: float = 0.0
+
 @export_group("Apparence")
 
 # La couleur des touffes fabriquees pour les stades qui ne declarent aucun modele.
@@ -146,6 +163,7 @@ func champs() -> Dictionary:
 		"ralentissement_dernier_stade": ralentissement_dernier_stade,
 		"duree_vie_produit": duree_vie_produit,
 		"ressource": ressource,
+		"rayon_collision": rayon_collision,
 		"modele_produit": modele_produit,
 		"couleur": couleur,
 	}

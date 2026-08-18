@@ -179,6 +179,7 @@ static func preparer_depuis_champs(nom: String, champs: Dictionary, config: Dict
 		"ralentissement_dernier_stade": float(champs.ralentissement_dernier_stade),
 		"duree_vie_produit": float(champs.duree_vie_produit),
 		"ressource": String(champs.ressource),
+		"rayon_collision": float(champs.rayon_collision),
 		"couleur": [teinte.r, teinte.g, teinte.b],
 		"modeles_stades": modeles,
 		"modele_produit": String(champs.modele_produit),

@@ -34,6 +34,9 @@ extends SceneTree
 # - ET UN GROS PAS REND LA MEME SIMULATION QU'UN PETIT : aucun stade saute, aucune
 #   population qui derive. Sans ce verrou, accelerer changeait le monde ;
 # - la touffe procedurale repose au sol et fait la hauteur demandee ;
+# - LE TRONC EST UN FUT, PAS L'ARBRE : un cylindre du rayon declare par l'espece,
+#   haut comme la stature du stade donc grandissant avec elle, et ABSENT quand
+#   l'espece ne declare aucun rayon -- l'herbe reste traversable ;
 # - LES REGLAGES DE L'INSPECTEUR ET LE FICHIER NE PEUVENT PAS DIVERGER.
 #
 # AUCUNE DUREE, AUCUNE STATURE, AUCUN PLAFOND N'EST ECRIT ICI : tout se relit sur
@@ -120,6 +123,7 @@ func _init() -> void:
 	_juger_le_pas_de_temps()
 	_juger_le_prechauffage()
 	_juger_la_touffe()
+	_juger_le_tronc()
 	_juger_les_reglages()
 
 	grille.free()
@@ -855,6 +859,42 @@ func _juger_la_touffe() -> void:
 		b.size.y, int(_config.brins_touffe), ESPECE_HAUTE, (haute.modeles_stades as Array).size()])
 
 # ---- Le verrou contre la divergence ----
+
+# ---- Le tronc ----
+
+# LE CORPS SOLIDE SUIT LE STADE ET N'EXISTE QUE SI L'ESPECE LE DECLARE. Le test
+# porte sur la fabrique statique (jeu/plantes/couvert.gd:forme_de_tronc), donc
+# sans arbre de scene ni moteur physique : c'est une geometrie, elle se mesure.
+func _juger_le_tronc() -> void:
+	var haute: Dictionary = _types[ESPECE_HAUTE]
+	var stades: Array = haute.stades
+
+	# A RAYON NUL, RIEN. C'est le defaut, et c'est ce qui laisse l'herbe
+	# traversable sans qu'une ligne de code ne nomme l'herbe.
+	_v.v(Couvert.forme_de_tronc(0.0, 7.5) == null,
+		"un rayon nul fabrique quand meme un tronc : l'herbe barrerait le passage")
+	_v.v(Couvert.forme_de_tronc(0.4, 0.0) == null,
+		"une stature nulle fabrique quand meme un tronc")
+
+	# LA HAUTEUR EST CELLE DU STADE, donc elle CHANGE avec lui : une pousse ne
+	# barre pas le passage comme un arbre mature. Un tronc de hauteur fixe
+	# passerait tous les autres jugements sans que rien ne rougisse.
+	var hauteurs: Array = []
+	for stade in stades:
+		var forme: CylinderShape3D = Couvert.forme_de_tronc(0.4, float(stade.stature))
+		_v.v(forme != null, "le stade '%s' n'a pas de tronc alors que son rayon est pose" % stade.nom)
+		if forme == null:
+			continue
+		_v.v(is_equal_approx(forme.radius, 0.4),
+			"le tronc du stade '%s' a un rayon de %.2f au lieu de 0.40" % [stade.nom, forme.radius])
+		_v.v(is_equal_approx(forme.height, float(stade.stature)),
+			"le tronc du stade '%s' est haut de %.2f pour une stature de %.2f" % [
+				stade.nom, forme.height, float(stade.stature)])
+		hauteurs.append(forme.height)
+
+	_v.v(hauteurs.size() >= 2 and hauteurs.max() > hauteurs.min(),
+		"tous les stades ont un tronc de la meme hauteur : il ne suit pas la croissance")
+	print("tronc : rayon 0.40, hauteurs %s -- une par stade, l'herbe n'en a aucun" % [hauteurs])
 
 func _juger_les_reglages() -> void:
 	var noeud = Couvert.new()

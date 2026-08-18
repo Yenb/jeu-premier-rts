@@ -32,7 +32,7 @@ metadata/_editor_floor_ = Vector3(0, 6, 0)
 script = ExtResource("5_couvert")
 ticks_prechauffage = 500
 delta_prechauffage = 10.0
-pas_simulation = 30.0
+pas_simulation = 6.25
 ticks_max_par_image = 10
 
 [node name="Arbre" type="Node" parent="Terrain/Couvert" unique_id=739125010]
@@ -41,10 +41,14 @@ nom = "arbre"
 modele_stade_1 = "res://jeu/plantes/jeune pousse.glb"
 modele_stade_2 = "res://jeu/plantes/mature.glb"
 modele_stade_3 = "res://jeu/plantes/epuisé.glb"
+rayon_dispersion_min = 2
+rayon_dispersion_max = 10
+max_voisins = 4
 intervalle_reproduction = 100.0
 max_produits_par_plante = 50
 ressource = "graine"
 modele_produit = "res://jeu/plantes/seve.glb"
+rayon_collision = null
 couleur = Color(0.32, 0.55, 0.24, 1)
 
 [node name="Herbe" type="Node" parent="Terrain/Couvert" unique_id=27824478]
@@ -61,6 +65,8 @@ duree_stade_3 = 40.0
 stature_stade_3 = 1.0
 marge_couches = 6
 trouee_max_voisins = 13
+rayon_dispersion_max = 8
+max_voisins = 5
 stade_reproduction_max = 3
 intervalle_reproduction = 30.0
 stade_production_min = 99
@@ -68,6 +74,7 @@ max_produits_par_plante = 0
 ralentissement_dernier_stade = 1.0
 duree_vie_produit = 60.0
 ressource = "herbe"
+rayon_collision = null
 
 [node name="SemisArbre2" parent="Terrain/Couvert" unique_id=177304090 instance=ExtResource("4_hp2bx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5.073414, 14.089966, 12.861382)
