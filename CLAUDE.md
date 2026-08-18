@@ -13,22 +13,26 @@ Game design du jeu : `jeu/GAME_DESIGN.md`.
 
 Premier jeu RTS bâti sur le framework Orion.
 
-Le framework vit dans `addons/`, en LECTURE SEULE — c'est une copie. Le contenu
-du jeu vit dans `jeu/`. Toute écriture se fait dans `jeu/` ou à la racine,
-JAMAIS dans `addons/`.
+Le framework est une COPIE en LECTURE SEULE, répartie entre `scripts/`, `data/`
+et `documents/`. Le contenu du jeu vit dans `jeu/`. Toute écriture se fait dans
+`jeu/`, ou dans les documents du jeu à la racine (`CLAUDE.md`, `SUIVI.md`) —
+JAMAIS dans `scripts/`, `data/` ni `documents/`.
 
 ## Arborescence
 
-- `addons/scripts/` — le cœur du framework (lecture seule).
-- `addons/data/` — les catalogues du framework (lecture seule).
-- `addons/documents/` — la doc du framework : `CARTE.md` (index du moteur,
-  fichier par fichier), `design.md` (le design et le pourquoi),
-  `prototypes.md` (l'état des bancs). Lecture seule.
+- `scripts/` — le cœur du framework, à la racine (lecture seule).
+- `data/` — les catalogues du framework, à la racine (lecture seule).
+- `documents/CARTE.md` — l'index du moteur, fichier par fichier (lecture seule).
+- `documents/` — la doc du framework : `design.md` (le design et le
+  pourquoi), `prototypes.md` (l'état des bancs). Lecture seule.
 - `jeu/` — tout le contenu propre au jeu.
 
 ## Frontière
 
-Le jeu ne touche JAMAIS `addons/`. S'il manque une mécanique, ce n'est pas un
+Le jeu ne touche JAMAIS `scripts/`, `data/` ni `documents/`. Que le cœur et les
+catalogues du framework soient posés À LA RACINE ne les rend pas écrivables :
+la racine n'est ouverte que pour les documents du jeu. S'il manque une
+mécanique, ce n'est pas un
 chantier de jeu : c'est un chantier FRAMEWORK, et il se fait dans l'autre
 dépôt. Claude s'arrête et le DIT — il ne bricole pas la mécanique manquante au
 passage.
@@ -58,10 +62,10 @@ Ce qui suit est RECOPIÉ TEL QUEL du `CLAUDE.md` du framework, sans résumé et
 sans reformulation. Les règles valent identiquement ici.
 
 Correspondance des chemins, à lire une fois et à appliquer partout dans ce
-bloc : `scripts/` et `data/` désignent `addons/scripts/` et `addons/data/`
+bloc : `scripts/` et `data/` désignent `scripts/` et `data/` À LA RACINE
 (lecture seule) ; `CARTE.md`, `docs/design.md` et `docs/prototypes.md`
-désignent `addons/CARTE.md`, `addons/documents/design.md` et
-`addons/documents/prototypes.md` ; `docs/ETAT.md` désigne, pour le jeu,
+désignent `documents/CARTE.md`, `documents/design.md` et
+`documents/prototypes.md` ; `docs/ETAT.md` désigne, pour le jeu,
 `SUIVI.md` à la racine. Le code neuf du jeu s'écrit dans `jeu/`.
 
 ## Ne code pas ce que tu n'as pas compris
@@ -70,9 +74,12 @@ entre deux lectures : ARRÊTE-TOI et demande. N'écris pas de code.
 
 Une hypothèse silencieuse coûte plus cher qu'une question.
 
-N'affirme jamais que quelque chose marche si tu ne l'as pas lancé. Si tu ne
-peux pas vérifier — parce que c'est visuel, parce qu'il faut une souris,
-parce que tu n'as pas d'écran — dis-le. Tu proposes, je vérifie.
+N'affirme jamais que quelque chose marche si tu ne l'as pas lancé. Ce qui
+reste à vérifier à l'écran se dit EN UNE LIGNE, une seule fois, en fin de
+récapitulatif. Yael sait que Claude n'a ni écran ni souris : le redire, le
+justifier, s'en excuser ou conseiller comment regarder est du bruit — « le
+rendu est à vérifier à l'écran » suffit, et le paragraphe qui l'explique ne
+s'écrit pas. Tu proposes, je vérifie.
 
 Ne bricole pas un contournement pour masquer ce que tu ne peux pas faire.
 Dis que tu ne peux pas.
@@ -378,6 +385,14 @@ part pas avec une mécanique à moitié définie.
 ---
 
 # TRAVAILLER SUR LE PROJET
+
+## Les deux dépôts
+
+- JEU (ce dossier) : `https://github.com/Yenb/jeu-premier-rts` — c'est ici que
+  vont les commits et les push.
+- FRAMEWORK : `https://github.com/Yenb/orion`. Ses fichiers sont présents ici en
+  COPIE (`scripts/`, `data/`, `documents/`) et n'y sont jamais écrits — les
+  corriger se fait dans son dépôt, et rien ne se pousse d'ici vers lui.
 
 C'est un projet Godot, pas un projet CLI/npm/etc. — pas de gestionnaire de paquets, pas de lint. Le développement passe par l'éditeur Godot ou l'exécutable `godot`.
 

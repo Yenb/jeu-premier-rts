@@ -1,0 +1,17 @@
+[gd_scene format=3 uid="uid://bvxpqlbshxwah"]
+
+[ext_resource type="Script" uid="uid://7gd0gwlpvfup" path="res://jeu/plantes/plante.gd" id="1_plante"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_plante"]
+albedo_color = Color(0.24, 0.62, 0.24, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_plante"]
+material = SubResource("StandardMaterial3D_plante")
+size = Vector3(0.5, 0.5, 0.5)
+
+[node name="Plante" type="Node3D" unique_id=1792490486]
+script = ExtResource("1_plante")
+
+[node name="Tige" type="MeshInstance3D" parent="." unique_id=536517466]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.25, 0)
+mesh = SubResource("BoxMesh_plante")

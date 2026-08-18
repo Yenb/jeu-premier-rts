@@ -1,0 +1,53 @@
+{
+	"_note": "CE QUI EST PARTAGE PAR TOUTES LES ESPECES. Ce qui varie de l'une a l'autre -- stades, statures, plafond de couche, trouee, reproduction, production, modeles -- vit sur un NOEUD par espece pose sous le Couvert (jeu/plantes/espece.gd), jamais ici. data/ (racine, lecture seule) n'est ni ecrit ni lu : les deux catalogues ci-dessous sont LOCAUX, au format exact de data/reproduction.json et data/seuils_etat.json, passes tels quels aux mecanismes du coeur qui recoivent toujours leur catalogue en parametre.",
+	"_note_reglages": "Ces valeurs sont aussi exportees par jeu/plantes/couvert.gd, pour que le game designer les regle a l'inspecteur sans ouvrir ce fichier. Le noeud SURCHARGE ce fichier ; ce fichier reste la seule source pour tout ce qui tourne sans noeud, tests compris. LES DEUX NE PEUVENT PAS DIVERGER EN SILENCE : test_plante.gd compare les valeurs par defaut du noeud a celles d'ici et rougit des qu'elles s'ecartent.",
+
+	"seed": 20260817,
+	"type_par_defaut": "arbre",
+	"_note_type": "L'espece d'un semis pose sans type nomme. C'est le SEUL endroit du depot ou un nom d'espece apparaisse hors des fichiers d'espece eux-memes, et il est en donnee : aucun .gd ne l'ecrit.",
+
+	"annees_par_seconde": 1.0,
+	"etat_morte": "morte",
+
+	"reproduction_ref": "couvert",
+	"reproduction_locale": {
+		"_note": "Format EXACT de data/reproduction.json, passe tel quel a gestation.gd. duree_gestation y est REECRITE PAR ESPECE avant chaque appel -- deux especes n'ont pas le meme rythme de pousse, et gestation.gd resout son entree par proprietes.reproduction_ref, la meme pour tout le monde. La valeur ci-dessous n'est donc qu'un point de depart.",
+		"couvert": {
+			"seuil_accouplement": 1.0,
+			"taux_montee": 1.0,
+			"duree_gestation": 240.0
+		}
+	},
+
+	"seuils_locaux": {
+		"_note": "Format EXACT de data/seuils_etat.json, passe tel quel a seuil_etat.gd. Le seuil est lu PAR PLANTE sur proprietes.seuil_longevite, que le cablage pose depuis la somme des durees de stades de SON espece -- c'est ainsi que deux longevites tres differentes traversent la MEME entree de catalogue, par la seule arithmetique. IL COMPARE 'age_reel', JAMAIS 'age' : la mort ne regarde pas la lumiere. 'age' se fige a l'ombre et commande la CROISSANCE ; 'age_reel' avance toujours et commande la FIN. Les confondre rendait les plantes dominees IMMORTELLES -- mesure faite, une herbe sous un arbre etait encore vivante dix vies plus tard -- et la foret ne pouvait plus reprendre un sous-bois qui ne se vidait jamais.",
+		"fin_vie": {
+			"propriete_continue": "age_reel",
+			"seuil_propriete": "seuil_longevite",
+			"etat": "morte"
+		}
+	},
+
+	"rejets_min": 1,
+	"rejets_max": 2,
+	"rayon_min_cellules": 3,
+	"rayon_max_cellules": 5,
+	"_note_rejets": "L'anneau ou tombent les rejets, en cellules. 'Tente' est le mot juste : un rejet dont la cellule d'arrivee est prise, trop haute pour son espece, ou trop entouree pour elle, ne nait pas -- et rien ne le remplace. UN REJET PORTE L'ESPECE DE SA MERE, toujours.",
+
+	"rayon_voisinage_cellules": 5,
+	"max_voisins": 6,
+	"_note_capacite_charge": "LA DENSITE, PARTAGEE PAR TOUTES LES ESPECES : le voisinage compte les plantes vivantes sans regarder leur espece, si bien qu'une envahissante prend reellement la place des autres. Elle gate la MERE : trop entouree, elle ne se reproduit plus. Sans elle, la population croit a chaque generation et ne se stabilise jamais -- defaut deja mesure, a ne pas repayer.",
+
+	"rayon_ombre_cellules": 3,
+	"_note_ombre": "LA DOMINANCE. Une plante dont une voisine porte une STATURE strictement superieure dans ce rayon cesse de GRANDIR : son age de croissance ne monte plus, donc son stade non plus. Elle repart si la grande disparait -- mais elle VIEILLIT ET MEURT quand meme, sur son horloge reelle. C'est ce qui vide le sous-bois et laisse la foret prendre le dessus : une dominee qui ne mourrait pas occuperait sa place pour toujours. Comparer des STATURES et non des numeros de stade est ce qui rend le multi-espece possible : entre deux especes, un numero ne veut rien dire.",
+
+	"rayon_trouee_cellules": 2,
+	"_note_trouee": "L'ETABLISSEMENT. Un rejet compte les vivantes dans ce rayon autour de l'endroit ou il tombe, et renonce si elles depassent le seuil de SON espece (trouee_max_voisins). C'est le goulot demographique observe en savane : la ou le tapis est continu, aucun semis d'arbre ne s'installe -- l'herbe ne tue pas les arbres, elle tue leurs semis. TROIS CONTRAINTES DISTINCTES, et il faut les trois : la densite borne le NOMBRE, l'ombre tranche QUI L'EMPORTE, la trouee decide QUI PEUT S'INSTALLER OU.",
+
+	"rayon_depot_cellules": 2,
+	"_note_depot": "Ou un produit peut tomber autour de sa plante, en cellules. Il occupe une colonne LIBRE -- ni plante ni autre produit : deux objets dans la meme colonne se cacheraient l'un l'autre.",
+
+	"largeur_touffe": 0.55,
+	"brins_touffe": 5,
+	"_note_touffe": "La touffe fabriquee a l'execution pour une espece qui ne declare aucun modele : quelques brins croises, larges de ceci, hauts comme la stature du stade. Le rendu ne decide de rien, et la simulation tourne identiquement sans ces deux champs."
+}
