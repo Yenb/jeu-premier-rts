@@ -14,6 +14,15 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 7b715cb — REQUETE SPATIALE corrigee dans `scripts/monde.gd` : les choses sont
+  rangees par case, a plusieurs resolutions nees a la demande, et une requete ne
+  lit plus que les cases que son rayon touche. Mesure : 512 076 tests de distance
+  par tick a 1 000 plantes, tombes a ~7 100. Le contrat change — une chose qui
+  bouge le declare par `deplacer()`. Mesures completes :
+  `jeu/plantes/MESURES_COUVERT.md`
+- 7b715cb — Premier commit du contenu, et depot distant du jeu :
+  `https://github.com/Yenb/jeu-premier-rts`
+
 - 2026-08-18 — Couvert MULTI-ESPÈCES et pression écologique : une RESSOURCE par
   espèce (`jeu/plantes/arbre.tres`, `herbe.tres`, décrites par `espece.gd` et
   `stade.gd`), déclarées sur le nœud Couvert et réglées à l'inspecteur —
