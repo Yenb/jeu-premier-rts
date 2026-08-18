@@ -48,7 +48,7 @@ intervalle_reproduction = 100.0
 max_produits_par_plante = 50
 ressource = "graine"
 modele_produit = "res://jeu/plantes/seve.glb"
-rayon_collision = null
+rayon_collision = 0.5
 couleur = Color(0.32, 0.55, 0.24, 1)
 
 [node name="Herbe" type="Node" parent="Terrain/Couvert" unique_id=27824478]
@@ -65,8 +65,9 @@ duree_stade_3 = 40.0
 stature_stade_3 = 1.0
 marge_couches = 6
 trouee_max_voisins = 13
-rayon_dispersion_max = 8
-max_voisins = 5
+rayon_dispersion_min = 1
+rayon_dispersion_max = 2
+max_voisins = 35
 stade_reproduction_max = 3
 intervalle_reproduction = 30.0
 stade_production_min = 99
