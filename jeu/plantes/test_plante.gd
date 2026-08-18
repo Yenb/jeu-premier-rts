@@ -16,6 +16,12 @@ extends SceneTree
 #   la dominee repart quand la grande meurt ;
 # - LA TROUEE EST PAR ESPECE : un rejet d'arbre renonce la ou le tapis est dense,
 #   un rejet d'herbe s'installe au meme endroit ;
+# - LA DISPERSION EST PAR ESPECE : la distance mesuree entre une mere et ses
+#   rejets tient dans l'anneau de SON espece, et l'arbre porte plus loin que
+#   l'herbe -- sans cette derniere comparaison, un anneau redevenu commun
+#   passerait sans rougir ;
+# - LA DENSITE EST PAR ESPECE : au MEME voisinage, l'arbre renonce a se
+#   reproduire et l'herbe continue ;
 # - la production sort a partir du stade declare, ralentie au dernier, plafonnee
 #   au sol, et le produit se perd apres sa duree de vie ;
 # - la reproduction n'a lieu qu'entre les deux bornes de stade ;
@@ -107,6 +113,7 @@ func _init() -> void:
 	_juger_l_ombre()
 	_juger_la_trouee()
 	_juger_la_densite()
+	_juger_la_dispersion()
 	_juger_le_ramassage()
 	_juger_la_reproductibilite()
 	_juger_l_ombre_par_signal()
@@ -405,19 +412,94 @@ func _juger_la_trouee() -> void:
 	print("trouee : tapis de %d -- '%s' renonce, '%s' s'installe" % [
 		semis.size(), ESPECE_HAUTE, ESPECE_BASSE])
 
+# ---- La dispersion ----
+
+# OU TOMBENT LES REJETS, ET C'EST UN TRAIT D'ESPECE. Le test mesure la distance
+# reelle entre une mere et ses rejets, en cellules, et exige qu'elle tienne dans
+# l'anneau DE SON ESPECE -- puis que les deux especes ne portent pas a la meme
+# distance. Sans cette derniere comparaison, un anneau redevenu commun passerait
+# le test sans que rien ne rougisse.
+func _juger_la_dispersion() -> void:
+	var portees: Dictionary = {}
+	for nom in _types:
+		var type: Dictionary = _types[nom]
+		var mesure := _portee_des_rejets(String(nom))
+		if mesure.is_empty():
+			_v.v(false, "'%s' n'a produit aucun rejet : la dispersion n'est pas mesuree" % nom)
+			continue
+		portees[nom] = mesure
+		_v.v(float(mesure.min) >= float(type.rayon_dispersion_min) - 0.001,
+			"'%s' depose un rejet a %.2f cellules, en deca de son anneau (%d)" % [
+				nom, float(mesure.min), int(type.rayon_dispersion_min)])
+		_v.v(float(mesure.max) <= float(type.rayon_dispersion_max) + 0.001,
+			"'%s' depose un rejet a %.2f cellules, au-dela de son anneau (%d)" % [
+				nom, float(mesure.max), int(type.rayon_dispersion_max)])
+
+	if portees.size() == 2:
+		var haute: Dictionary = portees[ESPECE_HAUTE]
+		var basse: Dictionary = portees[ESPECE_BASSE]
+		_v.v(float(haute.max) > float(basse.max),
+			"'%s' ne porte pas plus loin que '%s' (%.2f contre %.2f) : l'anneau est reste commun" % [
+				ESPECE_HAUTE, ESPECE_BASSE, float(haute.max), float(basse.max)])
+		print("dispersion : '%s' de %.2f a %.2f cellules, '%s' de %.2f a %.2f" % [
+			ESPECE_HAUTE, float(haute.min), float(haute.max),
+			ESPECE_BASSE, float(basse.min), float(basse.max)])
+
+# Une mere seule sur le plateau, jouee jusqu'a ce qu'elle seme. Rend la distance
+# minimale et maximale de ses rejets, en cellules -- {} si elle n'a rien seme.
+func _portee_des_rejets(espece: String) -> Dictionary:
+	var etat := Vegetation.etat_initial(
+		[{"id": "mere", "colonne": COLONNE_LOIN, "type": espece}], _releve, _config, _types)
+	var pas: float = Vegetation.pas_maximal(_types, _config)
+	var plus_pres := INF
+	var plus_loin := 0.0
+	var combien := 0
+	while float(etat.temps) < 4000.0 and combien < 12:
+		var rapport := Vegetation.avancer_par_tranches(etat, _config, _types, _releve, pas, pas)
+		for naissance in rapport.naissances:
+			var ecart: Vector2i = (naissance.colonne as Vector2i) - (naissance.mere_colonne as Vector2i)
+			var distance := sqrt(float(ecart.x * ecart.x + ecart.y * ecart.y))
+			plus_pres = minf(plus_pres, distance)
+			plus_loin = maxf(plus_loin, distance)
+			combien += 1
+	if combien == 0:
+		return {}
+	return {"min": plus_pres, "max": plus_loin, "combien": combien}
+
 # ---- La densite ----
 
+# LA DENSITE EST PAR ESPECE, et le test ne vaut que s'il OPPOSE les deux : le
+# meme voisinage doit fermer l'une et laisser l'autre pousser. Un test qui ne
+# verifierait qu'un plafond passerait a l'identique avec une valeur partagee, et
+# ne prouverait donc rien du chantier.
 func _juger_la_densite() -> void:
-	var plafond := int(_config.max_voisins)
-	_v.v(_pousse_avec(plafond - 1),
-		"une plante avec %d congeneres a portee ne pousse pas : le plafond refuse trop tot" % (plafond - 1))
-	_v.v(not _pousse_avec(plafond),
-		"une plante avec %d congeneres a portee pousse encore : le plafond ne retient rien" % plafond)
-	_v.v(_pousse_avec(0), "une plante isolee ne pousse pas")
+	var plafond_haute := int((_types[ESPECE_HAUTE] as Dictionary).max_voisins)
+	var plafond_basse := int((_types[ESPECE_BASSE] as Dictionary).max_voisins)
+	_v.v(plafond_basse > plafond_haute,
+		"le jeu d'essai n'oppose pas les deux densites (%d et %d) : rien n'est prouve" % [
+			plafond_haute, plafond_basse])
 
-func _pousse_avec(voisines: int) -> bool:
+	_v.v(_pousse_avec(ESPECE_HAUTE, plafond_haute - 1),
+		"'%s' avec %d congeneres a portee ne pousse pas : son plafond refuse trop tot" % [
+			ESPECE_HAUTE, plafond_haute - 1])
+	_v.v(not _pousse_avec(ESPECE_HAUTE, plafond_haute),
+		"'%s' avec %d congeneres a portee pousse encore : son plafond ne retient rien" % [
+			ESPECE_HAUTE, plafond_haute])
+	_v.v(_pousse_avec(ESPECE_HAUTE, 0), "une plante isolee ne pousse pas")
+
+	# LE MEME VOISINAGE, L'AUTRE ESPECE : la ou l'arbre renonce, l'herbe continue.
+	_v.v(_pousse_avec(ESPECE_BASSE, plafond_haute),
+		"'%s' s'arrete au plafond de '%s' : la densite n'est pas par espece" % [
+			ESPECE_BASSE, ESPECE_HAUTE])
+	_v.v(not _pousse_avec(ESPECE_BASSE, plafond_basse),
+		"'%s' avec %d congeneres a portee pousse encore : son propre plafond ne retient rien" % [
+			ESPECE_BASSE, plafond_basse])
+	print("densite : plafond %d pour '%s', %d pour '%s' -- meme voisinage, deux verdicts" % [
+		plafond_haute, ESPECE_HAUTE, plafond_basse, ESPECE_BASSE])
+
+func _pousse_avec(espece: String, voisines: int) -> bool:
 	var centre := COLONNE_LOIN
-	var semis: Array = [{"id": "sujet", "colonne": centre, "type": ESPECE_HAUTE}]
+	var semis: Array = [{"id": "sujet", "colonne": centre, "type": espece}]
 	var decalages := _couronne(voisines)
 	for i in range(decalages.size()):
 		semis.append({
@@ -426,7 +508,7 @@ func _pousse_avec(voisines: int) -> bool:
 			"type": ESPECE_BASSE,
 		})
 	var etat := Vegetation.etat_initial(semis, _releve, _config, _types)
-	return Vegetation.peut_pousser(etat.plantes[0], _config)
+	return Vegetation.peut_pousser(etat.plantes[0], _types[espece])
 
 func _couronne(nombre: int) -> Array:
 	var decalages: Array = []
@@ -786,13 +868,28 @@ func _juger_les_reglages() -> void:
 			"'%s' vaut %s a l'inspecteur et %s dans le fichier" % [cle, defauts[cle], _config.get(cle)])
 
 	var autres: Dictionary = defauts.duplicate(true)
-	autres["max_voisins"] = 13
+	autres["rayon_voisinage_cellules"] = 13
 	autres["rayon_trouee_cellules"] = 9
 	var surchargee: Dictionary = Couvert.appliquer_reglages(_config, autres)
-	_v.v(int(surchargee.max_voisins) == 13, "la surcharge de la densite ne prend pas")
+	_v.v(int(surchargee.rayon_voisinage_cellules) == 13, "la surcharge du rayon de voisinage ne prend pas")
 	_v.v(int(surchargee.rayon_trouee_cellules) == 9, "la surcharge du rayon de trouee ne prend pas")
-	_v.v(int(_config.max_voisins) != 13,
+	_v.v(int(_config.rayon_voisinage_cellules) != 13,
 		"appliquer_reglages a mute la config d'origine")
+
+	# CE QUI EST DESCENDU A L'ESPECE NE DOIT PAS DIVERGER DE SON DEFAUT DE FICHIER.
+	# Meme doctrine que pour le noeud Couvert juste au-dessus : le fichier reste la
+	# source pour tout ce qui tourne sans noeud, un noeud d'espece neuf doit le
+	# rejouer a l'identique.
+	var neuve = EspeceScript.new()
+	for paire in [
+		["rayon_dispersion_min", "rayon_min_cellules"],
+		["rayon_dispersion_max", "rayon_max_cellules"],
+		["max_voisins", "max_voisins"],
+	]:
+		_v.v(int(neuve.get(String(paire[0]))) == int(_config.get(String(paire[1]))),
+			"'%s' vaut %s sur une espece neuve et %s dans le fichier ('%s')" % [
+				paire[0], neuve.get(String(paire[0])), _config.get(String(paire[1])), paire[1]])
+	neuve.free()
 
 	# LA LONGEVITE SUIT LA TABLE, jamais un champ pose a cote : elle doit valoir la
 	# somme des durees declarees, et rien d'autre.
@@ -830,6 +927,8 @@ func _espece_haute() -> Node:
 	espece.modele_produit = "res://jeu/plantes/seve.glb"
 	espece.marge_couches = 2
 	espece.trouee_max_voisins = 1
+	espece.rayon_dispersion_min = 3; espece.rayon_dispersion_max = 5
+	espece.max_voisins = 6
 	espece.stade_reproduction_min = 2; espece.stade_reproduction_max = 2
 	espece.intervalle_reproduction = 240.0
 	espece.stade_production_min = 2; espece.intervalle_production = 120.0
@@ -845,6 +944,8 @@ func _espece_basse() -> Node:
 	espece.nom_stade_3 = "montee"; espece.duree_stade_3 = 40.0; espece.stature_stade_3 = 1.0
 	espece.marge_couches = 6
 	espece.trouee_max_voisins = 8
+	espece.rayon_dispersion_min = 1; espece.rayon_dispersion_max = 2
+	espece.max_voisins = 14
 	espece.stade_reproduction_min = 2; espece.stade_reproduction_max = 3
 	espece.intervalle_reproduction = 30.0
 	espece.stade_production_min = 99

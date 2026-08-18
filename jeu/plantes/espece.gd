@@ -63,6 +63,26 @@ extends Node
 # le sien.
 @export var trouee_max_voisins: int = 1
 
+@export_group("Peuplement")
+
+# OU TOMBENT LES REJETS, en cellules autour de la mere. C'est la CAPACITE DE
+# DISPERSION, et elle appartient a l'espece : un arbre confie ses graines au vent
+# ou aux animaux et essaime loin ; une herbe s'etend par ses stolons, donc juste a
+# cote. Un anneau serre fait un tapis continu, un anneau large fait un semis
+# clairseme -- deux paysages avec la meme mecanique.
+@export var rayon_dispersion_min: int = 3
+@export var rayon_dispersion_max: int = 5
+
+# Combien de plantes vivantes, TOUTES ESPECES CONFONDUES, cette espece supporte
+# autour d'elle avant de cesser de se reproduire. Haut, elle se serre et forme un
+# tapis ; bas, elle s'espace. C'est ce qui borne la population : sans plafond,
+# elle croit a chaque generation et ne se stabilise jamais.
+#
+# LE RAYON SUR LEQUEL ON COMPTE RESTE COMMUN (rayon_voisinage_cellules, sur le
+# Couvert) : c'est l'echelle a laquelle le couvert regarde, pas un trait
+# d'espece. Seul le SEUIL varie ici.
+@export var max_voisins: int = 6
+
 @export_group("Reproduction")
 
 # Les deux bornes du stade fertile, comptees a partir de 1. DEUX BORNES ET NON
@@ -114,6 +134,9 @@ func champs() -> Dictionary:
 		"modeles_stades": [modele_stade_1, modele_stade_2, modele_stade_3],
 		"marge_couches": marge_couches,
 		"trouee_max_voisins": trouee_max_voisins,
+		"rayon_dispersion_min": rayon_dispersion_min,
+		"rayon_dispersion_max": rayon_dispersion_max,
+		"max_voisins": max_voisins,
 		"stade_reproduction_min": stade_reproduction_min,
 		"stade_reproduction_max": stade_reproduction_max,
 		"intervalle_reproduction": intervalle_reproduction,

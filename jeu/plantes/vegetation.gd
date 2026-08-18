@@ -168,6 +168,9 @@ static func preparer_depuis_champs(nom: String, champs: Dictionary, config: Dict
 		"reproduction_locale": reproduction,
 		"marge_couches": int(champs.marge_couches),
 		"trouee_max_voisins": int(champs.trouee_max_voisins),
+		"rayon_dispersion_min": int(champs.rayon_dispersion_min),
+		"rayon_dispersion_max": int(champs.rayon_dispersion_max),
+		"max_voisins": int(champs.max_voisins),
 		"stade_reproduction_min": int(champs.stade_reproduction_min),
 		"stade_reproduction_max": int(champs.stade_reproduction_max),
 		"stade_production_min": int(champs.stade_production_min),
@@ -366,15 +369,21 @@ static func colonnes_prises(etat: Dictionary, config: Dictionary) -> Dictionary:
 static func voisinage(position: Vector3, monde, rayon: float) -> int:
 	return monde.choses_dans_rayon(position, rayon).size()
 
-# LA DENSITE, PARTAGEE. Le gate est un refus d'appeler gestation.gd, qui ne lit
+# LA DENSITE, PAR ESPECE. Le gate est un refus d'appeler gestation.gd, qui ne lit
 # aucun voisinage et n'en lira jamais. La plante se compte elle-meme (distance
-# zero de son propre rayon) : le plafond de la config en tient compte.
+# zero de son propre rayon) : le plafond de l'espece en tient compte.
+#
+# LE SEUIL EST A L'ESPECE, LE RAYON RESTE COMMUN : une herbe qui fait tapis
+# supporte des dizaines de voisines la ou un arbre en refuse six, mais les deux se
+# comptent a la meme echelle. Melanger les deux ferait varier le rayon de
+# rafraichissement d'une plante a l'autre, alors qu'il est choisi une fois pour
+# tout le couvert (voir rafraichir_autour).
 #
 # LE COMPTE EST PORTE PAR LA PLANTE, comme l'ombre, et pour la meme raison : il ne
 # change qu'a une naissance ou une mort, et le redemander a chaque tick revenait a
 # le retrouver identique. Ce gate ne fait donc plus AUCUNE requete.
-static func peut_pousser(plante: Dictionary, config: Dictionary) -> bool:
-	return int(plante.proprietes.get("voisins", 0)) <= int(config.max_voisins)
+static func peut_pousser(plante: Dictionary, type: Dictionary) -> bool:
+	return int(plante.proprietes.get("voisins", 0)) <= int(type.max_voisins)
 
 # L'ETABLISSEMENT : un rejet renonce la ou c'est deja trop dense POUR SON ESPECE.
 # Compte AU POINT D'ARRIVEE, jamais autour de la mere -- c'est l'endroit ou l'on
@@ -682,7 +691,7 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 		var type_pousse := type_de(plante, types)
 		if type_pousse.is_empty() or not stade_fertile(plante, type_pousse):
 			continue
-		if not peut_pousser(plante, config):
+		if not peut_pousser(plante, type_pousse):
 			continue
 		Gestation.poser(plante, null, type_pousse.reproduction_locale)
 
@@ -698,7 +707,10 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	# 7. les rejets. La mere perd sa gestation dans TOUS les cas, y compris quand
 	# aucun rejet n'a pris : sans ce retrait elle resterait prete pour toujours et
 	# retenterait a chaque tick au lieu d'attendre le cycle suivant.
-	var decalages := anneau(int(config.rayon_min_cellules), int(config.rayon_max_cellules))
+	# UN ANNEAU PAR ESPECE, construit au plus une fois par tick et par espece : la
+	# capacite de dispersion est un trait d'espece, et l'anneau se deduit d'elle.
+	# Le cache evite de le reconstruire a chaque mere.
+	var anneaux: Dictionary = {}
 	for plante in encore:
 		var gestation: Dictionary = plante.proprietes.get("gestation", {})
 		if gestation.is_empty() or not gestation.get("naissance_prete", false):
@@ -708,6 +720,11 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 			plante.proprietes.erase("gestation")
 			continue
 		var plafond := plafond_de(type_mere, releve)
+		var nom_mere := String(type_mere.nom)
+		if not anneaux.has(nom_mere):
+			anneaux[nom_mere] = anneau(
+				int(type_mere.rayon_dispersion_min), int(type_mere.rayon_dispersion_max))
+		var decalages: Array = anneaux[nom_mere]
 		var combien: int = etat.rng.randi_range(int(config.rejets_min), int(config.rejets_max))
 		for _i in range(combien):
 			var colonne := colonne_de_rejet(plante, decalages, etat.rng)

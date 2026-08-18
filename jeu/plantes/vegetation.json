@@ -32,11 +32,11 @@
 	"rejets_max": 2,
 	"rayon_min_cellules": 3,
 	"rayon_max_cellules": 5,
-	"_note_rejets": "L'anneau ou tombent les rejets, en cellules. 'Tente' est le mot juste : un rejet dont la cellule d'arrivee est prise, trop haute pour son espece, ou trop entouree pour elle, ne nait pas -- et rien ne le remplace. UN REJET PORTE L'ESPECE DE SA MERE, toujours.",
+	"_note_rejets": "Combien de rejets une portee tente, et -- pour les deux rayons -- les VALEURS PAR DEFAUT que reprend un noeud d'espece neuf. L'anneau reellement employe est celui de l'ESPECE (rayon_dispersion_min/max sur jeu/plantes/espece.gd) : la capacite de dispersion est un trait, un arbre essaime loin et une herbe s'etend par ses stolons. 'Tente' est le mot juste : un rejet dont la cellule d'arrivee est prise, trop haute pour son espece, ou trop entouree pour elle, ne nait pas -- et rien ne le remplace. UN REJET PORTE L'ESPECE DE SA MERE, toujours.",
 
 	"rayon_voisinage_cellules": 5,
 	"max_voisins": 6,
-	"_note_capacite_charge": "LA DENSITE, PARTAGEE PAR TOUTES LES ESPECES : le voisinage compte les plantes vivantes sans regarder leur espece, si bien qu'une envahissante prend reellement la place des autres. Elle gate la MERE : trop entouree, elle ne se reproduit plus. Sans elle, la population croit a chaque generation et ne se stabilise jamais -- defaut deja mesure, a ne pas repayer.",
+	"_note_capacite_charge": "LE RAYON est commun -- il choisit le rayon de rafraichissement de tout le couvert et ne peut pas varier d'une plante a l'autre. LE SEUIL vit sur l'espece (max_voisins sur jeu/plantes/espece.gd), la valeur ci-dessus n'etant que le defaut d'un noeud neuf : une herbe qui fait tapis supporte des dizaines de voisines la ou un arbre en refuse six. Le voisinage compte les plantes vivantes SANS regarder leur espece, si bien qu'une envahissante prend reellement la place des autres. Il gate la MERE : trop entouree, elle ne se reproduit plus. Sans ce plafond, la population croit a chaque generation et ne se stabilise jamais -- defaut deja mesure, a ne pas repayer.",
 
 	"rayon_ombre_cellules": 3,
 	"_note_ombre": "LA DOMINANCE. Une plante dont une voisine porte une STATURE strictement superieure dans ce rayon cesse de GRANDIR : son age de croissance ne monte plus, donc son stade non plus. Elle repart si la grande disparait -- mais elle VIEILLIT ET MEURT quand meme, sur son horloge reelle. C'est ce qui vide le sous-bois et laisse la foret prendre le dessus : une dominee qui ne mourrait pas occuperait sa place pour toujours. Comparer des STATURES et non des numeros de stade est ce qui rend le multi-espece possible : entre deux especes, un numero ne veut rien dire.",

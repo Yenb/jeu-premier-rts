@@ -80,9 +80,11 @@ const NOM_MODELE := "Modele"
 
 @export_group("Peuplement")
 
-# LA DENSITE : combien de plantes vivantes, toutes especes confondues, une plante
-# supporte dans son rayon avant de cesser de se reproduire. Borne la population.
-@export var max_voisins: int = 6
+# L'ECHELLE A LAQUELLE LE COUVERT REGARDE SON VOISINAGE. Le SEUIL, lui, vit sur
+# chaque espece (`max_voisins` sur le noeud Arbre, Herbe...) : une herbe qui fait
+# tapis supporte des dizaines de voisines la ou un arbre en refuse six. Le rayon
+# reste commun parce qu'il choisit le rayon de rafraichissement de tout le couvert
+# (vegetation.gd:rafraichir_autour), qui ne peut pas varier d'une plante a l'autre.
 @export var rayon_voisinage_cellules: int = 5
 
 # LA DOMINANCE : dans ce rayon, une voisine de stature strictement superieure fige
@@ -282,7 +284,6 @@ func _liberer_les_semis_disparus(semis: Array) -> void:
 
 func reglages() -> Dictionary:
 	return {
-		"max_voisins": max_voisins,
 		"rayon_voisinage_cellules": rayon_voisinage_cellules,
 		"rayon_ombre_cellules": rayon_ombre_cellules,
 		"rayon_trouee_cellules": rayon_trouee_cellules,

@@ -30,7 +30,7 @@ metadata/_editor_floor_ = Vector3(0, 6, 0)
 
 [node name="Couvert" type="Node3D" parent="Terrain" unique_id=1764854831]
 script = ExtResource("5_couvert")
-ticks_prechauffage = 200
+ticks_prechauffage = 500
 delta_prechauffage = 10.0
 pas_simulation = 30.0
 ticks_max_par_image = 10
@@ -41,6 +41,7 @@ nom = "arbre"
 modele_stade_1 = "res://jeu/plantes/jeune pousse.glb"
 modele_stade_2 = "res://jeu/plantes/mature.glb"
 modele_stade_3 = "res://jeu/plantes/epuisé.glb"
+intervalle_reproduction = 100.0
 max_produits_par_plante = 50
 ressource = "graine"
 modele_produit = "res://jeu/plantes/seve.glb"
