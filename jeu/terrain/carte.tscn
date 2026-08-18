@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://ba583v1igfwfx"]
 
 [ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_8uusb"]
+[ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="1_phflo"]
 [ext_resource type="Texture2D" uid="uid://cayacutr100j6" path="res://jeu/terrain/thumbnail.jpg" id="2_ithla"]
 [ext_resource type="Script" uid="uid://bbi6ytwr53gcr" path="res://jeu/terrain/outil_sculpture.gd" id="3_lon83"]
 [ext_resource type="PackedScene" path="res://jeu/plantes/arbre.tscn" id="4_hp2bx"]
@@ -20,6 +21,9 @@ sky = SubResource("Sky_lon83")
 ambient_light_source = 3
 
 [node name="Carte" type="Node3D" unique_id=1500134617]
+
+[node name="Personnage" parent="." unique_id=1831600708 instance=ExtResource("1_phflo")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.079874, 14.064123, 3.468512)
 
 [node name="Terrain" type="GridMap" parent="." unique_id=191342120]
 mesh_library = ExtResource("1_8uusb")
@@ -48,7 +52,7 @@ intervalle_reproduction = 100.0
 max_produits_par_plante = 50
 ressource = "graine"
 modele_produit = "res://jeu/plantes/seve.glb"
-rayon_collision = 0.5
+rayon_collision = 2.0
 couleur = Color(0.32, 0.55, 0.24, 1)
 
 [node name="Herbe" type="Node" parent="Terrain/Couvert" unique_id=27824478]
@@ -67,7 +71,7 @@ marge_couches = 6
 trouee_max_voisins = 13
 rayon_dispersion_min = 1
 rayon_dispersion_max = 2
-max_voisins = 35
+max_voisins = 40
 stade_reproduction_max = 3
 intervalle_reproduction = 30.0
 stade_production_min = 99
@@ -75,7 +79,6 @@ max_produits_par_plante = 0
 ralentissement_dernier_stade = 1.0
 duree_vie_produit = 60.0
 ressource = "herbe"
-rayon_collision = null
 
 [node name="SemisArbre2" parent="Terrain/Couvert" unique_id=177304090 instance=ExtResource("4_hp2bx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5.073414, 14.089966, 12.861382)
@@ -86,9 +89,14 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 41.09968, 13.946219, 74.47587
 [node name="SemisHerbe" parent="Terrain/Couvert" unique_id=1729264829 instance=ExtResource("5_hp2bx")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 16.017881, 94.707245)
 
+[node name="SemisHerbe2" parent="Terrain/Couvert" unique_id=1032153529 instance=ExtResource("5_hp2bx")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 32.035763, -83.09564)
+
+[node name="SemisHerbe3" parent="Terrain/Couvert" unique_id=452191354 instance=ExtResource("5_hp2bx")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 107.85072, 24.177172, 3.7963257)
+
 [node name="Camera" type="Camera3D" parent="." unique_id=1417738536]
 transform = Transform3D(1, 0, 0, 0, 0.3889238, 0.9212699, 0, -0.9212699, 0.3889238, 22.862053, 167.9878, 96.29242)
-current = true
 
 [node name="Soleil" type="DirectionalLight3D" parent="." unique_id=429678122]
 transform = Transform3D(0.81915206, 0.43938506, -0.36868784, 0, 0.64278764, 0.76604444, 0.57357645, -0.62750685, 0.5265408, 0, 0, 0)

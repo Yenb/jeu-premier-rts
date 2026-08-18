@@ -14,6 +14,20 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 1a764b4 — PERSONNAGE ARPENTEUR : `jeu/unites/personnage.tscn`, une capsule d'un
+  mètre — une demi-cellule, et c'est ce rapport qui donne l'échelle à tout le
+  reste. Haut/bas avancent, gauche/droite TOURNENT ; sans souris, tourner est le
+  seul moyen de regarder ailleurs. Le calcul sort de `_physics_process` en
+  fonctions statiques, verrouillées sans clavier ni moteur physique
+- 45b3a4a — TRONC SOLIDE : une espèce qui déclare un `rayon_collision` reçoit un
+  cylindre de ce rayon, haut comme la stature de son stade, échangé avec le
+  modèle. C'est le fût, pas l'arbre — on circule sous la canopée. À rayon nul
+  aucun corps n'est posé, et c'est le défaut : l'herbe reste traversable sans
+  qu'une ligne ne la nomme
+- 8818c26 — DISPERSION ET DENSITÉ PAR ESPÈCE : où tombent les rejets et combien
+  de voisines une plante supporte étaient communs, si bien qu'un tapis d'herbe
+  serré aurait fait des arbres serrés. Le rayon de comptage reste commun — il
+  choisit le rayon de rafraîchissement de tout le couvert
 - 7b715cb — REQUETE SPATIALE corrigee dans `scripts/monde.gd` : les choses sont
   rangees par case, a plusieurs resolutions nees a la demande, et une requete ne
   lit plus que les cases que son rayon touche. Mesure : 512 076 tests de distance
@@ -158,20 +172,13 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 1. Trancher le point ouvert de `jeu/GAME_DESIGN.md` § Terrain destructible :
    chercher si un mécanisme du cœur porte déjà la connexité de voisinage, sinon
    ouvrir le chantier framework
-2. Le coût restant du couvert est `monde.gd:choses_dans_rayon`, qui balaie TOUTES
-   les plantes à chaque requête — mesuré : 155 ms par tick à 1 128 plantes, soit
-   78 ms par seconde réelle. Le jeu a donné ce qu'il pouvait (facteur ~350) ;
-   l'ordre de grandeur suivant demande un index spatial DANS `monde.gd`, donc un
-   chantier FRAMEWORK. `perception.gd` le dit lui-même : « si un appelant réel
-   dépasse ~50 candidats par requête, le signaler plutôt que d'ajouter une
-   structure d'accélération en silence ». C'est signalé
-3. Câbler le ramassage des graines par les unités : `vegetation.gd:ramasser` et
+2. Câbler le ramassage des graines par les unités : `vegetation.gd:ramasser` et
    `couvert.gd:retirer_graine` sont posées et testées, personne ne les appelle —
    `consommer.gd` est le mécanisme qui attend, il transfère entre deux choses
-4. Second banc LLM avec grammaire GBNF contrainte
-5. Carré rouge (joueur) + carré violet (IA) + caméra scrollable
-6. Premier Modelfile agent stratégie avec system prompt
-7. Boucle complète : état → résumé → modèle → clé → action visible
+3. Second banc LLM avec grammaire GBNF contrainte
+4. Carré rouge (joueur) + carré violet (IA) + caméra scrollable
+5. Premier Modelfile agent stratégie avec system prompt
+6. Boucle complète : état → résumé → modèle → clé → action visible
 
 ## PIÈGES DÉJÀ PAYÉS
 
@@ -203,6 +210,17 @@ seul de ces pièges a coûté une demi-session ; tous ont été payés une fois.
   côté (jusqu'à 20 m), les plantes sautaient en grandissant. Invisible aux
   tests : `couvert.gd` n'en avait aucun. Recentrage à l'exécution, et une
   assertion de géométrie dans le test.
+- UN COÛT DOCUMENTÉ N'EST PAS UN COÛT CORRIGÉ. `monde.gd` portait en tête
+  « COUT LINEAIRE par requete : signalé, jamais contourné en silence », et cette
+  phrase est ce qui a laissé passer le défaut des mois : elle transforme un bug
+  en état connu et assumé, et se lit comme une décision déjà prise. Règle : un
+  coût se corrige, ou se plafonne par un test opposable — jamais par une note.
+- AUCUN TEST NE MESURAIT UN COÛT. `test_volume_docs.gd` rougit quand un `.md`
+  grossit de quelques milliers d'octets ; rien ne rougissait quand un tick passait
+  de 1 ms à 500. Un test de correction ne peut pas voir ça — le résultat EST juste,
+  il est seulement ruineux. D'où les compteurs exposés par `monde.gd` (requêtes,
+  cases lues, candidats mesurés) : ils existent pour qu'un test puisse poser un
+  plafond de coût.
 - OPTIMISER SANS MESURER — l'hypothèse « les colonnes prises sont le goulot »
   était fausse : 163 ms → 155 ms. Mesurer d'abord, toujours.
 - DEUX ÉCRIVAINS SUR `carte.tscn` — la sauvegarde de l'éditeur ouvert écrase le
