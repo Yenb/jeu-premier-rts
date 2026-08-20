@@ -40,6 +40,14 @@ chantier de jeu : c'est un chantier FRAMEWORK, et il se fait dans l'autre
 dépôt. Claude s'arrête et le DIT — il ne bricole pas la mécanique manquante au
 passage.
 
+EXCEPTION, décidée par Yael : la copie de `scripts/` DANS CE DÉPÔT peut être
+modifiée quand une mécanique manquante bloque vraiment le jeu — le noyau du
+framework reste versionné à part, dans l'autre dépôt, donc rien ne se perd à
+diverger ici. Ça ne dispense pas de s'arrêter et de le DIRE avant de coder :
+la modification se fait au su de Yael, jamais en silence, et l'écart avec le
+dépôt framework se note dans le fichier modifié lui-même (voir
+`scripts/monde.gd:retirer`, premier précédent).
+
 ## Connexion LLM
 
 Le classifieur stratégique parle à un modèle local par HTTP POST vers

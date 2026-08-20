@@ -41,13 +41,15 @@ extends RefCounted
 # verifier_index rejoue la recherche exhaustive et alarme sur tout ecart -- le
 # filet du paragraphe precedent, pour les tests, jamais pour la boucle de jeu.
 #
-# AUCUNE FONCTION DE RETRAIT, ET IL N'EN FAUT PAS : ce contenant se construit,
-# il ne s'amende pas -- voir banc_commun.gd:monde_depuis. Rien ne supprime une
-# entree de `choses` en place : une chose laissee dans la liste y reste,
-# `proprietes` eventuellement videe. Inoffensif tant que chaque mecanisme lit
-# par .get(cle, defaut), DANGEREUX des qu'un mecanisme traite une propriete
-# comme STRUCTURELLE sur chaque chose du monde -- un fantome non filtre alarme
-# alors INDEFINIMENT, a chaque tick.
+# retirer(id) SORT UNE CHOSE DU MONDE, DE PARTOUT A LA FOIS : `choses`,
+# `_rang`, et chaque niveau ouvert de l'index spatial. Sans elle, une chose
+# detruite reste un fantome compte par toute requete de densite a sa place,
+# pour toujours -- symptome paye sur une population qui se reproduit ET se
+# detruit (jeu/Ennemie/population_ennemie.gd). Id absent : push_error, rien
+# ne bouge -- jamais un silence sur un retrait qui n'a pas eu lieu.
+#
+# ECART AVEC LE DEPOT FRAMEWORK : sa version n'a pas ce geste (voir
+# CLAUDE.md § Frontiere pour la raison d'etre de l'ecart et sa portee).
 #
 # choses : Dictionary indexe PAR ID (id -> { chose, type }), pas un Array --
 # permet par_id() ci-dessous. L'ordre d'insertion est preserve ; un appelant qui
@@ -172,6 +174,18 @@ func par_id(id) -> Variant:
 		push_error("monde.gd : par_id() -- id '%s' absent" % id)
 		return null
 	return choses[id]
+
+# Sort une chose du monde : de `choses`, de `_rang`, et de chaque niveau
+# ouvert de l'index spatial. Voir l'en-tete -- un id absent alarme et ne
+# fait rien, jamais un silence.
+func retirer(id) -> void:
+	if not choses.has(id):
+		push_error("monde.gd : retirer() -- id '%s' absent" % id)
+		return
+	for exposant in _niveaux:
+		_deranger(_niveaux[exposant], id)
+	choses.erase(id)
+	_rang.erase(id)
 
 func choses_dans_rayon(position: Vector3, rayon: float) -> Array:
 	var resultat: Array = []

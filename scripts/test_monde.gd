@@ -27,13 +27,47 @@ func _init() -> void:
 	_resynchroniser_rattrape_un_deplacement_en_lot()
 	_filtre_de_distance_nominal()
 	_ajouter_refuse_sans_position_et_refuse_un_id_deja_pris()
+	_retirer_sort_une_chose_de_partout()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
 		return
 	print("OK: position vivante suivie apres deplacement, filtre de distance nominal, " +
-		"et ajouter() refuse sans position comme sur un id deja pris, sans jamais ecraser")
+		"ajouter() refuse sans position comme sur un id deja pris sans jamais ecraser, " +
+		"et retirer() ne laisse aucun fantome derriere lui")
 	quit(0)
+
+# UNE CHOSE RETIREE NE COMPTE PLUS NULLE PART -- ni dans une requete de
+# rayon, ni dans un par_id() qui suit. Deux niveaux ouverts avant le
+# retrait (un petit rayon puis un grand), pour prouver que retirer() les
+# parcourt TOUS, pas seulement celui de la derniere requete.
+func _retirer_sort_une_chose_de_partout() -> void:
+	var monde := Monde.new()
+	var cible := Objet.fabriquer("cible", "type_cible", Vector3(10, 0, 0), {})
+	var temoin := Objet.fabriquer("temoin", "type_temoin", Vector3(10, 0, 0), {})
+	monde.ajouter(cible, "type_cible", cible.position)
+	monde.ajouter(temoin, "type_temoin", temoin.position)
+
+	# OUVRE DEUX NIVEAUX DE RESOLUTION DIFFERENTS avant le retrait.
+	verif.v(monde.choses_dans_rayon(Vector3(10, 0, 0), 1.0).size() == 2,
+		"les deux choses doivent etre trouvees a courte portee avant le retrait")
+	verif.v(monde.choses_dans_rayon(Vector3(10, 0, 0), 500.0).size() == 2,
+		"les deux choses doivent etre trouvees a longue portee avant le retrait")
+
+	monde.retirer("cible")
+
+	verif.v(monde.par_id("cible") == null, "une chose retiree ne doit plus repondre a par_id()")
+	var courte := monde.choses_dans_rayon(Vector3(10, 0, 0), 1.0)
+	verif.v(courte.size() == 1 and courte[0].chose.id == "temoin",
+		"a courte portee, seul le temoin doit rester apres le retrait de la cible")
+	var longue := monde.choses_dans_rayon(Vector3(10, 0, 0), 500.0)
+	verif.v(longue.size() == 1 and longue[0].chose.id == "temoin",
+		"a longue portee aussi, la cible retiree ne doit plus etre trouvee")
+
+	# UN ID ABSENT ALARME ET NE FAIT RIEN -- jamais un second retrait muet.
+	monde.retirer("cible")
+	verif.v(monde.choses_dans_rayon(Vector3(10, 0, 0), 1.0).size() == 1,
+		"retirer() sur un id deja absent ne doit rien changer d'autre")
 
 # LES DEUX REFUS D'ajouter(), exerces ici et nulle part ailleurs. Le second
 # est le plus couteux : un id deja pris fait SORTIR sans enregistrer, et une
