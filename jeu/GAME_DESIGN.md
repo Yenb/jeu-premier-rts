@@ -231,6 +231,36 @@ Le reste suit :
 - Le relief fait le paysage sans une règle de plus : chaque espèce déclare
   jusqu'où elle monte. Les arbres dans les bas-fonds, l'herbe partout.
 
+## Échelle — le monde vit sans le joueur
+
+La carte de référence fait **100 km²**, et elle existe **entièrement**, tout le
+temps. Ce que le joueur voit n'est qu'une fenêtre : le rendu et la collision
+n'apparaissent qu'autour de lui et disparaissent derrière. La simulation, elle,
+ne s'arrête jamais et ne dépend d'aucun des deux. Mécanique et mesures :
+`SUIVI.md` § DÉCISIONS, « tout est donnée ».
+
+Ce que ça change pour le joueur, et c'est le point :
+
+- **CE QU'IL N'A JAMAIS VU EXISTE QUAND MÊME.** Une population qui prospère à
+  quatre kilomètres se reproduit, se déplace et peut l'atteindre sans qu'il ait
+  jamais posé les yeux dessus. Il n'y a pas de « hors champ » où le monde
+  s'arrête.
+- **AUCUN ÉVÉNEMENT N'A BESOIN D'ÊTRE DÉCLENCHÉ PAR SA PRÉSENCE.** Une menace
+  n'attend pas qu'il s'approche pour commencer à grandir. Ce qui arrive chez lui
+  a une histoire qu'il n'a pas vue, et qu'il peut reconstituer en allant voir.
+- **LE COÛT SUIT LA POPULATION, JAMAIS LA TAILLE DU MONDE.** Agrandir la carte
+  ne coûte rien. Ce qui coûte, c'est le nombre de choses vivantes — et c'est
+  au game design de le borner, par les mêmes moyens que le couvert : une densité
+  qui plafonne localement, pas un compteur global.
+- **CE QU'IL A FAIT RESTE.** Un relief sculpté, un terrain creusé, un objet
+  déplacé sont dans la donnée du monde, pas dans ce qui est affiché. Revenir
+  après mille kilomètres retrouve l'endroit tel qu'il a été laissé.
+
+Corollaire pour les cartes : elles se sculptent **par fenêtres**, jamais d'un
+bloc — voir `jeu/terrain/MANUEL_CARTE.md`. Une carte de 100 km² ne se dessine
+pas à la main d'un seul geste, et l'asymétrie voulue plus haut se construit
+donc endroit par endroit.
+
 ## Conditions de victoire
 
 (à remplir au fil des sessions)

@@ -35,6 +35,41 @@ Elle n'existe **que** dans l'éditeur.
 Régler `centre` sur `Fenetre`, cocher `charger`. Utile quand rien n'est encore
 chargé : le déplacement automatique ne s'amorce que sur une fenêtre déjà là.
 
+## Diagnostiquer, quand quelque chose ne va pas
+
+Ce qui a réellement servi sur ce chantier, dans l'ordre où ça a tranché. Les
+règles de fond sont dans `CLAUDE.md` § « Quand Yael dit que ça ne marche pas » ;
+ici, les gestes.
+
+**LE BANC JETABLE.** Un `.gd` de vingt lignes dans `jeu/terrain/`, lancé en
+headless, qui MESURE la chose contestée et rien d'autre — puis supprimé. Six
+ont été écrits ici, tous jetés. Ils ont tranché ce qu'aucun raisonnement
+n'aurait tranché : que poser 630 000 cellules coûte 215 ms et que les 28
+secondes suivantes sont la création des corps physiques ; que la maquette
+ajoutait 1,04 Mo au fichier de scène ; que la carte ne contenait que des trous.
+
+**UN TEST DOIT ROUGIR AVANT D'ÊTRE GARDÉ.** Écrire le jugement, casser le code
+exprès, vérifier qu'il échoue, restaurer. Trois jugements de ce chantier
+passaient sans rien tenir — ils comparaient une valeur à elle-même. Un test
+qu'on n'a pas vu échouer ne protège rien.
+
+**INSTRUMENTER LE VRAI CHEMIN, PAS UN BANC.** `Engine.is_editor_hint()` est
+faux hors éditeur : tout ce qui ne tourne que dans l'éditeur échappe aux tests.
+Le seul moyen est d'écrire dans la console à chaque étape — d'où le champ
+`journal` sur les outils. Y mettre un MARQUEUR DE VERSION : l'éditeur garde en
+mémoire des versions intermédiaires d'un script `@tool`, et on peut corriger
+longtemps du code qui ne s'exécute pas.
+
+**MESURER L'ÉTAT, PAS SEULEMENT LE CODE.** Quand le symptôme est « mon travail
+disparaît », lire le fichier de données avant de lire le code : combien de
+colonnes montées, combien creusées, sur quelle étendue. C'est ce relevé qui a
+montré que la carte ne portait que des trous, et non un relief abîmé.
+
+**CE QU'UN TEST NE DOIT JAMAIS MESURER : le contenu.** Un rayon tiré à un point
+fixe, un plafond qui exige une carte vierge — les deux rougissent le jour où la
+carte est travaillée, sans qu'aucun code n'ait changé. Mesurer un invariant du
+code : coût par colonne sculptée, sol sous le personnage.
+
 ## L'index
 
 | fichier | ce qu'il fait |
@@ -80,9 +115,7 @@ Trois conséquences qui se retrouvent partout dans ces fichiers :
 | `test_repere_fenetre` | que le curseur porte une donnée en double ; qu'il dépende de son parent |
 | `../objets/test_objets_visibles` | que le nombre de nœuds suive la population ; qu'un objet flotte ou s'enfonce |
 
-**Ce qu'aucun ne voit** : `Engine.is_editor_hint()` est faux hors éditeur. Tout
-ce qui ne s'exécute que dans l'éditeur n'est parcouru par aucun de ces tests —
-d'où les jugements qui lisent `Script.is_tool()` au lieu d'attendre l'erreur.
+**Ce qu'aucun ne voit** : voir ci-dessus, « instrumenter le vrai chemin ».
 
 ## Les mesures qui servent de repère
 
