@@ -2,17 +2,21 @@ extends SceneTree
 
 # Lancement :
 # godot --headless --script jeu/terrain/generer_murs.gd
+# godot --headless --script jeu/terrain/generer_murs.gd -- vers=res://jeu/terrain/autre.tscn
 #
-# OUTIL D'ECHAFAUDAGE, lance a la main. Il REECRIT res://jeu/terrain/carte.tscn
-# et rend la main ; le jeu ne l'appelle jamais, rien ne le charge au demarrage.
+# OUTIL D'ECHAFAUDAGE, lance a la main. Il REECRIT la scene qu'on lui donne et
+# rend la main ; le jeu ne l'appelle jamais, rien ne le charge au demarrage.
 # Son seul role : ceinturer le terrain d'un mur d'une cellule d'epaisseur, UNE
 # CELLULE AU-DELA de l'emprise sculptable, pour qu'aucun corps physique ne
 # quitte le plateau par le bord.
 #
-# Entree : res://jeu/terrain/carte.tscn, lue sur le disque, et l'emprise lue
-# chez le generateur. Aucune donnee, aucun argument.
-# Sortie : la meme scene, reecrite avec les cellules de bordure. Code de sortie
-# 0 sur VERT, 1 sur ROUGE.
+# Entree : la scene demandee (« vers=<chemin> », defaut res://jeu/terrain/
+# carte.tscn), lue sur le disque, et l'emprise lue chez le generateur. Aucune
+# donnee. Sortie : la meme scene, reecrite avec les cellules de bordure. Code de
+# sortie 0 sur VERT, 1 sur ROUGE.
+#
+# « vers= » EST CE QUI PERMET DE CEINTURER UNE SECONDE CARTE. Le chemin se lit
+# par le MEME geste que chez le generateur, jamais une seconde facon de le dire.
 #
 # IL NE TOUCHE AUCUNE CELLULE DE L'EMPRISE SCULPTEE. La ceinture est HORS
 # emprise par construction, et le compte des cellules de l'emprise est releve
@@ -58,15 +62,22 @@ const NOM_TERRAIN := "Terrain"
 const COUCHES_MURS := 22
 
 func _init() -> void:
-	var paquet := load(CHEMIN_SCENE) as PackedScene
+	var arguments := OS.get_cmdline_user_args()
+	var chemin_scene := Generateur.chemin_demande(arguments, CHEMIN_SCENE)
+	# MEME EMPRISE QUE LE GENERATEUR : voir generer_carte.gd, demi_cote= --
+	# la ceinture doit tomber au bord de CETTE carte, jamais de celle par
+	# defaut, si les deux different.
+	var demi_cote := Generateur.entier_demande(
+		arguments, Generateur.PREFIXE_DEMI_COTE, Generateur.DEMI_COTE)
+	var paquet := load(chemin_scene) as PackedScene
 	if paquet == null:
-		print("ROUGE: %s introuvable ou illisible" % CHEMIN_SCENE)
+		print("ROUGE: %s introuvable ou illisible" % chemin_scene)
 		quit(1)
 		return
 
 	var racine := paquet.instantiate() as Node3D
 	if racine == null:
-		print("ROUGE: la racine de %s n'est pas un Node3D" % CHEMIN_SCENE)
+		print("ROUGE: la racine de %s n'est pas un Node3D" % chemin_scene)
 		quit(1)
 		return
 
@@ -85,10 +96,10 @@ func _init() -> void:
 		quit(1)
 		return
 
-	var emprise_avant := _compter_emprise(grille)
+	var emprise_avant := _compter_emprise(grille, demi_cote)
 	var noeuds_avant := _noms_des_noeuds(racine)
 
-	var ceinture := cellules_de_ceinture(Generateur.DEMI_COTE, Generateur.COUCHE_BASE, COUCHES_MURS)
+	var ceinture := cellules_de_ceinture(demi_cote, Generateur.COUCHE_BASE, COUCHES_MURS)
 	var ecriture := Commun.ecrire_cellules(grille, ceinture, bloc, 0, ceinture.size())
 	print("ceinture : %d cellules designees, %d posees (les autres l'etaient deja)" % [
 		ceinture.size(), ecriture["changees"]])
@@ -100,9 +111,9 @@ func _init() -> void:
 		racine.free()
 		quit(1)
 		return
-	erreur = ResourceSaver.save(paquet_neuf, CHEMIN_SCENE)
+	erreur = ResourceSaver.save(paquet_neuf, chemin_scene)
 	if erreur != OK:
-		print("ROUGE: ecriture de %s impossible (erreur %d)" % [CHEMIN_SCENE, erreur])
+		print("ROUGE: ecriture de %s impossible (erreur %d)" % [chemin_scene, erreur])
 		racine.free()
 		quit(1)
 		return
@@ -110,9 +121,9 @@ func _init() -> void:
 	# free, Godot annonce des centaines de RID fuites a la sortie et le vrai
 	# resultat se perd dedans.
 	racine.free()
-	print("Ecrit : %s" % CHEMIN_SCENE)
+	print("Ecrit : %s" % chemin_scene)
 
-	if not _relu_et_conforme(emprise_avant, noeuds_avant, ceinture, bloc):
+	if not _relu_et_conforme(chemin_scene, emprise_avant, noeuds_avant, ceinture, bloc, demi_cote):
 		quit(1)
 		return
 	print("VERT: ceinture de %d couches posee sur les quatre bords, emprise sculptee intacte" %
@@ -184,8 +195,8 @@ static func compter_dans_emprise(grille: GridMap, demi_cote: int) -> int:
 			compte += 1
 	return compte
 
-func _compter_emprise(grille: GridMap) -> int:
-	return compter_dans_emprise(grille, Generateur.DEMI_COTE)
+func _compter_emprise(grille: GridMap, demi_cote: int) -> int:
+	return compter_dans_emprise(grille, demi_cote)
 
 func _noms_des_noeuds(racine: Node) -> Array[String]:
 	var noms: Array[String] = []
@@ -196,20 +207,20 @@ func _noms_des_noeuds(racine: Node) -> Array[String]:
 
 # Le verdict, sur le fichier RELU : la sculpture est intacte, la ceinture est
 # bien la, et aucun noeud de la scene n'a disparu au passage.
-func _relu_et_conforme(emprise_avant: int, noeuds_avant: Array[String],
-		ceinture: Array[Vector3i], bloc: int) -> bool:
+func _relu_et_conforme(chemin_scene: String, emprise_avant: int, noeuds_avant: Array[String],
+		ceinture: Array[Vector3i], bloc: int, demi_cote: int) -> bool:
 	# CACHE_MODE_IGNORE, jamais load() : la scene est deja dans le cache de
 	# ressources depuis le debut de ce script, et load() rendrait cette copie
 	# d'AVANT l'ecriture -- une relecture qui ne relit rien conclut que rien n'a
 	# ete ecrit alors que le fichier est bon.
 	var paquet := ResourceLoader.load(
-		CHEMIN_SCENE, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
+		chemin_scene, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) as PackedScene
 	if paquet == null:
-		print("ROUGE: %s illisible apres ecriture" % CHEMIN_SCENE)
+		print("ROUGE: %s illisible apres ecriture" % chemin_scene)
 		return false
 	var racine := paquet.instantiate() as Node3D
 	if racine == null:
-		print("ROUGE: la racine de %s n'est plus un Node3D apres ecriture" % CHEMIN_SCENE)
+		print("ROUGE: la racine de %s n'est plus un Node3D apres ecriture" % chemin_scene)
 		return false
 
 	var conforme := true
@@ -219,7 +230,7 @@ func _relu_et_conforme(emprise_avant: int, noeuds_avant: Array[String],
 		racine.free()
 		return false
 
-	var emprise_apres := _compter_emprise(grille)
+	var emprise_apres := _compter_emprise(grille, demi_cote)
 	if emprise_apres != emprise_avant:
 		print("ROUGE: l'emprise sculptee porte %d cellules au lieu de %d" % [
 			emprise_apres, emprise_avant])
