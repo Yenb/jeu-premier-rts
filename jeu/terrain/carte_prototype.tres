@@ -1,0 +1,19 @@
+[gd_resource type="Resource" format=3]
+
+[ext_resource type="Script" path="res://jeu/terrain/carte_terrain.gd" id="1_04ql3"]
+
+[resource]
+script = ExtResource("1_04ql3")
+demi_cote = 50
+volumes = Dictionary[Vector2i, int]({
+Vector2i(3, 0): 1,
+Vector2i(3, 1): 1,
+Vector2i(3, 2): 1,
+Vector2i(3, 3): 1,
+Vector2i(3, 4): 1,
+Vector2i(3, 5): 1,
+Vector2i(3, 6): 1,
+Vector2i(3, 7): 1,
+Vector2i(4, 7): 1,
+Vector2i(4, 8): 1
+})
