@@ -43,11 +43,21 @@ extends GridMap
 # que l'outil a mise de cote. Meme regle que la taille de cellule : ce que la
 # scene transporte n'est pas ce qui fait autorite.
 #
-# IL PART D'UNE GRILLE VIDE, quoi qu'elle contienne. La meme scene sert a
-# SCULPTER dans l'editeur : le GridMap y porte alors une fenetre de terrain, que
-# le jeu n'a aucune raison de garder -- elle est deja dans la carte, et ce qui
-# tombe hors du disque du joueur resterait pose pour toujours. Vider au demarrage
-# rend le compte de cellules independant de ce que la scene transporte.
+# IL PREND CE QUE LA SCENE PORTE AVANT DE L'EFFACER, et c'est ce qui rend le
+# terrain sculpte FIABLE. La meme scene sert a sculpter : ce que le GridMap
+# transporte est du TRAVAIL, pas un residu. L'effacer sans le lire perd tout ce
+# qui n'a pas transite par l'editeur -- et ce transit depend d'un _process
+# d'editeur, d'un script recharge, d'une fenetre chargee : quatre conditions
+# dont aucune ne se signale quand elle manque.
+#
+# ON LE PREND, ON L'ECRIT DANS LA CARTE, PUIS on efface et on redessine. Le
+# GridMap de la scene cesse d'etre une impasse : ce qui y est sculpte et
+# enregistre avec la scene arrive dans le jeu, toujours, quel que soit ce qui a
+# tourne ou non dans l'editeur.
+#
+# ENSUITE SEULEMENT LA GRILLE PART VIDE : le compte de cellules redevient
+# independant de ce que la scene transporte, et ce qui tombe hors du disque du
+# joueur ne reste pas pose pour toujours.
 #
 # LE RAFRAICHISSEMENT A UN SEUIL. Sans lui, un observateur qui marche
 # recalculerait deux disques entiers a chaque image pour un ou deux pas de
@@ -60,6 +70,7 @@ extends GridMap
 # de contenu. Rien de scripts/, data/ ni documents/ n'est lu ni ecrit.
 
 const Commun = preload("res://jeu/terrain/terrain_commun.gd")
+const Outil = preload("res://jeu/terrain/outil_fenetre.gd")
 
 # La carte a dessiner. Sans elle, ce noeud ne pose rien et le dit.
 @export var carte: Resource
@@ -100,11 +111,15 @@ func _ready() -> void:
 			+ "celle du jeu est reprise -- sans quoi le sol serait traversable")
 		mesh_library = de_jeu
 		_bloc = Commun.premier_bloc(self)
-	# Voir l'en-tete : ce que la scene transporte n'est pas ce que le jeu dessine.
+	# Voir l'en-tete : ce que la scene transporte est du TRAVAIL, on le prend
+	# avant de l'effacer.
 	var transportees := get_used_cells().size()
 	if transportees > 0:
+		var prises := Outil.enregistrer_ce_qui_est_pose(self, carte)
+		if prises > 0:
+			print("terrain_visible : %d colonnes reprises de la scene et ecrites dans la carte" % prises)
 		clear()
-		print("terrain_visible : %d cellules transportees par la scene, effacees avant de dessiner" % transportees)
+		print("terrain_visible : %d cellules transportees par la scene, reprises puis effacees" % transportees)
 	_rafraichir_vers(_centre_observateur())
 
 func _process(_delta: float) -> void:

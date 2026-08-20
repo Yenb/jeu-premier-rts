@@ -140,6 +140,7 @@ func _verifier() -> void:
 
 	await _arete_imposee(terrain)
 	await _collision_reprise(terrain)
+	await _scene_reprise(terrain)
 
 	var carte: Resource = terrain.carte
 
@@ -313,6 +314,57 @@ func _collision_reprise(_modele: GridMap) -> void:
 
 	racine.queue_free()
 
+# CE QUE LA SCENE PORTE EST DU TRAVAIL, pas un residu. Un terrain sculpte dans
+# l'editeur et enregistre avec la scene doit arriver dans le jeu SANS avoir
+# transite par quoi que ce soit d'autre : ce transit dependait d'un _process
+# d'editeur, d'un script recharge et d'une fenetre chargee -- quatre conditions
+# dont aucune ne se signale quand elle manque, et le travail etait efface.
+func _scene_reprise(modele: GridMap) -> void:
+	var CarteTerrain := load("res://jeu/terrain/carte_terrain.gd")
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 50
+	var base: int = carte.sommet_de_base()
+
+	var racine := Node3D.new()
+	get_root().add_child(racine)
+	var terrain: GridMap = load("res://jeu/terrain/terrain_visible.gd").new()
+	terrain.mesh_library = modele.mesh_library
+	terrain.carte = carte
+	terrain.rayon_cellules = 20
+	# AUCUN OBSERVATEUR pour ce terrain : la scene deja instanciee en fournit
+	# un, et le disque se centrerait sous LUI au lieu de l'origine. Le test
+	# mesurerait alors le placement du personnage.
+	terrain.groupe_observateur = &"aucun_observateur_pour_ce_test"
+
+	# Les cellules sont posees AVANT l'entree dans l'arbre : c'est exactement ce
+	# que porte une scene sculptee puis enregistree.
+	var bloc := terrain.mesh_library.get_item_list()[0]
+	var colonne := Vector2i(4, -3)
+	for y in range(carte.couche_base, base + 1):
+		terrain.set_cell_item(Vector3i(colonne.x, y, colonne.y), bloc)
+	terrain.set_cell_item(Vector3i(colonne.x, base + 3, colonne.y), bloc)
+	_v.v(carte.colonnes_sculptees() == 0, "la carte n'est pas vierge : le test ne prouverait rien")
+
+	racine.add_child(terrain)
+	await process_frame
+
+	_v.v(carte.sommet(colonne) == base + 3,
+		"le relief de la scene n'est pas passe dans la carte : sommet %s" % [
+			carte.sommet(colonne)])
+	_v.v(not carte.est_pleine(colonne, base + 1),
+		"le vide entre les deux niveaux a ete comble en reprenant la scene")
+	_v.v(carte.est_sale(), "la carte n'est pas marquee : la reprise ne serait jamais ecrite")
+
+	var haut := -1
+	for cellule in terrain.get_used_cells():
+		if cellule.x == colonne.x and cellule.z == colonne.y:
+			haut = maxi(haut, cellule.y)
+	_v.v(haut == base + 3,
+		"le terrain rendu monte a la couche %d, %d attendu : la reprise n'est pas redessinee" % [
+			haut, base + 3])
+
+	racine.queue_free()
+
 func _conclure(racine: Node) -> void:
 	if racine != null:
 		racine.queue_free()
@@ -320,5 +372,5 @@ func _conclure(racine: Node) -> void:
 		print("ECHEC: le cablage de la scene ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: scene de la carte -- carte de 100 km² branchee, personnage dans le groupe observateur, terrain pose autour de lui, sol solide")
+	print("OK: scene de la carte -- ce que la scene porte est repris dans la carte, carte de 100 km² branchee, personnage dans le groupe observateur, terrain pose autour de lui, sol solide")
 	quit(0)
