@@ -36,6 +36,13 @@ extends SceneTree
 #   le GridMap, ou le chargement suivant l'effacerait sans un mot ;
 # - SANS FENETRE CHARGEE, DEPLACER N'ECRIT RIEN : viser sur une scene qu'on
 #   vient d'ouvrir ne doit declencher aucune ecriture ;
+# - ON N'A PAS BESOIN D'AVOIR CHARGE UNE FENETRE POUR QUE CA S'ENREGISTRE. Sur
+#   une petite carte, tout tient a l'ecran et personne ne « charge » : on
+#   sculpte directement dans la grille. Faire dependre l'enregistrement d'un
+#   geste qui n'a de sens qu'a grande echelle perd le travail de tous ceux qui
+#   ne le font pas, sans qu'aucune erreur ne sorte ;
+# - SANS FENETRE CHARGEE, ON N'EFFACE JAMAIS RIEN : une colonne que la grille ne
+#   porte pas n'est pas touchee. Creuser demande de savoir ce qui a ete charge ;
 # - CE QUI EST SCULPTE S'ENREGISTRE SANS QU'ON LE DEMANDE, quand la main
 #   s'arrete et une seule fois par geste. Un bouton a cocher est un bouton qu'on
 #   oublie, et ce qu'on oublie d'enregistrer n'existe pas au lancement -- le
@@ -122,6 +129,7 @@ func _init() -> void:
 	await _deplacement()
 	_creusement_refuse()
 	_chargement_partiel_ne_creuse_pas()
+	_sans_fenetre_chargee()
 	_surveillance()
 	_conclure()
 
@@ -609,10 +617,64 @@ static func _sommet_du_masque(masques: Dictionary, colonne: Vector2i, base: int)
 		rang -= 1
 	return -99
 
+# LE GESTE DE LA PETITE CARTE : on sculpte au pinceau, sans avoir rien charge,
+# et ca doit s'enregistrer. Deux niveaux separes par du vide, pour verifier du
+# meme coup que le volume survit.
+func _sans_fenetre_chargee() -> void:
+	var racine := Node3D.new()
+	get_root().add_child(racine)
+	var grille := GridMap.new()
+	grille.mesh_library = _bibliotheque
+	racine.add_child(grille)
+
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 50
+	var base: int = carte.sommet_de_base()
+	var bloc := Commun.premier_bloc(grille)
+
+	# LE GESTE, sans aucun chargement : le sol, du vide, puis un etage.
+	var colonne := Vector2i(4, -3)
+	for y in range(carte.couche_base, base + 1):
+		grille.set_cell_item(Vector3i(colonne.x, y, colonne.y), bloc)
+	grille.set_cell_item(Vector3i(colonne.x, base + 3, colonne.y), bloc)
+	grille.set_cell_item(Vector3i(colonne.x, base + 4, colonne.y), bloc)
+
+	var changees := OutilFenetre.enregistrer_ce_qui_est_pose(grille, carte)
+	_v.v(changees == 1, "%d colonnes prises, 1 attendue" % changees)
+	_v.v(carte.est_sale(), "la carte n'est pas marquee : rien ne l'ecrira")
+
+	# LES DEUX NIVEAUX ET LEUR VIDE.
+	_v.v(carte.sommet(colonne) == base + 4,
+		"le sommet est %s, %d attendu" % [carte.sommet(colonne), base + 4])
+	_v.v(carte.est_pleine(colonne, base),
+		"le sol du premier niveau a disparu")
+	_v.v(not carte.est_pleine(colonne, base + 1),
+		"le vide au-dessus du sol a ete comble")
+	_v.v(not carte.est_pleine(colonne, base + 2), "le vide n'est pas complet")
+	_v.v(carte.est_pleine(colonne, base + 3) and carte.est_pleine(colonne, base + 4),
+		"l'etage du dessus a disparu")
+
+	# IL N'EFFACE RIEN : une colonne que la grille ne porte pas reste intacte.
+	var ailleurs := Vector2i(20, 20)
+	var avant: int = carte.masque(ailleurs)
+	OutilFenetre.enregistrer_ce_qui_est_pose(grille, carte)
+	_v.v(carte.masque(ailleurs) == avant,
+		"une colonne absente de la grille a ete modifiee : sculpter sans charger creuserait")
+	_v.v(carte.sommet(ailleurs) != null,
+		"une colonne absente de la grille a ete creusee")
+
+	# ET RIEN NE CHANGE quand on repasse sans avoir touche a la grille.
+	carte.marquer_propre()
+	_v.v(OutilFenetre.enregistrer_ce_qui_est_pose(grille, carte) == 0,
+		"un second passage change des colonnes alors que rien n'a bouge")
+	_v.v(not carte.est_sale(), "la carte est remarquee alors que rien n'a change")
+
+	racine.queue_free()
+
 func _conclure() -> void:
 	if _v.echecs() > 0:
 		print("ECHEC: le passage de fenetre ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee, enregistrement automatique quand la main s'arrete")
+	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee, enregistrement automatique quand la main s'arrete, sculpture sans chargement prise sans rien effacer")
 	quit(0)

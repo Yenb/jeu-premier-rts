@@ -1,0 +1,175 @@
+[gd_scene format=3 uid="uid://bh53y7xa2sj8v"]
+
+[ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_bloc"]
+[ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_visible"]
+[ext_resource type="Resource" path="res://jeu/terrain/carte_prototype.tres" id="3_carte"]
+[ext_resource type="Script" uid="uid://c8j7b1t8xknu1" path="res://jeu/terrain/murs_limite.gd" id="4_murs"]
+[ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="5_personnage"]
+[ext_resource type="Script" uid="uid://dkp4ecef4kc0d" path="res://jeu/terrain/outil_fenetre.gd" id="6_fenetre"]
+[ext_resource type="Script" uid="uid://bbi6ytwr53gcr" path="res://jeu/terrain/outil_sculpture.gd" id="7_sculpture"]
+[ext_resource type="Script" uid="uid://colkh0daih7nc" path="res://jeu/terrain/outil_remplissage.gd" id="8_remplissage"]
+[ext_resource type="Script" uid="uid://ce2kv8gjbkwd8" path="res://jeu/terrain/maquette.gd" id="9_maquette"]
+[ext_resource type="Script" uid="uid://rlipnma41x2b" path="res://jeu/terrain/repere_fenetre.gd" id="10_repere"]
+[ext_resource type="Script" uid="uid://becseujcpb7uq" path="res://jeu/objets/objets_visibles.gd" id="11_objets"]
+[ext_resource type="Script" uid="uid://cahlbo86blqwg" path="res://jeu/objets/semer_objets.gd" id="12_semeur"]
+[ext_resource type="PackedScene" uid="uid://b8mm7aykyu1yv" path="res://jeu/Ennemie/le transporteur .glb" id="13_objet"]
+[ext_resource type="Script" uid="uid://bmypt23ew8xau" path="res://jeu/plantes/couvert.gd" id="14_couvert"]
+[ext_resource type="Script" uid="uid://dljn3feguvcg" path="res://jeu/plantes/espece.gd" id="15_espece"]
+[ext_resource type="PackedScene" path="res://jeu/plantes/arbre.tscn" id="16_arbre"]
+[ext_resource type="PackedScene" path="res://jeu/plantes/herbe.tscn" id="17_herbe"]
+[ext_resource type="Script" uid="uid://b6vo7g6xq65a2" path="res://jeu/monde/archiviste.gd" id="20_archiviste"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_c30xv"]
+transparency = 1
+cull_mode = 2
+shading_mode = 0
+albedo_color = Color(1, 0.45, 0.1, 0.45)
+
+[sub_resource type="BoxMesh" id="BoxMesh_e63v7"]
+material = SubResource("StandardMaterial3D_c30xv")
+size = Vector3(200, 12, 200)
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ciel"]
+
+[sub_resource type="Sky" id="Sky_ciel"]
+sky_material = SubResource("ProceduralSkyMaterial_ciel")
+
+[sub_resource type="Environment" id="Environment_ambiance"]
+background_mode = 2
+sky = SubResource("Sky_ciel")
+ambient_light_source = 3
+
+[node name="CartePrototype" type="Node3D" unique_id=526745414]
+
+[node name="Terrain" type="GridMap" parent="." unique_id=1475016844]
+mesh_library = ExtResource("1_bloc")
+data = {
+"cells": PackedInt32Array(3, 0, 0, 3, 1, 0, 3, 2, 0, 3, 3, 0, 3, 4, 0, 3, 5, 0, 3, 6, 0, 3, 7, 0, 4, 7, 0, 4, 8, 0)
+}
+script = ExtResource("2_visible")
+carte = ExtResource("3_carte")
+rayon_cellules = 15
+
+[node name="Couvert" type="Node3D" parent="Terrain" unique_id=1174709923]
+script = ExtResource("14_couvert")
+ticks_prechauffage = 500
+delta_prechauffage = 10.0
+pas_simulation = 6.25
+ticks_max_par_image = 10
+
+[node name="Arbre" type="Node" parent="Terrain/Couvert" unique_id=174494136]
+script = ExtResource("15_espece")
+nom = "arbre"
+modele_stade_1 = "res://jeu/plantes/jeune pousse.glb"
+modele_stade_2 = "res://jeu/plantes/mature.glb"
+modele_stade_3 = "res://jeu/plantes/epuisé.glb"
+rayon_dispersion_min = 2
+rayon_dispersion_max = 10
+max_voisins = 4
+intervalle_reproduction = 100.0
+max_produits_par_plante = 50
+ressource = "graine"
+modele_produit = "res://jeu/plantes/seve.glb"
+rayon_collision = 1.5
+couleur = Color(0.32, 0.55, 0.24, 1)
+
+[node name="Herbe" type="Node" parent="Terrain/Couvert" unique_id=286608023]
+script = ExtResource("15_espece")
+nom = "herbe"
+nom_stade_1 = "brin"
+duree_stade_1 = 25.0
+stature_stade_1 = 0.4
+nom_stade_2 = "touffe"
+duree_stade_2 = 35.0
+stature_stade_2 = 0.8
+nom_stade_3 = "montee"
+duree_stade_3 = 40.0
+stature_stade_3 = 1.0
+marge_couches = 6
+trouee_max_voisins = 13
+rayon_dispersion_min = 1
+rayon_dispersion_max = 2
+max_voisins = 40
+stade_reproduction_max = 3
+intervalle_reproduction = 30.0
+stade_production_min = 99
+max_produits_par_plante = 0
+ralentissement_dernier_stade = 1.0
+duree_vie_produit = 60.0
+ressource = "herbe"
+
+[node name="SemisArbre" parent="Terrain/Couvert" unique_id=216888308 instance=ExtResource("16_arbre")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7, 14, 7)
+
+[node name="SemisArbre2" parent="Terrain/Couvert" unique_id=25381410 instance=ExtResource("16_arbre")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -13, 14, 21)
+
+[node name="SemisHerbe" parent="Terrain/Couvert" unique_id=1130651611 instance=ExtResource("17_herbe")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 14, -5)
+
+[node name="SemisHerbe2" parent="Terrain/Couvert" unique_id=1770646431 instance=ExtResource("17_herbe")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -9, 14, -11)
+
+[node name="Limites" type="Node3D" parent="." unique_id=1272771151]
+
+[node name="Murs" type="GridMap" parent="Limites" unique_id=2062834634]
+mesh_library = ExtResource("1_bloc")
+script = ExtResource("4_murs")
+carte = ExtResource("3_carte")
+
+[node name="Objets" type="Node3D" parent="." unique_id=1105748232]
+script = ExtResource("11_objets")
+carte = ExtResource("3_carte")
+rayon_metres = 60.0
+scenes = {
+"transporteur": ExtResource("13_objet")
+}
+
+[node name="Semeur" type="Node" parent="." unique_id=1382749494]
+script = ExtResource("12_semeur")
+carte = ExtResource("3_carte")
+montreur = NodePath("../Objets")
+semis = {
+"transporteur": 40
+}
+
+[node name="Personnage" parent="." unique_id=890130232 groups=["observateur"] instance=ExtResource("5_personnage")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 16, 0)
+
+[node name="Fenetre" type="Node3D" parent="." unique_id=309083767]
+script = ExtResource("6_fenetre")
+carte = ExtResource("3_carte")
+demi_fenetre = 50
+
+[node name="Sculpteur" type="Node3D" parent="." unique_id=1739965145]
+script = ExtResource("7_sculpture")
+
+[node name="Remplisseur" type="Node3D" parent="." unique_id=2087081955]
+script = ExtResource("8_remplissage")
+
+[node name="Apercu" type="Node3D" parent="." unique_id=1124010015]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8.103973, 24.925457, 0)
+
+[node name="Maquette" type="Node3D" parent="Apercu" unique_id=675744549]
+script = ExtResource("9_maquette")
+carte = ExtResource("3_carte")
+pas_echantillon = 1
+
+[node name="Repere" type="MeshInstance3D" parent="Apercu" unique_id=1350277964]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 131.04893, -1)
+mesh = SubResource("BoxMesh_e63v7")
+script = ExtResource("10_repere")
+outil_fenetre = NodePath("../../Fenetre")
+maquette = NodePath("../Maquette")
+
+[node name="Soleil" type="DirectionalLight3D" parent="." unique_id=1550263646]
+transform = Transform3D(0.81915206, 0.43938506, -0.36868784, 0, 0.64278764, 0.76604444, 0.57357645, -0.62750685, 0.5265408, 0, 0, 0)
+shadow_enabled = true
+directional_shadow_max_distance = 200.0
+
+[node name="Ambiance" type="WorldEnvironment" parent="." unique_id=779819656]
+environment = SubResource("Environment_ambiance")
+
+[node name="Archiviste" type="Node" parent="." unique_id=585079019]
+script = ExtResource("20_archiviste")
+registres = Array[Resource]([ExtResource("3_carte")])

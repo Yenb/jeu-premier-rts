@@ -53,6 +53,18 @@ extends Node3D
 # rend sa bibliotheque d'origine au GridMap -- c'est le geste de fin, celui
 # qu'on coche avant d'enregistrer la scene.
 #
+# ON N'A PAS BESOIN D'AVOIR CHARGE UNE FENETRE POUR QUE CA S'ENREGISTRE. Sur une
+# petite carte, tout tient a l'ecran et personne n'a de raison de « charger » :
+# on sculpte directement dans la grille. Faire dependre l'enregistrement d'un
+# geste qui n'a de sens qu'a grande echelle, c'est perdre le travail de tous
+# ceux qui ne le font pas -- sans qu'aucune erreur ne sorte.
+#
+# SANS FENETRE CHARGEE, ON N'ECRIT QUE CE QUE LA GRILLE PORTE, jamais du vide.
+# Creuser demande de savoir ce qui a ete charge : une colonne absente de la
+# grille peut avoir ete creusee, ou n'avoir jamais ete posee, et rien ne les
+# distingue. On ajoute donc, on ne retire pas. Avec une fenetre chargee, les
+# deux sont possibles -- voir enregistrer_fenetre.
+#
 # CE QUI EST SCULPTE S'ENREGISTRE TOUT SEUL. Un bouton a cocher apres chaque
 # geste est un bouton qu'on oublie, et ce qu'on oublie d'enregistrer n'existe
 # pas au lancement du jeu -- le GridMap n'est qu'un cache, la carte est la seule
@@ -323,6 +335,26 @@ static func recouvrement(masques: Dictionary, centre_fenetre: Vector2i, demi: in
 			connues += 1
 	return float(connues) / float(attendues)
 
+# CE QUE LA GRILLE PORTE, ECRIT TEL QUEL. Aucune emprise, aucun vide : on
+# parcourt les cellules posees, on en tire un masque par colonne, on l'ecrit.
+#
+# IL N'EFFACE JAMAIS RIEN, et c'est ce qui le rend sur sans rien savoir de ce
+# qui a ete charge : une colonne que la grille ne porte pas n'est simplement pas
+# touchee. Creuser reste possible par la fenetre, qui elle sait ce qu'elle a
+# pose -- voir enregistrer_fenetre.
+static func enregistrer_ce_qui_est_pose(grille: GridMap, cible: Resource) -> int:
+	var masques := volumes_du_gridmap(grille, cible.couche_base)
+	var changees := 0
+	for colonne in masques:
+		if not cible.dans_emprise(colonne):
+			continue
+		var bits: int = int(masques[colonne])
+		if bits == cible.masque(colonne):
+			continue
+		cible.poser_masque(colonne, bits)
+		changees += 1
+	return changees
+
 # `permises` : les colonnes que le chargement a REELLEMENT traitees. Vide, on
 # ecrit toute la fenetre -- l'ancien comportement, garde pour les appels qui
 # posent eux-memes leur grille et savent ce qu'elle contient.
@@ -368,7 +400,7 @@ func _process(delta: float) -> void:
 	if not Engine.is_editor_hint():
 		set_process(false)
 		return
-	if not enregistrement_automatique or _en_cours or not fenetre_chargee:
+	if not enregistrement_automatique or _en_cours:
 		return
 	if carte == null:
 		return
@@ -408,8 +440,13 @@ static func surveiller(maintenant: int, vues: int, immobile: float, delta: float
 # lui-meme est un outil de plus a ne pas oublier d'appeler le jour ou une autre
 # donnee du monde change.
 func _enregistrer_automatiquement(grille: GridMap) -> void:
-	var changees := enregistrer_fenetre(
-		grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
+	var changees := 0
+	if fenetre_chargee:
+		changees = enregistrer_fenetre(
+			grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
+	else:
+		# Voir l'en-tete : sans fenetre chargee, on prend ce qui est POSE.
+		changees = enregistrer_ce_qui_est_pose(grille, carte)
 	if changees > 0 and journal:
 		print("sculpture prise : %d colonnes, en attente d'ecriture" % changees)
 
