@@ -14,6 +14,18 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- e1371d7 — CE QUE LA SCÈNE PORTE EST REPRIS AU LANCEMENT. `terrain_visible`
+  effaçait le GridMap sans le lire : tout ce qui n'avait pas transité par
+  l'éditeur était perdu, et ce transit tenait à quatre conditions dont aucune ne
+  se signale quand elle manque. Il PREND, il écrit dans la carte, PUIS il
+  efface. Sculpter sans avoir chargé de fenêtre s'enregistre aussi
+- 4b09b41 — UNE SEULE COUCHE ÉCRIT LE MONDE : `jeu/monde/registre.gd` porte
+  « ai-je changé ? », `archiviste.gd` porte « alors je t'écris ». Ajouter une
+  sorte de donnée au monde ne demande aucune ligne d'écriture — voir
+  MANUEL_CARTE.md
+- 21393bb — LA CARTE EST UN VOLUME : chaque colonne porte le MASQUE de ses
+  couches pleines, pas sa hauteur. Grottes, ponts, surplombs et niveaux séparés
+  deviennent représentables, ce dont dépend tout le terrain destructible
 - 5f41a86 — ENREGISTRER CONSERVE CE QUI EST SCULPTÉ HORS DES COLONNES CHARGÉES.
   La garde de a054506 bloquait toute colonne non chargée, y compris celles que
   la grille PORTE : le bouton creusait avant, il oubliait après. Elle ne
@@ -185,15 +197,16 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## EN COURS
 
-- LA SCULPTURE N'A PAS ÉTÉ ÉPROUVÉE DEPUIS 5f41a86 : sculpter, enregistrer,
-  relancer, retrouver son relief. Les tests tiennent les pièces, aucun ne
-  parcourt le geste entier dans l'éditeur — voir MANUEL_CARTE.md, « ce
-  qu'aucun ne voit »
+- LA CHAÎNE ÉDITEUR N'EST PARCOURUE PAR AUCUN TEST — voir PIÈGES, « ce qu'un
+  banc headless ne voit pas ». Trois défauts s'y sont succédé sans qu'aucun ne
+  rougisse
+- TROIS FICHIERS DE `carte_prototype.tscn` NE VIENNENT PAS DE CETTE SESSION :
+  `murs_limite.gd`, `semer_objets.gd`, `carte_prototype.tres`. À rattacher à un
+  chantier avant d'y écrire — un fichier, un écrivain
 - `carte_100km2.tscn` embarque les cellules du GridMap dès qu'on enregistre la
   scène en cours de sculpture — 7,8 Mo par sauvegarde, pour un contenu que la
   carte reconstruit. « vider » avant Ctrl+S le ramène à 3 Ko ; rien ne le force
-- LES TRACES `[repere]`, `[fenetre]`, `[sculpture]`, `[pas]` sont actives :
-  `journal` exporté sur les deux outils, à décocher quand le diagnostic est clos
+- LES TRACES DE DIAGNOSTIC sont actives : `journal` exporté sur les outils
 
 - UNE EMPRISE, DEUX CARTES DE TAILLES DIFFÉRENTES — à trancher avant tout
   chantier de terrain. `DEMI_COTE` est un nombre unique et vaut désormais 150,
@@ -298,6 +311,17 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## PIÈGES DÉJÀ PAYÉS
 
+- TROIS COPIES DE LA MÊME CHOSE, ET UNE SEULE QUE LE JEU LIT. Le GridMap de la
+  scène, la carte, le fichier de scène : on sculpte dans le premier, le jeu ne
+  lit que la deuxième, et Ctrl+S écrit la troisième. Symptôme : le travail
+  disparaît au lancement, trois fois de suite, pour trois raisons différentes.
+  Règle : ce qui n'est pas la source de vérité doit être REPRIS avant d'être
+  effacé, jamais jeté — et le chemin de reprise ne doit dépendre d'aucune
+  condition qui ne se signale pas quand elle manque.
+- UN MÉCANISME QUI N'A DE SENS QU'À GRANDE ÉCHELLE NE DOIT PAS CONDITIONNER LE
+  RESTE. L'enregistrement exigeait qu'une fenêtre soit chargée — un geste qui ne
+  sert que sur une carte de 100 km². Sur 200 m, tout tient à l'écran, personne
+  ne le fait, et le travail était perdu sans une erreur.
 - ÉCRIRE UNE FENÊTRE ENTIÈRE CREUSE CE QU'ELLE NE PORTE PAS. Symptôme : le
   terrain devient un damier de zones vides, et tout ce qui est sculpté
   disparaît — mesuré à 259 530 colonnes creusées, zéro relief monté. Cause : une

@@ -19,10 +19,28 @@ montre où tombera la fenêtre.
    **`Remplisseur`**, ou le pinceau GridMap natif — sélectionner `Terrain`, le
    panneau s'ouvre en bas. **Régler *Grid Floor* à 7 pour poser au-dessus du
    sol** ; à 0 on peint six couches sous la surface, invisible.
-3. **`Enregistrer`** sur `Fenetre` — ce que porte le GridMap part dans la carte
-   et sur le disque.
-4. **`Vider`** avant Ctrl+S — sans ça la scène embarque les cellules, mesuré à
-   7,8 Mo par sauvegarde pour un contenu que la carte reconstruit.
+3. **Rien à cocher.** Ce que tu sculptes part dans la carte tout seul, quand ta
+   main s'arrête (1,5 s, réglable). `Enregistrer` reste pour forcer.
+4. **`Vider`** avant Ctrl+S sur une grande carte — sans ça la scène embarque les
+   cellules, mesuré à 7,8 Mo par sauvegarde pour un contenu que la carte
+   reconstruit. Sur une petite carte, les garder ne coûte rien.
+
+### Les trois chemins vers le jeu, et pourquoi il y en a trois
+
+Le jeu ne lit QUE la carte (`.tres`). Le GridMap de la scène et le fichier de
+scène ne sont que des caches. Trois chemins mènent de l'un à l'autre, et ils
+existent tous parce qu'aucun ne suffit seul :
+
+| chemin | quand | ce qu'il rate |
+|---|---|---|
+| **auto-enregistrement** | main arrêtée dans l'éditeur | ne tourne pas si le script n'est pas rechargé |
+| **déplacement du curseur** | la fenêtre change d'endroit | rien, mais il faut déplacer |
+| **reprise au lancement** | le jeu démarre | rien — c'est le filet |
+
+**La reprise est le filet**, et c'est elle qui rend le reste facultatif :
+`terrain_visible` PREND ce que la grille porte, l'écrit dans la carte, PUIS
+efface et redessine. Ce qui est sculpté et sauvé avec la scène arrive dans le
+jeu **quoi qu'il se soit passé dans l'éditeur**.
 
 ### Repérer
 
@@ -82,9 +100,28 @@ code : coût par colonne sculptée, sol sous le personnage.
 | `maquette.gd` | la vue d'ensemble, éditeur seulement |
 | `terrain_commun.gd` | gestes partagés : trouver le terrain, l'emprise, la bibliothèque de jeu |
 | `../objets/objets_visibles.gd` | fait basculer un objet de donnée à nœud près de l'observateur |
+| `../monde/registre.gd` | ce dont le monde se souvient : porte « ai-je changé ? » |
+| `../monde/archiviste.gd` | la seule chose qui écrit sur disque, et seulement ce qui est marqué |
 
 `carte_100km2.tres` est la carte. `carte_100km2.tscn` est la scène — sculpture
 et jeu dans la même.
+
+## Ajouter une sorte de donnée au monde
+
+Rien à câbler côté écriture. Trois gestes :
+
+1. la donnée `extends "res://jeu/monde/registre.gd"` ;
+2. chaque fonction qui la modifie appelle `marquer_sale()` ;
+3. on la glisse dans `Registres` sur le nœud `Archiviste` de la scène.
+
+Elle est enregistrée. Gratte-ciels, gouffres, rivières, créatures : même chemin,
+aucun cas particulier. C'est le *dirty tracking* des mondes ouverts persistants —
+n'écrire que ce qui est marqué, ne stocker que les écarts au défaut.
+
+**La seule discipline** : un domaine qui modifie sans appeler `marquer_sale()`
+ne sera pas enregistré, et rien ne le dira avant le prochain lancement. C'est le
+prix d'un mécanisme qui ne relit pas tout le monde à chaque image pour deviner
+ce qui a bougé — ça coûterait plus que la simulation.
 
 ## La méthode, et pourquoi elle est celle-là
 
@@ -107,9 +144,10 @@ Trois conséquences qui se retrouvent partout dans ces fichiers :
 
 | test | ce qu'il rend impossible |
 |---|---|
-| `test_carte_terrain` | qu'une carte vierge pèse selon son emprise ; qu'une lecture coûte selon ce qui est sculpté |
+| `test_carte_terrain` | qu'une carte vierge pèse selon son emprise ; qu'une grotte se rebouche ou qu'un pont se remplisse |
+| `../monde/test_archiviste` | qu'un registre non marqué soit écrit, ou qu'un échec d'écriture passe pour un succès |
 | `test_terrain_visible` | que le compte de cellules suive la carte ; qu'un nœud traîne derrière l'observateur |
-| `test_scene_carte` | que la scène perde son câblage ; qu'un sol rendu ne collisionne pas |
+| `test_scene_carte` | que la scène perde son câblage ; qu'un sol rendu ne collisionne pas ; **que ce que la scène porte soit effacé sans être repris** |
 | `test_outil_fenetre` | qu'un enregistrement creuse ce qui n'a pas été chargé, ou oublie ce qui est sculpté ailleurs |
 | `test_maquette` | que la vue d'ensemble relise l'emprise ; qu'elle tienne à un seul `_ready` |
 | `test_repere_fenetre` | que le curseur porte une donnée en double ; qu'il dépende de son parent |
