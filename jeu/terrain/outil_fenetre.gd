@@ -403,20 +403,15 @@ static func surveiller(maintenant: int, vues: int, immobile: float, delta: float
 		return { "vues": vues, "immobile": cumul, "ecrire": false }
 	return { "vues": vues, "immobile": -1.0, "ecrire": true }
 
+# L'ECRITURE SUR DISQUE N'EST PLUS ICI. `enregistrer_fenetre` marque la carte,
+# l'archiviste l'ecrit -- voir jeu/monde/archiviste.gd. Un outil qui sauvegarde
+# lui-meme est un outil de plus a ne pas oublier d'appeler le jour ou une autre
+# donnee du monde change.
 func _enregistrer_automatiquement(grille: GridMap) -> void:
 	var changees := enregistrer_fenetre(
 		grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
-	if changees == 0:
-		return
-	if carte.resource_path.is_empty():
-		push_warning("la carte n'a aucun chemin sur le disque : le relief n'est ecrit qu'en memoire")
-		return
-	var erreur := ResourceSaver.save(carte, carte.resource_path)
-	if erreur != OK:
-		push_error("enregistrement automatique impossible (erreur %d)" % erreur)
-		return
-	print("enregistrement automatique : %d colonnes ecrites dans %s" % [
-		changees, carte.resource_path])
+	if changees > 0 and journal:
+		print("sculpture prise : %d colonnes, en attente d'ecriture" % changees)
 
 # LE GESTE COMPLET, appele par le curseur quand il a fini de bouger : ce qui
 # etait sous la fenetre part dans la carte, le GridMap se vide, la nouvelle zone
@@ -460,13 +455,7 @@ func deplacer_vers(vise: Vector2i) -> bool:
 				else "  <-- PAS UN MULTIPLE : deux zones se chevauchent ou laissent un vide"])
 	var changees := enregistrer_fenetre(
 		grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
-	if not carte.resource_path.is_empty():
-		var erreur := ResourceSaver.save(carte, carte.resource_path)
-		if erreur != OK:
-			push_error("ecriture de %s impossible (erreur %d) : deplacement annule" % [
-				carte.resource_path, erreur])
-			return false
-	print("deplacement : %v enregistre (%d colonnes changees), on va en %v" % [
+	print("deplacement : %v pris (%d colonnes changees), on va en %v" % [
 		centre_charge, changees, vise])
 
 	# 2. LA NOUVELLE ZONE SE REND. charger vide le GridMap avant de poser.
@@ -614,12 +603,3 @@ func _enregistrer() -> void:
 		grille, carte, centre, demi_fenetre, _colonnes_chargees)
 	print("enregistrement de la fenetre centree sur %v : %d colonnes changees, %d sculptees dans la carte" % [
 		centre, changees, carte.colonnes_sculptees()])
-
-	if carte.resource_path.is_empty():
-		push_warning("la carte n'a aucun chemin sur le disque : le relief n'est ecrit qu'en memoire")
-		return
-	var erreur := ResourceSaver.save(carte, carte.resource_path)
-	if erreur != OK:
-		push_error("ecriture de %s impossible (erreur %d)" % [carte.resource_path, erreur])
-		return
-	print("  ecrit : %s" % carte.resource_path)

@@ -1,5 +1,5 @@
 @tool
-extends Resource
+extends "res://jeu/monde/registre.gd"
 
 # LA DONNEE DU TERRAIN, et rien d'autre : aucun noeud, aucun GridMap, aucun
 # rendu. Elle dit ou s'arrete la carte, et jusqu'a quelle couche la matiere
@@ -52,6 +52,11 @@ extends Resource
 # « Attempt to call a method on a placeholder instance ». Il n'y a rien a
 # executer ici de toute facon : aucun _init, aucun _ready, aucun _process, que
 # des champs et des fonctions pures.
+#
+# C'EST UN REGISTRE DU MONDE (`jeu/monde/registre.gd`) : chaque geste qui la
+# modifie se MARQUE, et l'archiviste l'ecrit. Ce fichier n'appelle jamais
+# ResourceSaver -- une donnee qui sait s'ecrire elle-meme est une donnee qu'on
+# oublie d'ecrire ailleurs.
 #
 # Regles tenues : aucun hasard. Aucun texte visible par le joueur. Aucun nom de
 # contenu -- cette donnee ne sait pas ce qui pousse ni ce qui marche dessus.
@@ -155,10 +160,15 @@ func sommet(colonne: Vector2i) -> Variant:
 func poser_masque(colonne: Vector2i, bits: int) -> bool:
 	if not dans_emprise(colonne):
 		return false
+	if bits == masque(colonne):
+		return true
 	if bits == masque_de_base():
 		volumes.erase(colonne)
 	else:
 		volumes[colonne] = bits
+	# VOIR L'EN-TETE : c'est ici, et nulle part ailleurs, que la carte dit
+	# qu'elle a change. L'archiviste fait le reste.
+	marquer_sale()
 	return true
 
 # Ecrit une colonne PLEINE de la base jusqu'a `couche`. Le geste du sculpteur

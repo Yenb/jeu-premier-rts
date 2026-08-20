@@ -413,14 +413,29 @@ func _deplacement() -> void:
 	fait = await outil.deplacer_vers(ailleurs)
 	_v.v(fait, "le deplacement n'a rien fait alors qu'une fenetre etait chargee")
 
-	# 1. CE QUI ETAIT LA EST DANS LA CARTE, et sur le disque.
+	# 1. CE QUI ETAIT LA EST DANS LA CARTE, et la carte est MARQUEE.
+	#
+	# L'ECRITURE SUR DISQUE N'EST PLUS ICI : deplacer prend la sculpture et
+	# marque la carte, l'archiviste l'ecrit -- voir jeu/monde/archiviste.gd. Un
+	# outil qui sauvegarde lui-meme est un outil de plus a ne pas oublier
+	# d'appeler le jour ou une autre donnee du monde change.
 	var colonne := butte
 	_v.v(carte.sommet(colonne) == base + 3,
 		"la butte n'a pas ete enregistree avant le deplacement : sommet %s" % [
 			carte.sommet(colonne)])
+	_v.v(carte.est_sale(),
+		"la carte n'est pas marquee apres un deplacement : rien ne l'ecrira jamais")
+
+	# Et l'archiviste, qui ne connait rien au terrain, la porte sur le disque.
+	var archiviste: Node = load("res://jeu/monde/archiviste.gd").new()
+	archiviste.journal = false
+	var liste: Array[Resource] = [carte]
+	archiviste.registres = liste
+	racine.add_child(archiviste)
+	_v.v(archiviste.ecrire_les_sales() == 1, "l'archiviste n'a pas ecrit la carte marquee")
 	var relue: Resource = ResourceLoader.load(chemin, "", ResourceLoader.CACHE_MODE_IGNORE)
 	_v.v(relue != null and relue.sommet(colonne) == base + 3,
-		"la butte n'est pas sur le disque apres le deplacement")
+		"la butte n'est pas sur le disque apres l'ecriture de l'archiviste")
 
 	# 2. LA NOUVELLE ZONE EST RENDUE, et l'ancienne DECHARGEE.
 	_v.v(outil.centre == ailleurs and outil.centre_charge == ailleurs,
