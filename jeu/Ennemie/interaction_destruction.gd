@@ -1,23 +1,23 @@
 extends Node3D
 
-# BANC "test_ennemi" -- le geste le plus simple possible : viser un objet du
-# groupe "destructible" a moins de `portee` metres et cliquer le detruit.
-# Rien d'autre : pas de degats, pas d'animation, pas de retour visuel. Sert a
-# valider le geste avant d'y accrocher quoi que ce soit -- pas destine a
-# survivre tel quel dans le jeu.
+# BANC "test_ennemi" -- viser un objet du groupe "destructible" a moins de
+# `portee` metres et cliquer le frappe. Si la cible sait encaisser un coup
+# (methode subir_frappe, voir vie_ennemi.gd), le geste ne fait QUE ça --
+# c'est la cible qui decide de sa propre destruction. Sinon, repli sur la
+# destruction directe, pour tout ce qui n'a pas encore de vie.
 #
 # Entree : la camera ACTIVE de la scene (get_viewport().get_camera_3d(),
-# jamais un chemin en dur -- la meme scene peut changer de camera). Sortie :
-# libere le noeud vise.
+# jamais un chemin en dur -- la meme scene peut changer de camera).
 
 @export var portee: float = 3.0
+@export var degats_par_coup: float = 1.0
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed \
 			and event.button_index == MOUSE_BUTTON_LEFT:
-		_viser_et_detruire()
+		_viser_et_frapper()
 
-func _viser_et_detruire() -> void:
+func _viser_et_frapper() -> void:
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
 		return
@@ -30,6 +30,10 @@ func _viser_et_detruire() -> void:
 	if resultat.is_empty():
 		return
 	var cible: Object = resultat.get("collider")
-	if cible is Node and cible.is_in_group("destructible"):
+	if not (cible is Node and cible.is_in_group("destructible")):
+		return
+	if cible.has_method("subir_frappe"):
+		cible.subir_frappe(degats_par_coup)
+	else:
 		print("[test_ennemi] detruit : %s" % cible.name)
 		cible.queue_free()
