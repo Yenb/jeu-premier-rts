@@ -1,0 +1,60 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Ennemie/transporteur.gd" id="1_transporteur"]
+[ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_orange"]
+albedo_color = Color(0.95, 0.5, 0.1, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_transporteur"]
+material = SubResource("StandardMaterial3D_orange")
+size = Vector3(0.5, 0.5, 0.5)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_transporteur"]
+size = Vector3(0.5, 0.5, 0.5)
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_vie"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_vie"]
+material = SubResource("ShaderMaterial_vie")
+size = Vector2(0.5, 0.07)
+
+; -- La barre de CHARGE : vide grise fonce, pleine grise clair. Une nuance
+; -- de gris pour le "metal", jamais un bleu qui pourrait se confondre avec
+; -- le stock du cube violet a l'etape C.
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_charge"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.1, 0.1, 0.12, 1)
+shader_parameter/couleur_pleine = Color(0.75, 0.75, 0.8, 1)
+shader_parameter/fraction = 0.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_charge"]
+material = SubResource("ShaderMaterial_charge")
+size = Vector2(0.5, 0.07)
+
+[node name="Transporteur" type="StaticBody3D" groups=["destructible"]]
+script = ExtResource("1_transporteur")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_transporteur")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_transporteur")
+
+[node name="BarreDeVie" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.55, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
+mesh = SubResource("QuadMesh_vie")
+
+; -- La charge JUSTE au-dessus de la vie, pas en dessous : lecture
+; -- naturelle du haut vers le bas.
+[node name="BarreDeCharge" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.66, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeCharge"]
+mesh = SubResource("QuadMesh_charge")

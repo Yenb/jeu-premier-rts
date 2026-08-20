@@ -1,0 +1,105 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Ennemie/gisement_fer.gd" id="1_gisement"]
+[ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+
+; -- Matiere partagee : trois teintes de gris, pour donner du grain sans
+; -- multiplier les materiaux. Aucune texture ; le gisement est reconnaissable
+; -- a sa SILHOUETTE en ferraille, pas a un rendu.
+[sub_resource type="StandardMaterial3D" id="Materiau_gris_clair"]
+albedo_color = Color(0.65, 0.65, 0.7, 1)
+
+[sub_resource type="StandardMaterial3D" id="Materiau_gris_moyen"]
+albedo_color = Color(0.45, 0.45, 0.5, 1)
+
+[sub_resource type="StandardMaterial3D" id="Materiau_gris_fonce"]
+albedo_color = Color(0.3, 0.3, 0.33, 1)
+
+; -- Sept blocs de tailles differentes, empiles et decales, pour evoquer un
+; -- tas de ferraille sans utiliser un vrai modele importe. La silhouette
+; -- fait a peu pres 5 m de haut et 3 m de large.
+
+[sub_resource type="BoxMesh" id="Mesh_socle"]
+material = SubResource("Materiau_gris_fonce")
+size = Vector3(3.0, 0.8, 3.0)
+
+[sub_resource type="BoxMesh" id="Mesh_gauche_bas"]
+material = SubResource("Materiau_gris_moyen")
+size = Vector3(1.4, 2.0, 1.6)
+
+[sub_resource type="BoxMesh" id="Mesh_droite_bas"]
+material = SubResource("Materiau_gris_moyen")
+size = Vector3(1.8, 1.6, 1.4)
+
+[sub_resource type="BoxMesh" id="Mesh_avant_bas"]
+material = SubResource("Materiau_gris_clair")
+size = Vector3(1.2, 1.4, 1.0)
+
+[sub_resource type="BoxMesh" id="Mesh_centre_haut"]
+material = SubResource("Materiau_gris_moyen")
+size = Vector3(1.5, 1.5, 1.3)
+
+[sub_resource type="BoxMesh" id="Mesh_gauche_haut"]
+material = SubResource("Materiau_gris_clair")
+size = Vector3(0.9, 1.0, 0.9)
+
+[sub_resource type="BoxMesh" id="Mesh_sommet"]
+material = SubResource("Materiau_gris_fonce")
+size = Vector3(0.7, 0.6, 0.7)
+
+; -- La collision : une seule boite qui enveloppe tout, largement suffisante
+; -- pour un transporteur qui vient cogner (pas besoin de collision par bloc).
+[sub_resource type="BoxShape3D" id="Forme_englobante"]
+size = Vector3(3.2, 5.0, 3.2)
+
+; -- La barre de metal : shader partage, couleur pleine = rouge.
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_barre"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.2, 0.05, 0.05, 1)
+shader_parameter/couleur_pleine = Color(0.9, 0.15, 0.15, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_barre"]
+material = SubResource("ShaderMaterial_barre")
+size = Vector2(3.0, 0.25)
+
+[node name="GisementFer" type="StaticBody3D"]
+script = ExtResource("1_gisement")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, 0)
+shape = SubResource("Forme_englobante")
+
+[node name="Socle" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.4, 0)
+mesh = SubResource("Mesh_socle")
+
+[node name="GaucheBas" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.7, 1.8, -0.4)
+mesh = SubResource("Mesh_gauche_bas")
+
+[node name="DroiteBas" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5, 1.6, 0.5)
+mesh = SubResource("Mesh_droite_bas")
+
+[node name="AvantBas" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.2, 1.5, -0.9)
+mesh = SubResource("Mesh_avant_bas")
+
+[node name="CentreHaut" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.2, 3.3, 0.1)
+mesh = SubResource("Mesh_centre_haut")
+
+[node name="GaucheHaut" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8, 3.7, 0.3)
+mesh = SubResource("Mesh_gauche_haut")
+
+[node name="Sommet" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1, 4.5, 0.0)
+mesh = SubResource("Mesh_sommet")
+
+[node name="BarreDeMetal" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5.3, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeMetal"]
+mesh = SubResource("QuadMesh_barre")

@@ -40,6 +40,13 @@ const CubeEnnemi := preload("res://jeu/Ennemie/cube_ennemi.tscn")
 # AUCUN HASARD NON SEEDE : meme graine, memes naissances, a chaque partie.
 @export var graine: int = 20260820
 
+# INTERRUPTEUR PROPRE, jamais un commentaire de code : quand faux, aucune
+# gestation ne s'entame et aucune naissance ne se joue -- mais le reste
+# (retrait des detruits, comptage de voisins pour ceux qui existent) reste
+# actif. Sert a geler cette mecanique le temps de tester autre chose autour
+# des cubes deja poses, sans supprimer ni le noeud ni ses reglages.
+@export var reproduction_active := true
+
 const REF_REPRODUCTION := "cube"
 
 var _monde := Monde.new()
@@ -83,6 +90,11 @@ func _avancer_dune_seconde() -> void:
 		# compte pour toujours dans chaque requete de densite alentour.
 		if not is_instance_valid(entite.noeud):
 			_monde.retirer(id)
+			continue
+
+		# INTERRUPTEUR OFF : on continue de retirer les detruits, mais aucune
+		# nouvelle gestation ni aucune naissance ne se joue.
+		if not reproduction_active:
 			continue
 
 		# LA DENSITE GATE AVANT DE POSER LA GESTATION -- une mere deja

@@ -6,6 +6,8 @@
 [ext_resource type="Script" uid="uid://dg03tx631kq2w" path="res://jeu/Ennemie/interaction_destruction.gd" id="4_interaction"]
 [ext_resource type="PackedScene" path="res://jeu/Ennemie/croix_visee.tscn" id="5_croix"]
 [ext_resource type="Script" uid="uid://c3x1dax1bu64y" path="res://jeu/Ennemie/population_ennemie.gd" id="6_population"]
+[ext_resource type="PackedScene" path="res://jeu/Ennemie/gisement_fer.tscn" id="8_gisement"]
+[ext_resource type="Script" uid="uid://bx0d3sj1mvtlt" path="res://jeu/Ennemie/monde_partage.gd" id="9_monde"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ah4o0"]
 
@@ -18,6 +20,9 @@ sky = SubResource("Sky_jyeuw")
 ambient_light_source = 3
 
 [node name="Carte" type="Node3D" unique_id=1136710350]
+
+[node name="MondePartage" type="Node" parent="." unique_id=1967358675]
+script = ExtResource("9_monde")
 
 [node name="Terrain" type="GridMap" parent="." unique_id=1754531682]
 mesh_library = ExtResource("1_4tcux")
@@ -45,8 +50,21 @@ script = ExtResource("4_interaction")
 [node name="Population" type="Node3D" parent="." unique_id=1268267222]
 script = ExtResource("6_population")
 duree_gestation = 5.0
+reproduction_active = false
 
 [node name="CubeEnnemi" parent="Population" unique_id=1795014797 instance=ExtResource("3_cube")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.313004, 13.02895)
 
+[node name="GisementFer" parent="." unique_id=802690814 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 53.611977, 14, 7)
+
+[node name="GisementFer" parent="GisementFer" unique_id=318829915 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -128.53714, 0.86673737, 7)
+
 [node name="CroixVisee" parent="." unique_id=1481093783 instance=ExtResource("5_croix")]
+
+[node name="GisementFer2" parent="." unique_id=1263899029 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -99.54446, 14.133471, 118.863396)
+
+[node name="GisementFer3" parent="." unique_id=113579778 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -119.318695, 13.485573, 54.012863)

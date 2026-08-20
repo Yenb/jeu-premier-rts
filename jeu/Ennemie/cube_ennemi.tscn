@@ -2,6 +2,8 @@
 
 [ext_resource type="Script" path="res://jeu/Ennemie/vie_ennemi.gd" id="1_vie"]
 [ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+[ext_resource type="Script" path="res://jeu/Ennemie/garde_transporteurs.gd" id="3_garde"]
+[ext_resource type="Script" path="res://jeu/Ennemie/gestation_stock.gd" id="4_gestation"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_violet"]
 albedo_color = Color(0.6, 0, 0.9, 1)
@@ -13,14 +15,27 @@ size = Vector3(1, 1, 1)
 [sub_resource type="BoxShape3D" id="BoxShape3D_cube"]
 size = Vector3(1, 1, 1)
 
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_barre"]
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_vie"]
 shader = ExtResource("2_shader")
 shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
 shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
 shader_parameter/fraction = 1.0
 
-[sub_resource type="QuadMesh" id="QuadMesh_barre"]
-material = SubResource("ShaderMaterial_barre")
+[sub_resource type="QuadMesh" id="QuadMesh_vie"]
+material = SubResource("ShaderMaterial_vie")
+size = Vector2(0.8, 0.1)
+
+; -- La barre de STOCK : vide bleu tres fonce, pleine bleu vif. Une teinte
+; -- de bleu franc, distincte du gris de la charge (transporteur) et du
+; -- rouge du gisement, pour se lire sans confusion en jeu.
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_stock"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.05, 0.08, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.4, 0.95, 1)
+shader_parameter/fraction = 0.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_stock"]
+material = SubResource("ShaderMaterial_stock")
 size = Vector2(0.8, 0.1)
 
 [node name="CubeEnnemi" type="StaticBody3D" groups=["destructible"]]
@@ -36,4 +51,21 @@ shape = SubResource("BoxShape3D_cube")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
 
 [node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
-mesh = SubResource("QuadMesh_barre")
+mesh = SubResource("QuadMesh_vie")
+
+; -- LA BARRE DE STOCK AU-DESSUS DE LA VIE : lecture haut->bas
+; -- stock -> vie, meme organisation que le transporteur (charge -> vie).
+[node name="BarreDeStock" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.15, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeStock"]
+mesh = SubResource("QuadMesh_stock")
+
+; -- LES DEUX COMPOSANTS AUTONOMES : chaque cube violet est complet des
+; -- son instanciation, y compris ceux nes de la gestation. Sans ca, un
+; -- nouveau cube ne pondrait ni transporteur ni ne se reproduirait.
+[node name="GardeTransporteurs" type="Node3D" parent="."]
+script = ExtResource("3_garde")
+
+[node name="GestationStock" type="Node3D" parent="."]
+script = ExtResource("4_gestation")
