@@ -551,17 +551,18 @@ static func surveiller(maintenant: int, vues: int, immobile: float, delta: float
 # l'archiviste l'ecrit -- voir jeu/monde/archiviste.gd. Un outil qui sauvegarde
 # lui-meme est un outil de plus a ne pas oublier d'appeler le jour ou une autre
 # donnee du monde change.
+# RIEN NE S'EFFACE TOUT SEUL, JAMAIS. Ce qui est dans la carte y reste tant que
+# personne ne demande explicitement de le retirer. Un mecanisme automatique qui
+# peut effacer finit par effacer ce qu'il ne fallait pas -- et cette session en
+# a donne trois preuves, chacune coutant des heures de sculpture.
+#
+# CE QUE CA COUTE, ET C'EST ASSUME : creuser une colonne ENTIERE dans l'editeur
+# ne s'enregistre pas par ce chemin. Vider une colonne au pinceau la retire de
+# la grille, et une colonne absente est indistinguable d'une colonne jamais
+# chargee. Perdre un creusement se voit et se refait ; perdre une carte
+# sculptee, non.
 func _enregistrer_automatiquement(grille: GridMap) -> void:
-	var changees := 0
-	# CREUSER DEMANDE DE SAVOIR CE QUI A ETE CHARGE. Une fenetre qui se dit
-	# chargee sans aucune colonne connue ne peut rien effacer sans risque : on
-	# retombe alors sur ce qui est POSE, qui n'efface jamais rien.
-	if fenetre_chargee and not _colonnes_chargees.is_empty():
-		changees = enregistrer_fenetre(
-			grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
-	else:
-		# Voir l'en-tete : sans fenetre chargee, on prend ce qui est POSE.
-		changees = enregistrer_ce_qui_est_pose(grille, carte)
+	var changees := enregistrer_ce_qui_est_pose(grille, carte)
 	if changees > 0 and journal:
 		print("sculpture prise : %d colonnes, en attente d'ecriture" % changees)
 
@@ -605,8 +606,10 @@ func deplacer_vers(vise: Vector2i) -> bool:
 			"" if (absi(ecart.x) == largeur or ecart.x == 0)
 				and (absi(ecart.y) == largeur or ecart.y == 0)
 				else "  <-- PAS UN MULTIPLE : deux zones se chevauchent ou laissent un vide"])
-	var changees := enregistrer_fenetre(
-		grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
+	# VOIR _enregistrer_automatiquement : on prend ce qui est POSE, et on
+	# n'efface rien. Un deplacement ne doit jamais faire disparaitre du relief
+	# ailleurs sur la carte.
+	var changees := enregistrer_ce_qui_est_pose(grille, carte)
 	print("deplacement : %v pris (%d colonnes changees), on va en %v" % [
 		centre_charge, changees, vise])
 
@@ -751,7 +754,7 @@ func _enregistrer() -> void:
 			centre_charge, centre, centre_charge])
 		return
 
-	var changees := enregistrer_fenetre(
-		grille, carte, centre, demi_fenetre, _colonnes_chargees)
-	print("enregistrement de la fenetre centree sur %v : %d colonnes changees, %d sculptees dans la carte" % [
-		centre, changees, carte.colonnes_sculptees()])
+	# VOIR _enregistrer_automatiquement : on prend ce qui est POSE, jamais plus.
+	var changees := enregistrer_ce_qui_est_pose(grille, carte)
+	print("enregistrement : %d colonnes changees, %d sculptees dans la carte" % [
+		changees, carte.colonnes_sculptees()])

@@ -116,7 +116,9 @@ func _ready() -> void:
 	# avant de l'effacer.
 	var transportees := get_used_cells().size()
 	if transportees > 0:
-		var prises := Outil.enregistrer_ce_qui_est_pose(self, carte, true)
+		# RIEN NE S'EFFACE TOUT SEUL : on prend ce que la scene porte, on ne
+		# retire jamais ce qu'elle ne porte pas. Voir outil_fenetre.gd.
+		var prises := Outil.enregistrer_ce_qui_est_pose(self, carte)
 		if prises > 0:
 			print("terrain_visible : %d colonnes reprises de la scene et ecrites dans la carte" % prises)
 		clear()

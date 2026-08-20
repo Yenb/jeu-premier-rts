@@ -148,14 +148,26 @@ func _l_occupation_lit_la_bonne_couche(v) -> void:
 	grille.set_cell_item(Vector3i(0, COUCHE, 0), 0)
 	grille.set_cell_item(Vector3i(1, COUCHE + 1, 1), 0)
 
-	var carte := Outil.occupation(grille, COUCHE, DEMI)
+	# LA FENETRE SUIT CE QUI EST POSE SUR CETTE COUCHE, pas l'emprise : une seule
+	# cellule sur la couche lue donne une fenetre de 3 de cote (marge comprise),
+	# quelle que soit la taille de la carte.
+	var fenetre := Outil.fenetre_utile(grille, COUCHE)
+	var bas: Vector2i = fenetre.bas
+	var cote: int = fenetre.cote
+	v.v(cote == 3, "la fenetre fait %d de cote pour une seule cellule posee, 3 attendu" % cote)
+
+	var carte := Outil.occupation(grille, COUCHE, bas, cote)
 	var pleines := 0
 	for case in carte:
 		pleines += case
-	v.v(carte.size() == DEMI * DEMI * 4,
-		"l'occupation porte %d cases au lieu de %d" % [carte.size(), DEMI * DEMI * 4])
+	v.v(carte.size() == cote * cote,
+		"l'occupation porte %d cases au lieu de %d" % [carte.size(), cote * cote])
 	v.v(pleines == 1, "%d cellules lues au lieu d'une : une autre couche a deteint" % pleines)
-	v.v(carte[(0 + DEMI) * DEMI * 2 + (0 + DEMI)] == 1, "la cellule posee n'est pas lue pleine")
+	v.v(carte[(0 - bas.x) * cote + (0 - bas.y)] == 1, "la cellule posee n'est pas lue pleine")
+
+	# ET UNE COUCHE VIDE NE DEMANDE AUCUN TRAVAIL.
+	var rien := Outil.fenetre_utile(grille, COUCHE + 5)
+	v.v(int(rien.cote) == 0, "une couche vide rend une fenetre de %d de cote" % rien.cote)
 
 	grille.free()
 
@@ -235,7 +247,7 @@ func _zones_placees(motif: Array, cherche_vide: bool, coin: Vector2i) -> Diction
 		for colonne in range(texte.length()):
 			if texte[colonne] == "#":
 				carte[(coin.x + ligne) * cote + (coin.y + colonne)] = 1
-	return Outil.zones_encloses(carte, DEMI, COUCHE, cherche_vide)
+	return Outil.zones_encloses(carte, Vector2i(-DEMI, -DEMI), cote, COUCHE, cherche_vide)
 
 func _bibliotheque_a_un_bloc() -> MeshLibrary:
 	var bibliotheque := MeshLibrary.new()

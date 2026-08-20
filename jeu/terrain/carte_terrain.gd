@@ -171,12 +171,34 @@ func sommet(colonne: Vector2i) -> Variant:
 	var bits := masque(colonne)
 	if bits == 0:
 		return null
-	var rang := COUCHES_MAXIMALES - 1
-	while rang >= 0:
-		if (bits & (1 << rang)) != 0:
-			return couche_base + rang
-		rang -= 1
-	return null
+	return couche_base + rang_le_plus_haut(bits)
+
+# LE RANG DU BIT LE PLUS HAUT, par dichotomie : six comparaisons au lieu de
+# soixante-trois. Ce n'est pas de l'elegance -- `sommet` est appele une fois par
+# colonne sculptee par la maquette, et la version naive coutait 5 us par colonne
+# la ou celle-ci en coute une fraction. Mesure : le plafond du test etait
+# franchi.
+static func rang_le_plus_haut(bits: int) -> int:
+	var rang := 0
+	var reste := bits
+	if reste >= (1 << 32):
+		rang += 32
+		reste >>= 32
+	if reste >= (1 << 16):
+		rang += 16
+		reste >>= 16
+	if reste >= (1 << 8):
+		rang += 8
+		reste >>= 8
+	if reste >= (1 << 4):
+		rang += 4
+		reste >>= 4
+	if reste >= (1 << 2):
+		rang += 2
+		reste >>= 2
+	if reste >= 2:
+		rang += 1
+	return rang
 
 # Ecrit le masque d'une colonne. Rend false hors emprise -- y ecrire poserait de
 # la matiere qu'aucun outil ne retrouverait.

@@ -75,24 +75,63 @@ enum Mode { REMPLIR, CREUSER }
 
 var _en_cours := false
 
-# Etat de la couche, une case par cellule de l'emprise : 1 pleine, 0 vide.
-# Indice = (x + demi_cote) * cote + (z + demi_cote), avec cote = demi_cote * 2.
-static func occupation(grille: GridMap, couche_lue: int, demi_cote: int) -> PackedByteArray:
-	var cote := demi_cote * 2
+# LA FENETRE DE TRAVAIL, deduite de ce que la grille PORTE sur cette couche :
+# le carre englobant des cellules posees, plus une cellule de marge. Rend
+# { bas, cote }, ou un cote nul quand la couche est vide.
+#
+# ELLE NE SUIT PAS L'EMPRISE DECLAREE, et c'est tout l'objet de ce geste. Sur
+# une carte de cent kilometres carres, balayer l'emprise fait vingt-cinq
+# millions de cases et autant d'octets, pour un contour qui en occupe quelques
+# centaines. Le cout suit ce qui est pose, jamais la taille du monde.
+#
+# LA MARGE D'UNE CELLULE EST STRUCTURELLE : le bord de la fenetre est la PORTE
+# DE SORTIE de l'algorithme. Sans elle, un contour appuye contre la derniere
+# cellule posee n'aurait aucun exterieur, et tout ce qu'il enferme passerait
+# pour ouvert -- ou l'inverse.
+static func fenetre_utile(grille: GridMap, couche_lue: int) -> Dictionary:
+	var bas := Vector2i(0, 0)
+	var haut := Vector2i(0, 0)
+	var premier := true
+	for cellule in grille.get_used_cells():
+		if cellule.y != couche_lue:
+			continue
+		var colonne := Vector2i(cellule.x, cellule.z)
+		if premier:
+			bas = colonne
+			haut = colonne
+			premier = false
+			continue
+		bas.x = mini(bas.x, colonne.x)
+		bas.y = mini(bas.y, colonne.y)
+		haut.x = maxi(haut.x, colonne.x)
+		haut.y = maxi(haut.y, colonne.y)
+	if premier:
+		return { "bas": Vector2i.ZERO, "cote": 0 }
+	# Un CARRE : l'algorithme indexe en cote x cote, et une fenetre rectangulaire
+	# demanderait deux largeurs partout. Le carre coute quelques cases de plus,
+	# jamais un ordre de grandeur.
+	var large := maxi(haut.x - bas.x, haut.y - bas.y) + 3
+	return { "bas": bas - Vector2i.ONE, "cote": large }
+
+# Etat de la couche, une case par cellule de la fenetre : 1 pleine, 0 vide.
+# Indice = (x - bas.x) * cote + (z - bas.y).
+static func occupation(grille: GridMap, couche_lue: int, bas: Vector2i,
+		cote: int) -> PackedByteArray:
 	var carte := PackedByteArray()
+	if cote <= 0:
+		return carte
 	carte.resize(cote * cote)
-	for x in range(-demi_cote, demi_cote):
-		for z in range(-demi_cote, demi_cote):
+	for x in range(bas.x, bas.x + cote):
+		for z in range(bas.y, bas.y + cote):
 			if grille.get_cell_item(Vector3i(x, couche_lue, z)) != GridMap.INVALID_CELL_ITEM:
-				carte[(x + demi_cote) * cote + (z + demi_cote)] = 1
+				carte[(x - bas.x) * cote + (z - bas.y)] = 1
 	return carte
 
 # Rend { cellules, zones } : les cellules encloses de la couche, et le nombre
 # de zones distinctes qu'elles forment. `cherche_vide` dit la NATURE cherchee --
 # vrai pour les poches de vide (remplir), faux pour les ilots pleins (creuser).
-static func zones_encloses(carte: PackedByteArray, demi_cote: int, couche_lue: int,
-		cherche_vide: bool) -> Dictionary:
-	var cote := demi_cote * 2
+static func zones_encloses(carte: PackedByteArray, bas: Vector2i, cote: int,
+		couche_lue: int, cherche_vide: bool) -> Dictionary:
 	var total := cote * cote
 	var vide := { "cellules": [] as Array[Vector3i], "zones": 0 }
 	if carte.size() != total:
@@ -104,8 +143,9 @@ static func zones_encloses(carte: PackedByteArray, demi_cote: int, couche_lue: i
 	var etat := PackedByteArray()
 	etat.resize(total)
 
-	# Premiere vague : tout ce qui touche le bord de l'emprise. Le bord n'est
-	# jamais un mur, il est la porte de sortie.
+	# Premiere vague : tout ce qui touche le bord de la FENETRE. Le bord n'est
+	# jamais un mur, il est la porte de sortie -- voir fenetre_utile, qui garde
+	# une cellule de marge pour qu'il en existe toujours un.
 	var pile: Array[int] = []
 	for a in range(cote):
 		for index in [a * cote, a * cote + cote - 1, a, (cote - 1) * cote + a]:
@@ -131,8 +171,9 @@ static func zones_encloses(carte: PackedByteArray, demi_cote: int, couche_lue: i
 		var groupe: Array[int] = [depart]
 		while not groupe.is_empty():
 			var index: int = groupe.pop_back()
+			@warning_ignore("integer_division")
 			cellules.append(Vector3i(
-				index / cote - demi_cote, couche_lue, index % cote - demi_cote))
+				index / cote + bas.x, couche_lue, index % cote + bas.y))
 			for voisin in _voisins(index, cote):
 				if etat[voisin] == 0 and _est_de_la_nature(carte, voisin, cherche_vide):
 					etat[voisin] = 2
@@ -175,9 +216,14 @@ func _appliquer() -> void:
 		if bloc == GridMap.INVALID_CELL_ITEM:
 			return
 
-	var demi := Commun.emprise_fraternelle(self, Generateur.DEMI_COTE)
-	var carte := occupation(grille, couche, demi)
-	var trouve := zones_encloses(carte, demi, couche, mode == Mode.REMPLIR)
+	# VOIR fenetre_utile : on travaille sur ce qui est POSE, jamais sur l'emprise
+	# declaree -- vingt-cinq millions de cases sur une carte de cent kilometres
+	# carres, pour un contour qui en occupe quelques centaines.
+	var fenetre := fenetre_utile(grille, couche)
+	var bas: Vector2i = fenetre.bas
+	var cote: int = fenetre.cote
+	var carte := occupation(grille, couche, bas, cote)
+	var trouve := zones_encloses(carte, bas, cote, couche, mode == Mode.REMPLIR)
 	var cellules: Array[Vector3i] = trouve["cellules"]
 	print("%s couche %d : %d zone(s) close(s), %d cellules concernees" % [
 		Mode.keys()[mode], couche, trouve["zones"], cellules.size()])

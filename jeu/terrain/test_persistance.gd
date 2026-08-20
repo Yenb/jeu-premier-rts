@@ -19,8 +19,10 @@ extends SceneTree
 #   seconde et demie plus tard, sans qu'aucun bouton n'ait ete coche ;
 # - CE QUI SORT DES COUCHES REPRESENTABLES ALARME. Sculpter sous `couche_base`
 #   ou au-dela de la 62e etait jete en silence ;
-# - UNE COLONNE ENTIEREMENT CREUSEE DANS LA SCENE RESTE CREUSEE au lancement,
-#   au lieu de revenir pleine.
+# - RIEN NE S'EFFACE TOUT SEUL. Sculpter ici, deplacer le repere la-bas,
+#   relancer : TOUT doit rester. Trois mecanismes automatiques ont efface du
+#   travail dans cette session, chacun pour une raison differente. Il n'y a plus
+#   qu'un seul chemin d'enregistrement, et il n'efface jamais.
 #
 # Entree : des cartes et des GridMap construits ici. Sortie : une ligne « OK: »
 # et le code 0 si tout tient, « ECHEC: » et le code 1 sinon.
@@ -61,7 +63,7 @@ func _tout() -> void:
 	_report_n_efface_pas()
 	_fenetre_sans_colonnes()
 	_hors_couches()
-	_colonne_creusee()
+	await _deplacer_n_efface_rien()
 	_conclure()
 
 func _carte(demi: int = 50) -> Resource:
@@ -204,7 +206,78 @@ func _hors_couches() -> void:
 	grille.queue_free()
 	_faites += 1
 
-# UNE COLONNE ENTIEREMENT CREUSEE DANS LA SCENE RESTE CREUSEE.
+# LE GESTE QUI A FAIT PERDRE LE PLUS DE TRAVAIL : sculpter ici, deplacer le
+# repere ailleurs, relancer. Ce qu'on a sculpte AVANT le deplacement doit
+# survivre -- il n'a aucun lien avec l'endroit ou pointe le marqueur.
+func _deplacer_n_efface_rien() -> void:
+	# SA PROPRE RACINE : terrain_commun.gd refuse de choisir entre plusieurs
+	# GridMap freres, et les sections precedentes ont laisse les leurs.
+	var coin := Node3D.new()
+	_racine.add_child(coin)
+	var grille := GridMap.new()
+	grille.mesh_library = _biblio
+	coin.add_child(grille)
+	var outil: Node3D = Outil.new()
+	coin.add_child(outil)
+
+	var carte := _carte(200)
+	var base: int = carte.sommet_de_base()
+	outil.carte = carte
+	outil.demi_fenetre = 20
+	outil.centre = Vector2i.ZERO
+	outil.journal = false
+
+	outil.charger = true
+	var f := 0
+	while not outil.fenetre_chargee and f < 400:
+		await process_frame
+		f += 1
+	_v.v(outil.fenetre_chargee, "le chargement n'a jamais fini : le test ne prouve rien")
+
+	var bloc := _biblio.get_item_list()[0]
+	var ici := Vector2i(2, 2)
+	for y in range(base + 1, base + 5):
+		grille.set_cell_item(Vector3i(ici.x, y, ici.y), int(bloc))
+	Outil.enregistrer_ce_qui_est_pose(grille, carte)
+	_v.v(carte.sommet(ici) == base + 4, "la sculpture de depart n'est pas enregistree")
+
+	# LE DEPLACEMENT, tres loin.
+	var ailleurs := Vector2i(120, 120)
+	var fait: bool = await outil.deplacer_vers(ailleurs)
+	_v.v(fait, "le deplacement n'a rien fait : le test ne prouve rien")
+	_v.v(carte.sommet(ici) == base + 4,
+		"deplacer le repere a efface ce qui etait sculpte ailleurs : sommet %s" % [
+			carte.sommet(ici)])
+
+	# On sculpte la-bas aussi, et les DEUX doivent tenir.
+	var la_bas := Vector2i(122, 122)
+	for y in range(base + 1, base + 3):
+		grille.set_cell_item(Vector3i(la_bas.x, y, la_bas.y), int(bloc))
+	Outil.enregistrer_ce_qui_est_pose(grille, carte)
+	_v.v(carte.sommet(la_bas) == base + 2, "la sculpture d'apres n'est pas enregistree")
+	_v.v(carte.sommet(ici) == base + 4, "sculpter ailleurs a efface la premiere")
+
+	# ET LE LANCEMENT ne doit rien perdre non plus.
+	var terrain: GridMap = TerrainVisible.new()
+	terrain.mesh_library = _biblio
+	terrain.carte = carte
+	terrain.rayon_cellules = 10
+	terrain.groupe_observateur = &"aucun_pour_ce_test"
+	for cellule in grille.get_used_cells():
+		terrain.set_cell_item(cellule, grille.get_cell_item(cellule),
+			grille.get_cell_item_orientation(cellule))
+	_racine.add_child(terrain)
+	await process_frame
+
+	_v.v(carte.sommet(ici) == base + 4,
+		"le lancement a efface ce qui etait loin du repere : sommet %s" % [carte.sommet(ici)])
+	_v.v(carte.sommet(la_bas) == base + 2, "le lancement a efface la seconde sculpture")
+
+	terrain.queue_free()
+	coin.queue_free()
+	_faites += 1
+
+# UNE COLONNE ENTIEREMENT CREUSEE : ce qui est POSE est pris, rien n'est efface.
 func _colonne_creusee() -> void:
 	var carte := _carte()
 	var base: int = carte.sommet_de_base()
@@ -219,22 +292,14 @@ func _colonne_creusee() -> void:
 			for y in range(carte.couche_base, base + 1):
 				grille.set_cell_item(Vector3i(x, y, z), 0)
 
-	# Sans le drapeau, la colonne absente n'est pas touchee : elle revient pleine.
-	var temoin := _carte()
-	Outil.enregistrer_ce_qui_est_pose(grille, temoin, false)
-	_v.v(temoin.sommet(trou) != null,
-		"sans le drapeau, une colonne absente est creusee : le comportement par defaut a change")
-
-	# AVEC le drapeau -- ce que fait terrain_visible en reprenant une scene --
-	# la colonne comprise dans la boite travaillee est bien creusee.
-	Outil.enregistrer_ce_qui_est_pose(grille, carte, true)
-	_v.v(carte.sommet(trou) == null,
-		"la colonne entierement creusee revient pleine : sommet %s" % [carte.sommet(trou)])
-	_v.v(carte.sommet(Vector2i(0, 0)) != null,
-		"le terrain autour du trou a ete creuse aussi")
-	# HORS de la boite travaillee, rien n'est touche.
-	_v.v(carte.sommet(Vector2i(40, 40)) != null,
-		"une colonne hors de la boite travaillee a ete creusee")
+	# UNE COLONNE ABSENTE DE LA GRILLE N'EST JAMAIS TOUCHEE, et c'est la regle
+	# qui protege tout le reste : absente peut vouloir dire creusee, ou jamais
+	# chargee, et rien ne les distingue. On garde.
+	Outil.enregistrer_ce_qui_est_pose(grille, carte)
+	_v.v(carte.sommet(trou) != null,
+		"une colonne absente de la grille a ete creusee : le travail d'ailleurs peut partir")
+	_v.v(carte.sommet(Vector2i(0, 0)) != null, "le terrain autour a ete creuse")
+	_v.v(carte.sommet(Vector2i(40, 40)) != null, "une colonne lointaine a ete creusee")
 
 	grille.queue_free()
 	_faites += 1
@@ -250,5 +315,6 @@ func _conclure() -> void:
 		return
 	print("OK: persistance -- le jeu redessine ce que la carte garde (item et orientation), "
 		+ "reporter n'efface pas ce qu'il n'a pas vu, une fenetre sans colonnes connues ne creuse "
-		+ "rien, les couches hors portee alarment, une colonne creusee reste creusee")
+		+ "rien, les couches hors portee alarment, et RIEN ne s'efface tout seul -- "
+		+ "ni en deplacant le repere, ni au lancement")
 	quit(0)
