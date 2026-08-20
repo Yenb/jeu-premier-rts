@@ -284,6 +284,33 @@ Concrètement, Claude doit :
    ça : un commit sans pathspec qui aspire le working tree d'un fichier
    partagé, un `git apply --cached` isolé qui a fini par tout réindexer.
 
+## Quand Yael dit que ça ne marche pas
+
+Le code peut être juste et le problème entier : ce qui manque alors n'est
+pas la qualité du travail, c'est le RAPPORT au problème.
+
+- QUAND YAEL POSE UNE QUESTION OU SIGNALE QUELQUE CHOSE, CE N'EST PAS UNE
+  CRITIQUE DU TRAVAIL : il veut COMPRENDRE. Répondre à ce qu'il demande,
+  jamais défendre ce qui a été fait. Une réponse qui explique pourquoi le
+  code est bon ne répond à personne.
+- PREMIÈRE RÉPONSE : UNE QUESTION, JAMAIS UNE EXPLICATION. « Qu'est-ce que
+  tu attendais qu'il se passe ? » avant tout diagnostic. Un écart entre « ça
+  marche » et « ça ne marche pas » est le plus souvent un écart d'OBJECTIF,
+  pas de code.
+- LE SYMPTÔME OBSERVÉ GAGNE TOUJOURS SUR LE TEST VERT. Un test qui ne voit
+  pas le symptôme est un test incomplet, jamais une preuve que le symptôme
+  n'existe pas. Ce que les tests ne peuvent PAS voir se dit AVANT de les
+  montrer — un test headless ne voit rien de l'éditeur.
+- AVANT DE CODER, DÉCRIRE CE QUI SE VERRA À L'ÉCRAN, jamais ce qui va être
+  construit. Une phrase, validée ou corrigée en trente secondes. Décrire le
+  mécanisme ne révèle aucun malentendu : les deux descriptions peuvent être
+  vraies et parler de deux choses différentes.
+- UN NOM PAR CHOSE, tenu du code jusqu'à la conversation. Trois noms pour un
+  même objet coûtent plusieurs échanges à chercher le mauvais nœud.
+- NOMMER TOUT CHOIX STRUCTURANT AU MOMENT OÙ IL EST PRIS, surtout celui qui
+  épargne du travail à Claude. Un choix qui n'est pas dit ne peut pas être
+  contesté.
+
 ## Méthode
 
 - Répondre en français, toujours, sans exception, dans toutes les réponses

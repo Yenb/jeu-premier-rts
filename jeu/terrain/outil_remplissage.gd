@@ -175,7 +175,7 @@ func _appliquer() -> void:
 		if bloc == GridMap.INVALID_CELL_ITEM:
 			return
 
-	var demi := Generateur.DEMI_COTE
+	var demi := Commun.emprise_fraternelle(self, Generateur.DEMI_COTE)
 	var carte := occupation(grille, couche, demi)
 	var trouve := zones_encloses(carte, demi, couche, mode == Mode.REMPLIR)
 	var cellules: Array[Vector3i] = trouve["cellules"]

@@ -1,0 +1,65 @@
+[gd_scene load_steps=10 format=3]
+
+[ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_bloc"]
+[ext_resource type="Resource" path="res://jeu/terrain/carte_100km2.tres" id="2_carte"]
+[ext_resource type="Script" path="res://jeu/terrain/outil_fenetre.gd" id="3_fenetre"]
+[ext_resource type="Script" path="res://jeu/terrain/outil_sculpture.gd" id="4_sculpture"]
+[ext_resource type="Script" path="res://jeu/terrain/outil_remplissage.gd" id="5_remplissage"]
+[ext_resource type="Script" path="res://jeu/terrain/maquette.gd" id="6_maquette"]
+[ext_resource type="Script" path="res://jeu/terrain/repere_fenetre.gd" id="7_repere"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ciel"]
+
+[sub_resource type="Sky" id="Sky_ciel"]
+sky_material = SubResource("ProceduralSkyMaterial_ciel")
+
+[sub_resource type="Environment" id="Environment_ambiance"]
+background_mode = 2
+sky = SubResource("Sky_ciel")
+ambient_light_source = 3
+
+[node name="Sculpture" type="Node3D"]
+
+[node name="Terrain" type="GridMap" parent="."]
+mesh_library = ExtResource("1_bloc")
+cell_size = Vector3(2, 2, 2)
+
+[node name="Fenetre" type="Node3D" parent="."]
+script = ExtResource("3_fenetre")
+carte = ExtResource("2_carte")
+centre = Vector2i(0, 0)
+demi_fenetre = 150
+
+[node name="Sculpteur" type="Node3D" parent="."]
+script = ExtResource("4_sculpture")
+
+[node name="Remplisseur" type="Node3D" parent="."]
+script = ExtResource("5_remplissage")
+
+[node name="Apercu" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 400, 0)
+
+[node name="Maquette" type="Node3D" parent="Apercu"]
+script = ExtResource("6_maquette")
+carte = ExtResource("2_carte")
+pas_echantillon = 20
+teintes = 8
+
+[node name="Repere" type="MeshInstance3D" parent="Apercu"]
+script = ExtResource("7_repere")
+outil_fenetre = NodePath("../../Fenetre")
+maquette = NodePath("../Maquette")
+
+[node name="Vue" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 300, 400)
+rotation_degrees = Vector3(-35, 0, 0)
+current = true
+far = 20000.0
+
+[node name="Soleil" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-50, -35, 0)
+shadow_enabled = true
+directional_shadow_max_distance = 400.0
+
+[node name="Ambiance" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_ambiance")

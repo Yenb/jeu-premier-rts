@@ -1,0 +1,35 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://jeu/terrain/maquette.gd" id="1_maquette"]
+[ext_resource type="Resource" path="res://jeu/terrain/carte_100km2.tres" id="2_carte"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ciel"]
+
+[sub_resource type="Sky" id="Sky_ciel"]
+sky_material = SubResource("ProceduralSkyMaterial_ciel")
+
+[sub_resource type="Environment" id="Environment_ambiance"]
+background_mode = 2
+sky = SubResource("Sky_ciel")
+ambient_light_source = 3
+
+[node name="Maquette" type="Node3D"]
+
+[node name="Terrain" type="Node3D" parent="."]
+script = ExtResource("1_maquette")
+carte = ExtResource("2_carte")
+pas_echantillon = 20
+teintes = 8
+
+[node name="Vue" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 7000, 0)
+rotation_degrees = Vector3(-90, 0, 0)
+current = true
+far = 20000.0
+
+[node name="Soleil" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-50, -35, 0)
+shadow_enabled = false
+
+[node name="Ambiance" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_ambiance")

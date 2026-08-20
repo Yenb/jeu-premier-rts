@@ -33,8 +33,12 @@ extends Node3D
 # de figer en silence. Sans arbre de scene -- hors editeur -- il n'y a aucune
 # frame a attendre : tout passe d'un coup, meme code d'ecriture.
 #
-# L'EMPRISE EST LUE CHEZ LE GENERATEUR, jamais recopiee : deux nombres qui
-# doivent s'accorder finissent toujours par diverger. La hauteur, elle, n'est
+# L'EMPRISE EST LUE SUR LA CARTE que porte un noeud frere, et seulement a defaut
+# chez le generateur. Une carte declare son emprise : ecreter a la constante du
+# generateur refuserait toute sculpture hors des cent cinquante premieres
+# cellules, c'est-a-dire partout sauf au centre d'une carte de cent kilometres
+# carres. Jamais recopiee : deux nombres qui doivent s'accorder finissent
+# toujours par diverger. La hauteur, elle, n'est
 # bornee NULLE PART -- ni vers le haut ni vers le bas, c'est le sculpteur qui
 # decide, et ce qu'il demande s'annonce en console avant de commencer.
 #
@@ -153,7 +157,7 @@ func _appliquer() -> void:
 		if bloc == GridMap.INVALID_CELL_ITEM:
 			return
 
-	var boite := bornes(coin_debut, coin_fin, Generateur.DEMI_COTE)
+	var boite := bornes(coin_debut, coin_fin, Commun.emprise_fraternelle(self, Generateur.DEMI_COTE))
 	var total := volume(boite[0], boite[1])
 	var ecartees := volume_demande(coin_debut, coin_fin) - total
 	print("%s : %d cellules de %s a %s (%d hors emprise, ignorees), %d frames" % [

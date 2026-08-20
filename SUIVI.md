@@ -14,6 +14,35 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 2026-08-19 — DISTANCE DE RENDU PAR ESPÈCE : `espece.gd` porte un
+  `distance_rendu` que `couvert.gd` pose en `visibility_range_end` sur CHAQUE
+  `GeometryInstance3D` du corps instancié — un `.glb` est un `Node3D` qui en
+  porte plusieurs plus bas, la poser sur la racine ne toucherait rien. Godot
+  cesse de dessiner au-delà et c'est la CAMÉRA qui décide : aucun objet n'a
+  besoin de savoir où est le joueur, donc rien à remplir sur mille types. À zéro
+  rien n'est écrit — une scène existante ne change pas de comportement. Elle ne
+  libère AUCUN nœud et ne touche PAS le tronc solide : un arbre qu'on ne voit
+  plus barre toujours le passage. Mesuré à côté : un nœud de plante pèse 5,1 Ko
+  (herbe) à 9,6 Ko (arbre), et `visibility_range_end` n'en rend pas un octet
+- 2026-08-19 — GRANDE CARTE 300×300 : `jeu/terrain/grande_carte.tscn`, scène
+  NEUVE — 630 000 cellules d'emprise plus 26 488 de ceinture, 10,7 Mo. Aucun
+  outil neuf : `DEMI_COTE` passe de 64 à 150 et les quatre outils s'ouvrent d'un
+  coup, c'est la seule déclaration de l'emprise. Deux outils gagnent
+  `vers=<chemin>` — sans lui, une carte d'une autre taille ne s'obtient qu'en
+  écrasant celle qui existe. Et `generer_carte.gd` RELIT la bibliothèque quand
+  elle est sur le disque au lieu de la réécrire : il ne sait construire qu'un
+  item, `bloc.tres` en porte trois, et les écraser aurait vidé toute cellule
+  portant `limite` ou `rampe` — dans `carte.tscn` comme ailleurs. Mesuré :
+  chargement 710 ms, instanciation 508 ms, relevé 217 ms pour 91 204 colonnes,
+  contre 306/105/40 et 16 900 sur l'ancienne. Coût de démarrage, jamais de tick
+- 2026-08-19 — VISÉE À LA SOURIS : le déplacement horizontal fait pivoter le
+  CORPS, le vertical incline les YEUX SEULS — une capsule inclinée glisse sur le
+  terrain au lieu de s'y tenir. L'inclinaison s'accumule (une souris rend un
+  déplacement, jamais une position) et reste sous le quart de tour, sinon
+  l'image se retourne et le lacet part à l'envers de ce que le joueur voit. Le
+  curseur se prend au PREMIER CLIC et jamais au démarrage — capturé d'office il
+  est pris avant qu'on ait rien demandé, à chaque lancement ; Échap le rend.
+  Quatre fonctions statiques de plus, verrouillées sans souris ni moteur physique
 - 1a764b4 — PERSONNAGE ARPENTEUR : `jeu/unites/personnage.tscn`, une capsule d'un
   mètre — une demi-cellule, et c'est ce rapport qui donne l'échelle à tout le
   reste. Haut/bas avancent, gauche/droite TOURNENT ; sans souris, tourner est le
@@ -134,6 +163,13 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## EN COURS
 
+- UNE EMPRISE, DEUX CARTES DE TAILLES DIFFÉRENTES — à trancher avant tout
+  chantier de terrain. `DEMI_COTE` est un nombre unique et vaut désormais 150,
+  alors que `carte.tscn` porte une ceinture à 64 : `test_collision_terrain.gd`
+  passe de VERT à ROUGE parce qu'il cherche le mur de l'ancienne carte à la
+  nouvelle emprise. Deux issues, aucune bricolable au passage — refaire
+  `carte.tscn` à 300×300 et n'en garder qu'une, ou sortir l'emprise du
+  générateur pour qu'elle se lise SUR LA SCÈNE, chaque carte portant la sienne
 - `jeu/terrain/test_carte.gd` est ROUGE (12 échecs) : il verrouille le compte
   exact de cellules, l'absence de relief, l'emprise stricte et une bibliothèque
   à un seul item — que la carte actuelle dément point par point. À recentrer sur
@@ -145,6 +181,49 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## DÉCISIONS
 
+- TOUT EST DONNÉE ; LE RENDU ET LA COLLISION SONT UNE COUCHE TEMPORAIRE. Vaut
+  pour TOUT objet à venir, pas seulement le terrain. Loin du joueur, un objet
+  n'a ni nœud ni corps physique : il est une position et des propriétés, et
+  l'altitude du sol sous lui se LIT dans la carte — `carte_terrain.gd:sommet`,
+  temps constant, mesuré à 0,66 µs, sans rien de chargé. Près du joueur il
+  devient un nœud avec collision, posé à cette même altitude ; quand le joueur
+  s'éloigne le nœud est libéré et la donnée reste. La simulation ne dépend
+  d'aucune des deux couches et ne s'arrête jamais. `terrain_visible.gd`
+  applique déjà exactement ça au terrain — traverser 10 km y laisse le compte
+  de cellules identique au premier pas.
+  CHARGER LA COLLISION PARTOUT EST ÉCARTÉ : c'est revenir aux 175 millions de
+  cellules que toute cette architecture existe pour éviter.
+  DEUX PIÈGES À TENIR LE JOUR OÙ UN OBJET BASCULE. La hauteur portée par la
+  donnée et le sol rendu viennent de la MÊME source, sinon l'objet apparaît
+  enfoncé ou en l'air. Et un objet qui devrait tomber pendant que personne ne
+  le regarde n'a AUCUNE physique pour le faire : sa chute se calcule en
+  données, ou elle n'a pas lieu — décision de game design, pas de technique.
+
+- LE RENDU EST BORNÉ PAR LE RAYON, JAMAIS PAR LA POPULATION. N'instancier des
+  nœuds que dans un rayon autour du joueur donne un compte de nœuds égal à
+  `π·r² × densité` — la taille du monde et sa population n'y entrent pas. Deux
+  millions d'agents portent le même nombre de nœuds que deux mille. Ça ne croît
+  qu'en r² : doubler le rayon coûte quatre fois, jamais plus. À la densité
+  d'herbe mesurée (0,0185 plante/m²) : 23 plantes à 20 m, 581 à 100 m. Le seul
+  terme qui suit la population totale est la donnée de simulation
+- LE NŒUD COÛTE DE LA MÉMOIRE, ET C'EST TOUT. Mesuré sur les formes que
+  `couvert.gd` fabrique : `Node3D` seul 1,4 Ko ; + `MeshInstance3D` (une herbe)
+  5,1 Ko ; + `StaticBody3D` + `CollisionShape3D` (un arbre) 9,6 Ko. En temps,
+  11,7 µs pour fabriquer un arbre — poser mille plantes coûte 12 ms, une fois.
+  Donc le mur du rendu est la MÉMOIRE, jamais la fabrication
+- `visibility_range_end` CACHE, IL NE LIBÈRE PAS. Propriété de tout
+  `GeometryInstance3D`, la caméra décide seule, aucun objet n'a besoin de savoir
+  qui est le joueur — c'est la réponse généraliste pour ne pas DESSINER. Mais le
+  nœud reste, et ses 9,6 Ko avec lui. Tenir l'échelle demande de SUPPRIMER le
+  nœud, ce qui exige de savoir où est l'observateur : par GROUPE
+  (`get_first_node_in_group`), jamais un champ à remplir sur chaque type
+- LA SIMULATION N'A JAMAIS EU DE NŒUDS, ET C'EST ACQUIS SANS RIEN FAIRE.
+  `monde.gd` et `vegetation.gd` sont des Dictionary et des fonctions — aucun
+  Node, aucun `_process`. « Tout simulé, rien rendu » est donc l'état de DÉPART,
+  pas un chantier. La règle à tenir le jour où le rendu se câble : le nœud lit la
+  donnée, la donnée n'a jamais connaissance du nœud. `couvert.gd` est la seule
+  couche à nœuds — un `Node3D` par plante, plus son modèle, plus un corps pour
+  les troncs
 - OPTIMISER EST UN CRITÈRE PERMANENT, pas un chantier de fin. Les cartes
   grandiront, et ce qui tient à cent objets casse à mille : toute mécanique
   écrite désormais s'évalue AUSSI sur son coût à grande échelle, et se mesure
@@ -157,9 +236,13 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 - Le terrain est un GridMap : un objet d'AFFICHAGE et d'édition, que la
   simulation ne lit pas. Le pont vers les cases-objets qu'exige `design.md` est
   écrit et tient dans un seul fichier — voir `jeu/plantes/surface_terrain.gd`,
-  seul du jeu à connaître GridMap. Les cases n'entrent PAS dans le Monde :
-  `monde.gd` balaie linéairement, et une carte entière y rendrait chaque requête
-  de voisinage proportionnelle au terrain. La collision du GridMap n'entame rien :
+  seul du jeu à connaître GridMap. Les cases n'entrent PAS dans le Monde — non
+  plus parce que `monde.gd` balaierait tout, il range par case et son coût suit
+  le rayon, mais parce qu'y verser le terrain mettrait une case-objet PAR
+  COLONNE dans chaque case que le rayon touche : un comptage de plantes paierait
+  le terrain de son rayon, où les colonnes dépassent les plantes de plusieurs
+  ordres. Le relevé se lit par colonne, en temps constant, sans aucun rayon à
+  parcourir. La collision du GridMap n'entame rien :
   elle n'est lue que par le moteur physique de Godot, jamais par un mécanisme
 - Le résumé d'état est une photo complète à chaque appel, pas d'historique
   cumulé
@@ -169,6 +252,15 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## PROCHAINES ÉTAPES
 
+0. CIBLE DU PREMIER PROTOTYPE : une carte de **100 km²**. Les cartes actuelles
+   sont un terrain d'entraînement, pas la cible — `carte.tscn` fait 0,066 km²,
+   `grande_carte.tscn` 0,36 km². Le repère mesuré pour juger : 630 000 cellules
+   de GridMap pèsent 10,7 Mo de scène. À reprendre quand le jeu aura avancé
+1. OBJETS EN DONNÉES, NŒUDS PRÈS DU JOUEUR : le mécanisme qui fait basculer un
+   objet de donnée à nœud (rendu plus collision) quand le joueur approche, et
+   l'inverse quand il s'éloigne. La règle est tranchée — voir DÉCISIONS, « tout
+   est donnée » — et le terrain l'applique déjà ; rien ne le fait encore pour
+   les objets. Patron à recopier : `couvert.gd`, seule couche à nœuds du jeu
 1. Trancher le point ouvert de `jeu/GAME_DESIGN.md` § Terrain destructible :
    chercher si un mécanisme du cœur porte déjà la connexité de voisinage, sinon
    ouvrir le chantier framework
@@ -210,6 +302,14 @@ seul de ces pièges a coûté une demi-session ; tous ont été payés une fois.
   côté (jusqu'à 20 m), les plantes sautaient en grandissant. Invisible aux
   tests : `couvert.gd` n'en avait aucun. Recentrage à l'exécution, et une
   assertion de géométrie dans le test.
+- UNE JUSTIFICATION RECOPIÉE PÉRIME EN SILENCE. « Les cases n'entrent pas dans
+  le Monde parce que `monde.gd` balaie linéairement » vivait dans quatre
+  fichiers ; l'index spatial a rendu la raison fausse partout d'un coup, et rien
+  n'a rougi — aucun test ne lit un commentaire. Elle a servi une fois à conclure
+  qu'une carte plus grande était hors de portée, sur des chiffres d'avant
+  l'index. Règle : une décision cite le MÉCANISME qui la fonde à UN seul
+  endroit ; les autres y renvoient. Et un relevé de mesures dit en tête sur quel
+  moteur il a été pris — sans quoi il se relit comme un état courant.
 - UN COÛT DOCUMENTÉ N'EST PAS UN COÛT CORRIGÉ. `monde.gd` portait en tête
   « COUT LINEAIRE par requete : signalé, jamais contourné en silence », et cette
   phrase est ce qui a laissé passer le défaut des mois : elle transforme un bug

@@ -37,6 +37,46 @@ static func terrain_frere(noeud: Node) -> GridMap:
 		return null
 	return trouves[0]
 
+# L'EMPRISE DU TERRAIN, en demi-cotes de cellules, lue sur la CARTE qu'un frere
+# porte -- jamais sur une constante de generateur. Une carte declare son
+# emprise ; deux cartes de tailles differentes coexistent, et l'outil qui
+# sculpte l'une ne doit pas se faire ecreter par la taille de l'autre.
+#
+# LA CARTE SE RECONNAIT A SA PROPRIETE, jamais a son nom de noeud : « celui qui
+# porte une carte declarant une emprise ». Renommer un noeud dans l'editeur ne
+# doit casser aucun outil -- meme raison qui fait chercher le terrain par TYPE.
+#
+# Rend `defaut` quand aucun frere n'en porte : l'outil garde alors le
+# comportement qu'il avait avant qu'une carte n'existe.
+static func emprise_fraternelle(noeud: Node, defaut: int) -> int:
+	var parent := noeud.get_parent()
+	if parent == null:
+		return defaut
+	for frere in parent.get_children():
+		var carte = frere.get("carte")
+		if carte != null and carte.get("demi_cote") != null:
+			return int(carte.demi_cote)
+	return defaut
+
+# LA BIBLIOTHEQUE DE JEU mise de cote par un frere, ou null. L'outil de fenetre
+# remplace celle du terrain par une version sans formes de collision le temps de
+# sculpter -- un GridMap cree un corps physique par cellule, et six cent mille
+# corps coutent vingt-huit secondes. S'il reste celle-la sur le terrain quand la
+# scene est enregistree, LE SOL DU JEU DEVIENT TRAVERSABLE, sans qu'aucune
+# erreur ne sorte : les cellules sont posees, elles se voient, et rien ne les
+# arrete.
+#
+# ELLE SE RECONNAIT A SA PROPRIETE, jamais au nom du noeud qui la porte.
+static func bibliotheque_de_jeu_fraternelle(noeud: Node) -> MeshLibrary:
+	var parent := noeud.get_parent()
+	if parent == null:
+		return null
+	for frere in parent.get_children():
+		var mise_de_cote = frere.get("bibliotheque_de_jeu")
+		if mise_de_cote is MeshLibrary:
+			return mise_de_cote
+	return null
+
 # Le PREMIER item de la bibliotheque, jamais l'identifiant 0 en dur : les
 # identifiants d'une MeshLibrary ne sont tenus ni de commencer a zero ni de se
 # suivre.
