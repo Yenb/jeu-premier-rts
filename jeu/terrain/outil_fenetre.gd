@@ -159,6 +159,16 @@ const VERSION := "fenetre 6 -- sans collision, vidage, streaming"
 
 var _en_cours := false
 
+# LES COLONNES REELLEMENT POSEES PAR LE DERNIER CHARGEMENT, et elles seules.
+#
+# SANS CET ENSEMBLE, ENREGISTRER CREUSE. Il ecrit toute la fenetre, et une
+# colonne absente du GridMap compte comme VIDE -- or « absente » a deux causes
+# que rien ne distingue : le sculpteur l'a creusee jusqu'au vide, ou elle n'a
+# jamais ete chargee. Le second cas se produit des qu'un chargement est
+# interrompu, ou que la grille porte autre chose que la fenetre demandee. Ce
+# qui n'a pas ete charge n'est donc jamais ecrit.
+var _colonnes_chargees: Dictionary = {}
+
 # CE QU'UN GRIDMAP PORTE, en une ligne lisible : combien de cellules, sur
 # combien de colonnes, et entre quelles bornes. Les BORNES sont ce qui tranche :
 # deux emprises cote a cote se voient a leur etendue, la ou un simple compte ne
@@ -256,13 +266,52 @@ static func charger_tranche(grille: GridMap, source: Resource, colonnes: Array[V
 # creusee jusqu'au vide n'apparait dans aucune cellule, et n'ecrire que ce qu'on
 # voit la laisserait pleine dans la carte. La fenetre fait autorite sur son
 # emprise, entierement.
+# CE QUE LE GRIDMAP PORTE RECOUVRE-T-IL BIEN LA FENETRE QU'ON VEUT ECRIRE ?
+#
+# LE FILET CONTRE LE GESTE QUI CREUSE. Enregistrer ecrit TOUTE la fenetre, et
+# une colonne absente du GridMap compte comme VIDE : si le GridMap est pose
+# ailleurs -- ou pas encore rempli -- aucune colonne ne correspond, et la
+# fenetre entiere part en trou dans la carte. Rien a l'ecran ne le montre sur
+# le coup ; ca se voit plus tard, en damier.
+#
+# Le seuil est LARGE : un sculpteur peut legitimement avoir creuse une bonne
+# part de sa fenetre jusqu'au vide. Ce qu'on refuse est le cas ou le GridMap
+# n'a RIEN a voir avec la zone demandee.
+const RECOUVREMENT_MINIMAL := 0.05
+
+static func recouvrement(sommets: Dictionary, centre_fenetre: Vector2i, demi: int) -> float:
+	var attendues := demi * demi * 4
+	if attendues <= 0:
+		return 0.0
+	var connues := 0
+	for colonne in colonnes_de(centre_fenetre, demi):
+		if sommets.has(colonne):
+			connues += 1
+	return float(connues) / float(attendues)
+
+# `permises` : les colonnes que le chargement a REELLEMENT traitees. Vide, on
+# ecrit toute la fenetre -- l'ancien comportement, garde pour les appels qui
+# posent eux-memes leur grille et savent ce qu'elle contient.
 static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre: Vector2i,
-		demi: int) -> int:
+		demi: int, permises: Dictionary = {}) -> int:
 	var sommets := sommets_du_gridmap(grille)
+
+	# VOIR RECOUVREMENT_MINIMAL : on refuse d'ecrire une fenetre que la grille
+	# ne porte pas, plutot que de la creuser en silence.
+	var part := recouvrement(sommets, centre_fenetre, demi)
+	if part < RECOUVREMENT_MINIMAL:
+		push_error(("enregistrement refuse en %v : le GridMap ne recouvre que %.1f %% "
+			+ "de cette fenetre. L'ecrire la creuserait entierement dans la carte.") % [
+			centre_fenetre, part * 100.0])
+		return 0
 	var vide: int = cible.couche_base - 1
 	var changees := 0
 	for colonne in colonnes_de(centre_fenetre, demi):
 		if not cible.dans_emprise(colonne):
+			continue
+		# CE QUI N'A PAS ETE CHARGE N'EST PAS ECRIT. Voir _colonnes_chargees :
+		# l'ecrire reviendrait a creuser une colonne que personne n'a touchee.
+		if not permises.is_empty() and not permises.has(colonne):
 			continue
 		var avant: Variant = cible.sommet(colonne)
 		var apres: int = int(sommets.get(colonne, vide))
@@ -304,7 +353,16 @@ func deplacer_vers(vise: Vector2i) -> bool:
 		return false
 
 	# 1. CE QUI ETAIT LA PART DANS LA CARTE, avant que quoi que ce soit ne bouge.
-	var changees := enregistrer_fenetre(grille, carte, centre_charge, demi_fenetre)
+	if journal:
+		var ecart := vise - centre_charge
+		var largeur := demi_fenetre * 2
+		print("  [pas] %v -> %v : ecart %v colonnes, largeur de fenetre %d%s" % [
+			centre_charge, vise, ecart, largeur,
+			"" if (absi(ecart.x) == largeur or ecart.x == 0)
+				and (absi(ecart.y) == largeur or ecart.y == 0)
+				else "  <-- PAS UN MULTIPLE : deux zones se chevauchent ou laissent un vide"])
+	var changees := enregistrer_fenetre(
+		grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
 	if not carte.resource_path.is_empty():
 		var erreur := ResourceSaver.save(carte, carte.resource_path)
 		if erreur != OK:
@@ -347,9 +405,17 @@ func _charger() -> void:
 		bibliotheque_de_jeu = grille.mesh_library
 	grille.mesh_library = sans_collision(bibliotheque_de_jeu)
 
-	var colonnes := colonnes_de(centre, demi_fenetre)
+	# LE CENTRE EST FIGE ICI, ET RELU NULLE PART ENSUITE. La pose s'etale sur
+	# plusieurs frames ; pendant ces attentes le curseur continue de tourner et
+	# peut ecrire un nouveau `centre`. Le relire a la fin ferait annoncer
+	# `centre_charge` a un endroit ou RIEN n'a ete pose -- et l'enregistrement
+	# suivant, ne trouvant aucune colonne connue dans le GridMap, ecrirait du
+	# VIDE sur toute la fenetre et creuserait la carte.
+	var pose_sur := centre
+	var colonnes := colonnes_de(pose_sur, demi_fenetre)
+	_colonnes_chargees = {}
 	print("chargement de la fenetre centree sur %v : %d colonnes de %.1f m, %d frames" % [
-		centre, colonnes.size(), carte.cote,
+		pose_sur, colonnes.size(), carte.cote,
 		ceili(float(colonnes.size()) / float(maxi(colonnes_par_frame, 1)))])
 	# LE GRIDMAP EST VIDE D'ABORD : sans ca, le relief precedent survivrait sous
 	# le nouveau partout ou celui-ci est plus bas.
@@ -370,9 +436,15 @@ func _charger() -> void:
 	var index := 0
 	var cellules := 0
 	while index < colonnes.size():
+		var debut_tranche := index
 		var tranche := charger_tranche(
-			grille, carte, colonnes, centre, bloc, index, maxi(colonnes_par_frame, 1))
+			grille, carte, colonnes, pose_sur, bloc, index, maxi(colonnes_par_frame, 1))
 		index = tranche["index"]
+		# Voir _colonnes_chargees : on retient ce qui a ETE TRAITE, pose ou non.
+		# Une colonne traitee et restee vide est un trou legitime de la carte ;
+		# une colonne jamais traitee ne doit pas etre ecrite du tout.
+		for i in range(debut_tranche, index):
+			_colonnes_chargees[colonnes[i]] = true
 		cellules += tranche["cellules"]
 		if index >= colonnes.size():
 			break
@@ -385,7 +457,8 @@ func _charger() -> void:
 			break
 	_en_cours = false
 
-	centre_charge = centre
+	# CE QUI A ETE POSE, jamais ce que `centre` vaut maintenant. Voir plus haut.
+	centre_charge = pose_sur
 	fenetre_chargee = true
 	var duree := Time.get_ticks_msec() - debut
 	print("  %d cellules posees en %d ms (%.1f us par cellule)" % [
@@ -406,6 +479,7 @@ func _vider() -> void:
 	var avant := grille.get_used_cells().size()
 	grille.clear()
 	fenetre_chargee = false
+	_colonnes_chargees = {}
 	# LE GESTE DE FIN REND SA COLLISION AU TERRAIN. Vider d'abord, restaurer
 	# ensuite : sur une grille deja vide, la bibliotheque de jeu ne coute rien.
 	if bibliotheque_de_jeu != null:
@@ -433,7 +507,8 @@ func _enregistrer() -> void:
 			centre_charge, centre, centre_charge])
 		return
 
-	var changees := enregistrer_fenetre(grille, carte, centre, demi_fenetre)
+	var changees := enregistrer_fenetre(
+		grille, carte, centre, demi_fenetre, _colonnes_chargees)
 	print("enregistrement de la fenetre centree sur %v : %d colonnes changees, %d sculptees dans la carte" % [
 		centre, changees, carte.colonnes_sculptees()])
 

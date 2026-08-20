@@ -36,6 +36,25 @@ extends SceneTree
 #   le GridMap, ou le chargement suivant l'effacerait sans un mot ;
 # - SANS FENETRE CHARGEE, DEPLACER N'ECRIT RIEN : viser sur une scene qu'on
 #   vient d'ouvrir ne doit declencher aucune ecriture ;
+# - CE QUI N'A PAS ETE CHARGE N'EST JAMAIS ECRIT. Enregistrer ecrit toute la
+#   fenetre, et une colonne absente du GridMap compte comme VIDE -- or
+#   « absente » a deux causes que rien ne distingue : le sculpteur l'a creusee,
+#   ou elle n'a jamais ete chargee. Confondre les deux efface le travail a
+#   chaque enregistrement, et c'est ce que ce jugement empeche ;
+# - ENREGISTRER NE CREUSE JAMAIS UNE FENETRE QUE LE GRIDMAP NE PORTE PAS. Une
+#   colonne absente de la grille compte comme VIDE : si la grille est posee
+#   ailleurs, ou pas encore remplie, AUCUNE colonne ne correspond et la fenetre
+#   entiere part en trou dans la carte. Rien a l'ecran ne le montre sur le
+#   coup -- ca se voit plus tard, en damier de zones creusees ;
+# CE QUI N'EST PAS COUVERT ICI, ET DOIT L'ETRE UN JOUR : que le chargement
+# annonce ce qu'il a POSE et non ce que `centre` vaut a la fin. La pose s'etale
+# sur plusieurs frames, le curseur tourne pendant, et un `centre` change en
+# cours de route ferait annoncer un `centre_charge` ou rien n'a ete pose --
+# c'est ce qui declenchait le creusement ci-dessus. `outil_fenetre.gd:_charger`
+# fige desormais le centre au debut, mais AUCUN JUGEMENT NE LE TIENT : lance
+# depuis un test, le chargement se termine avant qu'on ait pu bouger le centre,
+# meme a une colonne par frame. Le filet ci-dessus rattrape la consequence,
+# jamais la cause.
 # - VIDER INVALIDE LA FENETRE. Un GridMap vide releve des colonnes vides
 #   partout : l'enregistrer effacerait six cents metres de sculpture dans la
 #   carte, en une case cochee, sans que rien a l'ecran ne le montre.
@@ -93,6 +112,8 @@ func _init() -> void:
 	_garde_fou()
 	_vidage()
 	await _deplacement()
+	_creusement_refuse()
+	_chargement_partiel_ne_creuse_pas()
 	_conclure()
 
 func _grille_neuve() -> GridMap:
@@ -409,10 +430,103 @@ func _deplacement() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(chemin))
 	racine.queue_free()
 
+# LE FILET : enregistrer une fenetre que la grille ne recouvre pas est REFUSE,
+# au lieu de creuser. On monte le cas exact du damier -- une grille posee a un
+# endroit, un enregistrement demande a un autre.
+func _creusement_refuse() -> void:
+	var racine := Node3D.new()
+	get_root().add_child(racine)
+	var grille := GridMap.new()
+	grille.mesh_library = _bibliotheque
+	racine.add_child(grille)
+
+	var carte := _carte_neuve()
+	var bloc := Commun.premier_bloc(grille)
+	var colonnes := OutilFenetre.colonnes_de(CENTRE, DEMI)
+	OutilFenetre.charger_tranche(grille, carte, colonnes, CENTRE, bloc, 0, colonnes.size())
+
+	var sculptees_avant: int = carte.colonnes_sculptees()
+	var loin := Vector2i(-2000, 1200)
+
+	# LE GESTE QUI CREUSAIT : la grille est en CENTRE, on enregistre en `loin`.
+	var changees := OutilFenetre.enregistrer_fenetre(grille, carte, loin, DEMI)
+	_v.v(changees == 0,
+		"enregistrer une fenetre non portee par la grille a change %d colonnes" % changees)
+	_v.v(carte.colonnes_sculptees() == sculptees_avant,
+		"la carte a ete creusee : %d colonnes stockees contre %d avant" % [
+			carte.colonnes_sculptees(), sculptees_avant])
+	for colonne in OutilFenetre.colonnes_de(loin, DEMI):
+		if carte.sommet(colonne) == null:
+			_v.v(false, "la colonne %v a ete creusee jusqu'au vide" % colonne)
+			break
+
+	# ET IL N'EMPECHE PAS LE GESTE LEGITIME : au bon endroit, ca passe.
+	var recouvre := OutilFenetre.recouvrement(
+		OutilFenetre.sommets_du_gridmap(grille), CENTRE, DEMI)
+	_v.v(recouvre > 0.9,
+		"la grille ne recouvre que %.1f %% de sa propre fenetre" % (recouvre * 100.0))
+	grille.set_cell_item(Vector3i(CENTRE.x, carte.sommet_de_base() + 2, CENTRE.y), bloc)
+	changees = OutilFenetre.enregistrer_fenetre(grille, carte, CENTRE, DEMI)
+	_v.v(changees == 1,
+		"le filet a bloque un enregistrement legitime : %d colonnes changees" % changees)
+
+	racine.queue_free()
+
+# LE SYMPTOME : « tout ce que je sculpte est supprime a chaque fois ». Une
+# fenetre chargee sur une PARTIE seulement de son emprise -- chargement
+# interrompu, grille qui porte autre chose -- puis enregistree : sans garde, les
+# colonnes jamais chargees partent en trou dans la carte, alors que personne ne
+# les a touchees.
+func _chargement_partiel_ne_creuse_pas() -> void:
+	var racine := Node3D.new()
+	get_root().add_child(racine)
+	var grille := GridMap.new()
+	grille.mesh_library = _bibliotheque
+	racine.add_child(grille)
+
+	var carte := _carte_neuve()
+	var base: int = carte.sommet_de_base()
+	var bloc := Commun.premier_bloc(grille)
+
+	# On ne charge QU'UNE MOITIE de la fenetre, et on retient ce qui l'a ete --
+	# exactement ce que _charger memorise.
+	var toutes := OutilFenetre.colonnes_de(CENTRE, DEMI)
+	var moitie := toutes.size() / 2
+	var chargees: Dictionary = {}
+	for i in range(moitie):
+		chargees[toutes[i]] = true
+	OutilFenetre.charger_tranche(grille, carte, toutes, CENTRE, bloc, 0, moitie)
+
+	# Le sculpteur monte une butte dans la moitie chargee.
+	var butte: Vector2i = toutes[10]
+	for y in range(base + 1, base + 4):
+		grille.set_cell_item(Vector3i(butte.x, y, butte.y), bloc)
+
+	var changees := OutilFenetre.enregistrer_fenetre(
+		grille, carte, CENTRE, DEMI, chargees)
+
+	# CE QUI A ETE SCULPTE EST ECRIT.
+	_v.v(carte.sommet(butte) == base + 3,
+		"la butte n'a pas ete enregistree : sommet %s" % [carte.sommet(butte)])
+	_v.v(changees == 1, "%d colonnes changees, 1 attendue" % changees)
+
+	# CE QUI N'A JAMAIS ETE CHARGE EST INTACT -- ni creuse, ni stocke.
+	var creusees := 0
+	for i in range(moitie, toutes.size()):
+		if carte.sommet(toutes[i]) == null:
+			creusees += 1
+	_v.v(creusees == 0,
+		"%d colonnes jamais chargees ont ete creusees dans la carte" % creusees)
+	_v.v(carte.colonnes_sculptees() == 1,
+		"%d colonnes stockees : les colonnes non chargees ont ete ecrites" % [
+			carte.colonnes_sculptees()])
+
+	racine.queue_free()
+
 func _conclure() -> void:
 	if _v.echecs() > 0:
 		print("ECHEC: le passage de fenetre ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge")
+	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites")
 	quit(0)
