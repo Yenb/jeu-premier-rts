@@ -14,6 +14,24 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- LA MAQUETTE N'A PLUS DE RELIEF PAR DEFAUT : `relief` (faux par defaut) pose
+  chaque echantillon au sommet par defaut de la carte, quelle que soit la
+  sculpture reelle. Personne ne marche sur la maquette, elle sert a s'orienter,
+  pas a previsualiser un denivele. Avant ce drapeau, un ecart de quelques
+  couches sur une carte presque plate s'etirait sur toute la gamme de couleur
+  et se peignait en blanc pur, comme un sommet. `etendue_minimale` (plancher
+  d'ecart avant d'atteindre la teinte du haut) reste pour le jour ou `relief`
+  repasse a vrai
+- 4c1116c — LE CURSEUR CHARGE ENCORE APRES REOUVERTURE : `fenetre_chargee`
+  redevient exporte ; la protection contre le creusement automatique n'est plus
+  le drapeau mais `_colonnes_chargees`, transmis à `enregistrer_ce_qui_est_pose`
+  pour n'effacer que ce qu'on sait avoir charge. Corrige l'effet de bord de
+  9500437 : tirer le repere ne chargeait plus rien apres reouverture de la
+  scene, sans aucune erreur pour le dire
+- 2026-08-20 — CARNET DE JEU : `jeu/CARNET_DE_JEU.md`, l'index de ce que le jeu
+  sait faire — les quatre couches, les scènes lançables, les cinq domaines, les
+  leviers de réglage, ce qui est écrit sans être appelé, et où se prend chaque
+  décision
 - e1371d7 — CE QUE LA SCÈNE PORTE EST REPRIS AU LANCEMENT. `terrain_visible`
   effaçait le GridMap sans le lire : tout ce qui n'avait pas transité par
   l'éditeur était perdu, et ce transit tenait à quatre conditions dont aucune ne

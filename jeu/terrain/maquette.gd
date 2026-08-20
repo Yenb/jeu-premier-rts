@@ -83,6 +83,22 @@ const NOM_GRILLE := "Cellules"
 @export var couleur_milieu := Color(0.52, 0.42, 0.26)
 @export var couleur_haut := Color(0.92, 0.92, 0.88)
 
+# EN COUCHES. Sous cet ecart, le bas et le haut RELEVES ne sont pas ceux
+# passes aux teintes -- l'ecart est elargi jusqu'a ce plancher. Sans lui, un
+# denivele de trois couches (six metres, sur une carte presque plate) occupe
+# TOUTE la gamme de couleur et un modeste monticule se peint en blanc pur,
+# comme un sommet. Vingt couches (quarante metres) laisse un vrai relief
+# sortir du vert sans qu'une bosse de sculpteur y arrive.
+@export var etendue_minimale: int = 20
+
+# FAUX : chaque echantillon se pose au sommet PAR DEFAUT de la carte, quelle
+# que soit la sculpture reelle -- la maquette redevient plate, d'une seule
+# teinte. Personne ne marche dessus, elle sert a s'orienter sur cent
+# kilometres carres, pas a previsualiser un relief. VRAI : le sommet reel de
+# chaque echantillon est repris, voir etendue_minimale pour ne pas l'etirer
+# jusqu'au blanc pour rien.
+@export var relief := false
+
 @export var reconstruire := false:
 	set(demande):
 		reconstruire = false
@@ -199,6 +215,14 @@ static func etendue(sommets: Dictionary) -> Array[int]:
 		haut = maxi(haut, couche)
 	return [bas, haut]
 
+# L'ETENDUE RELEVEE, ELARGIE JUSQU'AU PLANCHER. Voir etendue_minimale : c'est
+# ELLE qui va aux teintes, jamais l'etendue brute -- sans ca un denivele
+# minuscule occupe toute la gamme de couleur. Le bas ne bouge pas, seul le
+# haut s'eloigne : abaisser le bas peindrait le terrain existant plus clair
+# qu'il ne l'est.
+static func etendue_elargie(bornes: Array[int], minimale: int) -> Array[int]:
+	return [bornes[0], maxi(bornes[1], bornes[0] + maxi(minimale, 0))]
+
 # L'item de teinte d'une couche. Une etendue nulle -- carte parfaitement plate
 # -- rend toujours la teinte du bas, jamais une division par zero.
 static func teinte_de(couche: int, bas: int, haut: int, combien: int) -> int:
@@ -264,9 +288,13 @@ func construire() -> void:
 		couleur_bas, couleur_milieu, couleur_haut)
 
 	var sommets := echantillonner(carte, pas_echantillon)
-	var bornes := etendue(sommets)
+	if not relief:
+		var base: int = carte.sommet_de_base()
+		for echantillon in sommets.keys():
+			sommets[echantillon] = base
+	var bornes := etendue_elargie(etendue(sommets), etendue_minimale)
 	cellules.clear()
 	var posees := poser(cellules, sommets, bornes[0], bornes[1], teintes)
-	print("maquette : %d cellules pour %d colonnes (1 pour %d x %d), couches %d a %d, %d colonnes sculptees relues" % [
+	print("maquette : %d cellules pour %d colonnes (1 pour %d x %d), couches %d a %d (plancher %d), %d colonnes sculptees relues" % [
 		posees, carte.colonnes(), pas_echantillon, pas_echantillon,
-		bornes[0], bornes[1], carte.colonnes_sculptees()])
+		bornes[0], bornes[1], etendue_minimale, carte.colonnes_sculptees()])

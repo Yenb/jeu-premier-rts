@@ -91,6 +91,7 @@ func _tout() -> void:
 	_teintes()
 	_pose()
 	_declenchement()
+	_sans_relief()
 	_cout()
 	_scene()
 	_conclure()
@@ -147,6 +148,20 @@ func _teintes() -> void:
 	# CARTE PLATE : aucune division par zero, une seule teinte.
 	_v.v(Maquette.teinte_de(6, 6, 6, TEINTES) == 0,
 		"une carte plate ne rend pas une teinte unique")
+
+	# UN DENIVELE MINUSCULE NE PREND PLUS TOUTE LA GAMME. Sans plancher, un
+	# ecart de 3 (bas=6, haut=9) ferait deja tomber le haut en pleine teinte
+	# blanche -- exactement le cas d'un monticule de sculpteur sur une carte
+	# presque plate.
+	var elargie := Maquette.etendue_elargie([6, 9], 20)
+	_v.v(elargie[0] == 6, "le plancher deplace le bas : %d au lieu de 6" % elargie[0])
+	_v.v(elargie[1] == 26, "le plancher ne va pas assez haut : %d au lieu de 26" % elargie[1])
+	_v.v(Maquette.teinte_de(9, elargie[0], elargie[1], TEINTES) < TEINTES - 1,
+		"un denivele de 3 couches atteint quand meme la teinte du haut avec le plancher")
+	# LE PLANCHER NE RETRECIT JAMAIS UN VRAI RELIEF.
+	var large := Maquette.etendue_elargie([0, 40], 20)
+	_v.v(large[0] == 0 and large[1] == 40,
+		"le plancher retrecit une etendue deja plus large que lui : %s" % [large])
 
 	var bas := Color(0.2, 0.35, 0.18)
 	var milieu := Color(0.52, 0.42, 0.26)
@@ -234,6 +249,36 @@ func _declenchement() -> void:
 		"la maquette annonce son dessus a %.2f m, %.2f attendus" % [dessus, attendue])
 	_v.v(dessus > 0.0,
 		"la maquette annonce un dessus a zero : un curseur pose la passerait dessous")
+
+	maquette.queue_free()
+
+# SANS RELIEF (le defaut) : un sommet sculpte ne se voit plus, ni dans la
+# hauteur posee ni dans la teinte -- personne ne marche sur la maquette.
+func _sans_relief() -> void:
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 100
+	var base: int = carte.sommet_de_base()
+	carte.sculpter(Vector2i(0, 0), base + 6)
+
+	var maquette: Node3D = Maquette.new()
+	get_root().add_child(maquette)
+	maquette.carte = carte
+	maquette.pas_echantillon = PAS
+	_v.v(not maquette.relief, "relief est active par defaut : une maquette neuve montrerait la sculpture")
+
+	maquette.construire()
+	var echantillon := Maquette.echantillon_de(Vector2i(0, 0), PAS)
+	var pose := Vector3i(echantillon.x, base, echantillon.y)
+	_v.v(maquette.grille().get_cell_item(pose) == 0,
+		"sans relief, l'echantillon sculpte ne prend pas la teinte du bas")
+	_v.v(maquette.grille().get_cell_item(Vector3i(echantillon.x, base + 6, echantillon.y))
+			== GridMap.INVALID_CELL_ITEM,
+		"sans relief, une cellule existe quand meme a la hauteur sculptee")
+
+	maquette.relief = true
+	maquette.construire()
+	_v.v(maquette.grille().get_cell_item(Vector3i(echantillon.x, base + 6, echantillon.y)) != GridMap.INVALID_CELL_ITEM,
+		"avec relief active, la sculpture a disparu : le drapeau ne fait plus rien")
 
 	maquette.queue_free()
 
