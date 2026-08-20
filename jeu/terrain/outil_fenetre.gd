@@ -162,13 +162,19 @@ const VERSION := "fenetre 6 -- sans collision, vidage, streaming"
 # par le garde-fou de l'enregistrement.
 @export var centre_charge := Vector2i.ZERO
 
-# CE DRAPEAU NE SURVIT PAS A LA FERMETURE, ET C'EST VITAL. Il va de pair avec
-# `_colonnes_chargees`, qui est un etat de session : exporte seul, il revenait
-# VRAI a la reouverture avec un ensemble de colonnes VIDE -- et l'enregistrement
-# automatique, actif par defaut, creusait alors toute la fenetre une seconde et
-# demie plus tard, sans qu'aucun bouton n'ait ete coche. Deux etats qui doivent
-# s'accorder ne se rangent jamais dans deux endroits de duree differente.
-var fenetre_chargee := false
+# IL EST EXPORTE, DONC IL SURVIT A LA FERMETURE, et c'est ce qui rend le curseur
+# utilisable : `deplacer_vers` refuse de bouger une fenetre qui ne se sait pas
+# chargee. Non exporte, il revient FAUX a chaque reouverture de la scene, et
+# tirer le repere ne charge plus rien -- le centre suit la souris, l'ecran ne
+# montre rien de nouveau.
+#
+# LE GARDE-FOU N'EST PAS ICI, IL EST DANS L'ECRITURE. Ce drapeau va de pair avec
+# `_colonnes_chargees`, qui est un etat de SESSION : les deux ne durent pas
+# autant, et il revient donc VRAI avec un ensemble de colonnes VIDE. Ce qui
+# protege est que `enregistrer_ce_qui_est_pose` n'efface AUCUNE colonne qu'il ne
+# sait pas chargee -- sans ce filtre, l'enregistrement automatique creusait
+# toute la fenetre une seconde et demie apres l'ouverture.
+@export var fenetre_chargee := false
 
 @export var charger := false:
 	set(demande):
@@ -387,41 +393,31 @@ static func recouvrement(masques: Dictionary, centre_fenetre: Vector2i, demi: in
 # qui a ete charge : une colonne que la grille ne porte pas n'est simplement pas
 # touchee. Creuser reste possible par la fenetre, qui elle sait ce qu'elle a
 # pose -- voir enregistrer_fenetre.
-# `vider_les_creusees` : quand c'est vrai, une colonne ABSENTE de la grille mais
-# comprise dans la boite de ce qu'elle porte est traitee comme CREUSEE. C'est ce
-# qu'il faut pour reprendre une scene entiere -- sans quoi une colonne
-# entierement creusee dans l'editeur revient pleine au lancement. Faux par
-# defaut : sur un enregistrement en cours de travail, la boite ne dit rien de ce
-# qui n'a jamais ete pose.
+# `chargees` : les colonnes dont on SAIT ce que la grille porte. Pour
+# celles-la, le masque de la grille fait foi -- creuser y est possible. Pour
+# toutes les autres, on AJOUTE sans jamais retirer.
+#
+# POURQUOI CETTE DISTINCTION. Prendre le masque tel quel sur une colonne jamais
+# chargee la vide de tout ce qu'elle portait : peindre UNE cellule a l'etage
+# zero -- le reglage par defaut du panneau GridMap -- effacait les six couches
+# du terrain sous elle, et laissait un puits. Une couche absente de la grille a
+# deux causes qu'on ne distingue pas sans savoir ce qui a ete charge : creusee,
+# ou jamais posee.
 static func enregistrer_ce_qui_est_pose(grille: GridMap, cible: Resource,
-		vider_les_creusees: bool = false) -> int:
+		chargees: Dictionary = {}) -> int:
 	var masques := volumes_du_gridmap(grille, cible.couche_base)
 	var changees := 0
 	var touchees: Array[Vector2i] = []
-
-	if vider_les_creusees and not masques.is_empty():
-		var bas := Vector2i(999999, 999999)
-		var haut := Vector2i(-999999, -999999)
-		for colonne in masques:
-			bas.x = mini(bas.x, colonne.x)
-			bas.y = mini(bas.y, colonne.y)
-			haut.x = maxi(haut.x, colonne.x)
-			haut.y = maxi(haut.y, colonne.y)
-		for x in range(bas.x, haut.x + 1):
-			for z in range(bas.y, haut.y + 1):
-				var creusee := Vector2i(x, z)
-				if masques.has(creusee) or not cible.dans_emprise(creusee):
-					continue
-				if cible.masque(creusee) == 0:
-					continue
-				cible.poser_masque(creusee, 0)
-				changees += 1
 
 	for colonne in masques:
 		if not cible.dans_emprise(colonne):
 			continue
 		touchees.append(colonne)
 		var bits: int = int(masques[colonne])
+		# Voir l'en-tete : hors des colonnes chargees, on ajoute, on ne retire
+		# jamais.
+		if chargees.is_empty() or not chargees.has(colonne):
+			bits |= cible.masque(colonne)
 		if bits == cible.masque(colonne):
 			continue
 		cible.poser_masque(colonne, bits)
@@ -562,7 +558,7 @@ static func surveiller(maintenant: int, vues: int, immobile: float, delta: float
 # chargee. Perdre un creusement se voit et se refait ; perdre une carte
 # sculptee, non.
 func _enregistrer_automatiquement(grille: GridMap) -> void:
-	var changees := enregistrer_ce_qui_est_pose(grille, carte)
+	var changees := enregistrer_ce_qui_est_pose(grille, carte, _colonnes_chargees)
 	if changees > 0 and journal:
 		print("sculpture prise : %d colonnes, en attente d'ecriture" % changees)
 
@@ -609,7 +605,7 @@ func deplacer_vers(vise: Vector2i) -> bool:
 	# VOIR _enregistrer_automatiquement : on prend ce qui est POSE, et on
 	# n'efface rien. Un deplacement ne doit jamais faire disparaitre du relief
 	# ailleurs sur la carte.
-	var changees := enregistrer_ce_qui_est_pose(grille, carte)
+	var changees := enregistrer_ce_qui_est_pose(grille, carte, _colonnes_chargees)
 	print("deplacement : %v pris (%d colonnes changees), on va en %v" % [
 		centre_charge, changees, vise])
 
@@ -755,6 +751,6 @@ func _enregistrer() -> void:
 		return
 
 	# VOIR _enregistrer_automatiquement : on prend ce qui est POSE, jamais plus.
-	var changees := enregistrer_ce_qui_est_pose(grille, carte)
+	var changees := enregistrer_ce_qui_est_pose(grille, carte, _colonnes_chargees)
 	print("enregistrement : %d colonnes changees, %d sculptees dans la carte" % [
 		changees, carte.colonnes_sculptees()])

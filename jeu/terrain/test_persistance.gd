@@ -19,6 +19,16 @@ extends SceneTree
 #   seconde et demie plus tard, sans qu'aucun bouton n'ait ete coche ;
 # - CE QUI SORT DES COUCHES REPRESENTABLES ALARME. Sculpter sous `couche_base`
 #   ou au-dela de la 62e etait jete en silence ;
+# - PEINDRE UNE CELLULE NE VIDE PAS LA COLONNE. Le releve prenait le masque de
+#   la grille TEL QUEL : poser une cellule a l'etage zero -- le reglage par
+#   defaut du panneau GridMap -- sur une colonne jamais chargee effacait les six
+#   couches sous elle et laissait un puits. Une couche absente de la grille a
+#   deux causes qu'on ne distingue pas sans savoir ce qui a ete charge ;
+# - LE CURSEUR CHARGE ENCORE APRES REOUVERTURE. `deplacer_vers` refuse de bouger
+#   une fenetre qui ne se sait pas chargee : si `fenetre_chargee` ne survit pas a
+#   la sauvegarde de la scene, tirer le repere ne charge plus rien. Le drapeau a
+#   ete desexporte pour empecher un creusement automatique -- et a emporte le
+#   curseur avec lui, sans qu'aucun test ne bouge ;
 # - RIEN NE S'EFFACE TOUT SEUL. Sculpter ici, deplacer le repere la-bas,
 #   relancer : TOUT doit rester. Trois mecanismes automatiques ont efface du
 #   travail dans cette session, chacun pour une raison differente. Il n'y a plus
@@ -39,7 +49,7 @@ const TerrainVisible = preload("res://jeu/terrain/terrain_visible.gd")
 const CHEMIN_BIBLIOTHEQUE := "res://jeu/terrain/bloc.tres"
 
 # UNE SECTION QUI S'INTERROMPT NE COMPTE AUCUN ECHEC : chacune signe.
-const SECTIONS := 5
+const SECTIONS := 7
 
 var _v
 var _biblio: MeshLibrary
@@ -64,6 +74,8 @@ func _tout() -> void:
 	_fenetre_sans_colonnes()
 	_hors_couches()
 	await _deplacer_n_efface_rien()
+	_peindre_ne_vide_pas()
+	await _le_curseur_charge_encore_apres_reouverture()
 	_conclure()
 
 func _carte(demi: int = 50) -> Resource:
@@ -304,6 +316,71 @@ func _colonne_creusee() -> void:
 	grille.queue_free()
 	_faites += 1
 
+# LE PUITS : une cellule peinte a l'etage zero sur une colonne jamais chargee.
+func _peindre_ne_vide_pas() -> void:
+	var carte := _carte()
+	var base: int = carte.sommet_de_base()
+	var grille := _grille()
+	var colonne := Vector2i(9, 9)
+
+	_v.v(carte.sommet(colonne) == base,
+		"la colonne de depart ne porte pas le terrain par defaut")
+
+	# LE GESTE : UNE cellule, tout en bas, sur une colonne que rien n'a chargee.
+	grille.set_cell_item(Vector3i(colonne.x, carte.couche_base, colonne.y), 0)
+	Outil.enregistrer_ce_qui_est_pose(grille, carte)
+
+	_v.v(carte.sommet(colonne) == base,
+		"peindre une cellule en bas a vide la colonne : sommet %s au lieu de %d" % [
+			carte.sommet(colonne), base])
+	for couche in range(carte.couche_base, base + 1):
+		if not carte.est_pleine(colonne, couche):
+			_v.v(false, "la couche %d a disparu sous la cellule peinte" % couche)
+			break
+
+	# ET UNE COLONNE CHARGEE, elle, peut etre creusee : on sait ce qu'elle porte.
+	var chargee := Vector2i(-9, -9)
+	var connues: Dictionary = { chargee: true }
+	for y in range(carte.couche_base, base + 1):
+		grille.set_cell_item(Vector3i(chargee.x, y, chargee.y), 0)
+	grille.set_cell_item(Vector3i(chargee.x, base, chargee.y), GridMap.INVALID_CELL_ITEM)
+	Outil.enregistrer_ce_qui_est_pose(grille, carte, connues)
+	_v.v(not carte.est_pleine(chargee, base),
+		"une colonne chargee ne peut plus etre creusee : la sculpture ne s'enregistre plus")
+
+	grille.queue_free()
+	_faites += 1
+
+# CE QUI PROTEGE DU CREUSEMENT N'EST PAS CE DRAPEAU, c'est le filtre de
+# `enregistrer_ce_qui_est_pose` -- prouve par _peindre_ne_vide_pas. Le drapeau,
+# lui, doit SURVIVRE, sinon le curseur devient inerte.
+func _le_curseur_charge_encore_apres_reouverture() -> void:
+	var outil := Node3D.new()
+	outil.set_script(Outil)
+	_racine.add_child(outil)
+
+	# 1. IL SURVIT A LA SAUVEGARDE DE LA SCENE. Une propriete non exportee est
+	# effacee du .tscn par Godot a la premiere sauvegarde, en silence.
+	var range_dans_la_scene := false
+	for propriete in outil.get_property_list():
+		if propriete.name != "fenetre_chargee":
+			continue
+		range_dans_la_scene = (int(propriete.usage) & PROPERTY_USAGE_STORAGE) != 0
+	_v.v(range_dans_la_scene,
+		"fenetre_chargee n'est pas rangee dans la scene : a la reouverture elle "
+		+ "revient fausse, et tirer le repere ne charge plus rien")
+
+	# 2. ET C'EST BIEN LUI QUI COMMANDE LE CURSEUR : faux, rien ne se charge.
+	outil.carte = _carte()
+	outil.suivre_le_curseur = true
+	outil.journal = false
+	outil.fenetre_chargee = false
+	var refus: bool = await outil.deplacer_vers(Vector2i(20, 20))
+	_v.v(not refus, "une fenetre qui ne se sait pas chargee a quand meme bouge")
+
+	outil.queue_free()
+	_faites += 1
+
 func _conclure() -> void:
 	_v.v(_faites == SECTIONS,
 		"%d sections sur %d sont allees jusqu'au bout" % [_faites, SECTIONS])
@@ -316,5 +393,6 @@ func _conclure() -> void:
 	print("OK: persistance -- le jeu redessine ce que la carte garde (item et orientation), "
 		+ "reporter n'efface pas ce qu'il n'a pas vu, une fenetre sans colonnes connues ne creuse "
 		+ "rien, les couches hors portee alarment, et RIEN ne s'efface tout seul -- "
-		+ "ni en deplacant le repere, ni au lancement")
+		+ "ni en deplacant le repere, ni au lancement, ni en peignant une cellule ; "
+		+ "et le curseur charge encore apres reouverture de la scene")
 	quit(0)
