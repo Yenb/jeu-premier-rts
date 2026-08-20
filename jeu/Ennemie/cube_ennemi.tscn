@@ -1,0 +1,19 @@
+[gd_scene format=3]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_violet"]
+albedo_color = Color(0.6, 0, 0.9, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_cube"]
+material = SubResource("StandardMaterial3D_violet")
+size = Vector3(1, 1, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_cube"]
+size = Vector3(1, 1, 1)
+
+[node name="CubeEnnemi" type="StaticBody3D" groups=["destructible"]]
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_cube")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_cube")
