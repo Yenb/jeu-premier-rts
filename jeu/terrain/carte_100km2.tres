@@ -5,6 +5,10 @@
 [resource]
 script = ExtResource("1_38yyw")
 demi_cote = 2500
+particularites = Dictionary[Vector3i, int]({
+Vector3i(115, 7, -71): 64,
+Vector3i(119, 8, -69): 80
+})
 volumes = Dictionary[Vector2i, int]({
 Vector2i(-252, -102): 255,
 Vector2i(-252, -101): 255,
@@ -9137,20 +9141,22 @@ Vector2i(114, -70): 255,
 Vector2i(114, -69): 255,
 Vector2i(114, -68): 255,
 Vector2i(115, -75): 255,
+Vector2i(115, -71): 255,
 Vector2i(115, -70): 255,
 Vector2i(115, -69): 255,
 Vector2i(116, -75): 255,
 Vector2i(116, -70): 255,
 Vector2i(116, -69): 255,
 Vector2i(117, -75): 255,
-Vector2i(117, -69): 255,
+Vector2i(117, -69): 511,
+Vector2i(117, -68): 383,
 Vector2i(118, -75): 255,
 Vector2i(118, -74): 255,
 Vector2i(118, -73): 255,
-Vector2i(118, -68): 255,
+Vector2i(118, -68): 511,
 Vector2i(119, -72): 255,
 Vector2i(119, -71): 255,
 Vector2i(119, -70): 255,
-Vector2i(119, -69): 255,
-Vector2i(119, -68): 255,
+Vector2i(119, -69): 511,
+Vector2i(119, -68): 511
 })
