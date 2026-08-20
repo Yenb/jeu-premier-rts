@@ -14,6 +14,22 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- LE RAFRAICHISSEMENT DU TERRAIN EN JEU S'ETALE SUR PLUSIEURS IMAGES.
+  `terrain_visible.gd` posait et effaçait toute la couronne d'un seuil franchi
+  en un seul appel synchrone — MESURÉ à 12,5 ms pour 796 colonnes au rayon et
+  au pas de jeu (rayon 50, pas 4), soit les trois quarts d'une image à 60
+  i/s, à CHAQUE fois que le joueur avance de huit mètres : le freeze régulier
+  en marchant. `_retargeter`/`_avancer_file` mettent deux files (`_a_poser`,
+  `_a_effacer`) à jour sans jamais les vider ni les recréer — un demi-tour
+  avant la fin d'un étalement annule le travail en attente au lieu de le
+  refaire — et `_process` n'en draine que `colonnes_par_image` (120, sous
+  2 ms) par image. `rafraichir()` reste inchangée, synchrone, verrouillée par
+  les tests existants ; c'est elle qui pose le tout premier affichage
+- L'ARCHIVISTE MANQUAIT DANS `carte_100km2.tscn` : aucun noeud ne portait
+  `archiviste.gd`, donc rien de ce qui était sculpté ne s'écrivait jamais sur
+  le disque, quel que soit le temps passé — seul `Ctrl+S` de la scène
+  transportait quoi que ce soit, et de façon coûteuse (voir plus bas). Nœud
+  ajouté, cablé sur `carte_100km2.tres`
 - LA MAQUETTE N'A PLUS DE RELIEF PAR DEFAUT : `relief` (faux par defaut) pose
   chaque echantillon au sommet par defaut de la carte, quelle que soit la
   sculpture reelle. Personne ne marche sur la maquette, elle sert a s'orienter,

@@ -64,6 +64,26 @@ extends GridMap
 # grille de difference. Le seuil se paie en marge : le rayon reellement garanti
 # est `rayon_cellules - pas_de_rafraichissement`.
 #
+# CE QUE LE SEUIL DECLENCHE S'ETALE SUR PLUSIEURS IMAGES, EN JEU. MESURE
+# (test_terrain_visible.gd, _cout_au_rayon_de_jeu) : au rayon et au pas
+# reellement utilises, un seul seuil franchi coute 12,5 ms pour 796 colonnes
+# entrantes et sortantes -- les trois quarts d'une image a soixante par
+# seconde, POUR CHAQUE fois que l'observateur avance de huit metres. Pose et
+# effacement partent donc dans deux files d'attente (`_a_poser`,
+# `_a_effacer`), et `_process` n'en draine que `colonnes_par_image` a chaque
+# image. `rafraichir()` reste inchangee, entiere et synchrone -- c'est elle
+# que verrouillent les tests, et c'est elle que pose le PREMIER affichage : un
+# monde vide qui se remplit sur plusieurs images serait pire que le cout unique
+# du depart.
+#
+# UN SEUIL FRANCHI PENDANT QU'UNE FILE SE VIDE NE LA REDEMARRE PAS : il
+# AJUSTE les deux files a la nouvelle cible. Une colonne qui redevient visee
+# alors qu'elle attendait d'etre effacee sort de cette file sans qu'un seul
+# bloc n'ait bouge ; une colonne qui n'est plus visee alors qu'elle attendait
+# d'etre posee sort de l'autre file, tout aussi gratuitement. Repartir de zero
+# a chaque seuil franchi referait le travail deja fait ET le perdrait au
+# demi-tour suivant.
+#
 # Regles tenues : positions en Vector3, jamais Vector2 -- une COLONNE est un
 # Vector2i, un index et pas une position, meme convention que
 # surface_terrain.gd. Aucun hasard. Aucun texte visible par le joueur. Aucun nom
@@ -87,12 +107,22 @@ const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 # Ou se trouve celui autour de qui le terrain se dessine.
 @export var groupe_observateur: StringName = &"observateur"
 
+# COMBIEN DE COLONNES DRAINER PAR IMAGE, en jeu. Voir l'en-tete pour la
+# mesure : cent vingt colonnes tiennent sous 2 ms, et laissent le reste de
+# l'image au moteur physique, au rendu, a la vegetation.
+@export var colonnes_par_image: int = 120
+
 # L'ensemble des colonnes actuellement posees : colonne -> true. Il n'est jamais
 # deduit du GridMap -- get_used_cells couterait une lecture de tout ce qui est
 # pose a chaque rafraichissement.
 var _pose: Dictionary = {}
 var _centre_pose: Vector2i = Vector2i.ZERO
 var _amorce := false
+
+# CE QUI ATTEND D'ETRE POSE OU EFFACE, colonne -> true. Draine par
+# `_avancer_file`, ajuste par `_retargeter`. Voir l'en-tete.
+var _a_poser: Dictionary = {}
+var _a_effacer: Dictionary = {}
 var _bloc := GridMap.INVALID_CELL_ITEM
 
 func _ready() -> void:
@@ -129,9 +159,58 @@ func _process(_delta: float) -> void:
 	if carte == null or _bloc == GridMap.INVALID_CELL_ITEM:
 		return
 	var centre := _centre_observateur()
-	if not doit_rafraichir(_centre_pose, centre, pas_de_rafraichissement, _amorce):
-		return
-	_rafraichir_vers(centre)
+	if doit_rafraichir(_centre_pose, centre, pas_de_rafraichissement, _amorce):
+		_retargeter(centre)
+	if not _a_poser.is_empty() or not _a_effacer.is_empty():
+		_avancer_file()
+
+# AJUSTE LES DEUX FILES A LA NOUVELLE CIBLE, ne les vide ni ne les recree.
+# Voir l'en-tete.
+func _retargeter(centre: Vector2i) -> void:
+	var vise := colonnes_du_disque(centre, rayon_cellules)
+	for colonne in vise.keys():
+		if not carte.dans_emprise(colonne):
+			vise.erase(colonne)
+
+	# CE QUI EST VISE N'A PLUS DE RAISON D'ETRE EFFACE, et n'a rien a refaire
+	# s'il est deja pose ou deja en file pour l'etre.
+	for colonne in vise.keys():
+		_a_effacer.erase(colonne)
+		if not _pose.has(colonne) and not _a_poser.has(colonne):
+			_a_poser[colonne] = true
+
+	# CE QUI EST POSE ET N'EST PLUS VISE part a la file d'effacement.
+	for colonne in _pose.keys():
+		if not vise.has(colonne):
+			_a_effacer[colonne] = true
+	# CE QUI ATTENDAIT D'ETRE POSE ET N'EST PLUS VISE ne l'attend plus --
+	# rien n'a jamais ete ecrit, rien a effacer non plus.
+	for colonne in _a_poser.keys():
+		if not vise.has(colonne):
+			_a_poser.erase(colonne)
+
+	_centre_pose = centre
+	_amorce = true
+
+# DRAINE JUSQU'A `colonnes_par_image` DES DEUX FILES, effacement d'abord :
+# une colonne qui sort ne doit pas s'attarder plus longtemps qu'il ne faut le
+# temps que la file de pose se vide.
+func _avancer_file() -> void:
+	var restant := maxi(colonnes_par_image, 1)
+	for colonne in _a_effacer.keys():
+		if restant <= 0:
+			break
+		effacer_colonne(self, carte, colonne)
+		_a_effacer.erase(colonne)
+		_pose.erase(colonne)
+		restant -= 1
+	for colonne in _a_poser.keys():
+		if restant <= 0:
+			break
+		poser_colonne(self, carte, colonne, _bloc)
+		_a_poser.erase(colonne)
+		_pose[colonne] = true
+		restant -= 1
 
 # La colonne sous l'observateur, ou celle sous l'origine quand il n'y en a pas.
 func _centre_observateur() -> Vector2i:
@@ -196,12 +275,41 @@ static func cellules_des_colonnes(source: Resource, colonnes: Array[Vector2i]) -
 		cellules.append_array(source.cellules_de(colonne))
 	return cellules
 
+# LE GESTE D'UNE SEULE COLONNE, partage par `rafraichir()` (tout d'un coup) et
+# `_avancer_file()` (une colonne a la fois, etalee sur plusieurs images).
+#
+# CHAQUE CELLULE AVEC CE QU'ELLE EST, jamais toutes avec le meme bloc. Poser
+# l'item par defaut partout redessine les rampes en cubes et perd toute
+# orientation : la carte a tout garde, et l'ecran ne montre rien. `bloc` ne
+# sert que de repli quand la carte ne dit rien de particulier.
+static func poser_colonne(grille: GridMap, source: Resource, colonne: Vector2i, bloc: int) -> int:
+	var posees := 0
+	for cellule in source.cellules_de(colonne):
+		var item: int = source.item_de(cellule)
+		if item == CarteTerrain.ITEM_DEFAUT:
+			item = bloc
+		grille.set_cell_item(cellule, item, source.orientation_de(cellule))
+		posees += 1
+	return posees
+
+static func effacer_colonne(grille: GridMap, source: Resource, colonne: Vector2i) -> int:
+	var effacees := 0
+	for cellule in source.cellules_de(colonne):
+		if grille.get_cell_item(cellule) != GridMap.INVALID_CELL_ITEM:
+			grille.set_cell_item(cellule, GridMap.INVALID_CELL_ITEM)
+			effacees += 1
+	return effacees
+
 # Pose ce qui entre dans le disque, efface ce qui en sort, et rend le bilan :
 # { pose, entrantes, sortantes, cellules_posees, cellules_effacees }.
 #
 # LES COLONNES HORS EMPRISE N'ENTRENT PAS DANS L'ENSEMBLE POSE. Les garder
 # ferait porter a l'ensemble des colonnes qui ne portent aucune cellule, et le
 # compte de ce qui est pose cesserait de dire ce qui est a l'ecran.
+#
+# TOUT D'UN COUP, JAMAIS ETALEE : c'est la version que les tests verrouillent,
+# et celle qui pose le premier affichage. Voir l'en-tete pour la version
+# etalee sur plusieurs images, utilisee en jeu par `_process`.
 static func rafraichir(grille: GridMap, source: Resource, pose: Dictionary,
 		centre: Vector2i, rayon: int, bloc: int) -> Dictionary:
 	var vise := colonnes_du_disque(centre, rayon)
@@ -212,27 +320,18 @@ static func rafraichir(grille: GridMap, source: Resource, pose: Dictionary,
 	var a_poser := entrantes(pose, vise)
 	var a_effacer := sortantes(pose, vise)
 
-	# CHAQUE CELLULE AVEC CE QU'ELLE EST, jamais toutes avec le meme bloc.
-	# Poser l'item par defaut partout redessine les rampes en cubes et perd
-	# toute orientation : la carte a tout garde, et l'ecran ne montre rien.
-	# `bloc` ne sert que de repli quand la carte ne dit rien de particulier.
 	var posees := 0
 	for colonne in a_poser:
-		for cellule in source.cellules_de(colonne):
-			var item: int = source.item_de(cellule)
-			if item == CarteTerrain.ITEM_DEFAUT:
-				item = bloc
-			grille.set_cell_item(cellule, item, source.orientation_de(cellule))
-			posees += 1
+		posees += poser_colonne(grille, source, colonne, bloc)
 
-	var cellules_effacees := cellules_des_colonnes(source, a_effacer)
-	var videes := Commun.ecrire_cellules(grille, cellules_effacees,
-		GridMap.INVALID_CELL_ITEM, 0, maxi(cellules_effacees.size(), 1))
+	var effacees := 0
+	for colonne in a_effacer:
+		effacees += effacer_colonne(grille, source, colonne)
 
 	return {
 		"pose": vise,
 		"entrantes": a_poser.size(),
 		"sortantes": a_effacer.size(),
 		"cellules_posees": posees,
-		"cellules_effacees": videes.changees,
+		"cellules_effacees": effacees,
 	}

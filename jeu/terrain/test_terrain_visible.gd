@@ -67,7 +67,9 @@ func _init() -> void:
 	_traversee()
 	_bord_emprise()
 	_colonne_sculptee()
-	_conclure()
+	# DIFFERE : un noeud ajoute ici n'entrerait pas encore dans l'arbre, et son
+	# _ready ne partirait jamais. Meme raison que test_maquette.gd.
+	_etalement.call_deferred()
 
 func _construire_grille() -> GridMap:
 	var bibliotheque := load(CHEMIN_BIBLIOTHEQUE) as MeshLibrary
@@ -268,6 +270,77 @@ func _colonne_sculptee() -> void:
 		"une colonne non sculptee ne monte pas au sommet par defaut")
 	grille.queue_free()
 
+# VERROUILLE LE RAFRAICHISSEMENT ETALE (_retargeter / _avancer_file), le
+# chemin qu'emprunte le jeu -- rafraichir() reste le chemin des sections
+# ci-dessus, tout d'un coup.
+func _etalement() -> void:
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 100
+
+	var bibliotheque := load(CHEMIN_BIBLIOTHEQUE) as MeshLibrary
+	var terrain: GridMap = TerrainVisible.new()
+	terrain.mesh_library = bibliotheque
+	terrain.cell_size = Vector3(2.0, 2.0, 2.0)
+	terrain.carte = carte
+	terrain.rayon_cellules = 10
+	terrain.pas_de_rafraichissement = 2
+	terrain.colonnes_par_image = 7
+	get_root().add_child(terrain)
+
+	var complet: Dictionary = terrain._pose.duplicate()
+	var attendu := TerrainVisible.colonnes_du_disque(Vector2i.ZERO, 10)
+	_v.v(complet.size() == attendu.size(),
+		"le premier affichage n'est pas complet : %d colonnes, %d attendues" % [
+			complet.size(), attendu.size()])
+	_v.v(terrain._a_poser.is_empty() and terrain._a_effacer.is_empty(),
+		"le premier affichage laisse des files non vides")
+
+	# UN DEMI-TOUR AVANT LE MOINDRE DRAINAGE N'A RIEN A FAIRE : les deux files
+	# reviennent exactement a vide, l'etat reste celui du premier affichage.
+	terrain._retargeter(Vector2i(4, 0))
+	_v.v(not terrain._a_poser.is_empty() or not terrain._a_effacer.is_empty(),
+		"viser une nouvelle cible ne remplit aucune file : le test ne prouve rien")
+	terrain._retargeter(Vector2i.ZERO)
+	_v.v(terrain._a_poser.is_empty() and terrain._a_effacer.is_empty(),
+		"revenir a la cible de depart avant tout drainage laisse du travail en file")
+	_v.v(terrain._pose.size() == complet.size(),
+		"un aller-retour sans drainage a quand meme change ce qui est pose")
+
+	# UNE VRAIE CIBLE : chaque image ne draine que le budget, jusqu'a vider
+	# les files et rejoindre exactement le disque vise.
+	terrain._retargeter(Vector2i(4, 0))
+	var vise := TerrainVisible.colonnes_du_disque(Vector2i(4, 0), 10)
+	for colonne in vise.keys():
+		if not carte.dans_emprise(colonne):
+			vise.erase(colonne)
+	var total_en_file: int = terrain._a_poser.size() + terrain._a_effacer.size()
+	_v.v(total_en_file > terrain.colonnes_par_image,
+		"le deplacement d'essai ne met pas plus d'une image de travail en file : le test ne prouve rien")
+
+	terrain._avancer_file()
+	_v.v(terrain._a_poser.size() + terrain._a_effacer.size()
+			== total_en_file - terrain.colonnes_par_image,
+		"une image ne draine pas exactement le budget alors qu'il en reste plus que ca")
+
+	var images := 1
+	while (not terrain._a_poser.is_empty() or not terrain._a_effacer.is_empty()) and images < 1000:
+		terrain._avancer_file()
+		images += 1
+	_v.v(images > 1, "une seule image a suffi a tout drainer : le test ne prouve pas l'etalement")
+	_v.v(terrain._a_poser.is_empty() and terrain._a_effacer.is_empty(),
+		"les files ne se vident jamais apres %d images" % images)
+	_v.v(terrain._pose.size() == vise.size(),
+		"apres etalement complet, %d colonnes posees, %d visees" % [terrain._pose.size(), vise.size()])
+
+	var colonnes_grille: Dictionary = {}
+	for cellule in terrain.get_used_cells():
+		colonnes_grille[Vector2i(cellule.x, cellule.z)] = true
+	_v.v(colonnes_grille.size() == vise.size(),
+		"%d colonnes dans le GridMap apres etalement, %d visees" % [colonnes_grille.size(), vise.size()])
+
+	terrain.queue_free()
+	_conclure()
+
 func _conclure() -> void:
 	if _grille != null:
 		_grille.queue_free()
@@ -275,5 +348,5 @@ func _conclure() -> void:
 		print("ECHEC: le dessinateur de terrain ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: terrain visible -- disque borne par le rayon, compte de cellules invariant sur dix kilometres, rien ne traine, bord d'emprise coupe, relief suivi")
+	print("OK: terrain visible -- disque borne par le rayon, compte de cellules invariant sur dix kilometres, rien ne traine, bord d'emprise coupe, relief suivi, rafraichissement etale sur plusieurs images en jeu")
 	quit(0)
