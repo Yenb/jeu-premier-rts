@@ -36,6 +36,11 @@ extends SceneTree
 #   le GridMap, ou le chargement suivant l'effacerait sans un mot ;
 # - SANS FENETRE CHARGEE, DEPLACER N'ECRIT RIEN : viser sur une scene qu'on
 #   vient d'ouvrir ne doit declencher aucune ecriture ;
+# - CE QUI EST SCULPTE S'ENREGISTRE SANS QU'ON LE DEMANDE, quand la main
+#   s'arrete et une seule fois par geste. Un bouton a cocher est un bouton qu'on
+#   oublie, et ce qu'on oublie d'enregistrer n'existe pas au lancement -- le
+#   GridMap n'est qu'un cache. Ce qui est verrouille est la DECISION d'ecrire,
+#   sortie de la boucle d'images ;
 # - CE QUE LA GRILLE PORTE EST TOUJOURS ECRIT, meme hors des colonnes chargees.
 #   Sculpter ailleurs dans la fenetre -- au pinceau, autour du personnage --
 #   doit s'enregistrer comme le reste, sinon le bouton ne conserve rien ;
@@ -117,6 +122,7 @@ func _init() -> void:
 	await _deplacement()
 	_creusement_refuse()
 	_chargement_partiel_ne_creuse_pas()
+	_surveillance()
 	_conclure()
 
 func _grille_neuve() -> GridMap:
@@ -538,10 +544,46 @@ func _chargement_partiel_ne_creuse_pas() -> void:
 
 	racine.queue_free()
 
+# LA DECISION D'ECRIRE TOUTE SEULE. Verrouillee sans editeur ni horloge : c'est
+# une fonction pure, la boucle d'images ne fait que l'appeler.
+func _surveillance() -> void:
+	var seuil := 1.5
+
+	# LA MAIN BOUGE : le compte change, rien ne s'ecrit et le compteur repart.
+	var suite: Dictionary = OutilFenetre.surveiller(120, 100, 0.9, 0.1, seuil)
+	_v.v(not suite["ecrire"], "on ecrit alors que la grille vient de changer")
+	_v.v(int(suite["vues"]) == 120, "le nouveau compte n'est pas retenu")
+	_v.v(float(suite["immobile"]) == 0.0,
+		"le compteur d'immobilite n'est pas remis a zero quand la main bouge")
+
+	# LA MAIN S'ARRETE : rien ne s'ecrit tant que le seuil n'est pas atteint.
+	suite = OutilFenetre.surveiller(120, 120, 0.0, 0.5, seuil)
+	_v.v(not suite["ecrire"], "on ecrit avant que la main se soit arretee")
+	suite = OutilFenetre.surveiller(120, 120, 1.0, 0.4, seuil)
+	_v.v(not suite["ecrire"], "on ecrit pile au seuil, avant de l'avoir franchi")
+
+	# LE SEUIL FRANCHI : on ecrit, UNE fois.
+	suite = OutilFenetre.surveiller(120, 120, 1.4, 0.2, seuil)
+	_v.v(suite["ecrire"], "la main s'est arretee assez longtemps et rien ne s'ecrit")
+	_v.v(float(suite["immobile"]) < 0.0,
+		"rien ne marque que c'est ecrit : le fichier serait reecrit a chaque image")
+
+	# ET ON N'Y REVIENT PAS tant que la grille ne bouge pas.
+	suite = OutilFenetre.surveiller(120, 120, -1.0, 10.0, seuil)
+	_v.v(not suite["ecrire"],
+		"on reecrit le fichier alors que rien n'a change depuis le dernier enregistrement")
+
+	# UNE NOUVELLE SCULPTURE RELANCE le cycle.
+	suite = OutilFenetre.surveiller(130, 120, -1.0, 0.1, seuil)
+	_v.v(not suite["ecrire"], "on ecrit des le premier changement, sans attendre l'arret")
+	_v.v(float(suite["immobile"]) == 0.0, "le cycle n'est pas relance apres un enregistrement")
+	suite = OutilFenetre.surveiller(130, 130, 1.6, 0.1, seuil)
+	_v.v(suite["ecrire"], "la sculpture suivante ne s'enregistre jamais")
+
 func _conclure() -> void:
 	if _v.echecs() > 0:
 		print("ECHEC: le passage de fenetre ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee")
+	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee, enregistrement automatique quand la main s'arrete")
 	quit(0)

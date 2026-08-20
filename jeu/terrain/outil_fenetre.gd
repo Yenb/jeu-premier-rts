@@ -53,6 +53,22 @@ extends Node3D
 # rend sa bibliotheque d'origine au GridMap -- c'est le geste de fin, celui
 # qu'on coche avant d'enregistrer la scene.
 #
+# CE QUI EST SCULPTE S'ENREGISTRE TOUT SEUL. Un bouton a cocher apres chaque
+# geste est un bouton qu'on oublie, et ce qu'on oublie d'enregistrer n'existe
+# pas au lancement du jeu -- le GridMap n'est qu'un cache, la carte est la seule
+# verite. L'outil surveille donc la grille et ecrit quand la main s'arrete.
+#
+# QUAND LA MAIN S'ARRETE, JAMAIS PENDANT. Ecrire a chaque cellule posee
+# relancerait un releve complet et une ecriture disque a chaque coup de
+# pinceau. On attend que le compte de cellules cesse de bouger pendant
+# `secondes_avant_enregistrement`, et on ecrit une fois.
+#
+# LE COMPTE DE CELLULES SUFFIT A DETECTER LE GESTE, et c'est un choix de cout :
+# comparer les sommets colonne par colonne demanderait le releve qu'on cherche
+# justement a ne pas refaire. Le cas qu'il rate -- retirer une cellule et en
+# poser une autre dans la meme fenetre de temps -- laisse le compte identique ;
+# le bouton « enregistrer » reste la pour ces cas, et le prochain geste rattrape.
+#
 # DEPLACER LA FENETRE EST UN SEUL GESTE : ce qui etait sous elle s'ECRIT dans la
 # carte, puis se DECHARGE, et la nouvelle zone se rend. C'est toute la raison
 # d'etre de la fenetre -- ne jamais tenir plus qu'un endroit en cellules. Un
@@ -156,6 +172,17 @@ const VERSION := "fenetre 6 -- sans collision, vidage, streaming"
 # rendre la nouvelle zone. A false, deplacer ne fait que changer le centre et
 # c'est « charger » qui decide -- utile pour viser sans rien ecrire.
 @export var suivre_le_curseur := true
+
+# Voir l'en-tete : ce qui est sculpte part dans la carte sans qu'on le demande.
+@export var enregistrement_automatique := true
+
+# Combien de temps la grille doit rester immobile avant d'ecrire. Trop court,
+# on ecrit au milieu d'un geste ; trop long, on perd le travail si l'editeur
+# ferme.
+@export var secondes_avant_enregistrement: float = 1.5
+
+var _cellules_vues := -1
+var _immobile_depuis := 0.0
 
 var _en_cours := false
 
@@ -329,6 +356,62 @@ static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre
 			changees += 1
 	return changees
 
+# LA SURVEILLANCE. Voir l'en-tete : elle ne CALCULE rien, elle compte les
+# cellules et attend que ce compte cesse de bouger.
+func _process(delta: float) -> void:
+	if not Engine.is_editor_hint():
+		set_process(false)
+		return
+	if not enregistrement_automatique or _en_cours or not fenetre_chargee:
+		return
+	if carte == null:
+		return
+	var grille := Commun.terrain_frere(self)
+	if grille == null:
+		return
+
+	var suite := surveiller(
+		grille.get_used_cells().size(), _cellules_vues, _immobile_depuis, delta,
+		secondes_avant_enregistrement)
+	_cellules_vues = suite["vues"]
+	_immobile_depuis = suite["immobile"]
+	if suite["ecrire"]:
+		_enregistrer_automatiquement(grille)
+
+# LA DECISION D'ECRIRE, sortie de _process pour etre verrouillable sans editeur
+# ni horloge : la boucle d'images ne fait que la declencher. Rend
+# { vues, immobile, ecrire }.
+#
+# `immobile` NEGATIF veut dire « deja ecrit pour ce compte-la » : sans cette
+# marque, la grille restant immobile, on reecrirait le fichier a chaque image
+# qui suit.
+static func surveiller(maintenant: int, vues: int, immobile: float, delta: float,
+		seuil: float) -> Dictionary:
+	if maintenant != vues:
+		# LA MAIN BOUGE ENCORE : on repart de zero, rien ne s'ecrit.
+		return { "vues": maintenant, "immobile": 0.0, "ecrire": false }
+	if immobile < 0.0:
+		return { "vues": vues, "immobile": immobile, "ecrire": false }
+	var cumul := immobile + delta
+	if cumul < maxf(seuil, 0.0):
+		return { "vues": vues, "immobile": cumul, "ecrire": false }
+	return { "vues": vues, "immobile": -1.0, "ecrire": true }
+
+func _enregistrer_automatiquement(grille: GridMap) -> void:
+	var changees := enregistrer_fenetre(
+		grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
+	if changees == 0:
+		return
+	if carte.resource_path.is_empty():
+		push_warning("la carte n'a aucun chemin sur le disque : le relief n'est ecrit qu'en memoire")
+		return
+	var erreur := ResourceSaver.save(carte, carte.resource_path)
+	if erreur != OK:
+		push_error("enregistrement automatique impossible (erreur %d)" % erreur)
+		return
+	print("enregistrement automatique : %d colonnes ecrites dans %s" % [
+		changees, carte.resource_path])
+
 # LE GESTE COMPLET, appele par le curseur quand il a fini de bouger : ce qui
 # etait sous la fenetre part dans la carte, le GridMap se vide, la nouvelle zone
 # se rend. Rend true si quelque chose a ete fait.
@@ -468,6 +551,10 @@ func _charger() -> void:
 	# CE QUI A ETE POSE, jamais ce que `centre` vaut maintenant. Voir plus haut.
 	centre_charge = pose_sur
 	fenetre_chargee = true
+	# La surveillance repart de ce que le chargement vient de poser, sinon elle
+	# prendrait la pose elle-meme pour une sculpture a enregistrer.
+	_cellules_vues = grille.get_used_cells().size()
+	_immobile_depuis = -1.0
 	var duree := Time.get_ticks_msec() - debut
 	print("  %d cellules posees en %d ms (%.1f us par cellule)" % [
 		cellules, duree,
@@ -488,6 +575,8 @@ func _vider() -> void:
 	grille.clear()
 	fenetre_chargee = false
 	_colonnes_chargees = {}
+	_cellules_vues = -1
+	_immobile_depuis = 0.0
 	# LE GESTE DE FIN REND SA COLLISION AU TERRAIN. Vider d'abord, restaurer
 	# ensuite : sur une grille deja vide, la bibliotheque de jeu ne coute rien.
 	if bibliotheque_de_jeu != null:

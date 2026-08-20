@@ -142,12 +142,25 @@ func _verifier() -> void:
 	await _collision_reprise(terrain)
 
 	var carte: Resource = terrain.carte
-	var centre := Vector2i(0, 0)
+
+	# LE CENTRE SE LIT SOUS LE PERSONNAGE, jamais suppose a l'origine : le
+	# disque suit l'observateur, et sa position se regle a la souris. Un centre
+	# ecrit en dur fait rougir le test des que le personnage est deplace.
+	var sous_le_joueur := terrain.local_to_map(
+		terrain.to_local(personnage.global_position))
+	var centre := Vector2i(sous_le_joueur.x, sous_le_joueur.z)
 	var attendu := TerrainVisible.colonnes_du_disque(centre, terrain.rayon_cellules)
-	_v.v(posees == attendu.size() * carte.couches_pleines,
-		"%d cellules posees, %d attendues (%d colonnes de %d couches)" % [
-			posees, attendu.size() * carte.couches_pleines, attendu.size(),
-			carte.couches_pleines])
+
+	# L'ATTENDU SE DEMANDE A LA CARTE, colonne par colonne. Le deduire du nombre
+	# de colonnes fois les couches par defaut suppose un terrain PLAT : le jour
+	# ou la carte porte du relief, le test rougit sans qu'aucun code n'ait
+	# change, et il mesure alors le travail du sculpteur au lieu du code.
+	var cellules_attendues := 0
+	for colonne in attendu:
+		cellules_attendues += carte.cellules_de(colonne).size()
+	_v.v(posees == cellules_attendues,
+		"%d cellules posees, %d attendues sur les %d colonnes du disque" % [
+			posees, cellules_attendues, attendu.size()])
 
 	# La physique a besoin d'une image pour donner un corps aux cellules qui
 	# viennent d'etre posees.
