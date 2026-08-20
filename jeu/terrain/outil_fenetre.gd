@@ -99,6 +99,11 @@ extends Node3D
 # chargement, parce que le GridMap porterait alors le relief d'un endroit et
 # l'outil l'ecrirait a un autre.
 #
+# ON RELEVE LA CELLULE TELLE QU'ELLE EST : son item et son orientation, pas un
+# bit qui dirait seulement « pleine ». Un releve qui resume ne garde que ce qui
+# etait prevu en l'ecrivant -- les rampes disparaissaient ainsi, redessinees en
+# cubes, et toute sorte de bloc ajoutee plus tard aurait suivi.
+#
 # LE VOLUME FAIT FOI, JAMAIS LE SEUL SOMMET. Ce qui est releve d'une colonne,
 # c'est QUELLES couches sont pleines -- pas jusqu'ou la matiere monte. Une
 # hauteur unique remplissait tout du fond au sommet : grottes, ponts, trous et
@@ -155,12 +160,15 @@ const VERSION := "fenetre 6 -- sans collision, vidage, streaming"
 
 # Le centre effectivement charge dans le GridMap. Ecrit par le chargement, relu
 # par le garde-fou de l'enregistrement.
-#
-# IL EST EXPORTE, DONC IL SURVIT A LA FERMETURE DE L'EDITEUR : un garde-fou qui
-# s'oublie entre deux sessions refuserait d'enregistrer une fenetre pourtant
-# valide, et la seule parade serait de le desactiver.
 @export var centre_charge := Vector2i.ZERO
-@export var fenetre_chargee := false
+
+# CE DRAPEAU NE SURVIT PAS A LA FERMETURE, ET C'EST VITAL. Il va de pair avec
+# `_colonnes_chargees`, qui est un etat de session : exporte seul, il revenait
+# VRAI a la reouverture avec un ensemble de colonnes VIDE -- et l'enregistrement
+# automatique, actif par defaut, creusait alors toute la fenetre une seconde et
+# demie plus tard, sans qu'aucun bouton n'ait ete coche. Deux etats qui doivent
+# s'accorder ne se rangent jamais dans deux endroits de duree differente.
+var fenetre_chargee := false
 
 @export var charger := false:
 	set(demande):
@@ -276,13 +284,43 @@ static func vers_grille(colonne: Vector2i, _centre_fenetre: Vector2i) -> Vector2
 # l'aurait comble.
 static func volumes_du_gridmap(grille: GridMap, base: int) -> Dictionary:
 	var masques: Dictionary = {}
+	var hors_portee := 0
+	var plus_basse := 0
+	var plus_haute := 0
 	for cellule in grille.get_used_cells():
 		var colonne := Vector2i(cellule.x, cellule.z)
 		var rang := cellule.y - base
 		if rang < 0 or rang >= CarteTerrain.COUCHES_MAXIMALES:
+			# CE QUI NE PEUT PAS ETRE GARDE SE DIT. Une carte ne represente que
+			# les couches [couche_base, couche_base + 62] : sculpter en dehors
+			# est possible dans la grille et ne peut PAS etre enregistre. Le
+			# jeter en silence, c'est perdre du travail sans un mot.
+			hors_portee += 1
+			plus_basse = mini(plus_basse, cellule.y)
+			plus_haute = maxi(plus_haute, cellule.y)
 			continue
 		masques[colonne] = int(masques.get(colonne, 0)) | (1 << rang)
+	if hors_portee > 0:
+		push_error(("%d cellules sculptees hors des couches representables et NON "
+			+ "ENREGISTREES : la carte va de la couche %d a %d, ces cellules vont "
+			+ "de %d a %d.") % [hors_portee, base,
+			base + CarteTerrain.COUCHES_MAXIMALES - 1, plus_basse, plus_haute])
 	return masques
+
+# CE QUE CHAQUE CELLULE PORTE : son item et son orientation, codes ensemble.
+# Seules celles qui S'ECARTENT du bloc par defaut y figurent -- le terrain
+# ordinaire ne coute aucune entree.
+static func particularites_du_gridmap(grille: GridMap) -> Dictionary:
+	var portees: Dictionary = {}
+	for cellule in grille.get_used_cells():
+		var item := grille.get_cell_item(cellule)
+		var orientation := grille.get_cell_item_orientation(cellule)
+		var code := CarteTerrain.code_de(item, orientation)
+		if code == CarteTerrain.code_de(
+				CarteTerrain.ITEM_DEFAUT, CarteTerrain.ORIENTATION_DEFAUT):
+			continue
+		portees[cellule] = code
+	return portees
 
 # Pose dans le GridMap les colonnes d'indice [depuis, depuis + combien) de la
 # fenetre, telles que la carte les decrit. Rend { index, cellules }.
@@ -299,8 +337,15 @@ static func charger_tranche(grille: GridMap, source: Resource, colonnes: Array[V
 		var colonne := colonnes[index]
 		# LES CELLULES QUE LA CARTE DECLARE, une par une : elle saute les trous,
 		# et c'est ce qui fait revenir une grotte telle qu'elle a ete creusee.
+		#
+		# CHACUNE AVEC SON ITEM ET SON ORIENTATION : `bloc` ne sert que de repli
+		# pour une carte qui ne dit rien de particulier. Reposer tout avec lui
+		# redessinait les rampes en cubes.
 		for cellule in source.cellules_de(colonne):
-			grille.set_cell_item(cellule, bloc)
+			var item: int = source.item_de(cellule)
+			if item == CarteTerrain.ITEM_DEFAUT:
+				item = bloc
+			grille.set_cell_item(cellule, item, source.orientation_de(cellule))
 			cellules += 1
 		index += 1
 	return { "index": fin, "cellules": cellules }
@@ -342,22 +387,61 @@ static func recouvrement(masques: Dictionary, centre_fenetre: Vector2i, demi: in
 # qui a ete charge : une colonne que la grille ne porte pas n'est simplement pas
 # touchee. Creuser reste possible par la fenetre, qui elle sait ce qu'elle a
 # pose -- voir enregistrer_fenetre.
-static func enregistrer_ce_qui_est_pose(grille: GridMap, cible: Resource) -> int:
+# `vider_les_creusees` : quand c'est vrai, une colonne ABSENTE de la grille mais
+# comprise dans la boite de ce qu'elle porte est traitee comme CREUSEE. C'est ce
+# qu'il faut pour reprendre une scene entiere -- sans quoi une colonne
+# entierement creusee dans l'editeur revient pleine au lancement. Faux par
+# defaut : sur un enregistrement en cours de travail, la boite ne dit rien de ce
+# qui n'a jamais ete pose.
+static func enregistrer_ce_qui_est_pose(grille: GridMap, cible: Resource,
+		vider_les_creusees: bool = false) -> int:
 	var masques := volumes_du_gridmap(grille, cible.couche_base)
 	var changees := 0
+	var touchees: Array[Vector2i] = []
+
+	if vider_les_creusees and not masques.is_empty():
+		var bas := Vector2i(999999, 999999)
+		var haut := Vector2i(-999999, -999999)
+		for colonne in masques:
+			bas.x = mini(bas.x, colonne.x)
+			bas.y = mini(bas.y, colonne.y)
+			haut.x = maxi(haut.x, colonne.x)
+			haut.y = maxi(haut.y, colonne.y)
+		for x in range(bas.x, haut.x + 1):
+			for z in range(bas.y, haut.y + 1):
+				var creusee := Vector2i(x, z)
+				if masques.has(creusee) or not cible.dans_emprise(creusee):
+					continue
+				if cible.masque(creusee) == 0:
+					continue
+				cible.poser_masque(creusee, 0)
+				changees += 1
+
 	for colonne in masques:
 		if not cible.dans_emprise(colonne):
 			continue
+		touchees.append(colonne)
 		var bits: int = int(masques[colonne])
 		if bits == cible.masque(colonne):
 			continue
 		cible.poser_masque(colonne, bits)
 		changees += 1
+
+	# Voir _reporter_particularites : le masque dit ce qui existe, ceci dit ce
+	# que c'est. Une rampe perdrait sa forme sans cette passe.
+	var avant_particulieres: int = cible.cellules_particulieres()
+	_reporter_particularites(grille, cible, touchees)
+	if cible.cellules_particulieres() != avant_particulieres:
+		changees += 1
 	return changees
 
-# `permises` : les colonnes que le chargement a REELLEMENT traitees. Vide, on
-# ecrit toute la fenetre -- l'ancien comportement, garde pour les appels qui
-# posent eux-memes leur grille et savent ce qu'elle contient.
+# `permises` : les colonnes que le chargement a REELLEMENT traitees.
+#
+# VIDE, ON N'EFFACE RIEN. Un ensemble vide veut dire « je ne sais pas ce qui a
+# ete charge », jamais « tout est permis » : c'est l'etat d'une scene rouverte,
+# ou le drapeau de chargement survit et l'ensemble des colonnes non. Le lire
+# comme « tout permis » creusait alors toute la fenetre, sans qu'aucun bouton
+# n'ait ete coche. Une colonne absente de la grille est donc SAUTEE.
 static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre: Vector2i,
 		demi: int, permises: Dictionary = {}) -> int:
 	var masques := volumes_du_gridmap(grille, cible.couche_base)
@@ -385,14 +469,42 @@ static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre
 		# qui casse : ce qu'on sculpte hors des colonnes chargees ne s'ecrit
 		# jamais, et le bouton « enregistrer » ne conserve rien.
 		if not masques.has(colonne):
-			if not permises.is_empty() and not permises.has(colonne):
+			# Voir plus haut : sans savoir ce qui a ete charge, on n'efface rien.
+			if permises.is_empty() or not permises.has(colonne):
 				continue
 		var apres: int = int(masques.get(colonne, 0))
 		if apres == avant:
 			continue
 		cible.poser_masque(colonne, apres)
 		changees += 1
+
+	# CE QUE CHAQUE CELLULE PORTE, apres le volume : le masque decide de ce qui
+	# existe, ceci de ce que c'est. L'ordre compte -- poser_masque efface les
+	# particularites des couches qu'il eteint.
+	_reporter_particularites(grille, cible, colonnes_de(centre_fenetre, demi), permises)
 	return changees
+
+# Reporte item et orientation des cellules d'une liste de colonnes.
+#
+# IL NE TOUCHE QUE CE QUE LA GRILLE PORTE, ou ce que `permises` declare charge.
+# Sans ce filtre, une colonne absente de la grille retombait au bloc par defaut
+# et effacait la rampe que la carte gardait -- une perte invisible, puisque le
+# masque, lui, restait juste.
+static func _reporter_particularites(grille: GridMap, cible: Resource,
+		colonnes: Array[Vector2i], permises: Dictionary = {}) -> void:
+	var portees := particularites_du_gridmap(grille)
+	var masques := volumes_du_gridmap(grille, cible.couche_base)
+	for colonne in colonnes:
+		if not cible.dans_emprise(colonne):
+			continue
+		if not masques.has(colonne):
+			if permises.is_empty() or not permises.has(colonne):
+				continue
+		for cellule in cible.cellules_de(colonne):
+			var code: int = int(portees.get(cellule, CarteTerrain.code_de(
+				CarteTerrain.ITEM_DEFAUT, CarteTerrain.ORIENTATION_DEFAUT)))
+			cible.poser_cellule(cellule,
+				CarteTerrain.item_du_code(code), CarteTerrain.orientation_du_code(code))
 
 # LA SURVEILLANCE. Voir l'en-tete : elle ne CALCULE rien, elle compte les
 # cellules et attend que ce compte cesse de bouger.
@@ -441,7 +553,10 @@ static func surveiller(maintenant: int, vues: int, immobile: float, delta: float
 # donnee du monde change.
 func _enregistrer_automatiquement(grille: GridMap) -> void:
 	var changees := 0
-	if fenetre_chargee:
+	# CREUSER DEMANDE DE SAVOIR CE QUI A ETE CHARGE. Une fenetre qui se dit
+	# chargee sans aucune colonne connue ne peut rien effacer sans risque : on
+	# retombe alors sur ce qui est POSE, qui n'efface jamais rien.
+	if fenetre_chargee and not _colonnes_chargees.is_empty():
 		changees = enregistrer_fenetre(
 			grille, carte, centre_charge, demi_fenetre, _colonnes_chargees)
 	else:

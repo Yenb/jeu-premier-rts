@@ -36,6 +36,16 @@ extends SceneTree
 #   le GridMap, ou le chargement suivant l'effacerait sans un mot ;
 # - SANS FENETRE CHARGEE, DEPLACER N'ECRIT RIEN : viser sur une scene qu'on
 #   vient d'ouvrir ne doit declencher aucune ecriture ;
+# - UNE CELLULE EST ENREGISTREE TELLE QU'ELLE EST : son item et son orientation,
+#   pas un bit qui dirait seulement « pleine ». Un releve qui resume ne garde que
+#   ce qui etait prevu en l'ecrivant -- les rampes revenaient en cubes, et toute
+#   sorte de bloc ajoutee plus tard aurait suivi sans qu'on le sache ;
+# - CE QUI NE S'ECARTE PAS DU DEFAUT NE COUTE RIEN : un terrain ordinaire ne
+#   stocke aucune particularite, sinon peindre du plat ferait grossir la carte
+#   d'une entree par cellule ;
+# - UNE CELLULE RETIREE EMPORTE SA PARTICULARITE, sinon le registre garde des
+#   entrees pour des cellules qui n'existent plus -- invisibles, et
+#   ressuscitees au premier rallumage de la couche ;
 # - ON N'A PAS BESOIN D'AVOIR CHARGE UNE FENETRE POUR QUE CA S'ENREGISTRE. Sur
 #   une petite carte, tout tient a l'ecran et personne ne « charge » : on
 #   sculpte directement dans la grille. Faire dependre l'enregistrement d'un
@@ -130,6 +140,7 @@ func _init() -> void:
 	_creusement_refuse()
 	_chargement_partiel_ne_creuse_pas()
 	_sans_fenetre_chargee()
+	_cellule_telle_qu_elle_est()
 	_surveillance()
 	_conclure()
 
@@ -240,7 +251,12 @@ func _sculpture_enregistree() -> void:
 	for y in range(carte.couche_base, base + 1):
 		grille.set_cell_item(Vector3i(trou.x, y, trou.y), GridMap.INVALID_CELL_ITEM)
 
-	var changees := OutilFenetre.enregistrer_fenetre(grille, carte, CENTRE, DEMI)
+	# LES COLONNES CHARGEES SE DECLARENT, comme le fait _charger : sans elles,
+	# enregistrer ne peut rien effacer -- il ne sait pas ce qui a ete pose.
+	var chargees: Dictionary = {}
+	for c in colonnes:
+		chargees[c] = true
+	var changees := OutilFenetre.enregistrer_fenetre(grille, carte, CENTRE, DEMI, chargees)
 	_v.v(changees == 2, "%d colonnes changees, 2 sculptees" % changees)
 	_v.v(carte.sommet(butte) == base + 3,
 		"la butte s'ecrit a %s dans la carte, %d attendu" % [carte.sommet(butte), base + 3])
@@ -671,10 +687,87 @@ func _sans_fenetre_chargee() -> void:
 
 	racine.queue_free()
 
+# CE QUE LA RAMPE A REVELE, et qui vaut pour tout bloc a venir : ce qui est
+# enregistre doit etre ce que la cellule EST, jamais un resume.
+func _cellule_telle_qu_elle_est() -> void:
+	var racine := Node3D.new()
+	get_root().add_child(racine)
+	var grille := GridMap.new()
+	grille.mesh_library = _bibliotheque
+	racine.add_child(grille)
+
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 50
+	var base: int = carte.sommet_de_base()
+
+	# L'item qui n'est PAS le defaut, pris dans la bibliotheque plutot que
+	# choisi ici : ajouter un bloc au depot ne doit pas casser ce test.
+	var items: Array = _bibliotheque.get_item_list()
+	if items.size() < 2:
+		_v.v(false, "la bibliotheque n'a qu'un item : le test ne prouverait rien")
+		racine.queue_free()
+		return
+	var particulier: int = int(items[items.size() - 1])
+	var oriente := 10
+
+	var colonne := Vector2i(3, -2)
+	for y in range(carte.couche_base, base + 1):
+		grille.set_cell_item(Vector3i(colonne.x, y, colonne.y), int(items[0]))
+	var speciale := Vector3i(colonne.x, base + 1, colonne.y)
+	grille.set_cell_item(speciale, particulier, oriente)
+
+	OutilFenetre.enregistrer_ce_qui_est_pose(grille, carte)
+
+	# CE QUE LA CARTE A GARDE.
+	_v.v(carte.item_de(speciale) == particulier,
+		"la carte a garde l'item %d, %d attendu : la sorte de bloc est perdue" % [
+			carte.item_de(speciale), particulier])
+	_v.v(carte.orientation_de(speciale) == oriente,
+		"l'orientation est perdue : %d au lieu de %d" % [
+			carte.orientation_de(speciale), oriente])
+
+	# LE TERRAIN ORDINAIRE NE COUTE RIEN.
+	_v.v(carte.cellules_particulieres() == 1,
+		"%d cellules particulieres pour une seule cellule qui s'ecarte du defaut" % [
+			carte.cellules_particulieres()])
+
+	# ET IL REVIENT TEL QUEL dans une grille neuve, comme au lancement.
+	var neuve := GridMap.new()
+	neuve.mesh_library = _bibliotheque
+	racine.add_child(neuve)
+	var colonnes := OutilFenetre.colonnes_de(colonne, 3)
+	OutilFenetre.charger_tranche(neuve, carte, colonnes, colonne, int(items[0]), 0,
+		colonnes.size())
+	_v.v(neuve.get_cell_item(speciale) == particulier,
+		"recharge : item %d au lieu de %d -- le bloc est redessine en cube" % [
+			neuve.get_cell_item(speciale), particulier])
+	_v.v(neuve.get_cell_item_orientation(speciale) == oriente,
+		"recharge : orientation %d au lieu de %d" % [
+			neuve.get_cell_item_orientation(speciale), oriente])
+	var dessous := Vector3i(colonne.x, base, colonne.y)
+	_v.v(neuve.get_cell_item(dessous) == int(items[0]),
+		"la cellule ordinaire dessous a change de sorte")
+
+	# UNE CELLULE RETIREE EMPORTE SA PARTICULARITE.
+	carte.retirer_cellule(speciale)
+	_v.v(carte.cellules_particulieres() == 0,
+		"la cellule retiree a laisse sa particularite : elle ressusciterait")
+	_v.v(not carte.est_pleine(colonne, base + 1), "la cellule retiree est encore pleine")
+
+	# ET UN MASQUE QUI ETEINT UNE COUCHE la nettoie aussi.
+	grille.set_cell_item(speciale, particulier, oriente)
+	OutilFenetre.enregistrer_ce_qui_est_pose(grille, carte)
+	_v.v(carte.cellules_particulieres() == 1, "la particularite n'a pas ete reposee")
+	carte.poser_masque(colonne, carte.masque_de_base())
+	_v.v(carte.cellules_particulieres() == 0,
+		"eteindre la couche par le masque a laisse la particularite derriere")
+
+	racine.queue_free()
+
 func _conclure() -> void:
 	if _v.echecs() > 0:
 		print("ECHEC: le passage de fenetre ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee, enregistrement automatique quand la main s'arrete, sculpture sans chargement prise sans rien effacer")
+	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee, enregistrement automatique quand la main s'arrete, sculpture sans chargement prise sans rien effacer, cellule enregistree telle qu'elle est (item et orientation) sans que le defaut coute rien")
 	quit(0)

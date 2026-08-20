@@ -71,6 +71,7 @@ extends GridMap
 
 const Commun = preload("res://jeu/terrain/terrain_commun.gd")
 const Outil = preload("res://jeu/terrain/outil_fenetre.gd")
+const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 
 # La carte a dessiner. Sans elle, ce noeud ne pose rien et le dit.
 @export var carte: Resource
@@ -115,7 +116,7 @@ func _ready() -> void:
 	# avant de l'effacer.
 	var transportees := get_used_cells().size()
 	if transportees > 0:
-		var prises := Outil.enregistrer_ce_qui_est_pose(self, carte)
+		var prises := Outil.enregistrer_ce_qui_est_pose(self, carte, true)
 		if prises > 0:
 			print("terrain_visible : %d colonnes reprises de la scene et ecrites dans la carte" % prises)
 		clear()
@@ -209,10 +210,20 @@ static func rafraichir(grille: GridMap, source: Resource, pose: Dictionary,
 	var a_poser := entrantes(pose, vise)
 	var a_effacer := sortantes(pose, vise)
 
-	var cellules_posees := cellules_des_colonnes(source, a_poser)
+	# CHAQUE CELLULE AVEC CE QU'ELLE EST, jamais toutes avec le meme bloc.
+	# Poser l'item par defaut partout redessine les rampes en cubes et perd
+	# toute orientation : la carte a tout garde, et l'ecran ne montre rien.
+	# `bloc` ne sert que de repli quand la carte ne dit rien de particulier.
+	var posees := 0
+	for colonne in a_poser:
+		for cellule in source.cellules_de(colonne):
+			var item: int = source.item_de(cellule)
+			if item == CarteTerrain.ITEM_DEFAUT:
+				item = bloc
+			grille.set_cell_item(cellule, item, source.orientation_de(cellule))
+			posees += 1
+
 	var cellules_effacees := cellules_des_colonnes(source, a_effacer)
-	var ecrites := Commun.ecrire_cellules(grille, cellules_posees, bloc, 0,
-		maxi(cellules_posees.size(), 1))
 	var videes := Commun.ecrire_cellules(grille, cellules_effacees,
 		GridMap.INVALID_CELL_ITEM, 0, maxi(cellules_effacees.size(), 1))
 
@@ -220,6 +231,6 @@ static func rafraichir(grille: GridMap, source: Resource, pose: Dictionary,
 		"pose": vise,
 		"entrantes": a_poser.size(),
 		"sortantes": a_effacer.size(),
-		"cellules_posees": ecrites.changees,
+		"cellules_posees": posees,
 		"cellules_effacees": videes.changees,
 	}

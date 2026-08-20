@@ -18,6 +18,18 @@ extends "res://jeu/monde/registre.gd"
 # constante de generateur : deux cartes de tailles differentes coexistent, et
 # l'outil qui en lit une n'a plus a deviner de quelle taille elle est.
 #
+# ON ENREGISTRE CE QUE LA CELLULE EST, JAMAIS UN RESUME DE CE QU'ON A PREVU
+# QU'ELLE SOIT. Un resume ne garde que ce qui etait prevu en l'ecrivant : un
+# masque « plein / vide » perd l'item et l'orientation, donc les rampes, et
+# perdra de la meme facon toute sorte de bloc ajoutee plus tard. Chaque nouvelle
+# chose demanderait alors de rouvrir le releve -- et jusqu'a ce qu'on le fasse,
+# elle disparaitrait sans un mot.
+#
+# LE DEFAUT RESTE GRATUIT : le masque dit QUELLES couches sont pleines, et seules
+# les cellules qui S'ECARTENT du bloc par defaut coutent une entree. Un terrain
+# plat de cent kilometres carres ne pese pas un octet de plus qu'avant ; une
+# rampe en coute une, un bloc que personne n'a encore invente aussi.
+#
 # UNE CARTE EST UN VOLUME, PAS UN RELIEF. Chaque colonne porte QUELLES COUCHES
 # sont pleines, pas seulement jusqu'ou la matiere monte. Une hauteur unique par
 # colonne ne sait representer ni grotte, ni pont, ni surplomb, ni deux niveaux
@@ -75,10 +87,25 @@ extends "res://jeu/monde/registre.gd"
 # l'emprise : c'est elle qui convertit une emprise en superficie.
 @export var cote: float = 2.0
 
+# LES SEULES CELLULES QUI S'ECARTENT DU BLOC PAR DEFAUT. Clef : la cellule.
+# Valeur : son item et son orientation, codes ensemble. Voir l'en-tete -- c'est
+# ce registre qui fait survivre une rampe, et tout ce qui viendra apres.
+@export var particularites: Dictionary[Vector3i, int] = {}
+
 # LES SEULES COLONNES QUI S'ECARTENT DU DEFAUT. Clef : la colonne. Valeur : le
 # MASQUE de ses couches pleines -- bit i pour la couche `couche_base + i`. Un
 # masque nul designe une colonne entierement vide.
 @export var volumes: Dictionary[Vector2i, int] = {}
+
+# CE QUI N'A PAS BESOIN D'ETRE DIT. Une cellule posee sans rien de particulier
+# est le premier bloc de la bibliotheque, droit : c'est le cas de l'immense
+# majorite du terrain, et il ne coute aucune entree.
+const ITEM_DEFAUT := 0
+const ORIENTATION_DEFAUT := 0
+
+# Une orientation de GridMap tient sur vingt-quatre valeurs ; trente-deux laisse
+# la place sans jamais melanger les deux nombres.
+const ORIENTATIONS := 32
 
 # Combien de couches un masque peut porter. Le bit de signe reste libre : un
 # masque negatif se compare mal et se lit encore plus mal.
@@ -160,8 +187,19 @@ func sommet(colonne: Vector2i) -> Variant:
 func poser_masque(colonne: Vector2i, bits: int) -> bool:
 	if not dans_emprise(colonne):
 		return false
-	if bits == masque(colonne):
+	var avant := masque(colonne)
+	if bits == avant:
 		return true
+	# LES CELLULES QUI DISPARAISSENT EMPORTENT LEUR PARTICULARITE. Un masque qui
+	# eteint une couche sans nettoyer ce registre y laisserait une entree pour
+	# une cellule qui n'existe plus -- invisible, et ressuscitee au premier
+	# rallumage de la couche.
+	var eteintes := avant & ~bits
+	if eteintes != 0 and not particularites.is_empty():
+		for rang in range(COUCHES_MAXIMALES):
+			if (eteintes & (1 << rang)) != 0:
+				particularites.erase(Vector3i(colonne.x, couche_base + rang, colonne.y))
+
 	if bits == masque_de_base():
 		volumes.erase(colonne)
 	else:
@@ -211,6 +249,79 @@ func cellules_de(colonne: Vector2i) -> Array[Vector3i]:
 		if (bits & (1 << rang)) != 0:
 			cellules.append(Vector3i(colonne.x, couche_base + rang, colonne.y))
 	return cellules
+
+# CE QU'UNE CELLULE PORTE, code en un entier. Les deux sens, ecrits une fois :
+# un codage applique a l'envers est l'erreur que ce fichier peut faire sans que
+# rien ne le montre a l'ecran.
+static func code_de(item: int, orientation: int) -> int:
+	return item * ORIENTATIONS + clampi(orientation, 0, ORIENTATIONS - 1)
+
+static func item_du_code(code: int) -> int:
+	@warning_ignore("integer_division")
+	return code / ORIENTATIONS
+
+static func orientation_du_code(code: int) -> int:
+	return code % ORIENTATIONS
+
+# L'item d'une cellule. Le bloc par defaut quand rien n'est dit -- c'est le cas
+# de presque tout le terrain.
+func item_de(cellule: Vector3i) -> int:
+	if not particularites.has(cellule):
+		return ITEM_DEFAUT
+	return item_du_code(int(particularites[cellule]))
+
+func orientation_de(cellule: Vector3i) -> int:
+	if not particularites.has(cellule):
+		return ORIENTATION_DEFAUT
+	return orientation_du_code(int(particularites[cellule]))
+
+# POSE UNE CELLULE TELLE QU'ELLE EST : sa couche devient pleine, et son item
+# comme son orientation sont gardes s'ils s'ecartent du defaut.
+#
+# UNE CELLULE ORDINAIRE NE COUTE RIEN : reposer le bloc par defaut droit efface
+# la particularite au lieu d'en stocker une. Sans ca, peindre du terrain plat
+# ferait grossir la carte d'une entree par cellule.
+func poser_cellule(cellule: Vector3i, item: int, orientation: int) -> bool:
+	var colonne := Vector2i(cellule.x, cellule.z)
+	if not dans_emprise(colonne):
+		return false
+	var rang := cellule.y - couche_base
+	if rang < 0 or rang >= COUCHES_MAXIMALES:
+		return false
+
+	var avant := masque(colonne)
+	poser_masque(colonne, avant | (1 << rang))
+
+	var code := code_de(item, orientation)
+	if code == code_de(ITEM_DEFAUT, ORIENTATION_DEFAUT):
+		if particularites.has(cellule):
+			particularites.erase(cellule)
+			marquer_sale()
+	elif int(particularites.get(cellule, -1)) != code:
+		particularites[cellule] = code
+		marquer_sale()
+	return true
+
+# Retire une cellule : sa couche se vide, et ce qu'elle portait de particulier
+# part avec elle -- sans quoi le registre garderait des entrees pour des
+# cellules qui n'existent plus.
+func retirer_cellule(cellule: Vector3i) -> bool:
+	var colonne := Vector2i(cellule.x, cellule.z)
+	if not dans_emprise(colonne):
+		return false
+	var rang := cellule.y - couche_base
+	if rang < 0 or rang >= COUCHES_MAXIMALES:
+		return false
+	poser_masque(colonne, masque(colonne) & ~(1 << rang))
+	if particularites.has(cellule):
+		particularites.erase(cellule)
+		marquer_sale()
+	return true
+
+# CE QUE LE REGISTRE PESE REELLEMENT : les cellules qui s'ecartent du bloc par
+# defaut. Le terrain ordinaire n'y figure pas.
+func cellules_particulieres() -> int:
+	return particularites.size()
 
 # Le masque que decrivent des couches donnees. Sert a ceux qui relevent un
 # GridMap : ils voient des cellules, la carte veut un masque.
