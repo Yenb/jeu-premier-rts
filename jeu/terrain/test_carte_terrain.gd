@@ -14,6 +14,11 @@ extends SceneTree
 #   quelle que soit son emprise -- c'est la seule chose qui rend l'echelle
 #   tenable, et un stockage par colonne la ferait sauter sans qu'aucun autre
 #   test ne rougisse ;
+# - UNE CARTE EST UN VOLUME, PAS UN RELIEF : deux niveaux separes par du vide
+#   restent deux niveaux, une grotte creusee au milieu d'une colonne reste une
+#   grotte, un pont garde le vide dessous. Une hauteur unique par colonne les
+#   remplissait tous du fond au sommet, et TOUT le terrain destructible de
+#   GAME_DESIGN.md en depend ;
 # - le sommet vaut le defaut partout dans l'emprise, null au-dela, et null sur
 #   une colonne creusee jusqu'au vide ;
 # - une colonne remise au defaut SORT du stockage : sculpter puis defaire ne
@@ -69,6 +74,7 @@ var _v
 func _init() -> void:
 	_v = Verif.new()
 	_carte_livree()
+	_volume()
 	_emprise_et_sommet()
 	_sculpture()
 	_serialisation()
@@ -109,6 +115,54 @@ func _carte_livree() -> void:
 	print("carte livree : %.2f km2, %d colonnes dont %d sculptees, %d octets (%.1f par colonne sculptee)" % [
 		carte.superficie_km2(), carte.colonnes(), sculptees, octets,
 		float(octets) / float(maxi(sculptees, 1))])
+
+# CE QUE LE RELIEF NE SAVAIT PAS FAIRE. Chaque jugement ici serait faux avec une
+# hauteur unique par colonne.
+func _volume() -> void:
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 100
+	var base: int = carte.couche_base
+
+	# DEUX NIVEAUX SEPARES PAR DU VIDE : le sol, puis une plateforme au-dessus.
+	var plateforme := Vector2i(5, 5)
+	var bits: int = CarteTerrain.masque_depuis([base, base + 1, base + 6, base + 7], base)
+	_v.v(carte.poser_masque(plateforme, bits), "poser un masque dans l'emprise a echoue")
+
+	var cellules: Array[Vector3i] = carte.cellules_de(plateforme)
+	_v.v(cellules.size() == 4,
+		"la colonne a deux niveaux rend %d cellules, 4 attendues : le vide a ete comble" % [
+			cellules.size()])
+	_v.v(carte.est_pleine(plateforme, base + 1), "le niveau du bas a disparu")
+	_v.v(not carte.est_pleine(plateforme, base + 2),
+		"le vide entre les deux niveaux a ete rempli : la carte reste un relief")
+	_v.v(not carte.est_pleine(plateforme, base + 5), "le vide n'est pas complet")
+	_v.v(carte.est_pleine(plateforme, base + 7), "le niveau du haut a disparu")
+	_v.v(carte.sommet(plateforme) == base + 7,
+		"le sommet ne designe pas la couche la plus haute : %s" % [carte.sommet(plateforme)])
+
+	# UNE GROTTE : la colonne est pleine, sauf en son milieu.
+	var grotte := Vector2i(-7, 3)
+	var pleine: int = carte.masque_de_base()
+	var creuse := pleine & ~(1 << 3)
+	carte.poser_masque(grotte, creuse)
+	_v.v(not carte.est_pleine(grotte, base + 3), "la grotte a ete rebouchee")
+	_v.v(carte.est_pleine(grotte, base + 2) and carte.est_pleine(grotte, base + 4),
+		"la grotte a emporte ses voisines")
+	_v.v(carte.sommet(grotte) == carte.sommet_de_base(),
+		"creuser au milieu a change le sommet")
+	_v.v(carte.cellules_de(grotte).size() == carte.couches_pleines - 1,
+		"la colonne creusee rend %d cellules, %d attendues" % [
+			carte.cellules_de(grotte).size(), carte.couches_pleines - 1])
+
+	# LE POIDS SUIT LE VOLUME, PAS SA COMPLEXITE : une colonne = une entree,
+	# qu'elle porte deux niveaux ou dix.
+	_v.v(carte.colonnes_sculptees() == 2,
+		"%d colonnes stockees pour deux colonnes sculptees" % carte.colonnes_sculptees())
+
+	# ET LE DEFAUT RESTE GRATUIT : reposer le masque du defaut sort du stockage.
+	carte.poser_masque(grotte, carte.masque_de_base())
+	_v.v(carte.colonnes_sculptees() == 1,
+		"une colonne remise au defaut reste stockee")
 
 func _emprise_et_sommet() -> void:
 	var carte: Resource = CarteTerrain.new()
@@ -268,5 +322,5 @@ func _conclure() -> void:
 		print("ECHEC: la donnee de terrain ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: carte de terrain -- 100 km2 declares, carte vierge a poids nul, sculpture reversible, lecture a cout constant")
+	print("OK: carte de terrain -- volume et non relief (grottes, ponts, niveaux separes), 100 km2 declares, carte vierge a poids nul, sculpture reversible, lecture a cout constant")
 	quit(0)

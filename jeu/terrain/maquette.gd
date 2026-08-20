@@ -166,11 +166,15 @@ static func echantillonner(source: Resource, pas: int) -> Dictionary:
 			sommets[Vector2i(ex, ez)] = base
 
 	var vide: int = source.couche_base - 1
-	for colonne in source.reliefs:
+	for colonne in source.volumes:
 		var echantillon := echantillon_de(colonne, pas)
 		if not sommets.has(echantillon):
 			continue
-		var couche: int = source.reliefs[colonne]
+		# LE SOMMET SE DEMANDE A LA CARTE : ce qu'elle range est un MASQUE de
+		# couches, pas une hauteur. Le lire comme une couche donnerait des
+		# reliefs absurdes -- un masque de sept couches vaut 127.
+		var haut: Variant = source.sommet(colonne)
+		var couche: int = int(haut) if haut != null else vide
 		var retenu: int = int(sommets[echantillon])
 		# Une colonne vide ne remonte jamais un echantillon, elle ne peut que le
 		# laisser tel quel.

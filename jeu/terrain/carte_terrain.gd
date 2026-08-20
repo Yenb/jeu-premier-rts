@@ -18,6 +18,20 @@ extends Resource
 # constante de generateur : deux cartes de tailles differentes coexistent, et
 # l'outil qui en lit une n'a plus a deviner de quelle taille elle est.
 #
+# UNE CARTE EST UN VOLUME, PAS UN RELIEF. Chaque colonne porte QUELLES COUCHES
+# sont pleines, pas seulement jusqu'ou la matiere monte. Une hauteur unique par
+# colonne ne sait representer ni grotte, ni pont, ni surplomb, ni deux niveaux
+# separes par du vide : elle les remplit tous du fond au sommet. Tout le terrain
+# destructible de GAME_DESIGN.md en depend -- miner sous la surface, un pont qui
+# tient par cohesion, l'etayage.
+#
+# LES COUCHES TIENNENT DANS UN MASQUE DE BITS, un entier par colonne : le bit i
+# dit que la couche `couche_base + i` est pleine. Soixante-trois couches, soit
+# cent vingt-six metres de haut a deux metres la cellule. Une LISTE de couches
+# par colonne serait exacte aussi et couterait, sur les colonnes profondes,
+# autant d'entrees que de couches -- la ou le masque en coute UNE, quelle que
+# soit la complexite du volume.
+#
 # LE PLAT NE COUTE RIEN, ET C'EST CE QUI REND L'ECHELLE TENABLE. Une carte est
 # PLEINE par defaut jusqu'a `couche_base + couches_pleines - 1` ; seules les
 # colonnes qui S'ECARTENT de ce defaut sont stockees. Une carte vierge de
@@ -56,13 +70,29 @@ extends Resource
 # l'emprise : c'est elle qui convertit une emprise en superficie.
 @export var cote: float = 2.0
 
-# LES SEULES COLONNES QUI S'ECARTENT DU DEFAUT. Clef : la colonne. Valeur : la
-# couche de sa cellule pleine la plus haute. Une valeur sous `couche_base`
-# designe une colonne VIDE -- creusee jusqu'au fond.
-@export var reliefs: Dictionary[Vector2i, int] = {}
+# LES SEULES COLONNES QUI S'ECARTENT DU DEFAUT. Clef : la colonne. Valeur : le
+# MASQUE de ses couches pleines -- bit i pour la couche `couche_base + i`. Un
+# masque nul designe une colonne entierement vide.
+@export var volumes: Dictionary[Vector2i, int] = {}
 
-# Le sommet du terrain plein par defaut, celui que rend toute colonne non
-# sculptee.
+# Combien de couches un masque peut porter. Le bit de signe reste libre : un
+# masque negatif se compare mal et se lit encore plus mal.
+const COUCHES_MAXIMALES := 63
+
+# Le masque du terrain plein par defaut, celui que rend toute colonne non
+# sculptee : les `couches_pleines` premieres couches, depuis la base.
+func masque_de_base() -> int:
+	return masque_plein(couches_pleines)
+
+# Un masque dont les `combien` premieres couches sont pleines.
+static func masque_plein(combien: int) -> int:
+	var borne := clampi(combien, 0, COUCHES_MAXIMALES)
+	if borne <= 0:
+		return 0
+	return (1 << borne) - 1
+
+# Le sommet du terrain plein par defaut. Garde parce que tout ce qui SCULPTE
+# raisonne encore en hauteur -- la ou tout ce qui LIT raisonne en volume.
 func sommet_de_base() -> int:
 	return couche_base + couches_pleines - 1
 
@@ -80,39 +110,67 @@ func dans_emprise(colonne: Vector2i) -> bool:
 	return colonne.x >= -demi_cote and colonne.x < demi_cote \
 		and colonne.y >= -demi_cote and colonne.y < demi_cote
 
-# La couche de la cellule pleine la plus haute d'une colonne, ou null.
+# LE MASQUE des couches pleines d'une colonne. Zero hors emprise comme pour une
+# colonne entierement creusee : dans les deux cas il n'y a rien a poser, et
+# aucun appelant n'a besoin de les distinguer.
+func masque(colonne: Vector2i) -> int:
+	if not dans_emprise(colonne):
+		return 0
+	return volumes.get(colonne, masque_de_base())
+
+# Une couche donnee est-elle pleine ? Le seul geste qui interroge le VOLUME.
+func est_pleine(colonne: Vector2i, couche: int) -> bool:
+	var rang := couche - couche_base
+	if rang < 0 or rang >= COUCHES_MAXIMALES:
+		return false
+	return (masque(colonne) & (1 << rang)) != 0
+
+# La couche de la cellule pleine la plus haute, ou null.
 #
 # NULL A DEUX CAUSES ET AUCUN APPELANT N'A BESOIN DE LES DISTINGUER pour poser
-# quoi que ce soit : hors emprise, ou colonne creusee jusqu'au vide. Meme choix
-# que surface_terrain.gd:couche_de -- un entier sentinelle serait pris pour une
-# couche reelle.
+# quoi que ce soit : hors emprise, ou colonne sans aucune couche pleine. Meme
+# choix que surface_terrain.gd:couche_de -- un entier sentinelle serait pris
+# pour une couche reelle.
+#
+# LE SOMMET N'EST PLUS LE VOLUME, et c'est tout l'objet du changement : deux
+# colonnes de meme sommet peuvent etre creusees differemment. Ce qui DESSINE lit
+# le masque ; ce qui POSE quelque chose DESSUS lit le sommet.
 func sommet(colonne: Vector2i) -> Variant:
-	if not dans_emprise(colonne):
+	var bits := masque(colonne)
+	if bits == 0:
 		return null
-	var couche: int = reliefs.get(colonne, sommet_de_base())
-	if couche < couche_base:
-		return null
-	return couche
+	var rang := COUCHES_MAXIMALES - 1
+	while rang >= 0:
+		if (bits & (1 << rang)) != 0:
+			return couche_base + rang
+		rang -= 1
+	return null
 
-# Ecrit le sommet d'une colonne. Rend false quand la colonne est hors emprise --
-# ecrire hors emprise poserait de la matiere qu'aucun outil ne retrouverait.
+# Ecrit le masque d'une colonne. Rend false hors emprise -- y ecrire poserait de
+# la matiere qu'aucun outil ne retrouverait.
 #
 # UNE COLONNE REMISE AU DEFAUT SORT DU STOCKAGE. Sans ca, sculpter puis defaire
-# laisserait derriere lui une entree par geste, et le poids de la carte suivrait
-# le nombre de gestes au lieu de ce qui est reellement sculpte.
-func sculpter(colonne: Vector2i, couche: int) -> bool:
+# laisserait une entree par geste, et le poids de la carte suivrait le nombre de
+# gestes au lieu de ce qui est reellement sculpte.
+func poser_masque(colonne: Vector2i, bits: int) -> bool:
 	if not dans_emprise(colonne):
 		return false
-	if couche == sommet_de_base():
-		reliefs.erase(colonne)
+	if bits == masque_de_base():
+		volumes.erase(colonne)
 	else:
-		reliefs[colonne] = couche
+		volumes[colonne] = bits
 	return true
+
+# Ecrit une colonne PLEINE de la base jusqu'a `couche`. Le geste du sculpteur
+# qui raisonne en hauteur : il reste juste tant qu'on ne creuse pas dessous.
+# Une couche sous la base vide la colonne.
+func sculpter(colonne: Vector2i, couche: int) -> bool:
+	return poser_masque(colonne, masque_plein(couche - couche_base + 1))
 
 # Le nombre de colonnes qui s'ecartent du defaut : ce que la carte pese
 # reellement, par opposition a ce qu'elle couvre.
 func colonnes_sculptees() -> int:
-	return reliefs.size()
+	return volumes.size()
 
 # LA COTE DU SOL d'une colonne, en metres : la face sur laquelle une chose
 # repose. Rend null quand la colonne est vide ou hors emprise -- rien ne s'y
@@ -129,13 +187,27 @@ func hauteur_du_sol(colonne: Vector2i) -> Variant:
 		return null
 	return float(int(haut) + 1) * cote
 
-# Les cellules pleines d'une colonne, de la base a son sommet. Liste VIDE pour
-# une colonne vide ou hors emprise -- ce qui dessine n'a alors rien a poser.
+# Les cellules pleines d'une colonne, EXACTEMENT celles que son masque declare.
+# Liste vide pour une colonne vide ou hors emprise.
+#
+# ELLE SAUTE LES TROUS, et c'est la difference avec un relief : deux niveaux
+# separes par du vide restent deux niveaux, une grotte reste une grotte.
 func cellules_de(colonne: Vector2i) -> Array[Vector3i]:
 	var cellules: Array[Vector3i] = []
-	var haut: Variant = sommet(colonne)
-	if haut == null:
+	var bits := masque(colonne)
+	if bits == 0:
 		return cellules
-	for y in range(couche_base, int(haut) + 1):
-		cellules.append(Vector3i(colonne.x, y, colonne.y))
+	for rang in range(COUCHES_MAXIMALES):
+		if (bits & (1 << rang)) != 0:
+			cellules.append(Vector3i(colonne.x, couche_base + rang, colonne.y))
 	return cellules
+
+# Le masque que decrivent des couches donnees. Sert a ceux qui relevent un
+# GridMap : ils voient des cellules, la carte veut un masque.
+static func masque_depuis(couches: Array, base: int) -> int:
+	var bits := 0
+	for couche in couches:
+		var rang: int = int(couche) - base
+		if rang >= 0 and rang < COUCHES_MAXIMALES:
+			bits |= 1 << rang
+	return bits

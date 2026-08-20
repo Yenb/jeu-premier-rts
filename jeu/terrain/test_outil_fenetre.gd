@@ -169,14 +169,14 @@ func _chargement() -> void:
 	var colonnes := OutilFenetre.colonnes_de(CENTRE, DEMI)
 	OutilFenetre.charger_tranche(grille, carte, colonnes, CENTRE, bloc, 0, colonnes.size())
 
-	var sommets := OutilFenetre.sommets_du_gridmap(grille)
+	var sommets := OutilFenetre.volumes_du_gridmap(grille, carte.couche_base)
 	# LA CELLULE POSEE PORTE LA COLONNE DE LA CARTE, sans conversion.
-	_v.v(int(sommets.get(monte, -99)) == base + 5,
-		"la colonne montee arrive a %s dans le GridMap, %d attendu" % [
-			sommets.get(monte, null), base + 5])
+	_v.v(_sommet_du_masque(sommets, monte, carte.couche_base) == base + 5,
+		"la colonne montee arrive a %d dans le GridMap, %d attendu" % [
+			_sommet_du_masque(sommets, monte, carte.couche_base), base + 5])
 	_v.v(not sommets.has(creuse),
 		"la colonne creusee jusqu'au vide a quand meme ete posee")
-	_v.v(int(sommets.get(CENTRE, -99)) == base,
+	_v.v(_sommet_du_masque(sommets, CENTRE, carte.couche_base) == base,
 		"une colonne non sculptee n'arrive pas au sommet par defaut")
 	_v.v(not sommets.has(Vector2i.ZERO),
 		"une cellule a ete posee a l'origine alors que la fenetre est en %v" % CENTRE)
@@ -186,8 +186,8 @@ func _chargement() -> void:
 	var vierge := _carte_neuve()
 	grille.clear()
 	OutilFenetre.charger_tranche(grille, vierge, colonnes, CENTRE, bloc, 0, colonnes.size())
-	sommets = OutilFenetre.sommets_du_gridmap(grille)
-	_v.v(int(sommets.get(monte, -99)) == base,
+	sommets = OutilFenetre.volumes_du_gridmap(grille, carte.couche_base)
+	_v.v(_sommet_du_masque(sommets, monte, vierge.couche_base) == base,
 		"le relief precedent depasse encore apres un rechargement")
 	grille.queue_free()
 
@@ -264,7 +264,7 @@ func _bord_emprise() -> void:
 
 	# Et l'enregistrement n'ecrit rien dehors.
 	OutilFenetre.enregistrer_fenetre(grille, carte, centre, DEMI)
-	for colonne in carte.reliefs:
+	for colonne in carte.volumes:
 		if not carte.dans_emprise(colonne):
 			_v.v(false, "colonne %v ecrite hors emprise" % colonne)
 			break
@@ -425,7 +425,7 @@ func _deplacement() -> void:
 	# 2. LA NOUVELLE ZONE EST RENDUE, et l'ancienne DECHARGEE.
 	_v.v(outil.centre == ailleurs and outil.centre_charge == ailleurs,
 		"le centre charge est %v, %v attendu" % [outil.centre_charge, ailleurs])
-	var sommets := OutilFenetre.sommets_du_gridmap(grille)
+	var sommets := OutilFenetre.volumes_du_gridmap(grille, carte.couche_base)
 	_v.v(sommets.size() == DEMI * DEMI * 4,
 		"%d colonnes rendues apres le deplacement, %d attendues" % [
 			sommets.size(), DEMI * DEMI * 4])
@@ -471,7 +471,7 @@ func _creusement_refuse() -> void:
 
 	# ET IL N'EMPECHE PAS LE GESTE LEGITIME : au bon endroit, ca passe.
 	var recouvre := OutilFenetre.recouvrement(
-		OutilFenetre.sommets_du_gridmap(grille), CENTRE, DEMI)
+		OutilFenetre.volumes_du_gridmap(grille, carte.couche_base), CENTRE, DEMI)
 	_v.v(recouvre > 0.9,
 		"la grille ne recouvre que %.1f %% de sa propre fenetre" % (recouvre * 100.0))
 	grille.set_cell_item(Vector3i(CENTRE.x, carte.sommet_de_base() + 2, CENTRE.y), bloc)
@@ -579,6 +579,20 @@ func _surveillance() -> void:
 	_v.v(float(suite["immobile"]) == 0.0, "le cycle n'est pas relance apres un enregistrement")
 	suite = OutilFenetre.surveiller(130, 130, 1.6, 0.1, seuil)
 	_v.v(suite["ecrire"], "la sculpture suivante ne s'enregistre jamais")
+
+# LE SOMMET QUE DECRIT UN MASQUE. Le releve rend desormais QUELLES couches sont
+# pleines, pas jusqu'ou la matiere monte : comparer un masque a une couche donne
+# des verdicts absurdes -- douze couches pleines valent 4095.
+static func _sommet_du_masque(masques: Dictionary, colonne: Vector2i, base: int) -> int:
+	var bits: int = int(masques.get(colonne, 0))
+	if bits == 0:
+		return -99
+	var rang := 62
+	while rang >= 0:
+		if (bits & (1 << rang)) != 0:
+			return base + rang
+		rang -= 1
+	return -99
 
 func _conclure() -> void:
 	if _v.echecs() > 0:

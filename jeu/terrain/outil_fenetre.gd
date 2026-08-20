@@ -87,9 +87,10 @@ extends Node3D
 # chargement, parce que le GridMap porterait alors le relief d'un endroit et
 # l'outil l'ecrirait a un autre.
 #
-# LE SOMMET FAIT FOI, JAMAIS LES CELLULES UNE A UNE. La carte ne retient qu'une
-# hauteur par colonne : une grotte creusee sous la surface ne s'y ecrit pas et
-# se perd a l'enregistrement. La carte est un RELIEF, pas un volume.
+# LE VOLUME FAIT FOI, JAMAIS LE SEUL SOMMET. Ce qui est releve d'une colonne,
+# c'est QUELLES couches sont pleines -- pas jusqu'ou la matiere monte. Une
+# hauteur unique remplissait tout du fond au sommet : grottes, ponts, trous et
+# deux niveaux separes par du vide disparaissaient a l'enregistrement.
 #
 # RIEN N'EST ANNULABLE : Ctrl+Z defait la case cochee, jamais ce qui a ete
 # ecrit. Meme limite que outil_sculpture.gd, meme parade -- recharger la
@@ -101,6 +102,7 @@ extends Node3D
 # scripts/, data/ ni documents/ n'est lu ni ecrit.
 
 const Commun = preload("res://jeu/terrain/terrain_commun.gd")
+const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 
 # Combien de colonnes poser avant de rendre la main a l'editeur.
 #
@@ -253,17 +255,22 @@ static func vers_carte(cellule: Vector2i, _centre_fenetre: Vector2i) -> Vector2i
 static func vers_grille(colonne: Vector2i, _centre_fenetre: Vector2i) -> Vector2i:
 	return colonne
 
-# Le sommet de chaque colonne du GridMap, releve en UNE passe sur les cellules
-# occupees. Lire colonne par colonne coute une requete par cellule de la
-# fenetre ; ici le cout suit ce qui est POSE. Meme geste que
-# surface_terrain.gd:relever.
-static func sommets_du_gridmap(grille: GridMap) -> Dictionary:
-	var sommets: Dictionary = {}
+# LE MASQUE de chaque colonne du GridMap, releve en UNE passe sur les cellules
+# occupees. Lire colonne par colonne couterait une requete par cellule de la
+# fenetre ; ici le cout suit ce qui est POSE.
+#
+# CHAQUE CELLULE ALLUME SON BIT, aucune n'est resumee : c'est ce qui fait
+# survivre un trou creuse au milieu d'une colonne, la ou un releve de sommet
+# l'aurait comble.
+static func volumes_du_gridmap(grille: GridMap, base: int) -> Dictionary:
+	var masques: Dictionary = {}
 	for cellule in grille.get_used_cells():
 		var colonne := Vector2i(cellule.x, cellule.z)
-		if not sommets.has(colonne) or cellule.y > int(sommets[colonne]):
-			sommets[colonne] = cellule.y
-	return sommets
+		var rang := cellule.y - base
+		if rang < 0 or rang >= CarteTerrain.COUCHES_MAXIMALES:
+			continue
+		masques[colonne] = int(masques.get(colonne, 0)) | (1 << rang)
+	return masques
 
 # Pose dans le GridMap les colonnes d'indice [depuis, depuis + combien) de la
 # fenetre, telles que la carte les decrit. Rend { index, cellules }.
@@ -278,11 +285,11 @@ static func charger_tranche(grille: GridMap, source: Resource, colonnes: Array[V
 	var cellules := 0
 	while index < fin:
 		var colonne := colonnes[index]
-		var haut: Variant = source.sommet(colonne)
-		if haut != null:
-			for y in range(source.couche_base, int(haut) + 1):
-				grille.set_cell_item(Vector3i(colonne.x, y, colonne.y), bloc)
-				cellules += 1
+		# LES CELLULES QUE LA CARTE DECLARE, une par une : elle saute les trous,
+		# et c'est ce qui fait revenir une grotte telle qu'elle a ete creusee.
+		for cellule in source.cellules_de(colonne):
+			grille.set_cell_item(cellule, bloc)
+			cellules += 1
 		index += 1
 	return { "index": fin, "cellules": cellules }
 
@@ -306,13 +313,13 @@ static func charger_tranche(grille: GridMap, source: Resource, colonnes: Array[V
 # n'a RIEN a voir avec la zone demandee.
 const RECOUVREMENT_MINIMAL := 0.05
 
-static func recouvrement(sommets: Dictionary, centre_fenetre: Vector2i, demi: int) -> float:
+static func recouvrement(masques: Dictionary, centre_fenetre: Vector2i, demi: int) -> float:
 	var attendues := demi * demi * 4
 	if attendues <= 0:
 		return 0.0
 	var connues := 0
 	for colonne in colonnes_de(centre_fenetre, demi):
-		if sommets.has(colonne):
+		if masques.has(colonne):
 			connues += 1
 	return float(connues) / float(attendues)
 
@@ -321,22 +328,21 @@ static func recouvrement(sommets: Dictionary, centre_fenetre: Vector2i, demi: in
 # posent eux-memes leur grille et savent ce qu'elle contient.
 static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre: Vector2i,
 		demi: int, permises: Dictionary = {}) -> int:
-	var sommets := sommets_du_gridmap(grille)
+	var masques := volumes_du_gridmap(grille, cible.couche_base)
 
 	# VOIR RECOUVREMENT_MINIMAL : on refuse d'ecrire une fenetre que la grille
 	# ne porte pas, plutot que de la creuser en silence.
-	var part := recouvrement(sommets, centre_fenetre, demi)
+	var part := recouvrement(masques, centre_fenetre, demi)
 	if part < RECOUVREMENT_MINIMAL:
 		push_error(("enregistrement refuse en %v : le GridMap ne recouvre que %.1f %% "
 			+ "de cette fenetre. L'ecrire la creuserait entierement dans la carte.") % [
 			centre_fenetre, part * 100.0])
 		return 0
-	var vide: int = cible.couche_base - 1
 	var changees := 0
 	for colonne in colonnes_de(centre_fenetre, demi):
 		if not cible.dans_emprise(colonne):
 			continue
-		var avant: Variant = cible.sommet(colonne)
+		var avant: int = cible.masque(colonne)
 
 		# CE QUE LA GRILLE PORTE EST TOUJOURS ECRIT : c'est du travail, qu'il
 		# ait ete charge ici ou pose a la main ailleurs dans la fenetre.
@@ -346,14 +352,14 @@ static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre
 		# trou -- et avec la distinction posee sur les DEUX cas, c'est l'inverse
 		# qui casse : ce qu'on sculpte hors des colonnes chargees ne s'ecrit
 		# jamais, et le bouton « enregistrer » ne conserve rien.
-		if not sommets.has(colonne):
+		if not masques.has(colonne):
 			if not permises.is_empty() and not permises.has(colonne):
 				continue
-		var apres: int = int(sommets.get(colonne, vide))
-		cible.sculpter(colonne, apres)
-		var relu: Variant = cible.sommet(colonne)
-		if relu != avant:
-			changees += 1
+		var apres: int = int(masques.get(colonne, 0))
+		if apres == avant:
+			continue
+		cible.poser_masque(colonne, apres)
+		changees += 1
 	return changees
 
 # LA SURVEILLANCE. Voir l'en-tete : elle ne CALCULE rien, elle compte les
