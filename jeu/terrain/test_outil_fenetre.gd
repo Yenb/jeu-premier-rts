@@ -36,6 +36,9 @@ extends SceneTree
 #   le GridMap, ou le chargement suivant l'effacerait sans un mot ;
 # - SANS FENETRE CHARGEE, DEPLACER N'ECRIT RIEN : viser sur une scene qu'on
 #   vient d'ouvrir ne doit declencher aucune ecriture ;
+# - CE QUE LA GRILLE PORTE EST TOUJOURS ECRIT, meme hors des colonnes chargees.
+#   Sculpter ailleurs dans la fenetre -- au pinceau, autour du personnage --
+#   doit s'enregistrer comme le reste, sinon le bouton ne conserve rien ;
 # - CE QUI N'A PAS ETE CHARGE N'EST JAMAIS ECRIT. Enregistrer ecrit toute la
 #   fenetre, et une colonne absente du GridMap compte comme VIDE -- or
 #   « absente » a deux causes que rien ne distingue : le sculpteur l'a creusee,
@@ -510,15 +513,27 @@ func _chargement_partiel_ne_creuse_pas() -> void:
 		"la butte n'a pas ete enregistree : sommet %s" % [carte.sommet(butte)])
 	_v.v(changees == 1, "%d colonnes changees, 1 attendue" % changees)
 
-	# CE QUI N'A JAMAIS ETE CHARGE EST INTACT -- ni creuse, ni stocke.
+	# CE QUE LA GRILLE PORTE HORS DES COLONNES CHARGEES EST ECRIT QUAND MEME :
+	# c'est du travail, pose au pinceau la ou la fenetre n'avait rien charge.
+	var hors: Vector2i = toutes[moitie + 20]
+	for y in range(carte.couche_base, base + 5):
+		grille.set_cell_item(Vector3i(hors.x, y, hors.y), bloc)
+	OutilFenetre.enregistrer_fenetre(grille, carte, CENTRE, DEMI, chargees)
+	_v.v(carte.sommet(hors) == base + 4,
+		"ce qui est sculpte hors des colonnes chargees n'est pas enregistre : sommet %s" % [
+			carte.sommet(hors)])
+
+	# CE QUI N'A JAMAIS ETE CHARGE NI SCULPTE EST INTACT -- ni creuse, ni stocke.
 	var creusees := 0
 	for i in range(moitie, toutes.size()):
+		if toutes[i] == hors:
+			continue
 		if carte.sommet(toutes[i]) == null:
 			creusees += 1
 	_v.v(creusees == 0,
 		"%d colonnes jamais chargees ont ete creusees dans la carte" % creusees)
-	_v.v(carte.colonnes_sculptees() == 1,
-		"%d colonnes stockees : les colonnes non chargees ont ete ecrites" % [
+	_v.v(carte.colonnes_sculptees() == 2,
+		"%d colonnes stockees, 2 attendues (la butte et ce qui est pose hors chargement)" % [
 			carte.colonnes_sculptees()])
 
 	racine.queue_free()
@@ -528,5 +543,5 @@ func _conclure() -> void:
 		print("ECHEC: le passage de fenetre ne tient pas (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites")
+	print("OK: fenetre de sculpture -- decalage dans le bon sens, chargement qui efface et pose sans collision, aller-retour identique, creuse ecrit comme vide, bord d'emprise tenu, garde-fou opposable, vidage qui rend la bibliotheque, deplacement qui enregistre puis recharge, enregistrement refuse la ou la grille ne porte rien, colonnes jamais chargees jamais ecrites, sculpture hors chargement conservee")
 	quit(0)

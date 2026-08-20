@@ -309,11 +309,19 @@ static func enregistrer_fenetre(grille: GridMap, cible: Resource, centre_fenetre
 	for colonne in colonnes_de(centre_fenetre, demi):
 		if not cible.dans_emprise(colonne):
 			continue
-		# CE QUI N'A PAS ETE CHARGE N'EST PAS ECRIT. Voir _colonnes_chargees :
-		# l'ecrire reviendrait a creuser une colonne que personne n'a touchee.
-		if not permises.is_empty() and not permises.has(colonne):
-			continue
 		var avant: Variant = cible.sommet(colonne)
+
+		# CE QUE LA GRILLE PORTE EST TOUJOURS ECRIT : c'est du travail, qu'il
+		# ait ete charge ici ou pose a la main ailleurs dans la fenetre.
+		#
+		# CE QU'ELLE NE PORTE PAS n'est ecrit VIDE que si la colonne a bien ete
+		# chargee. Sans cette distinction, une colonne jamais chargee part en
+		# trou -- et avec la distinction posee sur les DEUX cas, c'est l'inverse
+		# qui casse : ce qu'on sculpte hors des colonnes chargees ne s'ecrit
+		# jamais, et le bouton « enregistrer » ne conserve rien.
+		if not sommets.has(colonne):
+			if not permises.is_empty() and not permises.has(colonne):
+				continue
 		var apres: int = int(sommets.get(colonne, vide))
 		cible.sculpter(colonne, apres)
 		var relu: Variant = cible.sommet(colonne)
