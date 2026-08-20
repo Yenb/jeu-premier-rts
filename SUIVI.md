@@ -14,6 +14,23 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- a054506 — ENREGISTRER NE CREUSE PLUS CE QUI N'A JAMAIS ÉTÉ CHARGÉ. Le
+  chargement retient les colonnes qu'il a réellement traitées ; l'enregistrement
+  n'écrit que celles-là. Une colonne absente du GridMap comptait comme VIDE, et
+  « absente » avait deux causes que rien ne distinguait — creusée par le
+  sculpteur, ou jamais chargée. Voir PIÈGES
+- e39ef42 — CARTE DE 100 km² : `carte_terrain.gd` porte l'emprise et le sommet
+  de chaque colonne, sans nœud ni GridMap ; vierge elle pèse 185 octets pour
+  25 millions de colonnes, contre 16,5 octets par cellule pour un GridMap plein.
+  `terrain_visible.gd` ne rend qu'un disque autour de l'observateur — traverser
+  9,6 km laisse 19 747 cellules, du premier au dernier pas. `outil_fenetre.gd`
+  sculpte par fenêtre de 600 m, posée LÀ OÙ ELLE EST sur la carte, et déplacer
+  le curseur enregistre la zone quittée avant de rendre la suivante ;
+  `maquette.gd` montre les 100 km² d'un coup en ne relisant que ce qui est
+  sculpté. `jeu/objets/objets_visibles.gd` fait basculer un objet de donnée à
+  nœud près de l'observateur : 10 000 objets semés, 5 nœuds vivants au plus.
+  Chaque carte porte son emprise, ce qui ferme le premier point EN COURS
+
 - 2026-08-19 — DISTANCE DE RENDU PAR ESPÈCE : `espece.gd` porte un
   `distance_rendu` que `couvert.gd` pose en `visibility_range_end` sur CHAQUE
   `GeometryInstance3D` du corps instancié — un `.glb` est un `Node3D` qui en
@@ -163,6 +180,16 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## EN COURS
 
+- CARTE DE TRAVAIL ENTIÈREMENT CREUSÉE par le défaut fermé en a054506 :
+  `carte_100km2.tres` porte 259 530 colonnes, toutes vides, aucun relief monté,
+  sur 4,4 km par 1,9 km. Le correctif empêche que ça recommence, il ne rend
+  rien. À trancher : repartir d'une carte vierge, ou garder ces trous
+- `carte_100km2.tscn` embarque les cellules du GridMap dès qu'on enregistre la
+  scène en cours de sculpture — 7,8 Mo par sauvegarde, pour un contenu que la
+  carte reconstruit. « vider » avant Ctrl+S le ramène à 3 Ko ; rien ne le force
+- LES TRACES `[repere]`, `[fenetre]`, `[sculpture]`, `[pas]` sont actives :
+  `journal` exporté sur les deux outils, à décocher quand le diagnostic est clos
+
 - UNE EMPRISE, DEUX CARTES DE TAILLES DIFFÉRENTES — à trancher avant tout
   chantier de terrain. `DEMI_COTE` est un nombre unique et vaut désormais 150,
   alors que `carte.tscn` porte une ceinture à 64 : `test_collision_terrain.gd`
@@ -198,14 +225,17 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
   enfoncé ou en l'air. Et un objet qui devrait tomber pendant que personne ne
   le regarde n'a AUCUNE physique pour le faire : sa chute se calcule en
   données, ou elle n'a pas lieu — décision de game design, pas de technique.
+  CE QUE ÇA COÛTE, ET POURQUOI C'EST TENABLE : le compte de nœuds vaut
+  `π·r² × densité`, donc doubler le rayon coûte quatre fois et agrandir la carte
+  coûte zéro. À la densité d'herbe mesurée (0,0185 plante/m²) : 23 plantes à
+  20 m, 581 à 100 m. Deux millions d'agents portent le même nombre de nœuds que
+  deux mille — le seul terme qui suive la population totale est la donnée.
+  RIEN N'EST À DÉFAIRE POUR Y ARRIVER : `monde.gd` et `vegetation.gd` sont des
+  Dictionary et des fonctions, sans Node ni `_process`. « Tout simulé, rien
+  rendu » est l'état de DÉPART. Les couches à nœuds sont `couvert.gd`,
+  `terrain_visible.gd` et `objets_visibles.gd` ; le nœud lit la donnée, la
+  donnée n'a jamais connaissance du nœud.
 
-- LE RENDU EST BORNÉ PAR LE RAYON, JAMAIS PAR LA POPULATION. N'instancier des
-  nœuds que dans un rayon autour du joueur donne un compte de nœuds égal à
-  `π·r² × densité` — la taille du monde et sa population n'y entrent pas. Deux
-  millions d'agents portent le même nombre de nœuds que deux mille. Ça ne croît
-  qu'en r² : doubler le rayon coûte quatre fois, jamais plus. À la densité
-  d'herbe mesurée (0,0185 plante/m²) : 23 plantes à 20 m, 581 à 100 m. Le seul
-  terme qui suit la population totale est la donnée de simulation
 - LE NŒUD COÛTE DE LA MÉMOIRE, ET C'EST TOUT. Mesuré sur les formes que
   `couvert.gd` fabrique : `Node3D` seul 1,4 Ko ; + `MeshInstance3D` (une herbe)
   5,1 Ko ; + `StaticBody3D` + `CollisionShape3D` (un arbre) 9,6 Ko. En temps,
@@ -217,13 +247,6 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
   nœud reste, et ses 9,6 Ko avec lui. Tenir l'échelle demande de SUPPRIMER le
   nœud, ce qui exige de savoir où est l'observateur : par GROUPE
   (`get_first_node_in_group`), jamais un champ à remplir sur chaque type
-- LA SIMULATION N'A JAMAIS EU DE NŒUDS, ET C'EST ACQUIS SANS RIEN FAIRE.
-  `monde.gd` et `vegetation.gd` sont des Dictionary et des fonctions — aucun
-  Node, aucun `_process`. « Tout simulé, rien rendu » est donc l'état de DÉPART,
-  pas un chantier. La règle à tenir le jour où le rendu se câble : le nœud lit la
-  donnée, la donnée n'a jamais connaissance du nœud. `couvert.gd` est la seule
-  couche à nœuds — un `Node3D` par plante, plus son modèle, plus un corps pour
-  les troncs
 - OPTIMISER EST UN CRITÈRE PERMANENT, pas un chantier de fin. Les cartes
   grandiront, et ce qui tient à cent objets casse à mille : toute mécanique
   écrite désormais s'évalue AUSSI sur son coût à grande échelle, et se mesure
@@ -252,10 +275,6 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## PROCHAINES ÉTAPES
 
-0. CIBLE DU PREMIER PROTOTYPE : une carte de **100 km²**. Les cartes actuelles
-   sont un terrain d'entraînement, pas la cible — `carte.tscn` fait 0,066 km²,
-   `grande_carte.tscn` 0,36 km². Le repère mesuré pour juger : 630 000 cellules
-   de GridMap pèsent 10,7 Mo de scène. À reprendre quand le jeu aura avancé
 1. OBJETS EN DONNÉES, NŒUDS PRÈS DU JOUEUR : le mécanisme qui fait basculer un
    objet de donnée à nœud (rendu plus collision) quand le joueur approche, et
    l'inverse quand il s'éloigne. La règle est tranchée — voir DÉCISIONS, « tout
@@ -273,6 +292,31 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 6. Boucle complète : état → résumé → modèle → clé → action visible
 
 ## PIÈGES DÉJÀ PAYÉS
+
+- ÉCRIRE UNE FENÊTRE ENTIÈRE CREUSE CE QU'ELLE NE PORTE PAS. Symptôme : le
+  terrain devient un damier de zones vides, et tout ce qui est sculpté
+  disparaît — mesuré à 259 530 colonnes creusées, zéro relief monté. Cause : une
+  colonne absente du GridMap compte comme VIDE, et « absente » a deux causes
+  qu'il faut distinguer — creusée par le sculpteur, ou jamais chargée. Règle :
+  ce qu'un chargement n'a pas traité ne s'écrit pas ; l'ensemble des colonnes
+  posées se retient, il ne se déduit pas de l'emprise demandée.
+- UN CENTRE RELU APRÈS UNE ATTENTE N'EST PLUS CELUI QU'ON A POSÉ. Une pose
+  étalée sur plusieurs frames rend la main entre deux tranches, et ce qui
+  pilotait a pu changer pendant. Règle : figer au début ce sur quoi on travaille,
+  et ne jamais le relire à la fin pour annoncer ce qu'on a fait. Aucun test ne
+  tient ce point — lancé depuis un test, le chargement se termine avant qu'on
+  ait pu bouger quoi que ce soit.
+- UN TEST QUI VISE UN POINT FIXE FINIT PAR MESURER LE TRAVAIL DU SCULPTEUR. Un
+  rayon tiré à l'origine, un plafond qui exige une carte vierge : les deux
+  rougissent le jour où la carte est travaillée, sans qu'aucun code n'ait
+  changé. Règle : mesurer un invariant du code — coût par colonne sculptée,
+  sol sous le personnage — jamais un état du contenu.
+- CE QU'UN BANC HEADLESS NE VOIT PAS. `Engine.is_editor_hint()` est faux hors
+  éditeur : tout ce qui ne s'exécute que dans l'éditeur — construction d'une
+  vue d'outil, script `@tool` sur une ressource — n'est parcouru par aucun test
+  lancé en ligne de commande. Règle : le dire AVANT de montrer un test vert, et
+  vérifier le mode du script (`Script.is_tool()`) au lieu d'attendre l'erreur
+  « placeholder instance ».
 
 Ce que le prochain chantier de couvert doit savoir avant d'écrire une ligne. Un
 seul de ces pièges a coûté une demi-session ; tous ont été payés une fois.
