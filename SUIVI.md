@@ -14,6 +14,11 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 5f41a86 — ENREGISTRER CONSERVE CE QUI EST SCULPTÉ HORS DES COLONNES CHARGÉES.
+  La garde de a054506 bloquait toute colonne non chargée, y compris celles que
+  la grille PORTE : le bouton creusait avant, il oubliait après. Elle ne
+  s'applique plus qu'aux colonnes absentes de la grille. Mode d'emploi et index
+  du terrain : `jeu/terrain/MANUEL_CARTE.md`
 - a054506 — ENREGISTRER NE CREUSE PLUS CE QUI N'A JAMAIS ÉTÉ CHARGÉ. Le
   chargement retient les colonnes qu'il a réellement traitées ; l'enregistrement
   n'écrit que celles-là. Une colonne absente du GridMap comptait comme VIDE, et
@@ -180,10 +185,10 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## EN COURS
 
-- CARTE DE TRAVAIL ENTIÈREMENT CREUSÉE par le défaut fermé en a054506 :
-  `carte_100km2.tres` porte 259 530 colonnes, toutes vides, aucun relief monté,
-  sur 4,4 km par 1,9 km. Le correctif empêche que ça recommence, il ne rend
-  rien. À trancher : repartir d'une carte vierge, ou garder ces trous
+- LA SCULPTURE N'A PAS ÉTÉ ÉPROUVÉE DEPUIS 5f41a86 : sculpter, enregistrer,
+  relancer, retrouver son relief. Les tests tiennent les pièces, aucun ne
+  parcourt le geste entier dans l'éditeur — voir MANUEL_CARTE.md, « ce
+  qu'aucun ne voit »
 - `carte_100km2.tscn` embarque les cellules du GridMap dès qu'on enregistre la
   scène en cours de sculpture — 7,8 Mo par sauvegarde, pour un contenu que la
   carte reconstruit. « vider » avant Ctrl+S le ramène à 3 Ko ; rien ne le force
