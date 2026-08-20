@@ -9,6 +9,9 @@ SEUL document que Claude modifie au fil des sessions.
 
 Game design du jeu : `jeu/GAME_DESIGN.md`.
 
+Ce que le jeu sait faire, où ça vit, quel réglage produit quel effet :
+`jeu/CARNET_DE_JEU.md`. À lire en premier pour savoir ce qui existe déjà.
+
 ## Aperçu
 
 Premier jeu RTS bâti sur le framework Orion.
@@ -283,6 +286,12 @@ Concrètement, Claude doit :
    écrivains en même temps. Deux écrasements se sont produits faute de
    ça : un commit sans pathspec qui aspire le working tree d'un fichier
    partagé, un `git apply --cached` isolé qui a fini par tout réindexer.
+
+10. DIRE SI LA CAUSE EST L'ÉDITEUR OU LE CODE. Un diagnostic qui se
+    résout par un clic dans l'éditeur (case à cocher, champ à régler,
+    nœud à sélectionner) n'est PAS un défaut de code — le dire
+    explicitement, et dire OÙ cliquer, quel nœud, quel champ. Sans cette
+    distinction, Yael cherche un bug de code là où il n'y en a aucun.
 
 ## Quand Yael dit que ça ne marche pas
 
