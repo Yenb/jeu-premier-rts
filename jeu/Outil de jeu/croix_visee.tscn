@@ -1,6 +1,6 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://jeu/Ennemie/croix_visee.gd" id="1_croix"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/croix_visee.gd" id="1_croix"]
 
 [node name="CroixVisee" type="CanvasLayer"]
 

@@ -24,7 +24,7 @@ extends Node3D
 # Timer d'une seconde, meme rythme que population_ennemie.gd.
 
 const Gestation = preload("res://scripts/gestation.gd")
-const TransporteurScene := preload("res://jeu/Ennemie/transporteur.tscn")
+const TransporteurScene := preload("res://jeu/Outil de jeu/transporteur.tscn")
 
 @export var combien: int = 2
 @export var duree_gestation: float = 30.0

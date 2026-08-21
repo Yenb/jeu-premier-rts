@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cxlkhpeansdph"
-path.s3tc="res://.godot/imported/le transporteur _peau monstre.png-46bb117cabe0e367467e727edad5b206.s3tc.ctex"
+path.s3tc="res://.godot/imported/le transporteur _peau monstre.png-ba06b672276cc61c4545908c18fd0ec7.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
@@ -14,8 +14,8 @@ generator_parameters={
 
 [deps]
 
-source_file="res://jeu/Ennemie/le transporteur _peau monstre.png"
-dest_files=["res://.godot/imported/le transporteur _peau monstre.png-46bb117cabe0e367467e727edad5b206.s3tc.ctex"]
+source_file="res://jeu/Outil de jeu/le transporteur _peau monstre.png"
+dest_files=["res://.godot/imported/le transporteur _peau monstre.png-ba06b672276cc61c4545908c18fd0ec7.s3tc.ctex"]
 
 [params]
 

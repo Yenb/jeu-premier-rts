@@ -1,7 +1,7 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://jeu/Ennemie/gisement_fer.gd" id="1_gisement"]
-[ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/gisement_fer.gd" id="1_gisement"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
 
 ; -- Matiere partagee : trois teintes de gris, pour donner du grain sans
 ; -- multiplier les materiaux. Aucune texture ; le gisement est reconnaissable

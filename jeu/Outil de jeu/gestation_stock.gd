@@ -22,7 +22,7 @@ extends Node3D
 # doit pas s'evanouir quand son producteur meurt.
 
 const Gestation = preload("res://scripts/gestation.gd")
-const CubeEnnemiScene := preload("res://jeu/Ennemie/cube_ennemi.tscn")
+const CubeEnnemiScene := preload("res://jeu/Outil de jeu/cube_ennemi.tscn")
 
 @export var seuil_reproduction: float = 30.0
 @export var duree_gestation: float = 20.0

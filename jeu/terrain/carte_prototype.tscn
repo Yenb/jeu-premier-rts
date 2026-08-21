@@ -12,7 +12,7 @@
 [ext_resource type="Script" uid="uid://rlipnma41x2b" path="res://jeu/terrain/repere_fenetre.gd" id="10_repere"]
 [ext_resource type="Script" uid="uid://becseujcpb7uq" path="res://jeu/objets/objets_visibles.gd" id="11_objets"]
 [ext_resource type="Script" uid="uid://cahlbo86blqwg" path="res://jeu/objets/semer_objets.gd" id="12_semeur"]
-[ext_resource type="PackedScene" uid="uid://b8mm7aykyu1yv" path="res://jeu/Ennemie/le transporteur .glb" id="13_objet"]
+[ext_resource type="PackedScene" uid="uid://b8mm7aykyu1yv" path="res://jeu/Outil de jeu/le transporteur .glb" id="13_objet"]
 [ext_resource type="Script" uid="uid://bmypt23ew8xau" path="res://jeu/plantes/couvert.gd" id="14_couvert"]
 [ext_resource type="Script" uid="uid://dljn3feguvcg" path="res://jeu/plantes/espece.gd" id="15_espece"]
 [ext_resource type="PackedScene" path="res://jeu/plantes/arbre.tscn" id="16_arbre"]

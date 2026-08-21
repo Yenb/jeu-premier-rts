@@ -1,7 +1,7 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://jeu/Ennemie/soldat.gd" id="1_soldat"]
-[ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/soldat.gd" id="1_soldat"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
 
 ; -- Rouge fonce pour se distinguer d'emblee du transporteur (orange) et
 ; -- du cube violet (violet). L'oeil doit voir "danger" au premier coup.

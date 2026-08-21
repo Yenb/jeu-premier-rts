@@ -61,7 +61,7 @@ en temps constant. Les produits tombés au sol non plus.
 | `terrain/carte.tscn` | l'ancienne carte, GridMap entièrement posé, couvert et semis dessus | terrain plein + couvert + personnage + caméra fixe |
 | `terrain/grande_carte.tscn` | 300×300 de terrain nu | GridMap plein + personnage, aucun script de jeu |
 | `terrain/sculpture.tscn`, `terrain/maquette.tscn` | postes d'éditeur sur la carte de 100 km², sans personnage | les outils seuls |
-| `terrain/test_ennemi.tscn` | 7 ha ceinturés, un cube violet qui se reproduit par densité locale — 10 coups à moins de 3 m pour en détruire un, barre de vie shader au-dessus | personnage + population émergente (composition `monde.gd` + `gestation.gd`) + interaction de frappe + croix de visée |
+| `Outil de jeu/test_ennemi.tscn` | 7 ha ceinturés, écosystème complet du prototype ennemi : cube violet + transporteurs + gisement + mode combat + soldat + vie joueur | monde partagé, personnage avec vie/présence, une lignée de cube violet (garde + gestations stock/soldat), gisement de fer, HUD vie du joueur |
 
 ---
 

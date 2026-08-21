@@ -301,6 +301,20 @@ Concrètement, Claude doit :
     explicitement, et dire OÙ cliquer, quel nœud, quel champ. Sans cette
     distinction, Yael cherche un bug de code là où il n'y en a aucun.
 
+11. LIVRAISON EXPLICITE. Sur toute livraison qui ajoute ou modifie un
+    comportement (nouvelle mécanique, correction, ajout), sortir trois
+    blocs séparés dans la réponse :
+    - **Fait :** ce que le code produit littéralement
+    - **Anticipé :** les cas limites déjà gérés au passage (durée de
+      vie, garde anti-friendly-fire, filtre sur profil, etc.)
+    - **Non fait :** ce qui n'a PAS été traité et pourrait manquer (son,
+      animation, particules, feedback visuel, cas limites non creusés)
+    Sans ce format, Yael doit deviner ce qui a été anticipé, poser des
+    questions sur des choses déjà faites, découvrir trop tard des trous
+    qui auraient pu être nommés d'entrée. Non requis pour les
+    corrections triviales d'une ligne ni pour les explications sans
+    livraison de code.
+
 ## Quand Yael dit que ça ne marche pas
 
 Le code peut être juste et le problème entier : ce qui manque alors n'est

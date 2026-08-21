@@ -1,7 +1,7 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://jeu/Ennemie/transporteur.gd" id="1_transporteur"]
-[ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/transporteur.gd" id="1_transporteur"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_orange"]
 albedo_color = Color(0.95, 0.5, 0.1, 1)

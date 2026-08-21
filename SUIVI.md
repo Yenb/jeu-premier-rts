@@ -14,6 +14,23 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- bbab9b6 — BANC TEST_ENNEMI complet : gisement (500 métal, se détruit à zéro),
+  transporteurs qui prospectent (perception+saillance, vision 5 m, marche
+  aléatoire, cognent, rapportent), cube violet (vie 50, stock 200 max) qui se
+  reproduit à 30 métal, transporteur qui cherche un autre cube quand sa mère est
+  pleine, mode combat DÉCLENCHÉ à la frappe et PERSISTANT jusqu'à la naissance
+  du soldat (aucun timer), signal aux voisins dans 15 m, soldat rouge (20 vie,
+  vitesse 3, dégâts 10) territorial (rayon 10 m du cube parent), mémoire de
+  cible via `scripts/lien_personnel.gd` du framework (magnitude 1.0, décroissance
+  0.4/s, plancher 0.05 → ~3 s de traque après perte de vue), joueur (100 vie,
+  barre HUD 2D, reload de scène à zéro). Composant `PresenceDansMonde`
+  générique. Framework composé partout, rien inventé sur les mécaniques.
+- LOGBOOK.md : le mécanisme qui nommera au joueur ce que le système produit,
+  décide les 4 conditions (rare, composé, conséquent, nommable) et écarte deux
+  fausses pistes (IA narrateur, journal joueur). Rien d'implémenté encore
+- `jeu/Ennemie/` et `jeu/terrain/test_ennemi.tscn` déplacés dans
+  `jeu/Outil de jeu/` (regroupement du banc), tous les paths mis à jour dans les
+  13 fichiers concernés. Vérifié : la scène charge, ses 14 nœuds sont là
 - LE RAFRAICHISSEMENT DU TERRAIN EN JEU S'ETALE SUR PLUSIEURS IMAGES.
   `terrain_visible.gd` posait et effaçait toute la couronne d'un seuil franchi
   en un seul appel synchrone — MESURÉ à 12,5 ms pour 796 colonnes au rayon et

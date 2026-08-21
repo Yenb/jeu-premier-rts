@@ -22,7 +22,7 @@ extends Node3D
 
 const Monde = preload("res://scripts/monde.gd")
 const Gestation = preload("res://scripts/gestation.gd")
-const CubeEnnemi := preload("res://jeu/Ennemie/cube_ennemi.tscn")
+const CubeEnnemi := preload("res://jeu/Outil de jeu/cube_ennemi.tscn")
 
 # TOUTES LES UNE MINUTE : gestation.gd lit ce nombre en SECONDES BRUTES, pas
 # une echelle de temps de jeu -- voir son en-tete.

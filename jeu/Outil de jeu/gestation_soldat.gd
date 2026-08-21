@@ -19,7 +19,7 @@ extends Node3D
 # la main et l'utilisera pour un cube violet des qu'il atteint 30.
 
 const Gestation = preload("res://scripts/gestation.gd")
-const SoldatScene := preload("res://jeu/Ennemie/soldat.tscn")
+const SoldatScene := preload("res://jeu/Outil de jeu/soldat.tscn")
 
 @export var seuil_soldat: float = 50.0
 @export var duree_gestation: float = 30.0

@@ -4,12 +4,12 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://b8mm7aykyu1yv"
-path="res://.godot/imported/le transporteur .glb-e6dd6aac8c8bee3f0ded258208c6eb7a.scn"
+path="res://.godot/imported/le transporteur .glb-ca81cf64af727d6e0000d8b010a17455.scn"
 
 [deps]
 
-source_file="res://jeu/Ennemie/le transporteur .glb"
-dest_files=["res://.godot/imported/le transporteur .glb-e6dd6aac8c8bee3f0ded258208c6eb7a.scn"]
+source_file="res://jeu/Outil de jeu/le transporteur .glb"
+dest_files=["res://.godot/imported/le transporteur .glb-ca81cf64af727d6e0000d8b010a17455.scn"]
 
 [params]
 

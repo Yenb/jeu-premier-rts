@@ -1,6 +1,6 @@
 [gd_scene format=3]
 
-[ext_resource type="Script" path="res://jeu/Ennemie/barre_joueur.gd" id="1_barre"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/barre_joueur.gd" id="1_barre"]
 
 [node name="BarreJoueur" type="CanvasLayer"]
 
