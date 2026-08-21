@@ -48,19 +48,34 @@ const CATALOGUE_CANAUX := {
 	"vue": {"geometrie": "cone_oriente"},
 }
 const CATALOGUE_SAILLANCE := {
-	# UNE SAILLANCE FORTE, une PORTEE plus large que la vue -- ce qui
-	# tranche est la portee de VUE (portee_vision, sur le percevant), pas
-	# la portee_saillance ici. Elle sert au FACTEUR de proximite.gd :
-	# a mi-portee_vision, saillance = 8.0 * (1 - 5/20) = 6.0 -- encore
-	# forte, donc le transporteur ne perd pas de temps a hesiter.
-	"gisement_fer": {"saillance_intrinseque": 8.0, "portee_saillance": 20.0},
+	"gisement_fer": {
+		"saillance_intrinseque": 8.0, "portee_saillance": 20.0,
+		"sens": "attirance",
+	},
+	# LE JOUEUR : plus SAILLANT que le gisement (20 contre 8) et VU DE
+	# PLUS LOIN -- la peur prime toujours sur la faim. `sens: "fuite"`
+	# est un champ LOCAL a ce banc (proximite.gd l'ignore silencieusement,
+	# il ne lit que saillance_intrinseque et portee_saillance) : c'est le
+	# transporteur qui trie attirance/fuite apres l'evaluation.
+	"joueur_menace": {
+		"saillance_intrinseque": 20.0, "portee_saillance": 15.0,
+		"sens": "fuite",
+	},
+	# UN AUTRE CUBE VIOLET (que la mere) : le transporteur y va quand sa
+	# mere est pleine. La saillance est plus faible que celle du gisement --
+	# on prefere d'abord aller collecter, on ne relaie que si le stock est
+	# deja plein.
+	"cube_violet_disponible": {
+		"saillance_intrinseque": 6.0, "portee_saillance": 15.0,
+		"sens": "attirance",
+	},
 }
 
 @export var vie_max: float = 3.0
 @export var charge_max: float = 10.0
 @export var degats_par_coup: float = 5.0
 @export var vitesse: float = 3.0
-@export var portee_vision: float = 10.0
+@export var portee_vision: float = 5.0
 @export var rayon_contact: float = 1.2
 @export var secondes_par_direction: float = 2.0
 @export var secondes_par_scan: float = 1.0
@@ -71,6 +86,8 @@ enum {
 	ETAT_VERS_GISEMENT,
 	ETAT_COGNE,
 	ETAT_VERS_MERE,
+	ETAT_VERS_AUTRE_CUBE,
+	ETAT_FUITE,
 }
 
 var entite: Dictionary
@@ -92,6 +109,9 @@ var _depuis_direction := 0.0
 var _depuis_scan := 0.0
 var _depuis_coup := 0.0
 var _gisement_vise: Node3D = null
+# LE CUBE ALTERNATIF -- utilise quand la mere est pleine et qu'on trouve
+# un autre cube pas plein. Oublie apres depot.
+var _cube_alternatif: Node3D = null
 
 static var _prochaine_graine := 20260821
 var _rng := RandomNumberGenerator.new()
@@ -134,6 +154,19 @@ func subir_frappe(degats: float) -> void:
 
 func _process(delta: float) -> void:
 	entite["position"] = global_position
+	# LA MENACE PREND PRIORITE : evaluee a CHAQUE frame. Une menace percue
+	# force ETAT_FUITE, quel que soit l'etat en cours (aller vers un
+	# gisement, cogner, revenir a la mere -- tout est mis en pause). Une
+	# menace qui sort de portee laisse le transporteur reprendre son
+	# comportement normal a partir d'ERRANCE (il devra retrouver le
+	# gisement, comme un vrai animal apeure qui perd le fil).
+	var menace := _percevoir_la_plus_menacante()
+	if menace != null:
+		_etat = ETAT_FUITE
+		_fuir(menace, delta)
+		return
+	if _etat == ETAT_FUITE:
+		_etat = ETAT_ERRANCE
 	match _etat:
 		ETAT_ERRANCE:
 			_faire_errance(delta)
@@ -143,6 +176,8 @@ func _process(delta: float) -> void:
 			_faire_cogne(delta)
 		ETAT_VERS_MERE:
 			_faire_vers_mere(delta)
+		ETAT_VERS_AUTRE_CUBE:
+			_faire_vers_autre_cube(delta)
 
 # ------------------ ERRANCE ------------------
 
@@ -157,30 +192,110 @@ func _faire_errance(delta: float) -> void:
 			return
 	_marcher_aleatoire(delta)
 
-# CHERCHE LA CIBLE LA PLUS SAILLANTE : compose Perception + Proximite.
-# Perception rend tout ce qui tombe dans le cone_oriente (ici sphere de
-# portee_vision). Proximite pondere par le profil_saillance de chaque
-# chose (le gisement en porte un, le cube violet non pour l'instant).
-# On rend le NOEUD 3D de la plus saillante, ou null si rien.
-func _chercher_gisement() -> Node3D:
+# RETOURNE LA CHOSE LA PLUS SAILLANTE avec le sens demande ("attirance"
+# ou "fuite"). Rend null si rien de percu dans ce sens.
+#
+# CE FILTRAGE PAR "sens" EST LOCAL AU TRANSPORTEUR, pas au framework :
+# proximite.gd ne connait pas cette notion, il rend juste une saillance.
+# C'est ici qu'on decide qu'un profil "attirance" me fait aller vers, un
+# profil "fuite" me fait aller contre.
+func _percevoir_plus_saillante(sens_voulu: String) -> Node3D:
 	if _monde_partage == null:
 		return null
 	var percues := Perception.percevoir(entite, _monde_partage.monde, CATALOGUE_CANAUX)
 	if percues.is_empty():
 		return null
 	var evaluees := Proximite.evaluer(percues, entite, CATALOGUE_SAILLANCE)
-	if evaluees.is_empty():
+	var meilleure_saillance := 0.0
+	var meilleur: Dictionary = {}
+	for eva in evaluees:
+		var ref: String = eva.chose.proprietes.get("profil_saillance", "")
+		var sens: String = CATALOGUE_SAILLANCE.get(ref, {}).get("sens", "")
+		if sens != sens_voulu:
+			continue
+		if eva.saillance > meilleure_saillance:
+			meilleure_saillance = eva.saillance
+			meilleur = eva
+	if meilleur.is_empty():
 		return null
-	var meilleur: Dictionary = evaluees[0]
-	for i in range(1, evaluees.size()):
-		if evaluees[i].saillance > meilleur.saillance:
-			meilleur = evaluees[i]
-	# LE NOEUD 3D EST PORTE PAR LA CHOSE, pas devine : gisement_fer.gd le
-	# pose explicitement dans son entite au _ready.
 	var noeud = meilleur.chose.get("noeud", null)
-	if noeud is Node3D and is_instance_valid(noeud):
-		return noeud
-	return null
+	# is_instance_valid AVANT is : voir _percevoir_plus_saillante_avec_profil.
+	if noeud == null or not is_instance_valid(noeud) or not (noeud is Node3D):
+		return null
+	return noeud
+
+func _chercher_gisement() -> Node3D:
+	# Filtre par PROFIL : on ne veut pas confondre un gisement avec un
+	# cube violet disponible (les deux ont sens=attirance mais rien a
+	# voir a l'usage).
+	return _percevoir_plus_saillante_avec_profil("attirance", "gisement_fer",
+		func(_noeud): return true)
+
+func _percevoir_la_plus_menacante() -> Node3D:
+	return _percevoir_plus_saillante("fuite")
+
+# CHERCHE UN AUTRE CUBE VIOLET pas plein et pas sa mere. Filtre applique
+# sur le noeud, pas sur le catalogue -- la "disponibilite" est un etat
+# dynamique du cube (son stock), pas un profil de saillance.
+func _chercher_cube_disponible_autre_que_mere() -> Node3D:
+	return _percevoir_plus_saillante_avec_profil(
+		"attirance", "cube_violet_disponible",
+		func(noeud):
+			if noeud == mere:
+				return false
+			if noeud.has_method("est_plein") and noeud.est_plein():
+				return false
+			return true)
+
+# VARIANTE de _percevoir_plus_saillante qui filtre par NOM de profil ET
+# par un predicat sur le noeud. Le predicat est indispensable pour
+# "cube pas plein" -- l'etat dynamique du cube (stock) n'est pas dans le
+# catalogue de saillance, il est sur l'instance.
+func _percevoir_plus_saillante_avec_profil(
+		sens_voulu: String, profil_voulu: String, predicat: Callable) -> Node3D:
+	if _monde_partage == null:
+		return null
+	var percues := Perception.percevoir(entite, _monde_partage.monde, CATALOGUE_CANAUX)
+	if percues.is_empty():
+		return null
+	var evaluees := Proximite.evaluer(percues, entite, CATALOGUE_SAILLANCE)
+	var meilleure_saillance := 0.0
+	var meilleur_noeud: Node3D = null
+	for eva in evaluees:
+		var ref: String = eva.chose.proprietes.get("profil_saillance", "")
+		if ref != profil_voulu:
+			continue
+		var sens: String = CATALOGUE_SAILLANCE.get(ref, {}).get("sens", "")
+		if sens != sens_voulu:
+			continue
+		var noeud = eva.chose.get("noeud", null)
+		# is_instance_valid AVANT is : is sur une instance libere leve
+		# "Left operand of 'is' is a previously freed instance." en Godot 4.
+		# Cas : un gisement/cube epuise a ete queue_free avant que son
+		# entree du monde ait ete retiree ce meme frame.
+		if noeud == null or not is_instance_valid(noeud) or not (noeud is Node3D):
+			continue
+		if not predicat.call(noeud):
+			continue
+		if eva.saillance > meilleure_saillance:
+			meilleure_saillance = eva.saillance
+			meilleur_noeud = noeud
+	return meilleur_noeud
+
+# LA FUITE : simple, sans strategie -- direction OPPOSEE a la menace, a
+# vitesse normale. Un vrai animal qui panique ne calcule pas d'itineraire,
+# il s'eloigne, point. Rien de plus subtil ici : c'est le comportement
+# qui donne le "cote debile" qui a fait rire Yael.
+func _fuir(menace: Node3D, delta: float) -> void:
+	if not is_instance_valid(menace):
+		return
+	var vers_menace: Vector3 = menace.global_position - global_position
+	vers_menace.y = 0.0
+	if vers_menace.length() <= 0.001:
+		# COLLE SUR LA MENACE : direction arbitraire pour se decoller.
+		vers_menace = Vector3.RIGHT
+	var direction: Vector3 = -vers_menace.normalized()
+	global_position = global_position + direction * vitesse * delta
 
 func _marcher_aleatoire(delta: float) -> void:
 	_depuis_direction += delta
@@ -243,31 +358,70 @@ func _choisir_apres_cognage() -> void:
 
 func _faire_vers_mere(delta: float) -> void:
 	if not is_instance_valid(mere):
-		# Mere morte : on ne peut plus deposer, on erre avec la charge.
-		_etat = ETAT_ERRANCE
+		# Mere morte : on ne peut plus deposer chez elle. Peut-etre chez
+		# un autre cube -- on tente la perception.
+		_choisir_autre_cube_ou_errer()
+		return
+	# MERE PLEINE : on ne peut plus lui deposer, chercher un autre cube.
+	if mere.has_method("est_plein") and mere.est_plein():
+		_choisir_autre_cube_ou_errer()
 		return
 	var vers: Vector3 = mere.global_position - global_position
 	vers.y = 0.0
 	if vers.length() <= rayon_contact:
-		_deposer_a_la_mere()
+		_deposer_dans(mere)
+		_apres_depot()
 		return
 	_avancer_vers(vers, delta)
 
-func _deposer_a_la_mere() -> void:
-	if not is_instance_valid(mere):
+# ------------------ VERS AUTRE CUBE ------------------
+
+func _faire_vers_autre_cube(delta: float) -> void:
+	# Le cube alternatif a peut-etre ete detruit, ou vient de se remplir --
+	# on rechecke a chaque tick.
+	if not is_instance_valid(_cube_alternatif) \
+			or (_cube_alternatif.has_method("est_plein") and _cube_alternatif.est_plein()):
+		_cube_alternatif = null
+		# Si la mere est de nouveau disponible, on y retourne.
+		if is_instance_valid(mere) and not (mere.has_method("est_plein") and mere.est_plein()):
+			_etat = ETAT_VERS_MERE
+		else:
+			_choisir_autre_cube_ou_errer()
 		return
-	# CONSOMMER.TRANSFERER, meme geste que le cognage : la charge du
-	# transporteur devient le stock_metal de la mere, quantite REELLEMENT
-	# transferee garantie egale a ce qui a quitte la source.
-	Consommer.transferer(entite, mere.entite, "charge", "stock_metal",
+	var vers: Vector3 = _cube_alternatif.global_position - global_position
+	vers.y = 0.0
+	if vers.length() <= rayon_contact:
+		_deposer_dans(_cube_alternatif)
+		_cube_alternatif = null
+		_apres_depot()
+		return
+	_avancer_vers(vers, delta)
+
+# CHERCHE UN AUTRE CUBE DISPONIBLE via perception+saillance. S'il en
+# trouve un, cible-le ; sinon erre en attendant que la mere se libere.
+func _choisir_autre_cube_ou_errer() -> void:
+	var autre := _chercher_cube_disponible_autre_que_mere()
+	if autre != null:
+		_cube_alternatif = autre
+		_etat = ETAT_VERS_AUTRE_CUBE
+	else:
+		_etat = ETAT_ERRANCE
+
+# GESTE DE DEPOT partage : mere ou autre cube, meme Consommer.transferer,
+# meme geste. La cible refresh sa propre barre de stock (sinon la barre
+# bleue ne bougerait qu'au frappe/coup).
+func _deposer_dans(cible: Node3D) -> void:
+	if not is_instance_valid(cible):
+		return
+	Consommer.transferer(entite, cible.entite, "charge", "stock_metal",
 		charge_max, 1.0)
 	_rafraichir_barres()
-	# LA MERE RAFRAICHIT SA PROPRE BARRE DE STOCK -- sinon la barre
-	# bleue ne bougerait qu'a un frappe/coup, jamais au depot.
-	if mere.has_method("_rafraichir_barres"):
-		mere._rafraichir_barres()
-	# Retour : chercher un gisement (memoire perdue si on veut, mais
-	# souvent le meme est encore utile s'il n'est pas epuise).
+	if cible.has_method("_rafraichir_barres"):
+		cible._rafraichir_barres()
+
+func _apres_depot() -> void:
+	# Retour : chercher un gisement (memoire perdue si le gisement est
+	# detruit, sinon le meme est encore utile).
 	if is_instance_valid(_gisement_vise):
 		_etat = ETAT_VERS_GISEMENT
 	else:

@@ -61,6 +61,13 @@ func _tick() -> void:
 		return
 	if not "entite" in parent_cube:
 		return
+	# EN MODE COMBAT : la reproduction normale est GELEE. Une gestation
+	# deja entamee est abandonnee -- pas de fuite en avant. Reprend des
+	# que le mode combat expire.
+	if "mode_combat" in parent_cube and parent_cube.mode_combat:
+		if _mere.proprietes.has("gestation"):
+			_mere.proprietes.erase("gestation")
+		return
 	var stock: float = parent_cube.entite.proprietes.reserves.stock_metal.reserve
 
 	# 1. STOCK INSUFFISANT : rien a faire. Une gestation deja entamee

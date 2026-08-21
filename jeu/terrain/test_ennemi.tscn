@@ -8,6 +8,9 @@
 [ext_resource type="Script" uid="uid://c3x1dax1bu64y" path="res://jeu/Ennemie/population_ennemie.gd" id="6_population"]
 [ext_resource type="PackedScene" path="res://jeu/Ennemie/gisement_fer.tscn" id="8_gisement"]
 [ext_resource type="Script" uid="uid://bx0d3sj1mvtlt" path="res://jeu/Ennemie/monde_partage.gd" id="9_monde"]
+[ext_resource type="Script" uid="uid://tudqsgyk7wcj" path="res://jeu/Ennemie/presence_dans_monde.gd" id="10_presence"]
+[ext_resource type="Script" uid="uid://b12cv03ble3qs" path="res://jeu/Ennemie/vie_joueur.gd" id="11_vie_joueur"]
+[ext_resource type="PackedScene" path="res://jeu/Ennemie/barre_joueur.tscn" id="12_barre_joueur"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ah4o0"]
 
@@ -47,6 +50,14 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.891258, 0)
 [node name="Interaction" type="Node3D" parent="Personnage" unique_id=1887413678]
 script = ExtResource("4_interaction")
 
+[node name="PresenceDansMonde" type="Node" parent="Personnage" unique_id=2066222487]
+script = ExtResource("10_presence")
+type_dans_monde = "joueur"
+profil_saillance = "joueur_menace"
+
+[node name="VieJoueur" type="Node" parent="Personnage" unique_id=1629763438]
+script = ExtResource("11_vie_joueur")
+
 [node name="Population" type="Node3D" parent="." unique_id=1268267222]
 script = ExtResource("6_population")
 duree_gestation = 5.0
@@ -55,16 +66,47 @@ reproduction_active = false
 [node name="CubeEnnemi" parent="Population" unique_id=1795014797 instance=ExtResource("3_cube")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.313004, 13.02895)
 
+[node name="CubeEnnemi" parent="Population/CubeEnnemi" unique_id=675513793 instance=ExtResource("3_cube")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -87.24022, 0.17092514, 47.626034)
+
 [node name="GisementFer" parent="." unique_id=802690814 instance=ExtResource("8_gisement")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 53.611977, 14, 7)
 
-[node name="GisementFer" parent="GisementFer" unique_id=318829915 instance=ExtResource("8_gisement")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -128.53714, 0.86673737, 7)
-
 [node name="CroixVisee" parent="." unique_id=1481093783 instance=ExtResource("5_croix")]
 
+[node name="BarreJoueur" parent="." unique_id=1990014717 instance=ExtResource("12_barre_joueur")]
+
 [node name="GisementFer2" parent="." unique_id=1263899029 instance=ExtResource("8_gisement")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -99.54446, 14.133471, 118.863396)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -99.54446, 14.133471, 84.27639)
 
 [node name="GisementFer3" parent="." unique_id=113579778 instance=ExtResource("8_gisement")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -119.318695, 13.485573, 54.012863)
+metal_max = 1000.0
+
+[node name="GisementFer4" parent="." unique_id=318829915 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -74.92516, 14.07925, 22.5093)
+metal_max = 1000.0
+
+[node name="GisementFer4" parent="GisementFer4" unique_id=969086592 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.077301, 0.1653862, 22.5093)
+metal_max = 1000.0
+
+[node name="GisementFer5" parent="GisementFer4" unique_id=1016062457 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 124.7369, 0.30984116, -82.14356)
+metal_max = 1000.0
+
+[node name="GisementFer6" parent="GisementFer4" unique_id=564744385 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 124.7369, 0.30984116, -27.46933)
+metal_max = 1000.0
+
+[node name="GisementFer5" parent="." unique_id=856825430 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -74.92516, 14.07925, 77.18353)
+metal_max = 1000.0
+
+[node name="GisementFer4" parent="GisementFer5" unique_id=151236193 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 53.889038, 0.18938446, -82.14356)
+metal_max = 1000.0
+
+[node name="GisementFer5" parent="GisementFer5" unique_id=914880325 instance=ExtResource("8_gisement")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 53.889038, 0.18938446, -27.46933)
+metal_max = 1000.0

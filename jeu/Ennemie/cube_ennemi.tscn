@@ -4,6 +4,7 @@
 [ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
 [ext_resource type="Script" path="res://jeu/Ennemie/garde_transporteurs.gd" id="3_garde"]
 [ext_resource type="Script" path="res://jeu/Ennemie/gestation_stock.gd" id="4_gestation"]
+[ext_resource type="Script" path="res://jeu/Ennemie/gestation_soldat.gd" id="5_soldat"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_violet"]
 albedo_color = Color(0.6, 0, 0.9, 1)
@@ -69,3 +70,6 @@ script = ExtResource("3_garde")
 
 [node name="GestationStock" type="Node3D" parent="."]
 script = ExtResource("4_gestation")
+
+[node name="GestationSoldat" type="Node3D" parent="."]
+script = ExtResource("5_soldat")

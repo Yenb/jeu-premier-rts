@@ -1,0 +1,41 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Ennemie/soldat.gd" id="1_soldat"]
+[ext_resource type="Shader" path="res://jeu/Ennemie/barre_de_vie.gdshader" id="2_shader"]
+
+; -- Rouge fonce pour se distinguer d'emblee du transporteur (orange) et
+; -- du cube violet (violet). L'oeil doit voir "danger" au premier coup.
+[sub_resource type="StandardMaterial3D" id="Materiau_soldat"]
+albedo_color = Color(0.85, 0.1, 0.1, 1)
+
+[sub_resource type="BoxMesh" id="Mesh_soldat"]
+material = SubResource("Materiau_soldat")
+size = Vector3(0.7, 0.7, 0.7)
+
+[sub_resource type="BoxShape3D" id="Forme_soldat"]
+size = Vector3(0.7, 0.7, 0.7)
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_vie"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadMesh_vie"]
+material = SubResource("ShaderMaterial_vie")
+size = Vector2(0.7, 0.09)
+
+[node name="Soldat" type="StaticBody3D" groups=["destructible"]]
+script = ExtResource("1_soldat")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_soldat")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("Forme_soldat")
+
+[node name="BarreDeVie" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
+mesh = SubResource("QuadMesh_vie")
