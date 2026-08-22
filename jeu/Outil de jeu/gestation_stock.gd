@@ -22,7 +22,12 @@ extends Node3D
 # doit pas s'evanouir quand son producteur meurt.
 
 const Gestation = preload("res://scripts/gestation.gd")
-const CubeEnnemiScene := preload("res://jeu/Outil de jeu/cube_ennemi.tscn")
+# LA SCENE DE PONTE EST CHARGEE A LA DEMANDE, jamais en preload : ce script
+# vit sur un enfant de cube_ennemi.tscn, mais Godot 4.7 refuse le cycle
+# strict au chargement quand une modif ailleurs declenche un rescan
+# (Parse Error: Busy sur la ligne du script au premier reload). load()
+# resout au moment de l'appel, quand la scene est deja disponible.
+const CHEMIN_SCENE := "res://jeu/Outil de jeu/cube_ennemi.tscn"
 
 @export var seuil_reproduction: float = 30.0
 @export var duree_gestation: float = 20.0
@@ -103,6 +108,10 @@ func _pondre_un_cube_violet(parent_cube: Node3D) -> void:
 	var angle := _rng.randf_range(0.0, TAU)
 	var rayon := _rng.randf_range(rayon_pose_min, rayon_pose_max)
 	var pose: Vector3 = parent_cube.global_position + Vector3(cos(angle) * rayon, 0.0, sin(angle) * rayon)
-	var nouveau := CubeEnnemiScene.instantiate() as Node3D
+	var scene: PackedScene = load(CHEMIN_SCENE)
+	if scene == null:
+		push_error("gestation_stock.gd : impossible de charger %s" % CHEMIN_SCENE)
+		return
+	var nouveau := scene.instantiate() as Node3D
 	accueil.add_child(nouveau)
 	nouveau.global_position = pose

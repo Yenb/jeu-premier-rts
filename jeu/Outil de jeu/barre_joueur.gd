@@ -17,4 +17,9 @@ func _ready() -> void:
 	vie.vie_changee.connect(_sur_vie_changee)
 
 func _sur_vie_changee(fraction: float) -> void:
-	_remplissage.size.x = LARGEUR_MAX * clampf(fraction, 0.0, 1.0)
+	# set_deferred : les ancres opposees du Remplissage ne sont pas egales
+	# (anchor_top=0, anchor_bottom=1), donc Godot override size juste
+	# apres _ready. set_deferred attend la fin de la frame pour poser la
+	# taille, apres que le layout ait ete calcule.
+	var nouvelle_taille := Vector2(LARGEUR_MAX * clampf(fraction, 0.0, 1.0), _remplissage.size.y)
+	_remplissage.set_deferred("size", nouvelle_taille)

@@ -248,6 +248,61 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## EN COURS
 
+- CANEVAS DE BASE APPLIQUÉ à l'herbe, au lichen et au préchauffeur.
+  `manager_herbe.gd` + `manager_lichen.gd` remplacent `cube_herbe.gd` +
+  `cube_lichen.gd` en scène active (fichiers cube gardés sur disque pour
+  patron cube violet). Le préchauffeur pousse ses brins survivants dans
+  le manager via `ajouter_avec_age(pos, age)` au lieu d'instancier des
+  Node. Mesuré : 26 nœuds au total dans la scène (au lieu de ~90 000
+  avec l'ancien pattern à 22 000+ individus), soit 1 560 dispatches/s
+  d'engine au lieu de 5.4 M. Règle non négociable dans CLAUDE.md
+  § « Canevas de base des populations massives ». Toute future
+  dérogation exige un tableau justificatif chiffré et deux sources
+  internet.
+- CHANTIER LOCALITÉ SPATIALE FERMÉ pour l'herbe et le lichen. Le
+  compteur de voisins passe par un CHAMP SCALAIRE
+  (`jeu/Outil de jeu/champ_spatial.gd` + wrappers `champ_herbe.gd`,
+  `champ_lichen.gd`) : chaque cube inscrit +1 à sa naissance, retire -1
+  à sa mort, et LIT sa case et les 8 adjacentes pour tester la
+  saturation. Pattern d'automate cellulaire, éprouvé depuis 40 ans en
+  écologie computationnelle. Aucun `get_nodes_in_group`, aucune Area3D,
+  aucun scan par tick. Coût par événement : O(1). Coût par lecture :
+  O(1) constant (9 cases). Le fichier `prechauffeur_herbe.gd` garde
+  son événementiel interne (compteur `voisins` maintenu aux naissances
+  et morts dans sa liste de brins), à migrer vers `champ_spatial` le
+  jour où il devient un vrai goulot.
+- `jeu/plantes/vegetation.gd` EST MAL DIMENSIONNÉ POUR SON BESOIN — indexation
+  par colonne GridMap, reconstruction complète du Monde à chaque événement, et
+  requêtes spatiales imbriquées dans `rafraichir_autour` (`choses_dans_rayon`
+  appelé, puis `ombragee` refait `choses_dans_rayon` pour chaque plante
+  trouvée). Le système « marche » parce que le CPU encaisse, pas parce qu'il
+  est bien pensé — à N=50 000 individus ou sur mobile, le mur arrive d'un
+  coup. Chiffres à N=500 herbes, ~30 événements par tick :
+
+  | Ce que le code FAIT | Coût |
+  | --- | --- |
+  | Reconstruction Monde (`monde_des_vivantes`) à chaque tick avec ≥1 mort/naissance | ~500 insertions |
+  | `colonnes_prises` — balayage complet à chaque tick | ~500 |
+  | Production : boucle sur TOUTES les plantes, chacune cherche colonne libre | ~500 × k_anneau |
+  | Gestation posée : teste stade+voisins sur TOUTES | ~500 |
+  | Gestation avancée : tick sur TOUTES | ~500 |
+  | Rejets : pour chaque naissance, `trouee_suffisante` fait `choses_dans_rayon` | ~30 × k |
+  | `rafraichir_autour` : 30 foyers × ~15 plantes touchées, ET pour CHACUNE des 15, `ombragee` refait un `choses_dans_rayon` — **requête imbriquée** | **~6 750** |
+  | **Total code actuel** | **~10 000 op/tick** |
+
+  | Ce qu'une herbe voudrait FAIRE | Coût |
+  | --- | --- |
+  | Chaque herbe qui tente de se reproduire (~50/500 par tick) fait UNE requête locale sur ses voisines dans son rayon (k≈30) | ~50 × 30 |
+  | **Total logique locale** | **~1 500 op/tick** |
+
+  Facteur ≈ 7× à N=500. Se dégrade avec N (reconstruction linéaire, requêtes
+  imbriquées aussi) — à N=2 000 le rapport devient ~20×. La différence
+  conceptuelle : le code actuel MAINTIENT un état spatial global pour
+  répondre vite à toute question, alors que les herbes ne posent chacune
+  qu'UNE question, locale, quand elles la posent. Sur des choses qui bougent
+  peu et pondent rarement, maintenir coûte plus cher que recalculer à la
+  demande. À restructurer avant tout chantier qui remet l'herbe en jeu
+
 - LA CHAÎNE ÉDITEUR N'EST PARCOURUE PAR AUCUN TEST — voir PIÈGES, « ce qu'un
   banc headless ne voit pas ». Trois défauts s'y sont succédé sans qu'aucun ne
   rougisse
@@ -344,6 +399,15 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## PROCHAINES ÉTAPES
 
+1. GÉNÉRALISER `prechauffeur_herbe.gd` — actuellement il ne préchauffe
+   que ses propres graines (Marker3D enfants + N aléatoires autour de
+   lui). Utile seul, sans intérêt à côté d'un `semeur.tscn` qui pose déjà
+   500 graines réparties : le préchauffeur devrait pouvoir s'aligner sur
+   les positions posées par le semeur et faire tourner leur simulation
+   avant l'instanciation, plutôt qu'ajouter ses propres graines à côté.
+   Fichier gardé sur disque, retiré de la scène en attendant. À faire
+   quand on voudra un tapis avec une HISTOIRE (naissances, morts,
+   trouées) plutôt qu'un semis uniforme
 1. OBJETS EN DONNÉES, NŒUDS PRÈS DU JOUEUR : le mécanisme qui fait basculer un
    objet de donnée à nœud (rendu plus collision) quand le joueur approche, et
    l'inverse quand il s'éloigne. La règle est tranchée — voir DÉCISIONS, « tout

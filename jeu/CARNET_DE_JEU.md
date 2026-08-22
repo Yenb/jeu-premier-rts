@@ -130,6 +130,71 @@ seul décide. Agrandir la carte coûte zéro.
 - ajouter une sorte d'objet = une ligne dans `semis`, une dans `scenes`, sur la
   scène. Zéro ligne de code.
 
+### 3.5 bis `jeu/Outil de jeu/` — bancs de test, herbe, lichen, semeur
+
+Bancs où le gameplay se compose sans toucher au moteur. Ce dossier réunit le
+banc `test_ennemi` (cube violet, transporteurs, soldats, joueur) et le banc
+`test_ennemi2 Mother box` (ruche mère en cours, herbe verte, lichen,
+semeur initial).
+
+COMPTAGE DES VOISINS PAR CHAMP SCALAIRE — l'herbe et le lichen ne
+regardent JAMAIS le groupe entier ni ne posent d'Area3D. Le monde tient
+un tableau `case -> densité` (`champ_spatial.gd`), un par espèce
+(`champ_herbe.gd`, `champ_lichen.gd`, nœuds dans la scène). Chaque cube
+inscrit +1 à sa naissance, retire -1 à sa mort, LIT sa case et les 8
+adjacentes pour tester la saturation. O(1) par événement, O(1) par
+lecture. Pattern d'automate cellulaire (voir CLAUDE.md § LOCALITÉ
+SPATIALE).
+
+- l'HERBE VERTE — patron CANEVAS DE BASE (voir CLAUDE.md § « Autres
+  règles non négociables »). Trois composants :
+  - `manager_herbe.gd` (Node) : tableau plat de dicts, `_process` central,
+    s'auto-sème à `_ready`. AUCUN Node par brin, AUCUN Timer par brin.
+    Réglages `@export` : `duree_gestation`, `duree_vie`, `seuil_voisins`,
+    `rayon_cases`, `rayon_pose`, `y_min`, `y_max`, `nombre_initial`,
+    `rayon_dispersion`, `seed_rng`.
+  - `champ_herbe.gd` (wrapper de `champ_spatial.gd`) : compteur de
+    densité par case pour la saturation locale.
+  - `visuel_herbe.gd` : MultiMesh de 200 000 slots, 1 draw call pour
+    tout le tapis. Free-list d'indices, `Transform3D(Basis(), pos)`
+    posé au bon slot à chaque naissance.
+  Un `cube_herbe.gd/.tscn` existe encore sur disque (utilisé par le
+  préchauffeur dormant) mais N'EST PLUS DANS LA SCÈNE ACTIVE — le
+  manager remplace complètement.
+- LE LICHEN — patron CANEVAS DE BASE, mêmes trois composants que l'herbe.
+  - `manager_lichen.gd` (Node) : tableau de dicts, `_process` central,
+    s'auto-sème. Double gate `seuil_mere` (défaut 10) + `seuil_cible`
+    (défaut 12).
+  - `champ_lichen.gd` (wrapper `champ_spatial.gd`, taille de case 60 cm)
+  - `visuel_lichen.gd` : MultiMesh 200 000 slots, cube 30 cm vert-bleu.
+  `cube_lichen.gd/.tscn` restent sur disque (patron cube violet, plus
+  utilisés en scène active).
+- SEMER UNE POPULATION INITIALE (`semeur.tscn`) — programme neutre, ne
+  connaît aucun nom d'espèce. Au `_ready`, tire N positions aléatoires
+  dans un disque autour de sa propre position (uniforme sur disque), fait
+  un raycast vertical sur chacune, instancie `scene_a_semer` à cet
+  endroit si le sol est dans la bande d'altitude. S'auto-free après.
+  ACTIVATION : poser `semeur.tscn` dans la scène, régler `scene_a_semer`
+  (herbe, lichen, ou toute scène auto-reproductrice future), `nombre` et
+  `rayon_dispersion`. La scène `test_ennemi2 Mother box.tscn` en porte
+  deux : `SemeurHerbe` (500 herbes) et `SemeurLichen` (500 lichens).
+- PRÉCHAUFFER LE TAPIS (`prechauffeur_herbe.tscn`) — DORMANT, PAS DANS LA
+  SCÈNE ACTUELLEMENT, ALIGNÉ SUR LE CANEVAS DE BASE. Simule N secondes en
+  DONNÉES PURES (aucun nœud, aucun Timer), puis pousse les brins
+  survivants dans `ManagerHerbe` via `ajouter_avec_age(pos, age)`.
+  N'INSTANCIE PLUS aucun `cube_herbe.tscn` — la transition est
+  invisible pour le reste du système, les brins prechauffés vivent
+  dans le MÊME tableau que ceux gérés par le manager, meurent
+  échelonnés (chacun avec son âge d'arrivée), pondent normalement.
+  ACTIVATION : poser `prechauffeur_herbe.tscn` en enfant de la scène,
+  lui donner AU MOINS UNE graine (`Marker3D` enfant ou
+  `nombre_graines_aleatoires > 0`). Les paramètres du préchauffeur
+  doivent MATCHER `manager_herbe.gd` sinon le tapis préchauffé diverge
+  du tapis vivant.
+  Le fichier reste sur disque pour ré-activation quand on voudra un
+  tapis avec une HISTOIRE (naissances, morts, trouées) plutôt qu'un
+  semis uniforme via `nombre_initial` du manager.
+
 ### 3.5 `jeu/unites/` — le personnage arpenteur
 
 Une capsule d'un mètre — une demi-cellule — vue à la première personne. Elle sert

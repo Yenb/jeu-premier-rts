@@ -52,6 +52,26 @@ extends Node
 @export var stature_stade_3: float = 5.0
 @export_file("*.glb", "*.tscn", "*.scn") var modele_stade_3: String = ""
 
+# DE COMBIEN LA VIE D'UN INDIVIDU S'ECARTE DE CELLE DE SON ESPECE, en fraction.
+# A 0.3, une plante vit entre 70 % et 130 % des durees declarees ci-dessus --
+# tous ses seuils a la fois, tiree une seule fois a sa naissance. A ZERO, toutes
+# les plantes de l'espece sont identiques, et c'est le defaut.
+#
+# CE QU'ELLE CORRIGE, ET CE N'EST PAS COSMETIQUE : sans elle, N plantes nees au
+# meme tick franchissent TOUS leurs seuils au meme tick, pour toujours. Une
+# population n'est alors pas un continuum mais quelques COHORTES synchronisees :
+# la vegetation apparait d'un bloc, et le tick qui porte le passage doit tout
+# faire ensemble. Le meme travail, ETALE, ne se voit pas.
+#
+# C'EST DE LA BIOLOGIE, PAS DU BRUIT. Deux graines de la meme espece ne murissent
+# pas au meme rythme -- sol, eau, lumiere, graine. La variance est la chose
+# reelle qui manquait, pas un pansement sur un defaut.
+#
+# UN SEUL FACTEUR POUR TOUTE LA VIE de la plante, jamais un par stade : les
+# seuils de stade.gd sont CUMULES et doivent rester croissants. Un facteur
+# unique les met tous a l'echelle sans jamais pouvoir les croiser.
+@export var dispersion_duree: float = 0.0
+
 @export_group("Terrain")
 
 # Combien de couches au-dessus du sol le plus bas de la carte cette espece
@@ -141,6 +161,23 @@ extends Node
 # La couleur des touffes fabriquees pour les stades qui ne declarent aucun modele.
 @export var couleur: Color = Color(0.38, 0.68, 0.28)
 
+# LA DISTANCE AU-DELA DE LAQUELLE GODOT CESSE DE DESSINER CETTE ESPECE, en
+# metres. A zero, aucune limite -- tout est dessine, quelle que soit la distance.
+#
+# ELLE EST PAR ESPECE, et c'est tout l'interet : un brin d'herbe ne se distingue
+# plus a quarante metres, un arbre de sept metres se voit d'un bout a l'autre de
+# la vallee. Une distance commune obligerait a prendre la plus grande des deux.
+#
+# CE N'EST PAS DE LA SIMULATION. La plante hors de portee vit exactement comme
+# les autres -- elle vieillit, elle se reproduit, elle meurt. Seul son DESSIN
+# s'arrete. Et c'est la CAMERA qui en decide, pas le joueur : rien ici n'a besoin
+# de savoir ou il est.
+#
+# CE QU'ELLE NE FAIT PAS : elle ne libere aucun noeud ni aucune memoire, et elle
+# ne touche pas au tronc solide -- un arbre qu'on ne voit plus barre toujours le
+# passage.
+@export var distance_rendu: float = 0.0
+
 # Les reglages, ramasses en un Dictionary. C'est la SEULE chose que ce noeud rend,
 # et la seule que couvert.gd lui demande.
 func champs() -> Dictionary:
@@ -148,6 +185,7 @@ func champs() -> Dictionary:
 		"noms_stades": [nom_stade_1, nom_stade_2, nom_stade_3],
 		"durees_stades": [duree_stade_1, duree_stade_2, duree_stade_3],
 		"statures_stades": [stature_stade_1, stature_stade_2, stature_stade_3],
+		"dispersion_duree": dispersion_duree,
 		"modeles_stades": [modele_stade_1, modele_stade_2, modele_stade_3],
 		"marge_couches": marge_couches,
 		"trouee_max_voisins": trouee_max_voisins,
@@ -164,6 +202,7 @@ func champs() -> Dictionary:
 		"duree_vie_produit": duree_vie_produit,
 		"ressource": ressource,
 		"rayon_collision": rayon_collision,
+		"distance_rendu": distance_rendu,
 		"modele_produit": modele_produit,
 		"couleur": couleur,
 	}

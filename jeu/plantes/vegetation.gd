@@ -80,8 +80,9 @@ extends RefCounted
 # LES PRODUITS SURVIVENT A LEUR PLANTE : deposes au sol, ils finissent leur temps
 # meme si la mere meurt -- les retirer avec elle ferait disparaitre sous les yeux
 # du joueur ce qu'il allait ramasser. Ils N'ENTRENT PAS DANS LE MONDE (decision de
-# cout : monde.gd balaie lineairement et rien n'interroge le voisinage d'un
-# produit -- precedent scripts/banc_predation.gd, decision (d)).
+# cout : rien n'interroge le voisinage d'un produit, et les y verser ferait payer
+# leur presence a toute requete dont le rayon les touche -- precedent
+# scripts/banc_predation.gd, decision (d)).
 #
 # Regles tenues : positions en Vector3, jamais Vector2 -- une COLONNE est un
 # Vector2i, index de grille et non position. Tout tirage passe par un RNG seede
@@ -165,6 +166,7 @@ static func preparer_depuis_champs(nom: String, champs: Dictionary, config: Dict
 		"stades": stades,
 		"stades_config": stades_config,
 		"longevite": cumul,
+		"dispersion_duree": maxf(0.0, float(champs.get("dispersion_duree", 0.0))),
 		"reproduction_locale": reproduction,
 		"marge_couches": int(champs.marge_couches),
 		"trouee_max_voisins": int(champs.trouee_max_voisins),
@@ -180,6 +182,7 @@ static func preparer_depuis_champs(nom: String, champs: Dictionary, config: Dict
 		"duree_vie_produit": float(champs.duree_vie_produit),
 		"ressource": String(champs.ressource),
 		"rayon_collision": float(champs.rayon_collision),
+		"distance_rendu": float(champs.get("distance_rendu", 0.0)),
 		"couleur": [teinte.r, teinte.g, teinte.b],
 		"modeles_stades": modeles,
 		"modele_produit": String(champs.modele_produit),
@@ -200,10 +203,49 @@ static func preparer_depuis_champs(nom: String, champs: Dictionary, config: Dict
 # comparaison. L'ombre est une boucle en n carre : y refaire deux recherches de
 # table par voisine couterait tout le tick. Elle est REECRITE a chaque tick,
 # jamais perimee.
-static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, config: Dictionary, type: Dictionary) -> Dictionary:
+# LE FACTEUR DE VIE D'UN INDIVIDU. Tire UNE FOIS a la naissance, applique a tous
+# ses seuils : la plante vit plus vite ou plus lentement que son espece, jamais
+# par a-coups. Rend exactement 1.0 quand l'espece ne declare aucune dispersion,
+# ET NE TIRE ALORS RIEN -- une scene qui ne s'en sert pas garde la meme suite de
+# tirages, donc exactement la meme partie qu'avant.
+static func facteur_de_vie(type: Dictionary, rng) -> float:
+	var dispersion := float(type.get("dispersion_duree", 0.0))
+	if dispersion <= 0.0 or rng == null:
+		return 1.0
+	# Borne a 0.05 : un facteur nul ou negatif ferait franchir tous les seuils au
+	# premier tick, ce que stade.gd traduirait par une plante nee epuisee.
+	return maxf(0.05, 1.0 + rng.randf_range(-dispersion, dispersion))
+
+static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, config: Dictionary, type: Dictionary, rng = null) -> Dictionary:
 	var position: Variant = Surface.position_posee(colonne, releve)
 	if position == null:
 		return {}
+	# LES SEUILS SONT COPIES PAR PLANTE DEPUIS TOUJOURS (duplicate) : il ne
+	# manquait qu'une raison de les rendre differents. La voici.
+	var facteur := facteur_de_vie(type, rng)
+	var seuils_etales: Array = (type.stades_config as Array).duplicate(true)
+	# TOUTE L'HORLOGE DE L'INDIVIDU, JAMAIS LA MOITIE. Mettre les seuils de stade
+	# a l'echelle sans toucher a la reproduction raccourcit la FENETRE FERTILE
+	# sans raccourcir l'intervalle entre deux pousses : la plante rapide seme
+	# moins, parfois plus du tout, et la population s'effondre. Mesure : 1603
+	# vivantes a dispersion nulle, 441 avec la seule mise a l'echelle des stades.
+	# Piege deja recense -- SUIVI.md, « FENETRE FERTILE PLUS COURTE QUE
+	# L'INTERVALLE ». Ce qui change ici est la PHASE d'un individu, jamais sa
+	# fecondite.
+	var reproduction: Dictionary = (type.reproduction_locale as Dictionary)
+	if not is_equal_approx(facteur, 1.0):
+		for entree in seuils_etales:
+			entree["age_seuil"] = float(entree.age_seuil) * facteur
+		reproduction = reproduction.duplicate(true)
+		# UN CATALOGUE PORTE AUSSI DES NOTES : toute entree qui n'est pas un
+		# Dictionary est sautee, jamais supposee etre une regle.
+		for ref in reproduction:
+			if not (reproduction[ref] is Dictionary):
+				continue
+			var regle: Dictionary = reproduction[ref]
+			if regle.has("duree_gestation"):
+				regle["duree_gestation"] = float(regle.duree_gestation) * facteur
+
 	var plante := {
 		"id": id,
 		"position": position,
@@ -225,11 +267,16 @@ static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, 
 			# l'ombre.
 			"age": 0.0,
 			"age_reel": 0.0,
-			"seuil_longevite": float(type.longevite),
+			"seuil_longevite": float(type.longevite) * facteur,
 			"reproduction_ref": String(config.reproduction_ref),
 			"etats_actifs": [],
 			"stade": "",
-			"stades_config": (type.stades_config as Array).duplicate(true),
+			"stades_config": seuils_etales,
+			# Le catalogue de gestation de CETTE plante. Identique a celui de son
+			# espece quand elle ne porte aucune dispersion -- meme objet, aucune
+			# copie inutile.
+			"reproduction_locale": reproduction,
+			"facteur_vie": facteur,
 			"compteur_production": 0.0,
 			"stature": 0.0,
 			"ombragee": false,
@@ -252,6 +299,11 @@ static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, 
 static func etat_initial(semis: Array, releve: Dictionary, config: Dictionary, types: Dictionary) -> Dictionary:
 	var plantes: Array = []
 	var refus: Array = []
+	# CREE AVANT LA BOUCLE, et non plus apres : les semis tirent desormais leur
+	# facteur de vie, et ils doivent le tirer sur LE meme RNG seede que la suite
+	# de la partie -- sinon la reproductibilite s'arrete au premier semis.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(config.get("seed", 0))
 	for graine in semis:
 		var colonne: Vector2i = graine.colonne
 		var nom_type := String(graine.get("type", ""))
@@ -264,13 +316,11 @@ static func etat_initial(semis: Array, releve: Dictionary, config: Dictionary, t
 		var raison := Surface.raison_de_refus(colonne, releve, plafond_de(type, releve))
 		if raison != "":
 			refus.append({"id": String(graine.id), "colonne": colonne, "raison": raison})
-		var plante := fabriquer_plante(String(graine.id), colonne, releve, config, type)
+		var plante := fabriquer_plante(String(graine.id), colonne, releve, config, type, rng)
 		if plante.is_empty():
 			continue
 		plantes.append(plante)
 
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(config.get("seed", 0))
 	var etat := {
 		"plantes": plantes,
 		"graines": [],
@@ -342,6 +392,9 @@ static func stade_fertile(plante: Dictionary, type: Dictionary) -> bool:
 # point_fusion ne fond jamais » (scripts/seuil_etat.gd). Une espece qui declare un
 # stade de production au-dela de son dernier ne produit donc JAMAIS, sans qu'une
 # ligne de code ne le sache.
+# LA MEME HORLOGE QUE LE RESTE DE LA PLANTE : un individu qui vit vite produit
+# vite. Sans ce facteur, il traverserait ses stades plus tot tout en gardant la
+# cadence de son espece -- une incoherence qui se verrait sur le sol.
 static func intervalle_de_production(plante: Dictionary, type: Dictionary) -> float:
 	var numero := numero_de_stade(plante, type)
 	if numero <= 0 or numero < int(type.stade_production_min):
@@ -349,7 +402,7 @@ static func intervalle_de_production(plante: Dictionary, type: Dictionary) -> fl
 	var intervalle := float(type.intervalle_production)
 	if numero == dernier_stade(type):
 		intervalle *= float(type.ralentissement_dernier_stade)
-	return intervalle
+	return intervalle * float(plante.proprietes.get("facteur_vie", 1.0))
 
 static func produits_au_sol(etat: Dictionary, id: String) -> int:
 	var combien := 0
@@ -390,14 +443,45 @@ static func peut_pousser(plante: Dictionary, type: Dictionary) -> bool:
 # Compte AU POINT D'ARRIVEE, jamais autour de la mere -- c'est l'endroit ou l'on
 # s'installe qui decide, pas celui d'ou l'on vient. Les morts sont ecartes ici
 # aussi, pour la meme raison qu'ailleurs : le Monde en garde un tick.
-static func trouee_suffisante(position: Vector3, monde, config: Dictionary, type: Dictionary, releve: Dictionary) -> bool:
-	var rayon := Surface.metres_par_cellules(float(config.rayon_trouee_cellules), releve)
+# LES REJETS D'UN MEME TICK DOIVENT SE VOIR LES UNS LES AUTRES. `monde` n'est
+# reconstruit qu'au pas 8 : sans `nouvelles`, une cohorte entiere teste la MEME
+# trouee et s'y engouffre en bloc, chacune aveugle aux autres. Le gate ne mord
+# alors jamais pendant une rafale -- exactement quand il devrait mordre.
+#
+# MESURE QUI L'A ETABLI : a especes et graine identiques, une population
+# synchronisee atteignait 1603 vivantes la ou la meme population etalee dans le
+# temps se stabilisait vers 500. L'ecart n'etait pas une ecologie differente,
+# c'etait le gate contourne par la synchronisation.
+#
+# `nouvelles` est indexe par COLONNE, jamais par position : les rejets de ce tick
+# sont deja ranges ainsi par le pas 7, et compter des cles coute moins qu'une
+# seconde requete spatiale.
+static func trouee_suffisante(position: Vector3, monde, config: Dictionary, type: Dictionary, releve: Dictionary, nouvelles: Dictionary = {}) -> bool:
+	var rayon_cellules := float(config.rayon_trouee_cellules)
+	var rayon := Surface.metres_par_cellules(rayon_cellules, releve)
 	var combien := 0
 	for entree in monde.choses_dans_rayon(position, rayon):
 		if est_disparue(entree.chose, config):
 			continue
 		combien += 1
+	if not nouvelles.is_empty():
+		combien += voisines_nees_ce_tick(
+			Surface.colonne_de(position, releve), nouvelles, rayon_cellules)
 	return combien <= int(type.trouee_max_voisins)
+
+# Combien de rejets DE CE TICK sont deja tombes dans le rayon d'une colonne. Le
+# balayage est borne par le rayon de trouee, qui vaut quelques cellules -- il ne
+# depend jamais de la population.
+static func voisines_nees_ce_tick(colonne: Vector2i, nouvelles: Dictionary, rayon_cellules: float) -> int:
+	var portee := int(ceil(rayon_cellules))
+	var combien := 0
+	for dx in range(-portee, portee + 1):
+		for dz in range(-portee, portee + 1):
+			if sqrt(float(dx * dx + dz * dz)) > rayon_cellules:
+				continue
+			if nouvelles.has(Vector2i(colonne.x + dx, colonne.y + dz)):
+				combien += 1
+	return combien
 
 # LA DOMINANCE : une voisine de STATURE strictement superieure fige la plante.
 # Strictement, jamais « au moins egale » : deux grands cohabitent, seuls les
@@ -694,7 +778,8 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 			continue
 		if not peut_pousser(plante, type_pousse):
 			continue
-		Gestation.poser(plante, null, type_pousse.reproduction_locale)
+		Gestation.poser(plante, null,
+			plante.proprietes.get("reproduction_locale", type_pousse.reproduction_locale))
 
 	# 6. le compteur avance.
 	for plante in encore:
@@ -703,7 +788,8 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 		var type_gest := type_de(plante, types)
 		if type_gest.is_empty():
 			continue
-		Gestation.avancer(plante, type_gest.reproduction_locale, delta)
+		Gestation.avancer(plante,
+			plante.proprietes.get("reproduction_locale", type_gest.reproduction_locale), delta)
 
 	# 7. les rejets. La mere perd sa gestation dans TOUS les cas, y compris quand
 	# aucun rejet n'a pris : sans ce retrait elle resterait prete pour toujours et
@@ -712,6 +798,9 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	# capacite de dispersion est un trait d'espece, et l'anneau se deduit d'elle.
 	# Le cache evite de le reconstruire a chaque mere.
 	var anneaux: Dictionary = {}
+	# LES REJETS DEJA TOMBES CE TICK, par colonne. C'est ce qui permet au gate de
+	# trouee de se refermer PENDANT une rafale au lieu de la laisser passer.
+	var nes_ce_tick: Dictionary = {}
 	for plante in encore:
 		var gestation: Dictionary = plante.proprietes.get("gestation", {})
 		if gestation.is_empty() or not gestation.get("naissance_prete", false):
@@ -736,14 +825,15 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 				continue
 			# LA TROUEE, et c'est ici seulement qu'elle se joue : le rejet regarde
 			# ou il tombe, pas d'ou il vient.
-			if not trouee_suffisante(arrivee, monde, config, type_mere, releve):
+			if not trouee_suffisante(arrivee, monde, config, type_mere, releve, nes_ce_tick):
 				continue
 			etat["rejets"] = int(etat.rejets) + 1
-			var rejet := fabriquer_plante("rejet_%d" % int(etat.rejets), colonne, releve, config, type_mere)
+			var rejet := fabriquer_plante("rejet_%d" % int(etat.rejets), colonne, releve, config, type_mere, etat.rng)
 			if rejet.is_empty():
 				continue
 			plantes.append(rejet)
 			prises[colonne] = String(rejet.id)
+			nes_ce_tick[colonne] = true
 			foyers.append(rejet.position)
 			naissances.append({
 				"id": String(rejet.id),

@@ -11,12 +11,16 @@ config_version=5
 [application]
 
 config/name="Premier jeu rst"
-run/main_scene="res://jeu/terrain/carte.tscn"
+run/main_scene="uid://bgabhdmo156v1"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
 
 [display]
 
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/window_width_override=2300
+window/size/window_height_override=1400
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 

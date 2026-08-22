@@ -124,6 +124,9 @@ func _init() -> void:
 	_juger_le_prechauffage()
 	_juger_la_touffe()
 	_juger_le_tronc()
+	_juger_la_distance_de_rendu()
+	_juger_la_dispersion_des_vies()
+	_juger_les_rejets_du_meme_tick()
 	_juger_les_reglages()
 
 	grille.free()
@@ -998,6 +1001,134 @@ func _par_id(choses: Array, id: String) -> Variant:
 		if String(chose.id) == id:
 			return chose
 	return null
+
+# ---- La distance de rendu ----
+
+func _juger_la_distance_de_rendu() -> void:
+	# ZERO N'ECRIT RIEN : une espece qui ne declare pas de distance garde le
+	# defaut de Godot, donc se dessine partout, donc ne change pas de
+	# comportement en silence.
+	var muet := MeshInstance3D.new()
+	var avant := muet.visibility_range_end
+	_v.v(Couvert.poser_distance_rendu(muet, 0.0) == 0,
+		"une distance nulle pose quand meme une limite de rendu")
+	_v.v(is_equal_approx(muet.visibility_range_end, avant),
+		"une distance nulle a modifie visibility_range_end")
+	muet.free()
+
+	# ELLE DESCEND L'ARBRE ENTIER : visibility_range_end appartient a
+	# GeometryInstance3D, et un .glb est un Node3D qui en porte plusieurs plus
+	# bas. La poser sur la seule racine ne toucherait rien.
+	var racine := Node3D.new()
+	var enfant := MeshInstance3D.new()
+	var petit := MeshInstance3D.new()
+	enfant.add_child(petit)
+	racine.add_child(enfant)
+	_v.v(Couvert.poser_distance_rendu(racine, 40.0) == 2,
+		"la distance de rendu n'a pas atteint les deux maillages enfouis")
+	_v.v(is_equal_approx(enfant.visibility_range_end, 40.0)
+			and is_equal_approx(petit.visibility_range_end, 40.0),
+		"la distance posee n'est pas celle demandee")
+	racine.free()
+
+	# ELLE EST PAR ESPECE, et elle traverse reellement champs() -> le type.
+	var haute := _espece_haute()
+	haute.distance_rendu = 300.0
+	var basse := _espece_basse()
+	basse.distance_rendu = 40.0
+	var type_haut := Vegetation.preparer_depuis_champs(String(haute.nom), haute.champs(), _config)
+	var type_bas := Vegetation.preparer_depuis_champs(String(basse.nom), basse.champs(), _config)
+	_v.v(is_equal_approx(float(type_haut.get("distance_rendu", -1.0)), 300.0)
+			and is_equal_approx(float(type_bas.get("distance_rendu", -1.0)), 40.0),
+		"la distance de rendu ne traverse pas champs() jusqu'au type")
+	_v.v(float(type_haut.distance_rendu) > float(type_bas.distance_rendu),
+		"les deux especes portent la meme distance : elle n'est pas par espece")
+	haute.free()
+	basse.free()
+
+	print("distance de rendu : par espece, zero n'ecrit rien, et elle atteint les maillages enfouis")
+
+# ---- La dispersion des vies ----
+
+func _juger_la_dispersion_des_vies() -> void:
+	var espece := _espece_basse()
+	espece.dispersion_duree = 0.0
+	var sans := Vegetation.preparer_depuis_champs(String(espece.nom), espece.champs(), _config)
+
+	# A ZERO, AUCUN TIRAGE N'EST CONSOMME. C'est ce qui garantit qu'une scene qui
+	# ne s'en sert pas rejoue EXACTEMENT la meme partie qu'avant : la suite du
+	# RNG seede n'est pas decalee d'un cran.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 12345
+	var etat_avant := rng.state
+	var plate_a := Vegetation.fabriquer_plante("a", COLONNE_BASSE, _releve, _config, sans, rng)
+	_v.v(rng.state == etat_avant,
+		"une dispersion nulle consomme quand meme un tirage : la partie se decale")
+	_v.v(is_equal_approx(float(plate_a.proprietes.seuil_longevite), float(sans.longevite)),
+		"une dispersion nulle a quand meme change la longevite")
+
+	# AVEC DISPERSION, DEUX PLANTES DU MEME TYPE DIFFERENT. Sans ce jugement, la
+	# cle serait ecrite, lue, et toutes les plantes resteraient identiques -- le
+	# defaut serait vrai en donnee et sans le moindre effet.
+	espece.dispersion_duree = 0.3
+	var avec := Vegetation.preparer_depuis_champs(String(espece.nom), espece.champs(), _config)
+	var vies: Array = []
+	var seuils: Array = []
+	for i in range(12):
+		var p := Vegetation.fabriquer_plante("d%d" % i, COLONNE_BASSE, _releve, _config, avec, rng)
+		vies.append(float(p.proprietes.seuil_longevite))
+		seuils.append((p.proprietes.stades_config as Array).duplicate(true))
+	var distinctes := {}
+	for v in vies:
+		distinctes[snappedf(v, 0.001)] = true
+	_v.v(distinctes.size() > 1,
+		"douze plantes tirees a dispersion 0.3 ont toutes la meme vie")
+
+	# ET ELLES RESTENT DANS LES BORNES DECLAREES.
+	for v in vies:
+		_v.v(v >= float(avec.longevite) * 0.7 - 0.001 and v <= float(avec.longevite) * 1.3 + 0.001,
+			"une vie tiree sort des bornes de la dispersion : %.2f pour %.2f" % [v, float(avec.longevite)])
+
+	# LES SEUILS RESTENT CROISSANTS. stade.gd compare des index dans cette table
+	# et refuse tout retour en arriere : des seuils croises rendraient un stade
+	# inatteignable, sans qu'aucune erreur ne sorte.
+	for table in seuils:
+		var precedent := -1.0
+		for entree in table:
+			var seuil := float(entree.age_seuil)
+			_v.v(seuil >= precedent, "les seuils de stade ne sont plus croissants apres dispersion")
+			precedent = seuil
+
+	# REPRODUCTIBLE : meme graine, memes vies. La dispersion est du hasard SEEDE,
+	# jamais du hasard libre.
+	var rng_bis := RandomNumberGenerator.new()
+	rng_bis.seed = 12345
+	Vegetation.fabriquer_plante("a", COLONNE_BASSE, _releve, _config, sans, rng_bis)
+	var rejoue: Array = []
+	for i in range(12):
+		var p := Vegetation.fabriquer_plante("d%d" % i, COLONNE_BASSE, _releve, _config, avec, rng_bis)
+		rejoue.append(float(p.proprietes.seuil_longevite))
+	_v.v(rejoue == vies, "a graine egale, les vies tirees ne sont pas les memes")
+
+	espece.free()
+	print("dispersion : zero ne tire rien, 0.3 etale les vies dans ses bornes, seuils croissants, rejouable")
+
+# ---- Les rejets d'un meme tick se voient entre eux ----
+
+func _juger_les_rejets_du_meme_tick() -> void:
+	# LE COMPTE EST BORNE PAR LE RAYON, jamais par la population : c'est ce qui
+	# rend le geste utilisable dans la boucle de rejets sans la rendre couteuse.
+	var nouvelles := {Vector2i(0, 0): true, Vector2i(1, 0): true, Vector2i(0, 2): true}
+	_v.v(Vegetation.voisines_nees_ce_tick(Vector2i(0, 0), nouvelles, 1.0) == 2,
+		"le compte des rejets du tick ne respecte pas le rayon")
+	_v.v(Vegetation.voisines_nees_ce_tick(Vector2i(0, 0), nouvelles, 2.0) == 3,
+		"un rayon plus large ne ramasse pas les rejets plus lointains")
+	_v.v(Vegetation.voisines_nees_ce_tick(Vector2i(50, 50), nouvelles, 3.0) == 0,
+		"une colonne loin de tout compte quand meme des rejets")
+	_v.v(Vegetation.voisines_nees_ce_tick(Vector2i(0, 0), {}, 3.0) == 0,
+		"aucun rejet pose et pourtant un compte non nul")
+
+	print("rejets du meme tick : comptes par colonne, bornes par le rayon de trouee")
 
 func _conclure() -> void:
 	if _v.echecs() > 0:

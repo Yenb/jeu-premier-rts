@@ -156,6 +156,89 @@ comme ceux à venir, et le dégât n'apparaît pas là où on a écrit.
   Le jeu nourrit l'LLM par tranche résumée, jamais le firehose ; l'LLM lit
   l'état, il ne l'invente jamais. Voir design.md, « L'LLM : lecteur ancré,
   jamais auteur ».
+- CANEVAS DE BASE DES POPULATIONS MASSIVES : toute population qui doit
+  tenir des milliers d'individus (herbe, lichen, particules, projectiles,
+  unités simples) s'écrit sur le patron `jeu/plantes/vegetation.gd` +
+  `jeu/plantes/couvert.gd`, jamais un Node3D par individu. Ce canevas
+  est OBLIGATOIRE, une session future qui veut y déroger doit le
+  justifier ici avec un tableau chiffré et des sources internet -- pas
+  d'exception silencieuse.
+  Trois composants séparés :
+    (1) UN MANAGER (Node) qui tient un `Array` de dicts. `_process(delta)`
+        central itère tous les individus en UNE boucle. Aucun Node par
+        individu. Aucun Timer par individu. Exemple : `manager_herbe.gd`.
+    (2) UN CHAMP SCALAIRE (RefCounted) qui compte la densité par case
+        pour la saturation locale. Le manager y inscrit/retire à
+        naissance/mort. Voir LOCALITÉ SPATIALE ci-dessous. Exemple :
+        `champ_spatial.gd` + wrapper `champ_herbe.gd`.
+        DOUBLE GATE OBLIGATOIRE (patron `vegetation.gd`) :
+          - `seuil_mere` : au-dessus, la mere ne pond meme pas -- son
+            propre voisinage est trop dense, elle ecoute la pression.
+          - `seuil_cible` : au-dessus, le bebe ne peut pas s'installer
+            LA -- etablissement bloque par trouee insuffisante.
+        Sans le premier, une mere en bordure d'un tapis sature depense
+        chaque cycle a tenter et rater ; sans le second, un bebe se
+        pose la ou c'est deja plein. Les deux sont necessaires.
+    (3) UN VISUEL (MultiMeshInstance3D) qui rend tous les individus en
+        UN draw call. Le manager pose/retire les transforms. Exemple :
+        `visuel_herbe.gd`.
+  POURQUOI CE CANEVAS EST NON NÉGOCIABLE. Chiffres mesurés en Godot 4.7
+  cette session, à 22 000 individus :
+    * Un Node3D pèse 1 320 octets (documenté : forum.godotengine.org).
+    * L'ancien pattern (Node3D + 2 Timers par individu) = 3 nœuds par
+      individu, dispatchés par l'engine à chaque frame.
+    * À 22 000 individus × 3 nœuds × 60 fps = 3.96 MILLIONS de dispatches
+      par seconde, AVANT que la moindre ligne de logique tourne.
+    * Mémoire : 22 000 × 3 300 octets = 72 Mo pour les nœuds seuls.
+  Après bascule sur le canevas :
+    * 1 nœud manager × 60 fps = 60 dispatches par seconde. GAIN ×66 000.
+    * Mémoire : 22 000 × 200 octets (dict léger) = 4.4 Mo. GAIN ×16.
+    * Le comportement de simulation reste identique.
+  MODIFIER CE CANEVAS demande de rendre un tableau avec :
+    (a) La mesure du nouveau coût par frame / mémoire à 20 000 individus.
+    (b) Deux sources externes justifiant que le nouveau pattern tient
+        l'échelle mieux (doc Godot, benchmarks, articles techniques).
+    (c) La raison précise pour laquelle le canevas actuel ne suffit pas
+        au besoin -- pas une préférence, un besoin nommé.
+  Sans ce tableau justificatif, on ne modifie pas.
+- LOCALITÉ SPATIALE, JAMAIS DE BALAYAGE GLOBAL : une chose qui veut savoir
+  ce qui l'entoure dans un rayon n'interroge JAMAIS toutes les entités de
+  sa catégorie. Trois patterns INTERDITS, quelle que soit la population :
+    for autre in get_tree().get_nodes_in_group("x"):
+        if global_position.distance_to(autre.global_position) < rayon: ...
+    for autre in tous_les_x:  # boucle sur la population entière
+        ...
+    un compteur de voisins recalculé à CHAQUE tick, même en local
+  Trois patterns LÉGITIMES, du plus simple au plus puissant :
+    (a) CHAMP SCALAIRE : le monde tient un tableau `case -> densité` (voir
+        `jeu/Outil de jeu/champ_spatial.gd`). Chaque entité inscrit +1 à
+        sa naissance, retire -1 à sa mort. Pour tester la saturation :
+        lit sa case et les 8 adjacentes -- 9 lectures constantes, jamais
+        liées à N. AUCUNE physique, AUCUNE liste de voisins, AUCUN scan.
+        Pattern d'automate cellulaire, éprouvé depuis 40 ans en écologie
+        computationnelle. LE BON DÉFAUT pour compter de la densité
+        locale sans avoir besoin de nommer les voisins individuellement.
+    (b) BALANCE EN PHYSIQUE : Area3D + signaux body_entered/body_exited.
+        Le moteur physique de Godot tient une partition spatiale interne
+        et notifie sur événement. Zéro tick, zéro scan. Coûte une couche
+        physique fixe et un piège (body_entered ne s'émet pas quand un
+        corps spawn DEDANS -- il faut alors get_overlapping_bodies() une
+        fois au _ready pour rattraper).
+    (c) MONDE INDEXÉ : `scripts/monde.gd:choses_dans_rayon` ne balaie
+        que les cases touchées par le rayon, indexation cachée dans le
+        framework. Utile quand on a besoin de la LISTE des voisins et
+        pas juste d'un compte. Une requête à la naissance et à la mort
+        suffit ; jamais par tick.
+  MÉTAPHORE QUI DOIT DÉCLENCHER LE BON PATTERN : Yael parle souvent de
+  « balance », « pression », « champ », « objet inerte qui pèse ce qui
+  arrive ». Ces mots pointent le pattern (a), le champ scalaire, PAS
+  la perception ni la requête ponctuelle. Quand tu entends une
+  métaphore hors du vocabulaire technique standard, elle nomme un
+  concept précis -- chercher AVANT de proposer une solution.
+  Test permanent : si un fichier neuf appelle `get_nodes_in_group` suivi
+  d'un balayage par distance, STOP -- c'est cette règle qu'il viole.
+  Piège documenté parce qu'il s'est répété de session en session, chez
+  toutes les versions de Claude qui ont travaillé sur ce dépôt.
 
 ## Godot : jamais de class_name
 

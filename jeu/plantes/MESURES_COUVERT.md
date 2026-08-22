@@ -5,6 +5,14 @@ et rien d'autre : des chiffres obtenus en LANÇANT, la méthode qui les a
 produits, et les conclusions que ces chiffres portent. Ce qui reste à décider
 n'est pas ici.
 
+CES CHIFFRES SONT D'AVANT L'INDEX SPATIAL de `scripts/monde.gd`. Ils mesurent
+un `choses_dans_rayon()` qui balayait toutes les choses à chaque requête ; il
+range désormais par case et son coût suit le RAYON, plus la population. Tout ce
+que ce fichier attribue à la requête de voisinage — le coût quadratique en N
+(§2), la part de la phase 9 (§3), le coût par plante (§6) — porte donc sur un
+moteur qui n'existe plus. La méthode reste valable, les nombres non : ce qu'ils
+mesurent après l'index n'a jamais été relevé.
+
 Machine : Windows 11, Godot 4.7.1 stable, `--headless`. Terrain : celui de
 `jeu/terrain/carte.tscn` (16 900 colonnes relevées, cellule de 2 m, couche de
 référence 6). Tous les chiffres viennent de `jeu/plantes/vegetation.gd` recopié
@@ -70,20 +78,21 @@ sont dans les requêtes de voisinage, et 98,5 % de la phase 9 elle-même.
 
 ## 4. La fonction qui coûte
 
-`scripts/monde.gd:choses_dans_rayon()` — FRAMEWORK, pas jeu. Balayage LINÉAIRE
-de toutes les plantes enregistrées, à chaque requête. Le fichier le déclare
-lui-même : « COUT LINEAIRE par requete (balayage de toutes les choses) :
-signale, jamais contourne en silence ».
+`scripts/monde.gd:choses_dans_rayon()` — FRAMEWORK, pas jeu. AU MOMENT DE CE
+RELEVÉ, un balayage de toutes les plantes enregistrées à chaque requête : le
+rayon ne réduisait pas le travail, il ne filtrait que la réponse.
 
 Le jeu l'appelle depuis `jeu/plantes/vegetation.gd`, en trois endroits :
 `ombragee()` et `voisinage()`, toutes deux via `rafraichir_plante()` que pilote
-`rafraichir_autour()` (pas 9), et `trouee_suffisante()` (pas 7).
+`rafraichir_autour()` (pas 9), et `trouee_suffisante()` (pas 7). Ces trois
+adresses tiennent toujours.
 
 CE N'EST PLUS UN CHANTIER DE JEU. `rafraichir_autour` ne relit déjà que les
 foyers, `peut_pousser` ne fait plus aucune requête, l'ombre est déjà portée par
-chaque plante. Ce qui reste est la requête elle-même, et elle vit dans le
-framework. L'ordre de grandeur suivant demande un index spatial DANS
-`monde.gd` — c'est le point 2 des PROCHAINES ÉTAPES de `SUIVI.md`.
+chaque plante. Ce qui restait était la requête elle-même, et elle vit dans le
+framework : elle y porte désormais un index par case, à plusieurs résolutions
+nées à la demande. LE GOULOT QUE CE FICHIER DÉSIGNE N'EN EST DONC PLUS UN, et
+aucune des trois lignes ci-dessus ne dit ce qu'il coûte aujourd'hui.
 
 ## 5. La population que le terrain porte
 

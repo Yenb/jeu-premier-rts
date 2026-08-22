@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Outil de jeu/prechauffeur_herbe.gd" id="1_prech"]
+
+[node name="PrechauffeurHerbe" type="Node3D"]
+script = ExtResource("1_prech")
