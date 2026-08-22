@@ -26,7 +26,16 @@ extends RigidBody3D
 # bouger"). Materiau `no_depth_test = true` pour s'afficher par-dessus
 # la Base opaque.
 
-@export var capacite: int = 300
+# DEUX STOCKS SEPARES :
+# - PERSO (150) : sert au geniteur pour ses propres gestations
+#   (generateur 20, mother cube 100). Rempli par extraction 50 %.
+# - ACCESSIBLE (150) : sert aux generateurs enroles qui viennent puiser
+#   (cout_prelevement 10 par cycle). Rempli par extraction 50 %. Quand
+#   PERSO est plein, l'autre 50 % va integralement dans ACCESSIBLE.
+# Total 300 = capacite historique. Les deux barres visibles au-dessus
+# du geniteur : bleue = perso, violette = accessible.
+@export var capacite_perso: int = 150
+@export var capacite_accessible: int = 150
 @export var intervalle_extraction: float = 3.0
 @export var quantite_par_case: int = 1
 @export var rayon_detection: float = 30.0
@@ -73,7 +82,8 @@ const DISTANCE_MIN_CIBLE := 4.0
 # tolere le sol immediat et rejette les couches empilees ~7 m plus bas.
 const ECART_VERTICAL_MAX_CIBLE := 5.0
 
-var _stock: float = 0.0
+var _stock_perso: float = 0.0
+var _stock_accessible: float = 0.0
 var _ressources: Node = null
 var _timer: Timer
 var _ticks_vides: int = 0
@@ -97,6 +107,11 @@ var _cellule_centre_courante: Variant = null
 var _zone_material: StandardMaterial3D
 @onready var _barre_stock: MeshInstance3D = $BarreDeStock/Barre
 var _materiau_stock: ShaderMaterial
+# Nouvelle barre : stock ACCESSIBLE (violette). Node facultatif ; si le
+# noeud n'existe pas dans la scene chargee, on ne l'affiche pas (garde
+# compatibilite avec anciennes scenes qui n'ont pas encore ete regenerees).
+@onready var _barre_stock_accessible: MeshInstance3D = $BarreDeStockAccessible/Barre if has_node("BarreDeStockAccessible/Barre") else null
+var _materiau_stock_accessible: ShaderMaterial
 
 func _ready() -> void:
 	add_to_group("geniteur")
@@ -110,6 +125,11 @@ func _ready() -> void:
 	_materiau_stock = _barre_stock.mesh.surface_get_material(0).duplicate() as ShaderMaterial
 	_barre_stock.set_surface_override_material(0, _materiau_stock)
 	_materiau_stock.set_shader_parameter("fraction", 0.0)
+	# BARRE ACCESSIBLE (violette) : optionnelle dans les vieilles scenes.
+	if _barre_stock_accessible != null:
+		_materiau_stock_accessible = _barre_stock_accessible.mesh.surface_get_material(0).duplicate() as ShaderMaterial
+		_barre_stock_accessible.set_surface_override_material(0, _materiau_stock_accessible)
+		_materiau_stock_accessible.set_shader_parameter("fraction", 0.0)
 	_teindre_zone(true)
 
 	_timer = Timer.new()
@@ -193,26 +213,53 @@ func _tenter_extraction() -> void:
 	var cellule_centre := grille.local_to_map(grille.to_local(point))
 	_cellule_centre_courante = cellule_centre  # memoire pour _choisir_cible
 
+	# EXTRACTION ARRETEE SI LES DEUX STOCKS PLEINS : Yael a valide que
+	# le geniteur cesse de prendre plutot que de gaspiller.
+	if _stock_perso >= float(capacite_perso) and _stock_accessible >= float(capacite_accessible):
+		return
+	var capacite_totale: float = float(capacite_perso + capacite_accessible)
 	var pris_total := 0.0
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
 			var cellule := cellule_centre + Vector3i(dx, 0, dz)
 			var pris := float(_ressources.preleve(cellule, float(quantite_par_case)))
 			pris_total += pris
-			if _stock + pris_total >= float(capacite):
+			if _stock_perso + _stock_accessible + pris_total >= capacite_totale:
 				break
-		if _stock + pris_total >= float(capacite):
+		if _stock_perso + _stock_accessible + pris_total >= capacite_totale:
 			break
-	_stock = minf(_stock + pris_total, float(capacite))
-	_materiau_stock.set_shader_parameter("fraction", _stock / float(capacite))
+	# REPARTITION 50/50 avec debordement contro le : la moitie va au perso
+	# TANT QU'IL N'EST PAS PLEIN ; ce que le perso refuse va integralement
+	# dans accessible. Meme regle inverse : si accessible plein, tout dans
+	# perso. Total conserve, aucune matiere perdue.
+	var part_perso: float = 0.0
+	var part_accessible: float = 0.0
+	if _stock_perso >= float(capacite_perso):
+		# PERSO plein -> tout dans accessible.
+		part_accessible = minf(pris_total, float(capacite_accessible) - _stock_accessible)
+	elif _stock_accessible >= float(capacite_accessible):
+		# ACCESSIBLE plein -> tout dans perso.
+		part_perso = minf(pris_total, float(capacite_perso) - _stock_perso)
+	else:
+		# CAS NOMINAL : moitie / moitie, avec debordement contro le.
+		var moitie: float = pris_total * 0.5
+		part_perso = minf(moitie, float(capacite_perso) - _stock_perso)
+		part_accessible = minf(pris_total - part_perso, float(capacite_accessible) - _stock_accessible)
+		# Si perso a capte moins que sa moitie (dej a presque plein),
+		# le debordement va dans accessible ; la ligne ci-dessus le fait deja.
+	_stock_perso = _stock_perso + part_perso
+	_stock_accessible = _stock_accessible + part_accessible
+	_materiau_stock.set_shader_parameter("fraction", _stock_perso / float(capacite_perso))
+	if _materiau_stock_accessible != null:
+		_materiau_stock_accessible.set_shader_parameter("fraction", _stock_accessible / float(capacite_accessible))
 	_teindre_zone(pris_total > 0.0)
 
-	# ETAPE C : si RIEN pris ET stock non plein, on compte les ticks
-	# vides. Apres N ticks consecutifs a zero (le rouge est reste visible
-	# assez longtemps pour etre lu), on choisit une nouvelle cible sol.
+	# ETAPE C : si RIEN pris ET AU MOINS UN stock non plein, on compte les
+	# ticks vides. Si les deux sont pleins, l'immobilite est voulue (rien a
+	# aller chercher).
 	if pris_total > 0.0:
 		_ticks_vides = 0
-	elif _stock < float(capacite):
+	elif _stock_perso < float(capacite_perso) or _stock_accessible < float(capacite_accessible):
 		_ticks_vides += 1
 		if _ticks_vides >= TICKS_ROUGE_AVANT_DEPART:
 			_ticks_vides = 0
@@ -225,7 +272,8 @@ func _tenter_extraction() -> void:
 # Si aucune grille n'a jamais ete vue (spawn dans le vide), on ne fait rien
 # ce tick-ci -- le geniteur tombera jusqu'a en trouver une.
 func _marquer_tick_vide_sans_grille() -> void:
-	if _stock >= float(capacite):
+	# Idem : ne bouge pas si les deux stocks sont pleins.
+	if _stock_perso >= float(capacite_perso) and _stock_accessible >= float(capacite_accessible):
 		return
 	_ticks_vides += 1
 	if _ticks_vides >= TICKS_ROUGE_AVANT_DEPART:
@@ -272,17 +320,32 @@ func _teindre_zone(active: bool) -> void:
 		_zone_material.albedo_color = COULEUR_VIDE
 		_zone_material.emission = COULEUR_EMISSION_VIDE
 
-# API publique pour affichage / logique future.
+# API publique -- STOCK PERSO du geniteur. Utilise par gestation_energie
+# et gestation_mother_cube pour tester le seuil de ponte. Le stock
+# accessible aux generateurs enroles est distinct (voir preleve_stock_accessible).
 func stock_courant() -> float:
-	return _stock
+	return _stock_perso
 
-# API publique -- retirer du stock. Utilise par gestation_energie.gd pour
-# payer le cout d'un generateur d'energie a la naissance. Borne a zero
-# (jamais de stock negatif). Rafraichit la barre.
+# API publique -- retirer du stock PERSO. Utilise par gestation_energie.gd
+# (cout 20) et gestation_mother_cube.gd (cout 100) pour payer les
+# gestations. Borne a zero. Rafraichit la barre bleue.
 func retirer_stock(quantite: float) -> void:
-	_stock = maxf(0.0, _stock - quantite)
+	_stock_perso = maxf(0.0, _stock_perso - quantite)
 	if _materiau_stock != null:
-		_materiau_stock.set_shader_parameter("fraction", _stock / float(capacite))
+		_materiau_stock.set_shader_parameter("fraction", _stock_perso / float(capacite_perso))
+
+# API publique -- prelever au stock ACCESSIBLE (violet). Utilise par les
+# generateurs enroles quand ils viennent puiser au geniteur. Rend la
+# quantite REELLEMENT prise (bornee par le stock disponible), jamais
+# celle demandee -- meme convention que ressources_terrain.gd:preleve.
+# Un generateur qui recoit moins que cout_prelevement peut choisir de
+# repartir chercher un cadavre (comportement a cabler morceau suivant).
+func preleve_stock_accessible(quantite: float) -> float:
+	var pris: float = minf(quantite, _stock_accessible)
+	_stock_accessible = _stock_accessible - pris
+	if _materiau_stock_accessible != null:
+		_materiau_stock_accessible.set_shader_parameter("fraction", _stock_accessible / float(capacite_accessible))
+	return pris
 
 # API publique -- force le geniteur a chercher une nouvelle case marron
 # vers laquelle se deplacer. Utilise par gestation_energie.gd quand aucune

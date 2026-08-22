@@ -22,6 +22,14 @@ class MockGeniteur extends Node3D:
 		stock_retire_total += quantite
 		_appels_retirer += 1
 
+	# API MOCKE : le vrai geniteur retourne la quantite REELLEMENT prise.
+	# Ici on considere stock illimite -> retourne toujours la quantite
+	# demandee. Compteur incremente comme retirer_stock.
+	func preleve_stock_accessible(quantite: float) -> float:
+		stock_retire_total += quantite
+		_appels_retirer += 1
+		return quantite
+
 	func stock_courant() -> float:
 		return 300.0
 

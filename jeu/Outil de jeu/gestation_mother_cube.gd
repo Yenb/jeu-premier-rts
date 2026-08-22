@@ -198,6 +198,14 @@ func _exclusions_communes() -> Array:
 		var co := autre as CollisionObject3D
 		if co != null:
 			ex.append(co.get_rid())
+	# CADAVRES DE GENERATEURS (groupe "ressource") : meme piege que
+	# gestation_energie.gd -- sans exclusion, un cadavre autour du geniteur
+	# bloque _chercher_pose_libre et le geniteur boucle en mouvement, ne
+	# pond jamais la mother cube et n'extrait plus (2026-08-22).
+	for autre in get_tree().get_nodes_in_group("ressource"):
+		var co := autre as CollisionObject3D
+		if co != null:
+			ex.append(co.get_rid())
 	return ex
 
 func _hauteur_sol_sous(point: Vector3, espace: PhysicsDirectSpaceState3D, exclusions: Array) -> Variant:

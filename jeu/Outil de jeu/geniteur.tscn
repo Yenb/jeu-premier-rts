@@ -15,6 +15,17 @@ shader_parameter/fraction = 0.0
 material = SubResource("MatBarreStock")
 size = Vector2(4, 0.5)
 
+; -- Deuxieme barre : stock ACCESSIBLE aux generateurs (violet).
+[sub_resource type="ShaderMaterial" id="MatBarreStockAccessible"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.1, 0.05, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.7, 0.3, 0.95, 1)
+shader_parameter/fraction = 0.0
+
+[sub_resource type="QuadMesh" id="QuadBarreStockAccessible"]
+material = SubResource("MatBarreStockAccessible")
+size = Vector2(4, 0.5)
+
 [sub_resource type="StandardMaterial3D" id="MatBase"]
 albedo_color = Color(0.3, 0.35, 0.45, 1)
 metallic = 0.6
@@ -110,6 +121,16 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 7.2, 0)
 
 [node name="Barre" type="MeshInstance3D" parent="BarreDeStock"]
 mesh = SubResource("QuadBarreStock")
+
+; -- BARRE ACCESSIBLE (violette) juste au-dessus de la bleue, memes
+; -- dimensions. Le geniteur.gd:_ready la trouve via has_node -- si
+; -- absente (vieille scene non regeneree), l'affichage est simplement
+; -- ignore (aucune erreur, patron gracieux).
+[node name="BarreDeStockAccessible" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 7.9, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeStockAccessible"]
+mesh = SubResource("QuadBarreStockAccessible")
 
 [node name="ZoneExtraction" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2.99, 0)

@@ -211,6 +211,15 @@ func _exclusions_communes() -> Array:
 		var autre_co := autre as CollisionObject3D
 		if autre_co != null:
 			ex.append(autre_co.get_rid())
+	# CADAVRES DE GENERATEURS : dans le groupe "ressource" (voir
+	# generateur_energie.gd:_mourir), pas dans "generateur_energie". Sans
+	# cette exclusion, un cadavre bloque _chercher_pose_libre autour du
+	# geniteur -> gestation appelle chercher_nouvelle_cible en boucle ->
+	# geniteur en mouvement permanent -> n'extrait plus (piege 2026-08-22).
+	for autre in get_tree().get_nodes_in_group("ressource"):
+		var autre_co := autre as CollisionObject3D
+		if autre_co != null:
+			ex.append(autre_co.get_rid())
 	return ex
 
 # Rend la Y de la GridMap sous `point`, ou null si le raycast rate ou ne

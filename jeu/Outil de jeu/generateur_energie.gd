@@ -176,16 +176,32 @@ func _faire_vers_geniteur(_delta: float) -> void:
 # loin le generateur devra remarcher au tick suivant (mais ce cycle a
 # deja depense les 10 stock, budget perdu si le geniteur meurt).
 func _faire_colle(delta: float) -> void:
-	if not _cout_paye_pour_ce_cycle:
-		if _geniteur.has_method("retirer_stock"):
-			_geniteur.retirer_stock(cout_prelevement)
-		_cout_paye_pour_ce_cycle = true
 	# Stopper toute velocite horizontale (patron geniteur.gd:_avancer_vers_cible
 	# ligne 105 : eviter la derive residuelle).
 	linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
-	_secondes_dans_colle += delta
-	if _secondes_dans_colle >= secondes_ponte:
-		_etat = ETAT_POND
+	# PAIEMENT AU STOCK ACCESSIBLE (violet), pas au stock perso. preleve_
+	# rend ce qui a ete effectivement pris (borne au disponible). Si le
+	# stock accessible est vide/insuffisant, ATTENDRE au contact que le
+	# geniteur remplisse -- pas de timer, pas de production tant qu'on
+	# n'a pas paye integralement le cout. Le morceau cadavre-mange
+	# ajoutera plus tard un "repart chercher un cadavre" quand cette
+	# attente devient improductive.
+	if not _cout_paye_pour_ce_cycle:
+		if _geniteur.has_method("preleve_stock_accessible"):
+			var pris: float = float(_geniteur.preleve_stock_accessible(cout_prelevement))
+			if pris >= cout_prelevement:
+				_cout_paye_pour_ce_cycle = true
+		else:
+			# Fallback pour mocks / anciens geniteurs sans preleve_stock_accessible :
+			# essayer retirer_stock (comportement historique).
+			if _geniteur.has_method("retirer_stock"):
+				_geniteur.retirer_stock(cout_prelevement)
+			_cout_paye_pour_ce_cycle = true
+	# Le timer de ponte n'avance que si le paiement est fait.
+	if _cout_paye_pour_ce_cycle:
+		_secondes_dans_colle += delta
+		if _secondes_dans_colle >= secondes_ponte:
+			_etat = ETAT_POND
 
 # Pose un carre rouge du cote OPPOSE au geniteur (Yael : "derriere lui").
 # Puis retour ETAT_VERS_GENITEUR pour recommencer le cycle. La ponte est
