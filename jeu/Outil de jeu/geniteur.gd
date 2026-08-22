@@ -103,6 +103,13 @@ var _grille_connue: GridMap = null
 # declare arrive immediat, geniteur ne bouge pas : boucle silencieuse.
 # null tant qu'aucun tick d'extraction n'a reussi.
 var _cellule_centre_courante: Variant = null
+# ENTITE MONDE : le geniteur est inscrit au monde partage pour etre percu
+# comme SOURCE DE MATIERE par les generateurs enroles. Propriete
+# "stock_puisable" reflete _stock_accessible (les gestations paient sur
+# perso, mais les enroles puisent uniquement dans l'accessible). Mise a
+# jour a chaque changement (extraction et preleve).
+var entite: Dictionary = {}
+var _monde_partage: Node = null
 @onready var _zone: MeshInstance3D = $ZoneExtraction
 var _zone_material: StandardMaterial3D
 @onready var _barre_stock: MeshInstance3D = $BarreDeStock/Barre
@@ -139,8 +146,31 @@ func _ready() -> void:
 	_timer.timeout.connect(_tenter_extraction)
 	add_child(_timer)
 
+	# INSCRIPTION AU MONDE PARTAGE : le geniteur devient SOURCE percevable
+	# par les generateurs enroles. Propriete "stock_puisable" = ce qu'un
+	# generateur peut effectivement puiser (= _stock_accessible). Sans
+	# cette inscription, un generateur ne pourrait pas le trouver via
+	# Perception.percevoir (interdit de get_nodes_in_group + distance).
+	# Meme patron carre_rouge.gd:_ready.
+	entite = {
+		"id": str(get_instance_id()),
+		"position": global_position,
+		"proprietes": {
+			"stock_puisable": _stock_accessible,
+		},
+		"noeud": self,
+	}
+	_monde_partage = get_tree().get_first_node_in_group("monde_partage")
+	if _monde_partage != null:
+		_monde_partage.monde.ajouter(entite, "geniteur", global_position)
+
 func _process(delta: float) -> void:
 	_avancer_vers_cible(delta)
+	# SYNCHRO POSITION MONDE : le geniteur bouge, entite.position doit
+	# refleter la position vivante pour que les generateurs percoivent la
+	# bonne distance. Meme patron transporteur.gd:156.
+	if not entite.is_empty():
+		entite["position"] = global_position
 
 # Deplacement horizontal a vitesse constante vers _cible_deplacement.
 # Applique une velocite horizontale au RigidBody, la gravite gere Y.
@@ -252,6 +282,9 @@ func _tenter_extraction() -> void:
 	_materiau_stock.set_shader_parameter("fraction", _stock_perso / float(capacite_perso))
 	if _materiau_stock_accessible != null:
 		_materiau_stock_accessible.set_shader_parameter("fraction", _stock_accessible / float(capacite_accessible))
+	# Sync entite pour perception : le stock_puisable actuel (= accessible).
+	if not entite.is_empty():
+		entite.proprietes["stock_puisable"] = _stock_accessible
 	_teindre_zone(pris_total > 0.0)
 
 	# ETAPE C : si RIEN pris ET AU MOINS UN stock non plein, on compte les
@@ -345,7 +378,20 @@ func preleve_stock_accessible(quantite: float) -> float:
 	_stock_accessible = _stock_accessible - pris
 	if _materiau_stock_accessible != null:
 		_materiau_stock_accessible.set_shader_parameter("fraction", _stock_accessible / float(capacite_accessible))
+	# Sync entite pour perception -- les generateurs qui percoivent doivent
+	# voir la valeur qui vient de changer, pas l'ancienne.
+	if not entite.is_empty():
+		entite.proprietes["stock_puisable"] = _stock_accessible
 	return pris
+
+# API PUBLIQUE UNIFORME -- utilisee par les generateurs enroles. Alias de
+# preleve_stock_accessible cote geniteur ; le cadavre (generateur_energie.gd
+# apres _mourir) expose la MEME signature avec sa propre reserve. Le
+# generateur enrole appelle preleve_stock_puisable indifferemment sur
+# n'importe quelle source (respect CLAUDE.md § ADN : aucune connaissance
+# du type de la source dans le code appelant).
+func preleve_stock_puisable(quantite: float) -> float:
+	return preleve_stock_accessible(quantite)
 
 # API publique -- force le geniteur a chercher une nouvelle case marron
 # vers laquelle se deplacer. Utilise par gestation_energie.gd quand aucune

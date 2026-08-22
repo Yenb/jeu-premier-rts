@@ -17,6 +17,14 @@ extends RigidBody3D
 # barre et se detruire.
 
 const Frappe = preload("res://scripts/frappe.gd")
+const Perception = preload("res://scripts/perception.gd")
+
+# CATALOGUE LOCAL canaux perceptifs (patron transporteur.gd:47-49, meme
+# convention que mother_cube.gd). Vue en cone_oriente, angle absent =>
+# sphere pure au rayon portee_vision.
+const CATALOGUE_CANAUX := {
+	"vue": {"geometrie": "cone_oriente"},
+}
 
 @export var vie_max: float = 3.0
 # DUREE DE VIE : le generateur meurt automatiquement apres cette duree.
@@ -26,6 +34,13 @@ const Frappe = preload("res://scripts/frappe.gd")
 # cette valeur. Les frappes suivantes la font descendre ; a 0 -> queue_free.
 # Regle Yael : un cadavre encaisse 7 coups avant destruction finale.
 @export var vie_cadavre: float = 7.0
+# STOCK CADAVRE : matiere puisable par un AUTRE generateur enrole qui
+# vient manger le cadavre. Separe de vie_cadavre (celle-ci est la
+# resistance aux frappes du joueur). Un generateur enrole preleve
+# progressivement ce stock ; a 0 -> le cadavre disparait completement
+# (queue_free). Regle Yael 2026-08-22 : valeur separee, cumul possible
+# sur plusieurs sources pour atteindre cout_prelevement=10.
+@export var stock_cadavre_initial: float = 10.0
 # ENROLEMENT (morceau 2) : le generateur naissant marche vers le geniteur,
 # preleve 10 stock au contact, attend `secondes_ponte`, pond un carre rouge
 # derriere lui, recommence -- jusqu'a mort naturelle 5 min. Instinct
@@ -34,6 +49,13 @@ const Frappe = preload("res://scripts/frappe.gd")
 @export var distance_contact_geniteur: float = 4.0
 @export var cout_prelevement: float = 10.0
 @export var secondes_ponte: float = 60.0
+# PORTEE VISION : le generateur voit toutes les entites (geniteur ET
+# cadavres) dans ce rayon via Perception.percevoir. Choisit la plus
+# proche (tri distance). Voir CATALOGUE_CANAUX + percevoir_source_matiere.
+@export var portee_vision: float = 30.0
+# DISTANCE DE CONTACT CADAVRE : plus courte que celle du geniteur (cadavre
+# 1 m vs geniteur 6 m). 1.5 m couvre la marge d'inertie physique.
+@export var distance_contact_cadavre: float = 1.5
 # OFFSET PONTE : distance a laquelle le carre rouge est pose "derriere"
 # le generateur, direction OPPOSEE au geniteur. Le generateur fait 1 m,
 # le carre rouge 0.4 m -- 1.0 m suffit pour ne pas s'imbriquer.
@@ -42,14 +64,26 @@ const Frappe = preload("res://scripts/frappe.gd")
 const CarreRougeScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
 
 enum {
-	ETAT_VERS_GENITEUR,
+	ETAT_ATTENTE,
+	ETAT_VERS_SOURCE,
 	ETAT_COLLE,
 	ETAT_POND,
 }
-var _etat: int = ETAT_VERS_GENITEUR
-var _geniteur: Node3D = null
+var _etat: int = ETAT_ATTENTE
+# SOURCE : geniteur OU cadavre (autre generateur mort). Choisie a
+# ETAT_ATTENTE par perception + saillance sur "stock_puisable > 0", tri
+# par distance croissante. is_instance_valid teste avant chaque usage.
+var _source: Node3D = null
 var _secondes_dans_colle: float = 0.0
 var _cout_paye_pour_ce_cycle: bool = false
+# STOCK DEJA CUMULE DANS CE CYCLE : le generateur peut puiser sur
+# plusieurs sources jusqu'a atteindre cout_prelevement. Reset a chaque
+# nouveau cycle (retour VERS_SOURCE).
+var _matiere_cumulee: float = 0.0
+# CADAVRE : entite dans le monde + reserve courante.
+var _stock_cadavre_courant: float = 0.0
+var _entite_cadavre: Dictionary = {}
+var _monde_partage: Node = null
 
 var entite: Dictionary
 var _barre_vie: MeshInstance3D
@@ -103,6 +137,40 @@ func _mourir() -> void:
 	# la font descendre a 0, alors seulement queue_free.
 	entite.proprietes.reserves.vie.reserve = vie_cadavre
 	entite.proprietes.reserves.vie.capacite = vie_cadavre
+	# INSCRIPTION CADAVRE AU MONDE PARTAGE : les autres generateurs enroles
+	# le percoivent comme source de matiere (propriete stock_puisable). Sans
+	# cette inscription, aucun percepteur ne le trouve. Meme patron
+	# carre_rouge.gd:_ready.
+	_stock_cadavre_courant = stock_cadavre_initial
+	_entite_cadavre = {
+		"id": str(get_instance_id()) + "_cadavre",
+		"position": global_position,
+		"proprietes": {
+			"stock_puisable": _stock_cadavre_courant,
+		},
+		"noeud": self,
+	}
+	if _monde_partage != null:
+		_monde_partage.monde.ajouter(_entite_cadavre, "cadavre_generateur", global_position)
+
+# API publique -- utilisee UNIQUEMENT en phase cadavre (avant, le
+# generateur ne porte pas de stock puisable). Preleve dans le stock
+# cadavre, retourne la quantite REELLEMENT prise (bornee au disponible).
+# Quand le stock atteint 0 -> retrait du monde + queue_free (Yael 2026-08-22 :
+# "Si le stock, c'est la totalite, ca fait disparaitre le corps").
+func preleve_stock_puisable(quantite: float) -> float:
+	if not _est_cadavre:
+		return 0.0  # generateur vivant : rien a puiser ici
+	var pris: float = minf(quantite, _stock_cadavre_courant)
+	_stock_cadavre_courant = _stock_cadavre_courant - pris
+	if not _entite_cadavre.is_empty():
+		_entite_cadavre.proprietes["stock_puisable"] = _stock_cadavre_courant
+	if _stock_cadavre_courant <= 0.0:
+		# Disparition finale : retrait du monde partage puis queue_free.
+		if _monde_partage != null and not _entite_cadavre.is_empty():
+			_monde_partage.monde.retirer(_entite_cadavre.id)
+		queue_free()
+	return pris
 
 func _ready() -> void:
 	add_to_group("generateur_energie")
@@ -125,6 +193,13 @@ func _ready() -> void:
 			"reserves": {
 				"vie": {"reserve": vie_max, "capacite": vie_max},
 			},
+			# CANAUX PERCEPTIFS : le generateur voit les sources de matiere
+			# (geniteur, cadavres) dans son rayon portee_vision. Meme patron
+			# que transporteur.gd et mother_cube.gd.
+			"canaux": ["vue"],
+			"canaux_config": {
+				"vue": {"portee": portee_vision, "sensibilite": 1.0, "seuil": 0.0},
+			},
 		},
 		"noeud": self,
 	}
@@ -135,39 +210,94 @@ func _ready() -> void:
 	_materiau_vie = _barre_vie.mesh.surface_get_material(0).duplicate() as ShaderMaterial
 	_barre_vie.set_surface_override_material(0, _materiau_vie)
 	_rafraichir_barre()
-	# RESOLUTION GENITEUR : un seul geniteur dans le banc, resolu par groupe
-	# (patron transporteur.gd pour la mere). is_instance_valid teste avant
-	# chaque action de mouvement -- garde-fou valide par Yael.
-	_geniteur = get_tree().get_first_node_in_group("geniteur") as Node3D
+	# RESOLUTION MONDE PARTAGE : sans lui, aucune perception ni inscription
+	# cadavre. Un generateur qui n'en trouve pas se rabat sur "ne trouve
+	# aucune source" (percevoir_source_matiere rend []).
+	_monde_partage = get_tree().get_first_node_in_group("monde_partage")
 
 func _process(delta: float) -> void:
-	# CADAVRE : ne bouge plus, ne pond plus. Le corps reste comme ressource.
-	if _est_cadavre or _geniteur == null or not is_instance_valid(_geniteur):
+	# CADAVRE : ne bouge plus, ne pond plus. Le corps reste comme ressource
+	# puisable par les autres generateurs (via preleve_stock_puisable).
+	if _est_cadavre:
 		return
+	# Synchro position monde pour perception (patron transporteur.gd:156).
+	entite["position"] = global_position
 	match _etat:
-		ETAT_VERS_GENITEUR:
-			_faire_vers_geniteur(delta)
+		ETAT_ATTENTE:
+			_faire_attente()
+		ETAT_VERS_SOURCE:
+			_faire_vers_source(delta)
 		ETAT_COLLE:
 			_faire_colle(delta)
 		ETAT_POND:
 			_faire_pond()
 
-# Marche horizontale vers le geniteur. Meme pattern que soldat.gd et
-# geniteur.gd:_avancer_vers_cible : linear_velocity horizontal, gravite
-# gere Y. Au contact (distance <= distance_contact_geniteur), transition
-# ETAT_COLLE et reset des compteurs de cycle.
-func _faire_vers_geniteur(_delta: float) -> void:
-	var vers: Vector3 = _geniteur.global_position - global_position
+# ATTENTE : cherche une source de matiere (geniteur, cadavres). Le plus
+# proche gagne. Si rien percu, reste immobile (arret velocite horizontale)
+# jusqu'a apparition d'une source.
+func _faire_attente() -> void:
+	linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
+	var vus: Array = percevoir_source_matiere()
+	if vus.is_empty():
+		return
+	var noeud = vus[0].chose.get("noeud", null)
+	if noeud == null or not is_instance_valid(noeud) or not (noeud is Node3D):
+		return
+	_source = noeud as Node3D
+	_etat = ETAT_VERS_SOURCE
+	# NE PAS reset _matiere_cumulee : le generateur qui vient d'epuiser
+	# une source (cadavre trop petit) doit CONSERVER sa matiere deja
+	# collectee pour l'ajouter a ce qu'il prendra sur la source suivante
+	# (Yael 2026-08-22 : "cumul possible sur plusieurs sources"). Le
+	# reset se fait a _faire_pond (fin de cycle reussi).
+	_cout_paye_pour_ce_cycle = false
+
+# API publique -- rend les percepts qui portent stock_puisable > 0 sur
+# leur entite du monde. Tri par distance croissante. La perception reste
+# aveugle (rend TOUT dans le cone) ; le filtrage saillance se fait ici
+# par propriete NOMMEE (respect CLAUDE.md § ADN : aucun test
+# type == "geniteur" ni "cadavre_generateur").
+func percevoir_source_matiere() -> Array:
+	if _monde_partage == null:
+		return []
+	var percues := Perception.percevoir(entite, _monde_partage.monde, CATALOGUE_CANAUX)
+	var sources: Array = []
+	for p in percues:
+		var props: Dictionary = p.chose.get("proprietes", {})
+		if float(props.get("stock_puisable", 0.0)) > 0.0:
+			sources.append(p)
+	sources.sort_custom(func(a, b): return a.distance < b.distance)
+	return sources
+
+# Marche horizontale vers la source. Distance de contact adaptative :
+# le geniteur fait 6 m (distance_contact_geniteur), un cadavre 1 m
+# (distance_contact_cadavre). On distingue par presence de la propriete
+# "stock_cadavre_initial" sur le noeud (pattern duck-typing).
+# Si la source devient invalide (cadavre vide+free, geniteur mort), retour
+# ATTENTE pour rechercher.
+func _faire_vers_source(_delta: float) -> void:
+	if _source == null or not is_instance_valid(_source):
+		_source = null
+		_etat = ETAT_ATTENTE
+		return
+	var vers: Vector3 = _source.global_position - global_position
 	vers.y = 0.0
-	if vers.length() <= distance_contact_geniteur:
-		# Au contact : arret horizontal, entree en ETAT_COLLE.
+	var seuil: float = _distance_contact_pour(_source)
+	if vers.length() <= seuil:
 		linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
 		_etat = ETAT_COLLE
 		_secondes_dans_colle = 0.0
-		_cout_paye_pour_ce_cycle = false
 		return
 	var direction := vers.normalized()
 	linear_velocity = Vector3(direction.x * vitesse_marche, linear_velocity.y, direction.z * vitesse_marche)
+
+# Distance de contact adaptative : cadavre (petit) vs geniteur (grand).
+# Duck-typing sur la presence de "preleve_stock_puisable" + presence de
+# groupe "ressource" (les cadavres y sont, le geniteur non).
+func _distance_contact_pour(source: Node3D) -> float:
+	if source.is_in_group("ressource"):
+		return distance_contact_cadavre
+	return distance_contact_geniteur
 
 # Colle au geniteur : paie le cout de prelevement UNE FOIS (a l'entree),
 # puis attend secondes_ponte avant de pondre. Le geniteur ne bouge pas
@@ -176,44 +306,57 @@ func _faire_vers_geniteur(_delta: float) -> void:
 # loin le generateur devra remarcher au tick suivant (mais ce cycle a
 # deja depense les 10 stock, budget perdu si le geniteur meurt).
 func _faire_colle(delta: float) -> void:
-	# Stopper toute velocite horizontale (patron geniteur.gd:_avancer_vers_cible
-	# ligne 105 : eviter la derive residuelle).
+	if _source == null or not is_instance_valid(_source):
+		_source = null
+		_etat = ETAT_ATTENTE
+		return
 	linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
-	# PAIEMENT AU STOCK ACCESSIBLE (violet), pas au stock perso. preleve_
-	# rend ce qui a ete effectivement pris (borne au disponible). Si le
-	# stock accessible est vide/insuffisant, ATTENDRE au contact que le
-	# geniteur remplisse -- pas de timer, pas de production tant qu'on
-	# n'a pas paye integralement le cout. Le morceau cadavre-mange
-	# ajoutera plus tard un "repart chercher un cadavre" quand cette
-	# attente devient improductive.
+	# PAIEMENT UNIFORME via preleve_stock_puisable. La source rend la
+	# quantite REELLEMENT prise (bornee par son stock). Cumul dans
+	# _matiere_cumulee sur PLUSIEURS puises si necessaire. Une fois le
+	# cout atteint, le timer de ponte demarre.
+	# Si la source ne suffit pas a completer le cycle (cadavre trop
+	# petit), le generateur repart chercher une autre source (retour
+	# ATTENTE) avec la matiere deja cumulee gardee.
 	if not _cout_paye_pour_ce_cycle:
-		if _geniteur.has_method("preleve_stock_accessible"):
-			var pris: float = float(_geniteur.preleve_stock_accessible(cout_prelevement))
-			if pris >= cout_prelevement:
+		var reste: float = cout_prelevement - _matiere_cumulee
+		if _source.has_method("preleve_stock_puisable"):
+			var pris: float = float(_source.preleve_stock_puisable(reste))
+			_matiere_cumulee += pris
+			if pris <= 0.0:
+				# Source epuisee ce tick (le cadavre queue_free apres retour).
+				# Retour ATTENTE pour rechercher une autre source. Le cumul
+				# est PRESERVE (le generateur porte deja la matiere prise).
+				_source = null
+				_etat = ETAT_ATTENTE
+				return
+			if _matiere_cumulee >= cout_prelevement:
 				_cout_paye_pour_ce_cycle = true
 		else:
-			# Fallback pour mocks / anciens geniteurs sans preleve_stock_accessible :
-			# essayer retirer_stock (comportement historique).
-			if _geniteur.has_method("retirer_stock"):
-				_geniteur.retirer_stock(cout_prelevement)
+			# Fallback pour mocks sans preleve_stock_puisable.
+			if _source.has_method("retirer_stock"):
+				_source.retirer_stock(cout_prelevement)
+			_matiere_cumulee = cout_prelevement
 			_cout_paye_pour_ce_cycle = true
-	# Le timer de ponte n'avance que si le paiement est fait.
 	if _cout_paye_pour_ce_cycle:
 		_secondes_dans_colle += delta
 		if _secondes_dans_colle >= secondes_ponte:
 			_etat = ETAT_POND
 
-# Pose un carre rouge du cote OPPOSE au geniteur (Yael : "derriere lui").
-# Puis retour ETAT_VERS_GENITEUR pour recommencer le cycle. La ponte est
-# instantanee -- le vrai timer est dans ETAT_COLLE.
+# Pose un carre rouge du cote OPPOSE a la source (patron puceron : produit
+# le miellat de son cote, pas colle a la plante hote). Puis retour ATTENTE
+# pour choisir la prochaine source (peut avoir change entre-temps :
+# cadavre plus proche, geniteur epuise, ...). La ponte est instantanee.
 func _faire_pond() -> void:
-	var vers_geniteur: Vector3 = _geniteur.global_position - global_position
-	vers_geniteur.y = 0.0
+	var vers_source: Vector3 = Vector3.ZERO
+	if _source != null and is_instance_valid(_source):
+		vers_source = _source.global_position - global_position
+		vers_source.y = 0.0
 	var direction_derriere: Vector3
-	if vers_geniteur.length() > 0.001:
-		direction_derriere = -vers_geniteur.normalized()
+	if vers_source.length() > 0.001:
+		direction_derriere = -vers_source.normalized()
 	else:
-		# Colle sur le geniteur : direction arbitraire pour ne pas superposer.
+		# Colle sur la source ou source invalide : direction arbitraire.
 		direction_derriere = Vector3.RIGHT
 	var pose: Vector3 = global_position + direction_derriere * offset_carre_rouge
 	# POSITION AVANT add_child : sinon _ready du carre lit global_position
@@ -227,9 +370,11 @@ func _faire_pond() -> void:
 	var accueil := get_parent()
 	if accueil != null:
 		accueil.add_child(cr)
-	# Retour au debut du cycle : va rechercher le geniteur pour paie
-	# suivante. Meme comportement infini jusqu'a mort naturelle 5 min.
-	_etat = ETAT_VERS_GENITEUR
+	# Retour ATTENTE : nouveau cycle, choisit la meilleure source dispo.
+	_source = null
+	_matiere_cumulee = 0.0
+	_cout_paye_pour_ce_cycle = false
+	_etat = ETAT_ATTENTE
 
 # API publique -- appelee par ce qui frappe (arme, projectile, etc.).
 # Le degat 1 = une vie perdue (patron 3 vies = 3 unites de reserve).
@@ -240,6 +385,10 @@ func subir_frappe(degats: float) -> void:
 	Frappe.frapper(entite, degats, "vie")
 	if _est_cadavre:
 		if entite.proprietes.reserves.vie.reserve <= 0.0:
+			# Destruction par frappe AVANT que le stock soit consomme :
+			# retirer du monde partage pour eviter un fantome perceptible.
+			if _monde_partage != null and not _entite_cadavre.is_empty():
+				_monde_partage.monde.retirer(_entite_cadavre.id)
 			queue_free()
 		return
 	_rafraichir_barre()
