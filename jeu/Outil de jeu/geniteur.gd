@@ -164,13 +164,29 @@ func _ready() -> void:
 	if _monde_partage != null:
 		_monde_partage.monde.ajouter(entite, "geniteur", global_position)
 
+# B11 : si le geniteur est un jour queue_free (mecanisme de mort a
+# ajouter plus tard), retirer son entree du monde partage sinon les
+# generateurs enroles la percoivent comme un fantome perceptible ad
+# aeternam. NOTIFICATION_PREDELETE est appelee juste avant la destruction.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		if _monde_partage != null and not entite.is_empty():
+			_monde_partage.monde.retirer(entite.id)
+
 func _process(delta: float) -> void:
 	_avancer_vers_cible(delta)
 	# SYNCHRO POSITION MONDE : le geniteur bouge, entite.position doit
 	# refleter la position vivante pour que les generateurs percoivent la
 	# bonne distance. Meme patron transporteur.gd:156.
+	# monde.gd:deplacer() est REQUIS : l'indexation spatiale (par case /
+	# exposant) doit etre reajustee, sinon la chose reste trouvable a son
+	# ANCIENNE case et invisible a la nouvelle (voir monde.gd:148-150).
+	# Sans cet appel, les generateurs enroles percoivent le geniteur a
+	# son ancienne position et marchent dans le vide.
 	if not entite.is_empty():
 		entite["position"] = global_position
+		if _monde_partage != null:
+			_monde_partage.monde.deplacer(entite)
 
 # Deplacement horizontal a vitesse constante vers _cible_deplacement.
 # Applique une velocite horizontale au RigidBody, la gravite gere Y.

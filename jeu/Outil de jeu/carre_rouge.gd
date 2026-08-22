@@ -36,6 +36,10 @@ const Frappe = preload("res://scripts/frappe.gd")
 var entite: Dictionary
 var _barre_vie: MeshInstance3D
 var _materiau_vie: ShaderMaterial
+# LE MONDE PARTAGE : memorise pour pouvoir appeler monde.deplacer quand
+# le carre rouge est pousse par la physique (mother cube qui le mange,
+# generateur qui le pousse en passant).
+var _monde_partage: Node = null
 
 # Idempotent (protection contre double _mourir).
 var _est_mort: bool = false
@@ -47,10 +51,19 @@ func _mourir() -> void:
 	# SORT DU MONDE AVANT queue_free (patron gisement_fer.gd:71-73). Sans
 	# ce retrait, la mother cube percevrait encore un fantome dans
 	# monde.gd et s'y dirigerait pour rien.
-	var monde_partage := get_tree().get_first_node_in_group("monde_partage")
-	if monde_partage != null:
-		monde_partage.monde.retirer(entite.id)
+	if _monde_partage != null:
+		_monde_partage.monde.retirer(entite.id)
 	queue_free()
+
+func _process(_delta: float) -> void:
+	# Synchro position monde : le carre rouge peut etre pousse par la
+	# physique (mother cube qui le mange). Sans monde.deplacer, la mother
+	# cube le percevrait a son ancienne case.
+	if _est_mort or entite.is_empty():
+		return
+	entite["position"] = global_position
+	if _monde_partage != null:
+		_monde_partage.monde.deplacer(entite)
 
 func _ready() -> void:
 	add_to_group("carre_rouge")
@@ -67,9 +80,9 @@ func _ready() -> void:
 	# cube passera par Perception.percevoir avec canal vue pour trouver
 	# les carres rouges via cette inscription -- jamais via
 	# get_nodes_in_group + balayage distance (interdit CLAUDE.md).
-	var monde_partage := get_tree().get_first_node_in_group("monde_partage")
-	if monde_partage != null:
-		monde_partage.monde.ajouter(entite, "carre_rouge", global_position)
+	_monde_partage = get_tree().get_first_node_in_group("monde_partage")
+	if _monde_partage != null:
+		_monde_partage.monde.ajouter(entite, "carre_rouge", global_position)
 
 	_barre_vie = get_node("BarreDeVie/Barre") as MeshInstance3D
 	# DUPLIQUE le materiau shader pour ne pas partager la fraction entre

@@ -56,6 +56,12 @@ const CATALOGUE_CANAUX := {
 # DISTANCE DE CONTACT CADAVRE : plus courte que celle du geniteur (cadavre
 # 1 m vs geniteur 6 m). 1.5 m couvre la marge d'inertie physique.
 @export var distance_contact_cadavre: float = 1.5
+# INTERVALLE DE PERCEPTION EN ATTENTE : la perception coute (parcours de
+# l'index spatial, filtre saillance). En attendant qu'une source apparaisse,
+# re-scanner chaque frame gaspille du CPU (bug B6, 2026-08-22 : si le
+# geniteur a stock_puisable=0, boucle ATTENTE 60 fps sans production).
+# 0.5s : reactif sans etre couteux.
+@export var secondes_par_perception: float = 0.5
 # OFFSET PONTE : distance a laquelle le carre rouge est pose "derriere"
 # le generateur, direction OPPOSEE au geniteur. Le generateur fait 1 m,
 # le carre rouge 0.4 m -- 1.0 m suffit pour ne pas s'imbriquer.
@@ -75,6 +81,7 @@ var _etat: int = ETAT_ATTENTE
 # par distance croissante. is_instance_valid teste avant chaque usage.
 var _source: Node3D = null
 var _secondes_dans_colle: float = 0.0
+var _secondes_depuis_perception: float = 999.0  # premiere frame -> perception immediate
 var _cout_paye_pour_ce_cycle: bool = false
 # STOCK DEJA CUMULE DANS CE CYCLE : le generateur peut puiser sur
 # plusieurs sources jusqu'a atteindre cout_prelevement. Reset a chaque
@@ -152,6 +159,15 @@ func _mourir() -> void:
 	}
 	if _monde_partage != null:
 		_monde_partage.monde.ajouter(_entite_cadavre, "cadavre_generateur", global_position)
+	# EXCEPTION COLLISION AVEC LE GENITEUR : le cadavre est freeze=true,
+	# ne bougera plus. S'il tombe sur la route du geniteur, il peut le
+	# bloquer physiquement (bug B5, 2026-08-22). L'exception fait passer
+	# le geniteur A TRAVERS le cadavre. Les autres corps (generateurs
+	# vivants, joueur, mother cube) continuent a collisonner normalement.
+	var geniteur_node := get_tree().get_first_node_in_group("geniteur")
+	if geniteur_node != null and geniteur_node is CollisionObject3D:
+		var g_co: CollisionObject3D = geniteur_node
+		g_co.add_collision_exception_with(self)
 
 # API publique -- utilisee UNIQUEMENT en phase cadavre (avant, le
 # generateur ne porte pas de stock puisable). Preleve dans le stock
@@ -222,6 +238,7 @@ func _process(delta: float) -> void:
 		return
 	# Synchro position monde pour perception (patron transporteur.gd:156).
 	entite["position"] = global_position
+	_secondes_depuis_perception += delta
 	match _etat:
 		ETAT_ATTENTE:
 			_faire_attente()
@@ -237,6 +254,10 @@ func _process(delta: float) -> void:
 # jusqu'a apparition d'une source.
 func _faire_attente() -> void:
 	linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
+	# Throttle : ne perceptionne qu'une fois toutes les secondes_par_perception.
+	if _secondes_depuis_perception < secondes_par_perception:
+		return
+	_secondes_depuis_perception = 0.0
 	var vus: Array = percevoir_source_matiere()
 	if vus.is_empty():
 		return
@@ -332,12 +353,20 @@ func _faire_colle(delta: float) -> void:
 				return
 			if _matiere_cumulee >= cout_prelevement:
 				_cout_paye_pour_ce_cycle = true
-		else:
+		elif _source.has_method("retirer_stock"):
 			# Fallback pour mocks sans preleve_stock_puisable.
-			if _source.has_method("retirer_stock"):
-				_source.retirer_stock(cout_prelevement)
+			_source.retirer_stock(cout_prelevement)
 			_matiere_cumulee = cout_prelevement
 			_cout_paye_pour_ce_cycle = true
+		else:
+			# Aucune API disponible : la source est invalide comme source
+			# de matiere (bug B7 corrige 2026-08-22 -- avant, le generateur
+			# restait bloque en COLLE, timer arrete). Retour ATTENTE pour
+			# oublier cette source, la prochaine perception l'ignorera
+			# (elle n'a pas de stock_puisable > 0 declare).
+			_source = null
+			_etat = ETAT_ATTENTE
+			return
 	if _cout_paye_pour_ce_cycle:
 		_secondes_dans_colle += delta
 		if _secondes_dans_colle >= secondes_ponte:

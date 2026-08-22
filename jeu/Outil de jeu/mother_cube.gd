@@ -118,6 +118,11 @@ func _ready() -> void:
 	_monde_partage = get_tree().get_first_node_in_group("monde_partage")
 	if _monde_partage != null:
 		_monde_partage.monde.ajouter(entite, "mother_cube", global_position)
+	# B13 : expose "rayon" (demi-cote du cube, tenant compte du scale)
+	# pour que les futurs percepteurs corrigent la distance au CENTRE en
+	# distance a la SURFACE. Utile a taille adulte (cube 70 m, un joueur
+	# a 35 m physiques du bord voit distance monde = 35 m au centre).
+	entite.proprietes["rayon"] = _rayon_courant()
 
 	_barre_vie = get_node("BarreDeVie/Barre") as MeshInstance3D
 	# DUPLIQUE le materiau pour ne pas partager la fraction entre plusieurs
@@ -127,6 +132,7 @@ func _ready() -> void:
 	_rafraichir_barre()
 
 func _process(delta: float) -> void:
+	_compenser_scale_barre()
 	# SYNCHRONISATION POSITION MONDE : la mother cube bouge (physique
 	# RigidBody + mouvement volontaire au morceau 3). entite.position doit
 	# refleter la position vivante pour que Perception.percevoir mesure
@@ -134,6 +140,10 @@ func _process(delta: float) -> void:
 	if _est_mort:
 		return
 	entite["position"] = global_position
+	# monde.deplacer() : reajuste l'index spatial (voir monde.gd:148-150).
+	# Sans lui, les percepteurs voient la mother cube a son ancienne case.
+	if _monde_partage != null:
+		_monde_partage.monde.deplacer(entite)
 	# ACCUMULATION COMPTEUR FRAPPE : incremente tant qu'une cible est
 	# vivante, quel que soit l'etat. Une oscillation MANGE<->VERS a la
 	# frontiere du contact ne reset plus le compteur (bug corrige 2026-08-22).
@@ -234,6 +244,9 @@ func nourrir(_valeur: float) -> void:
 	var scale_max: float = _scale_max()
 	var nouveau_scale: float = minf(scale.x * facteur, scale_max)
 	scale = Vector3.ONE * nouveau_scale
+	# Sync rayon expose pour les percepteurs (B13).
+	if not entite.is_empty():
+		entite.proprietes["rayon"] = _rayon_courant()
 
 # Ratio de croissance dans [0, 1]. 0 = taille de base (scale=1). 1 =
 # taille max (scale = scale_max). Utilise par vitesse_courante et gain_pct
@@ -251,6 +264,12 @@ func _scale_max() -> float:
 
 func _vitesse_courante() -> float:
 	return lerp(vitesse_petite, vitesse_adulte, _ratio_taille())
+
+# Rayon actuel = demi-cote du cube en metres (mesh 0.3 m x scale).
+# Expose sur entite.proprietes.rayon pour les percepteurs qui veulent
+# corriger distance-au-centre en distance-a-la-surface.
+func _rayon_courant() -> float:
+	return taille_base_m * 0.5 * scale.x
 
 # API publique -- appelee par ce qui frappe (arme, projectile, etc.).
 func subir_frappe(degats: float) -> void:
@@ -283,3 +302,23 @@ func percevoir_nourriture() -> Array:
 func _rafraichir_barre() -> void:
 	var f := clampf(entite.proprietes.reserves.vie.reserve / vie_max, 0.0, 1.0)
 	_materiau_vie.set_shader_parameter("fraction", f)
+
+# B12 : le noeud BarreDeVie est enfant du RigidBody -- son scale HERITE
+# du scale de la mother cube. A taille adulte (scale ~233), la barre
+# ferait 70 m de large et flotterait a 70 m au-dessus du centre. On
+# COMPENSE en mettant un scale inverse sur BarreDeVie, appele chaque
+# frame apres le _process (l'utilisateur peut aussi nourrir via API,
+# d'ou l'appel dans _process plutot que dans nourrir seul).
+func _compenser_scale_barre() -> void:
+	var barre := get_node_or_null("BarreDeVie") as Node3D
+	if barre == null:
+		return
+	var s: float = scale.x
+	if s <= 0.0001:
+		return
+	# Contre-scale : la barre garde sa taille physique 0.4x0.06 m absolue.
+	barre.scale = Vector3.ONE / s
+	# Position locale : barre juste au-dessus du sommet du cube (mesh 0.3 m
+	# de cote, sommet a s*0.15 en Y absolu du centre). On veut barre a
+	# environ 0.2 m au-dessus du sommet en absolu -> y_local = 0.15 + 0.2/s.
+	barre.position.y = 0.15 + 0.2 / s

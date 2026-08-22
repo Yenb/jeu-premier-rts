@@ -18,6 +18,7 @@
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/inspecteur_bloc.tscn" id="28_insp"]
 [ext_resource type="Script" uid="uid://d1xwr8v708icp" path="res://jeu/Outil de jeu/stock_joueur.gd" id="29_stock"]
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/barre_ressource.tscn" id="30_bres"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/monde_partage.gd" id="31_monde"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ah4o0"]
 
@@ -77,6 +78,9 @@ script = ExtResource("29_stock")
 [node name="RessourcesTerrain" type="Node" parent="." unique_id=399751907]
 script = ExtResource("20_ress")
 profils = Array[Resource]([ExtResource("21_pbloc"), ExtResource("23_pramp"), ExtResource("24_prg"), ExtResource("25_pnr"), ExtResource("26_pbl"), ExtResource("27_pvt")])
+
+[node name="MondePartage" type="Node" parent="."]
+script = ExtResource("31_monde")
 
 [node name="InspecteurBloc" parent="." unique_id=1847977899 instance=ExtResource("28_insp")]
 
