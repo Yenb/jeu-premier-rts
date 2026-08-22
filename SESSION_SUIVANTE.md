@@ -14,8 +14,13 @@ mort. Framework composé partout (`Perception`, `Proximite`, `Frappe`,
 `Consommer`, `Gestation`, `LienPersonnel`). Aucun mécanisme neuf écrit,
 seulement de la composition.
 
-Un banc jouet `test_ennemi2 Mother box.tscn` a été dupliqué en secours
-avant refonte — c'est là que doit se construire la Ruche mère.
+Le banc `test_ennemi2 Mother box.tscn` porte maintenant un écosystème
+ennemi composé : géniteur double-stock, générateur d'énergie enrolé,
+carré rouge nourriture, mother cube physogastrique, cadavre-mange. Voir
+`jeu/CARNET_DE_JEU.md § 3.5 bis` pour l'index. La mother cube actuelle
+est un premier morceau (30 cm de base, croissance jusqu'à 70 m, 3 vies) —
+la Ruche mère finale décrite ci-dessous reste à réconcilier avec ce qui
+existe.
 
 ## La prochaine étape voulue par Yael
 

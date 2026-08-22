@@ -134,8 +134,46 @@ seul décide. Agrandir la carte coûte zéro.
 
 Bancs où le gameplay se compose sans toucher au moteur. Ce dossier réunit le
 banc `test_ennemi` (cube violet, transporteurs, soldats, joueur) et le banc
-`test_ennemi2 Mother box` (ruche mère en cours, herbe verte, lichen,
-semeur initial).
+`test_ennemi2 Mother box` (écosystème ennemi géniteur/générateur/mother cube,
+herbe verte, lichen, semeur initial).
+
+L'ÉCOSYSTÈME ENNEMI DE `test_ennemi2 Mother box` — quatre entités composées,
+chacune dans son fichier. Pattern reine termite physogastrique côté mother
+cube, pattern symbiote (puceron collé à sa source) côté générateur enrolé.
+
+- LE GÉNITEUR (`geniteur.gd`) — extraction au contact-sol seulement (garde
+  `HAUTEUR_MAX_AU_SOL = 3.5 m`), double stock : `_stock_perso` (150) pour
+  lui, `_stock_accessible` (150) puisable par les générateurs enrolés
+  (barre violette visible sous la barre de vie), extraction 50/50 avec
+  débordement vers le stock non plein. `_choisir_cible` filtre distance
+  ≥ 4 m, écart vertical ≤ 5 m, exclut l'emprise 3×3. Enfants
+  `gestation_energie` (seuil 20, coût 20, gestation 20 s, max vivants 4)
+  et `gestation_mother_cube` (seuil 100, coût 100, gestation 60 s, un
+  seul dans la vie du géniteur, prérequis quatre générateurs pondus).
+- LE GÉNÉRATEUR D'ÉNERGIE (`generateur_energie.gd`) — RigidBody3D amorti
+  (masse 5, damping 2/2, `lock_rotation`). Cycle enrolé : perçoit ses
+  sources par canal vue 30 m (filtre `stock_puisable > 0`), marche vers
+  la plus proche, cumule matière sur plusieurs sources jusqu'à
+  `cout_prelevement` (10), pond un carré rouge derrière lui toutes les
+  60 s. Mort à deux phases : 3 vies vivant → cadavre 7 vies (mesh terni,
+  freeze, groupe `ressource`, inscrit au monde avec `stock_puisable =
+  stock_cadavre_initial`) → `queue_free` à 0. Collision avec le géniteur
+  exclue au passage cadavre pour ne pas faire obstacle sous lui.
+- LE CARRÉ ROUGE (`carre_rouge.gd`) — nourriture de la mother cube,
+  RigidBody3D 40 cm rouge émissif, 5 vies, propriété `nourriture = 5`,
+  inscrit au monde. Le tri se fait côté saillance mother cube via la
+  propriété, jamais par `type == "carre_rouge"` (règle ADN).
+- LA MOTHER CUBE (`mother_cube.gd`) — RigidBody3D pourpre 30 cm de base,
+  taille adulte 70 m. Perception vue 30 m sur `nourriture > 0`, une
+  frappe par seconde au contact, scale lerp base → max (gain 5 %
+  décroissant avec la taille), vitesse lerp 10 → 2,5 m/s. Barre de vie
+  compensée du scale. Propriété `rayon` publiée sur l'entité pour les
+  futurs percepteurs.
+
+MONDE PARTAGÉ DU BANC — `MondePartage` posé racine de la scène (patron
+`test_ennemi`). Toute entité mouvante appelle `monde.deplacer(entite)` dans
+son `_process` : sans ça, un percepteur retrouve un fantôme à la case
+d'origine. Perception des ennemis throttlée à 2/s.
 
 COMPTAGE DES VOISINS PAR CHAMP SCALAIRE — l'herbe et le lichen ne
 regardent JAMAIS le groupe entier ni ne posent d'Area3D. Le monde tient

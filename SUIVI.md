@@ -14,6 +14,14 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- d09a008 — écosystème ennemi, bugs latents fermés : `monde.deplacer` appelé par toute entité mouvante (géniteur, mother cube, carré rouge), `MondePartage` posé au banc `test_ennemi2 Mother box` (sans lui perception morte), collision géniteur↔cadavre exclue, perception mother cube et générateur throttlées à 2/s, barre de vie mother cube compensée du scale, propriété `rayon` publiée sur l'entité
+- 8818c58 — cadavre-mange : le générateur enrolé perçoit la source la plus proche parmi géniteur et cadavres (filtre `stock_puisable > 0`), cumule matière sur plusieurs sources jusqu'à `cout_prelevement`
+- 8d69362 — mother cube perception + mange + croissance : vue 30 m sur `nourriture > 0`, une frappe par seconde au contact, scale lerp base → 70 m (gain 5 % décroissant avec la taille), vitesse lerp 10 → 2,5 m/s ; géniteur devient double-stock (`_stock_perso` 150 + `_stock_accessible` 150, extraction 50/50, barre violette visible)
+- a3b3337 — banc `test_ennemi2 Mother box` : générateur enrolé marche vers le géniteur, prélève 10 stock au contact, pond un carré rouge derrière lui toutes les 60 s ; premier morceau de la mother cube (3 vies, inscrit au monde)
+- 1215c83 — générateur d'énergie à deux phases : 3 vies vivant → cadavre 7 vies (mesh terni, freeze, groupe `ressource`, inscrit au monde avec `stock_puisable = stock_cadavre_initial`) → `queue_free` à 0
+- b44cfb4 — figeage géniteur fermé : `_choisir_cible` filtre distance ≥ 4 m et écart vertical ≤ 5 m, exclut l'emprise 3×3 (la case sur laquelle il vient d'arriver n'est plus une cible valide)
+- c797e78 — générateur d'énergie RigidBody3D amorti (masse 5, damping 2/2, `lock_rotation`) ; gestation en couronne libre autour du géniteur (essais sur 8 angles avec décalage random, rayon 6-8 m) → géniteur cherche nouvelle cible en cas d'échec
+- 2140f0a — géniteur : extraction bloquée tant qu'il n'est pas au sol (garde `HAUTEUR_MAX_AU_SOL = 3.5 m`) ; banc de gestation générateur d'énergie enfant (seuil 20, gestation 20 s, coût 20, max vivants 4)
 - bbab9b6 — BANC TEST_ENNEMI complet : gisement (500 métal, se détruit à zéro),
   transporteurs qui prospectent (perception+saillance, vision 5 m, marche
   aléatoire, cognent, rapportent), cube violet (vie 50, stock 200 max) qui se
