@@ -1,0 +1,63 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Outil de jeu/generateur_energie.gd" id="1_ge"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
+
+[sub_resource type="StandardMaterial3D" id="MatCoeur"]
+albedo_color = Color(0.18, 0.35, 0.7, 1)
+metallic = 0.75
+roughness = 0.25
+emission_enabled = true
+emission = Color(0.25, 0.55, 1.0, 1)
+emission_energy_multiplier = 1.6
+
+[sub_resource type="BoxMesh" id="MeshCoeur"]
+material = SubResource("MatCoeur")
+size = Vector3(1, 1, 1)
+
+[sub_resource type="BoxShape3D" id="ShapeGe"]
+size = Vector3(1, 1, 1)
+
+; -- LAMPE AU SOMMET : petite sphere emissive, meme role que la "Lampe" du
+; -- geniteur mais en bleu (energie) au lieu de jaune (activite). Design
+; -- sympa demande par Yael, patron des lampes emissives du dépôt.
+[sub_resource type="StandardMaterial3D" id="MatLampe"]
+albedo_color = Color(0.3, 0.7, 1.0, 1)
+emission_enabled = true
+emission = Color(0.35, 0.75, 1.0, 1)
+emission_energy_multiplier = 3.5
+
+[sub_resource type="SphereMesh" id="MeshLampe"]
+material = SubResource("MatLampe")
+radius = 0.15
+height = 0.3
+
+[sub_resource type="ShaderMaterial" id="MatBarre"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadBarre"]
+material = SubResource("MatBarre")
+size = Vector2(0.8, 0.1)
+
+[node name="GenerateurEnergie" type="StaticBody3D" groups=["destructible"]]
+script = ExtResource("1_ge")
+
+[node name="Coeur" type="MeshInstance3D" parent="."]
+mesh = SubResource("MeshCoeur")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("ShapeGe")
+
+[node name="Lampe" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, 0)
+mesh = SubResource("MeshLampe")
+
+; -- BARRE DE VIE au-dessus, meme geometrie/couleurs que cube_ennemi.tscn.
+[node name="BarreDeVie" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
+mesh = SubResource("QuadBarre")

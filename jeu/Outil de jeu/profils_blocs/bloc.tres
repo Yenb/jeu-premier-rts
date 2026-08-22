@@ -5,6 +5,5 @@
 [resource]
 script = ExtResource("1_profil")
 nom_item = "bloc"
-reserve = 5
+reserve = 4
 quantite_regen = 2
-duree_regen_secondes = 60.0

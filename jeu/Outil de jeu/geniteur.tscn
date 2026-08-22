@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" path="res://jeu/Outil de jeu/geniteur.gd" id="1_gen"]
 [ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/gestation_energie.gd" id="3_gest"]
 
 [sub_resource type="ShaderMaterial" id="MatBarreStock"]
 shader = ExtResource("2_shader")
@@ -112,4 +113,10 @@ mesh = SubResource("QuadBarreStock")
 [node name="ZoneExtraction" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -2.99, 0)
 mesh = SubResource("MeshZone")
+
+; -- BANC DE GESTATION : enfant du geniteur. Params (seuil_ponte,
+; -- duree_gestation, cout_ponte, max_vivants) exposes dans l'inspecteur
+; -- de ce noeud. Voir gestation_energie.gd.
+[node name="Gestation" type="Node3D" parent="."]
+script = ExtResource("3_gest")
 

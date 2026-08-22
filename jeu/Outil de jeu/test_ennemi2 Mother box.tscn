@@ -9,12 +9,12 @@
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/barre_joueur.tscn" id="10_barre"]
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/geniteur.tscn" id="16_hqypk"]
 [ext_resource type="Script" uid="uid://cj4hq8kgy146n" path="res://jeu/Outil de jeu/ressources_terrain.gd" id="20_ress"]
-[ext_resource type="Resource" path="res://jeu/Outil de jeu/profils_blocs/bloc.tres" id="21_pbloc"]
-[ext_resource type="Resource" path="res://jeu/Outil de jeu/profils_blocs/rampe.tres" id="23_pramp"]
-[ext_resource type="Resource" path="res://jeu/Outil de jeu/profils_blocs/bloc_rouge.tres" id="24_prg"]
-[ext_resource type="Resource" path="res://jeu/Outil de jeu/profils_blocs/bloc_noir.tres" id="25_pnr"]
-[ext_resource type="Resource" path="res://jeu/Outil de jeu/profils_blocs/bloc_bleu.tres" id="26_pbl"]
-[ext_resource type="Resource" path="res://jeu/Outil de jeu/profils_blocs/bloc_vert.tres" id="27_pvt"]
+[ext_resource type="Resource" uid="uid://dnue86cvdtf8o" path="res://jeu/Outil de jeu/profils_blocs/bloc.tres" id="21_pbloc"]
+[ext_resource type="Resource" uid="uid://cj5fjet8iax3y" path="res://jeu/Outil de jeu/profils_blocs/rampe.tres" id="23_pramp"]
+[ext_resource type="Resource" uid="uid://2tmui8cjc1j2" path="res://jeu/Outil de jeu/profils_blocs/bloc_rouge.tres" id="24_prg"]
+[ext_resource type="Resource" uid="uid://ccli041v2ryjj" path="res://jeu/Outil de jeu/profils_blocs/bloc_noir.tres" id="25_pnr"]
+[ext_resource type="Resource" uid="uid://uq0ktdc4tvhc" path="res://jeu/Outil de jeu/profils_blocs/bloc_bleu.tres" id="26_pbl"]
+[ext_resource type="Resource" uid="uid://j7heu6ni71db" path="res://jeu/Outil de jeu/profils_blocs/bloc_vert.tres" id="27_pvt"]
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/inspecteur_bloc.tscn" id="28_insp"]
 [ext_resource type="Script" uid="uid://d1xwr8v708icp" path="res://jeu/Outil de jeu/stock_joueur.gd" id="29_stock"]
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/barre_ressource.tscn" id="30_bres"]
@@ -84,3 +84,4 @@ profils = Array[Resource]([ExtResource("21_pbloc"), ExtResource("23_pramp"), Ext
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 65.150696, 48.750877, 34.288094)
 
 [editable path="Personnage"]
+[editable path="Geniteur"]

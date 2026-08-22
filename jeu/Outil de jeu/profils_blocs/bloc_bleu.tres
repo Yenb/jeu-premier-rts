@@ -1,10 +1,7 @@
-[gd_resource type="Resource" script_class="Resource" load_steps=2 format=3]
+[gd_resource type="Resource" format=3 uid="uid://uq0ktdc4tvhc"]
 
-[ext_resource type="Script" path="res://jeu/Outil de jeu/profil_bloc.gd" id="1_profil"]
+[ext_resource type="Script" uid="uid://drl8br2fktprw" path="res://jeu/Outil de jeu/profil_bloc.gd" id="1_profil"]
 
 [resource]
 script = ExtResource("1_profil")
 nom_item = "bloc_bleu"
-reserve = 0
-quantite_regen = 0
-duree_regen_secondes = 60.0

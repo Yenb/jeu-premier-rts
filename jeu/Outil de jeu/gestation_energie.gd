@@ -1,0 +1,129 @@
+extends Node3D
+
+# BANC "test_ennemi2 Mother box" -- LE GENITEUR OBSERVE SON PROPRE STOCK
+# et pond un generateur d'energie (voir generateur_energie.gd) des que
+# stock >= seuil_ponte ET nombre de vivants < max_vivants. Coute
+# `cout_ponte` unites de stock a la naissance ; si le generateur meurt
+# pendant la gestation, le cout n'a pas ete debite (patron
+# gestation_stock.gd).
+#
+# COMPOSE gestation.gd DU FRAMEWORK -- meme patron que gestation_stock.gd
+# et garde_transporteurs.gd. Deux gates specifiques ici : STOCK SUFFISANT
+# et MAX_VIVANTS non atteint. Meme mecanisme framework, deux gates
+# differentes. Rien de neuf ecrit sur "compter le temps" ou "declencher
+# au seuil".
+#
+# COMPTE LES VIVANTS PAR GROUPE, PAS PAR REFERENCE : chaque generateur
+# s'inscrit dans "generateur_energie" a son _ready. On lit la taille du
+# groupe, jamais un tableau interne -- si un generateur meurt (queue_free),
+# il quitte le groupe automatiquement. Le prochain tick voit le trou et
+# relance la ponte. Meme patron bus/group que le CLAUDE.md interdit
+# explicitement de contourner par des signal+connect par instance.
+#
+# LE NOUVEAU GENERATEUR EST POSE COMME FRERE du geniteur, pas enfant : un
+# enfant meurt avec son parent (queue_free en cascade). Un enfant de la
+# genese ne doit pas s'evanouir quand son geniteur meurt.
+#
+# POSITION DE PONTE = geniteur.global_position EXACTEMENT, pas d'offset
+# random (contrainte Yael : "colle la position, pas de position annexe").
+# La physique gere ensuite le chevauchement.
+
+const Gestation = preload("res://scripts/gestation.gd")
+# LA SCENE DU GENERATEUR EST CHARGEE A LA DEMANDE, jamais en preload :
+# meme raison que gestation_stock.gd -- Godot 4.7 refuse le cycle strict
+# quand une modif ailleurs declenche un rescan (Parse Error: Busy).
+const CHEMIN_SCENE := "res://jeu/Outil de jeu/generateur_energie.tscn"
+
+# PARAMETRES DE GESTATION -- exportes pour que Yael les regle dans
+# l'inspecteur, directement sur le nœud enfant du geniteur.
+@export var seuil_ponte: float = 20.0
+@export var duree_gestation: float = 20.0
+@export var cout_ponte: float = 20.0
+@export var max_vivants: int = 4
+
+const REF_REPRODUCTION := "generateur_energie"
+const NOM_GROUPE_VIVANTS := "generateur_energie"
+
+var _catalogue: Dictionary
+var _mere: Dictionary
+var _geniteur: Node = null
+
+func _ready() -> void:
+	_geniteur = get_parent()
+	if _geniteur == null:
+		push_error("gestation_energie.gd : aucun parent -- doit etre enfant du geniteur")
+		return
+	# Contrat : le geniteur expose stock_courant() (lecture) et
+	# retirer_stock(quantite) (mutation). Verifie a chaud, une seule fois.
+	if not _geniteur.has_method("stock_courant") or not _geniteur.has_method("retirer_stock"):
+		push_error("gestation_energie.gd : le parent n'expose pas stock_courant()/retirer_stock() -- pas le bon type de parent ?")
+		return
+
+	_catalogue = {REF_REPRODUCTION: {"duree_gestation": duree_gestation}}
+	# LE GENITEUR AGIT COMME "MERE" au sens de reproduction. Aucune
+	# gestation n'est posee ici tant que les deux gates ne sont pas
+	# franchies.
+	_mere = {
+		"id": str(_geniteur.get_instance_id()),
+		"proprietes": {"reproduction_ref": REF_REPRODUCTION},
+	}
+
+	var minuteur := Timer.new()
+	minuteur.wait_time = 1.0
+	minuteur.one_shot = false
+	minuteur.autostart = true
+	minuteur.timeout.connect(_tick)
+	add_child(minuteur)
+
+func _tick() -> void:
+	if _geniteur == null or not is_instance_valid(_geniteur):
+		return
+
+	var stock: float = float(_geniteur.stock_courant())
+	var vivants: int = get_tree().get_nodes_in_group(NOM_GROUPE_VIVANTS).size()
+
+	# 1. GATE MAX_VIVANTS : au-dessus, on bloque, meme si une gestation
+	# est deja entamee (on l'annule pour ne pas depenser du stock au
+	# moment de la naissance dans un slot inexistant). Symetrique au
+	# gele du mode_combat dans gestation_stock.gd.
+	if vivants >= max_vivants:
+		if _mere.proprietes.has("gestation"):
+			_mere.proprietes.erase("gestation")
+		return
+
+	# 2. GATE STOCK : sous le seuil, rien a faire. Une gestation deja
+	# entamee reste en place (stock a pu redescendre entre-temps, on ne
+	# casse pas ce qui a demarre -- meme convention que gestation_stock).
+	if stock < seuil_ponte and not _mere.proprietes.has("gestation"):
+		return
+
+	# 3. ENTAMER LA GESTATION AU FRANCHISSEMENT, pas avant.
+	if not _mere.proprietes.has("gestation"):
+		Gestation.poser(_mere, null, _catalogue)
+
+	# 4. AVANCER D'UNE SECONDE, meme rythme que le Timer.
+	Gestation.avancer(_mere, _catalogue, 1.0)
+
+	# 5. NAISSANCE PRETE : pondre, retirer la gestation, payer le cout.
+	var gestation: Dictionary = _mere.proprietes.get("gestation", {})
+	if gestation.get("naissance_prete", false):
+		_mere.proprietes.erase("gestation")
+		if _pondre_un_generateur():
+			# LE COUT SE PAIE ICI, jamais avant : voir en-tete. Si le
+			# spawn a echoue (contenant nul), on ne debite pas.
+			_geniteur.retirer_stock(cout_ponte)
+
+func _pondre_un_generateur() -> bool:
+	var accueil := _geniteur.get_parent()
+	if accueil == null:
+		push_error("gestation_energie.gd : aucun contenant pour poser le generateur (geniteur sans parent ?)")
+		return false
+	var scene: PackedScene = load(CHEMIN_SCENE)
+	if scene == null:
+		push_error("gestation_energie.gd : impossible de charger %s" % CHEMIN_SCENE)
+		return false
+	var nouveau := scene.instantiate() as Node3D
+	accueil.add_child(nouveau)
+	# CONTRAINTE YAEL : position = geniteur.global_position exactement.
+	nouveau.global_position = _geniteur.global_position
+	return true

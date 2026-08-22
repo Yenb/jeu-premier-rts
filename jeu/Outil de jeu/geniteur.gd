@@ -41,6 +41,19 @@ const COULEUR_EMISSION_VIDE := Color(0.9, 0.15, 0.15, 1.0)
 # consecutifs sans extraction avant que le geniteur ne se mette en marche.
 # Sans ce delai, le rouge apparait 1 frame puis disparait.
 const TICKS_ROUGE_AVANT_DEPART := 2
+# CONTACT AU SOL : le raycast d'extraction part du centre du geniteur
+# (RigidBody3D 6x6x6, collider ShapeGeniteur centre en (0,0,0)). En position
+# posee, la face basse du collider est a y_local = -3, donc
+# frappe.position.y attendu ~= global_position.y - 3.0. Ecart plus grand =
+# geniteur encore en l'air (chute apres spawn, saut physique) : pas
+# d'extraction tant qu'il n'est pas pose, sinon il preleve les cases 20 m
+# plus bas pendant qu'il tombe du ciel. RESULTAT NEGATIF a ne pas
+# reproduire : tester linear_velocity.y (voir commentaire dans
+# _tenter_extraction) echoue -- un RigidBody3D pose garde ~-2.7 m/s
+# residuel. Le check geometrique n'a pas ce faux positif.
+# Seuil = hauteur base (3.0) + tolerance physique (0.5, alignee sur le
+# seuil "arrete" de test_collision_terrain.gd:264).
+const HAUTEUR_MAX_AU_SOL := 3.5
 
 var _stock: float = 0.0
 var _ressources: Node = null
@@ -48,6 +61,12 @@ var _timer: Timer
 var _ticks_vides: int = 0
 # _cible_deplacement : null = immobile, Vector3 = position monde a atteindre.
 var _cible_deplacement: Variant = null
+# _grille_connue : derniere GridMap detectee sous le geniteur. Memorisee pour
+# pouvoir choisir une nouvelle cible meme quand le raycast rate (geniteur
+# sorti de la carte, ou passe au-dessus d'un trou) -- sinon les returns
+# silencieux de _tenter_extraction laisseraient le geniteur bloque sans
+# jamais rappeler _choisir_cible.
+var _grille_connue: GridMap = null
 @onready var _zone: MeshInstance3D = $ZoneExtraction
 var _zone_material: StandardMaterial3D
 @onready var _barre_stock: MeshInstance3D = $BarreDeStock/Barre
@@ -118,10 +137,32 @@ func _tenter_extraction() -> void:
 	requete.exclude = [get_rid()]
 	var frappe: Dictionary = espace.intersect_ray(requete)
 	if frappe.is_empty():
+		# Rien sous le geniteur (bord de carte, trou) : compter comme tick
+		# vide pour qu'apres N ticks _choisir_cible relance la marche vers
+		# une case marron connue. Sans ce comptage, le geniteur qui sort de
+		# la GridMap reste bloque sans jamais reappeler _choisir_cible.
+		_marquer_tick_vide_sans_grille()
 		return
 	if not (frappe.collider is GridMap):
+		# Frappe autre chose qu'une GridMap (mesh de decor, corps physique
+		# etranger) : meme traitement -- tick vide, relance eventuelle vers
+		# une case marron connue.
+		_marquer_tick_vide_sans_grille()
 		return
 	var grille: GridMap = frappe.collider
+	_grille_connue = grille  # memorise pour les returns silencieux futurs
+	# ETAPE A' : verifier que le geniteur est POSE sur la GridMap avant de
+	# prelever. Sans ce test le raycast trouve la grille 20 m plus bas
+	# pendant la chute et l'extraction commence en l'air, ce qui n'a pas de
+	# sens physique. Voir constante HAUTEUR_MAX_AU_SOL en haut du fichier
+	# pour la mesure et le resultat negatif ecarte (linear_velocity).
+	if global_position.y - float((frappe.position as Vector3).y) > HAUTEUR_MAX_AU_SOL:
+		# En l'air : ne rien prendre, ne rien teindre (le decal garde sa
+		# derniere couleur -- pas de reset volontaire pour ne pas clignoter
+		# pendant la chute). Ne compte PAS comme un tick vide non plus :
+		# _ticks_vides ne bouge pas, le geniteur ne partira pas chercher une
+		# nouvelle case simplement parce qu'il n'est pas encore arrive au sol.
+		return
 	var point := (frappe.position as Vector3) - (frappe.normal as Vector3) * 0.01
 	var cellule_centre := grille.local_to_map(grille.to_local(point))
 
@@ -150,6 +191,21 @@ func _tenter_extraction() -> void:
 			_ticks_vides = 0
 			_choisir_cible(grille)
 
+# Tick vide sans grille sous les pieds (bord de carte, trou, collider
+# etranger). Meme logique que le comptage classique dans _tenter_extraction,
+# mais adapte au cas ou on n'a pas de grille en argument : on reutilise
+# _grille_connue (memorisee au dernier tick reussi) pour _choisir_cible.
+# Si aucune grille n'a jamais ete vue (spawn dans le vide), on ne fait rien
+# ce tick-ci -- le geniteur tombera jusqu'a en trouver une.
+func _marquer_tick_vide_sans_grille() -> void:
+	if _stock >= float(capacite):
+		return
+	_ticks_vides += 1
+	if _ticks_vides >= TICKS_ROUGE_AVANT_DEPART:
+		_ticks_vides = 0
+		if _grille_connue != null:
+			_choisir_cible(_grille_connue)
+
 func _choisir_cible(grille: GridMap) -> void:
 	var cases := chercher_cases_marrons()
 	for c in cases:
@@ -171,6 +227,14 @@ func _teindre_zone(active: bool) -> void:
 # API publique pour affichage / logique future.
 func stock_courant() -> float:
 	return _stock
+
+# API publique -- retirer du stock. Utilise par gestation_energie.gd pour
+# payer le cout d'un generateur d'energie a la naissance. Borne a zero
+# (jamais de stock negatif). Rafraichit la barre.
+func retirer_stock(quantite: float) -> void:
+	_stock = maxf(0.0, _stock - quantite)
+	if _materiau_stock != null:
+		_materiau_stock.set_shader_parameter("fraction", _stock / float(capacite))
 
 # API publique -- rend les cellules de type `nom_ressource_cible` dans
 # le rayon de detection, triees par distance croissante.
