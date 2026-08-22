@@ -54,6 +54,24 @@ const TICKS_ROUGE_AVANT_DEPART := 2
 # Seuil = hauteur base (3.0) + tolerance physique (0.5, alignee sur le
 # seuil "arrete" de test_collision_terrain.gd:264).
 const HAUTEUR_MAX_AU_SOL := 3.5
+# DISTANCE MIN CIBLE : quand _choisir_cible pique la plus proche case marron
+# avec stock, sans ce filtre elle peut tomber a moins de 1 m -- _avancer_vers_cible
+# declare "arrive" immediatement (vers.length() <= 1.0), le geniteur ne
+# bouge pas, l'extraction retente sur la meme emprise 3x3 deja videe,
+# _ticks_vides remonte, meme case rechoisie : BOUCLE INFINIE SILENCIEUSE.
+# Observee le 2026-08-22 apres 4 pontes de generateurs (Yael, decal ROUGE
+# fige). Le seuil 4.0 m garantit un deplacement horizontal reel.
+const DISTANCE_MIN_CIBLE := 4.0
+# PORTEE VERTICALE : ressources_terrain.cellules_par_nom_dans_rayon scan
+# TOUTES les cellules avec profil, y compris les couches empilees en Y.
+# Sans ce filtre, une case marron 5 m sous le sol est candidate valide,
+# le geniteur essaie d'y aller (physique le bloque au sol) et retente en
+# boucle. Seuil 5 m : le geniteur est POSE a Y_sol + 3 (hauteur base),
+# le centre de la cellule sol est a Y_sol - ~1 (cellule 2 m centree),
+# ecart naturel = 4 m. Un seuil 3 m rejetterait TOUT le sol accessible
+# (regression observee le 2026-08-22 : 4229 cases mais 0 valides). 5 m
+# tolere le sol immediat et rejette les couches empilees ~7 m plus bas.
+const ECART_VERTICAL_MAX_CIBLE := 5.0
 
 var _stock: float = 0.0
 var _ressources: Node = null
@@ -67,6 +85,14 @@ var _cible_deplacement: Variant = null
 # silencieux de _tenter_extraction laisseraient le geniteur bloque sans
 # jamais rappeler _choisir_cible.
 var _grille_connue: GridMap = null
+# _cellule_centre_courante : Vector3i de la cellule sous le raycast central
+# au dernier tick d'extraction reussi. Sert a _choisir_cible pour EXCLURE
+# les 9 cases de l'emprise 3x3 actuelle (deja pillees) des candidates
+# suivantes. Sans cette exclusion, _choisir_cible pique une case du 3x3
+# actuel (elle est la plus proche par definition), _avancer_vers_cible
+# declare arrive immediat, geniteur ne bouge pas : boucle silencieuse.
+# null tant qu'aucun tick d'extraction n'a reussi.
+var _cellule_centre_courante: Variant = null
 @onready var _zone: MeshInstance3D = $ZoneExtraction
 var _zone_material: StandardMaterial3D
 @onready var _barre_stock: MeshInstance3D = $BarreDeStock/Barre
@@ -165,6 +191,7 @@ func _tenter_extraction() -> void:
 		return
 	var point := (frappe.position as Vector3) - (frappe.normal as Vector3) * 0.01
 	var cellule_centre := grille.local_to_map(grille.to_local(point))
+	_cellule_centre_courante = cellule_centre  # memoire pour _choisir_cible
 
 	var pris_total := 0.0
 	for dx in range(-1, 2):
@@ -208,10 +235,31 @@ func _marquer_tick_vide_sans_grille() -> void:
 
 func _choisir_cible(grille: GridMap) -> void:
 	var cases := chercher_cases_marrons()
+	var pos_geniteur := global_position
 	for c in cases:
 		if _ressources.quantite_a(c) <= 0:
 			continue
-		_cible_deplacement = grille.to_global(grille.map_to_local(c))
+		# EXCLURE L'EMPRISE 3x3 ACTUELLE : sans ca, la case sous les pieds
+		# (deja pillee mais tri par distance = 0) est cible instantanee,
+		# _avancer_vers_cible declare arrive immediat, boucle silencieuse.
+		if _cellule_centre_courante != null:
+			var d := c - (_cellule_centre_courante as Vector3i)
+			if absi(d.x) <= 1 and absi(d.z) <= 1:
+				continue
+		var pos_c := grille.to_global(grille.map_to_local(c))
+		# PORTEE VERTICALE : ignorer les couches empilees en Y hors de
+		# portee (case souterraine, plafond de mur). Le geniteur ne peut
+		# monter ou descendre : cibler une case a 5 m sous lui = figeage.
+		if absf(pos_c.y - pos_geniteur.y) > ECART_VERTICAL_MAX_CIBLE:
+			continue
+		# DISTANCE MINIMUM HORIZONTALE : garantit un vrai deplacement.
+		# Sans ce filtre, une case adjacente a l'emprise (a ~4 m mais
+		# < 1 m selon geometrie) peut declencher "arrive" immediat.
+		var dx := pos_c.x - pos_geniteur.x
+		var dz := pos_c.z - pos_geniteur.z
+		if sqrt(dx * dx + dz * dz) < DISTANCE_MIN_CIBLE:
+			continue
+		_cible_deplacement = pos_c
 		return
 
 func _teindre_zone(active: bool) -> void:

@@ -3,6 +3,7 @@
 [ext_resource type="Script" path="res://jeu/Outil de jeu/geniteur.gd" id="1_gen"]
 [ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
 [ext_resource type="Script" path="res://jeu/Outil de jeu/gestation_energie.gd" id="3_gest"]
+[ext_resource type="Script" path="res://jeu/Outil de jeu/gestation_mother_cube.gd" id="4_gestmc"]
 
 [sub_resource type="ShaderMaterial" id="MatBarreStock"]
 shader = ExtResource("2_shader")
@@ -119,4 +120,11 @@ mesh = SubResource("MeshZone")
 ; -- de ce noeud. Voir gestation_energie.gd.
 [node name="Gestation" type="Node3D" parent="."]
 script = ExtResource("3_gest")
+
+; -- BANC DE GESTATION MOTHER CUBE : enfant du geniteur. Params
+; -- (seuil_ponte=100, duree_gestation=60, cout_ponte=100, max_vivants=1,
+; -- prerequis_generateurs=4) exposes dans l'inspecteur de ce noeud.
+; -- Voir gestation_mother_cube.gd.
+[node name="GestationMother" type="Node3D" parent="."]
+script = ExtResource("4_gestmc")
 

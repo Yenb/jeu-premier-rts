@@ -1,8 +1,12 @@
 extends SceneTree
 
-# TEST TEMPORAIRE morceau 1 : instancier generateur_energie.tscn, appliquer
-# 3 frappes de 1 degat, verifier la sequence vie = 2 -> 1 -> 0 -> mort
-# (queue_free). Aucune verification de rendu -- headless.
+# TEST TEMPORAIRE : instancier generateur_energie.tscn, appliquer 3 frappes
+# de 1 degat, verifier que la mort N'EST PAS queue_free :
+#   - noeud toujours valide
+#   - sorti du groupe "generateur_energie"
+#   - inscrit au groupe "ressource"
+#   - freeze = true (RigidBody immobile)
+#   - fraction barre = 0
 
 func _init() -> void:
 	var scene: PackedScene = load("res://jeu/Outil de jeu/generateur_energie.tscn")
@@ -12,24 +16,23 @@ func _init() -> void:
 		return
 	var g = scene.instantiate()
 	root.add_child(g)
-	# Laisser _ready() s'executer (add_to_group, entite, barre)
 	await process_frame
 
 	print("vie initiale = ", g.entite.proprietes.reserves.vie.reserve)
-	print("dans le groupe generateur_energie = ", g.is_in_group("generateur_energie"))
+	print("dans generateur_energie = ", g.is_in_group("generateur_energie"))
+	print("dans ressource = ", g.is_in_group("ressource"))
+	print("freeze initial = ", g.freeze)
 
 	g.subir_frappe(1.0)
-	print("apres frappe 1 : vie = ", g.entite.proprietes.reserves.vie.reserve, " valide = ", is_instance_valid(g))
-
 	g.subir_frappe(1.0)
-	print("apres frappe 2 : vie = ", g.entite.proprietes.reserves.vie.reserve, " valide = ", is_instance_valid(g))
-
 	g.subir_frappe(1.0)
-	# Apres la troisieme frappe, queue_free est appelee -- l'objet reste
-	# valide jusqu'a la fin de la frame courante, mais sa reserve doit
-	# etre a 0.
-	print("apres frappe 3 : vie = ", g.entite.proprietes.reserves.vie.reserve, " valide = ", is_instance_valid(g))
 	await process_frame
-	print("apres 1 frame : valide = ", is_instance_valid(g))
+
+	print("--- APRES 3 FRAPPES + 1 frame ---")
+	print("valide = ", is_instance_valid(g))
+	print("vie = ", g.entite.proprietes.reserves.vie.reserve)
+	print("dans generateur_energie = ", g.is_in_group("generateur_energie"))
+	print("dans ressource = ", g.is_in_group("ressource"))
+	print("freeze = ", g.freeze)
 
 	quit(0)
