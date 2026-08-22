@@ -1,4 +1,4 @@
-extends StaticBody3D
+extends RigidBody3D
 
 # BANC "test_ennemi2 Mother box" -- LE GENERATEUR D'ENERGIE, pondu par le
 # geniteur (voir gestation_energie.gd, morceau suivant). Petit cube 1 m

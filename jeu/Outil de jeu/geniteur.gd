@@ -236,6 +236,15 @@ func retirer_stock(quantite: float) -> void:
 	if _materiau_stock != null:
 		_materiau_stock.set_shader_parameter("fraction", _stock / float(capacite))
 
+# API publique -- force le geniteur a chercher une nouvelle case marron
+# vers laquelle se deplacer. Utilise par gestation_energie.gd quand aucune
+# place n'est libre autour pour poser un generateur : bouger cree de
+# nouvelles positions autour, la ponte reussira apres le trajet. Silent
+# si aucune grille n'a jamais ete vue (spawn dans le vide).
+func chercher_nouvelle_cible() -> void:
+	if _grille_connue != null:
+		_choisir_cible(_grille_connue)
+
 # API publique -- rend les cellules de type `nom_ressource_cible` dans
 # le rayon de detection, triees par distance croissante.
 func chercher_cases_marrons() -> Array[Vector3i]:

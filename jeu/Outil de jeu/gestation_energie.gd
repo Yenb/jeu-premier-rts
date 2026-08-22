@@ -24,9 +24,16 @@ extends Node3D
 # enfant meurt avec son parent (queue_free en cascade). Un enfant de la
 # genese ne doit pas s'evanouir quand son geniteur meurt.
 #
-# POSITION DE PONTE = geniteur.global_position EXACTEMENT, pas d'offset
-# random (contrainte Yael : "colle la position, pas de position annexe").
-# La physique gere ensuite le chevauchement.
+# POSITION DE PONTE = X/Z du geniteur (colonne verticale de sa position),
+# Y RESOLU PAR RAYCAST vers le bas pour poser le generateur sur le sol.
+# Sans raycast, le generateur (StaticBody3D) apparait au centre du geniteur
+# (Y ~= 17) et reste flottant a 2.5 m au-dessus du sol -- contrainte Yael
+# revisee apres capture d'ecran. Le raycast exclut le geniteur pour ne
+# pas frapper son propre collider.
+# HAUTEUR_CENTRE_CUBE = 0.5 : le generateur est un cube 1x1x1 centre en
+# (0,0,0). Sa face basse est a y_local = -0.5, donc pour poser la face
+# basse sur le sol : global_position.y = frappe.position.y + 0.5.
+const HAUTEUR_CENTRE_CUBE := 0.5
 
 const Gestation = preload("res://scripts/gestation.gd")
 # LA SCENE DU GENERATEUR EST CHARGEE A LA DEMANDE, jamais en preload :
@@ -40,15 +47,32 @@ const CHEMIN_SCENE := "res://jeu/Outil de jeu/generateur_energie.tscn"
 @export var duree_gestation: float = 20.0
 @export var cout_ponte: float = 20.0
 @export var max_vivants: int = 4
+# ANNEAU DE PONTE : les candidats sont tires en couronne autour du geniteur,
+# 8 angles regulierement repartis, rayon random dans [min, max]. Meme
+# principe que cube_herbe.gd:_pondre (angle random autour, teste si libre),
+# adapte au geniteur (peu d'individus -> pas de champ scalaire, on utilise
+# intersect_shape physique). Si aucun des 8 candidats n'est libre, la
+# ponte echoue silencieusement ET le geniteur est prie de bouger --
+# apres un deplacement, une nouvelle couronne est teste au tick suivant.
+@export var rayon_pose_min: float = 6.0
+@export var rayon_pose_max: float = 8.0
+@export var essais_max: int = 8
 
 const REF_REPRODUCTION := "generateur_energie"
 const NOM_GROUPE_VIVANTS := "generateur_energie"
+
+# RNG SEEDE (regle CLAUDE.md : aucun hasard non-seede). Meme patron que
+# gestation_stock.gd : chaque instance recoit sa propre graine incrementale.
+static var _prochaine_graine := 20260930
+var _rng := RandomNumberGenerator.new()
 
 var _catalogue: Dictionary
 var _mere: Dictionary
 var _geniteur: Node = null
 
 func _ready() -> void:
+	_rng.seed = _prochaine_graine
+	_prochaine_graine += 1
 	_geniteur = get_parent()
 	if _geniteur == null:
 		push_error("gestation_energie.gd : aucun parent -- doit etre enfant du geniteur")
@@ -122,8 +146,90 @@ func _pondre_un_generateur() -> bool:
 	if scene == null:
 		push_error("gestation_energie.gd : impossible de charger %s" % CHEMIN_SCENE)
 		return false
+	var geniteur3d := _geniteur as Node3D
+	if geniteur3d == null:
+		return false
+	# Cherche une pose libre dans la couronne autour du geniteur. Aucune
+	# place libre apres essais_max angles -> la ponte echoue silencieusement
+	# ET le geniteur est prie de bouger vers une nouvelle case marron.
+	# Meme principe que cube_herbe.gd:_pondre (angle, teste si libre,
+	# sinon rien) -- outil de test different (intersect_shape physique,
+	# adapte a peu d'individus, au lieu du champ scalaire de l'herbe).
+	var pose_libre: Variant = _chercher_pose_libre(geniteur3d)
+	if pose_libre == null:
+		if _geniteur.has_method("chercher_nouvelle_cible"):
+			_geniteur.chercher_nouvelle_cible()
+		return false
 	var nouveau := scene.instantiate() as Node3D
 	accueil.add_child(nouveau)
-	# CONTRAINTE YAEL : position = geniteur.global_position exactement.
-	nouveau.global_position = _geniteur.global_position
+	nouveau.global_position = pose_libre as Vector3
+	return true
+
+# Cherche un emplacement libre pour le generateur autour du geniteur.
+# Rend Vector3 (pose trouvee) ou null (aucune place libre apres essais_max).
+# essais_max angles regulierement repartis, rayon random dans [min, max]
+# (patron gestation_stock.gd). Chaque candidat : raycast au sol pour la Y,
+# puis intersect_shape pour verifier qu'aucun objet ne bloque.
+func _chercher_pose_libre(geniteur3d: Node3D) -> Variant:
+	var espace: PhysicsDirectSpaceState3D = geniteur3d.get_world_3d().direct_space_state
+	if espace == null:
+		return null
+	var exclusions: Array = _exclusions_communes()
+	var forme := BoxShape3D.new()
+	forme.size = Vector3(1, 1, 1)
+	for i in essais_max:
+		var angle: float = float(i) * TAU / float(essais_max)
+		var rayon: float = _rng.randf_range(rayon_pose_min, rayon_pose_max)
+		var xz := geniteur3d.global_position + Vector3(cos(angle) * rayon, 0.0, sin(angle) * rayon)
+		var y_sol: Variant = _hauteur_sol_sous(xz, espace, exclusions)
+		if y_sol == null:
+			continue
+		var candidat := Vector3(xz.x, float(y_sol) + HAUTEUR_CENTRE_CUBE, xz.z)
+		if _pose_libre(forme, candidat, espace, exclusions):
+			return candidat
+	return null
+
+# RIDs a exclure du raycast et du test de forme : le geniteur (RigidBody3D)
+# et tous les generateurs deja nes (RigidBody3D). Sans exclure, le raycast
+# frappe le toit d'un ancien generateur (observe le 2026-08-22, ponte 2
+# Y=15.5 au lieu de Y=14.5) et intersect_shape declare "occupe" a cause du
+# geniteur lui-meme.
+func _exclusions_communes() -> Array:
+	var ex: Array = []
+	var geniteur_co := _geniteur as CollisionObject3D
+	if geniteur_co != null:
+		ex.append(geniteur_co.get_rid())
+	for autre in get_tree().get_nodes_in_group(NOM_GROUPE_VIVANTS):
+		var autre_co := autre as CollisionObject3D
+		if autre_co != null:
+			ex.append(autre_co.get_rid())
+	return ex
+
+# Rend la Y de la GridMap sous `point`, ou null si le raycast rate ou ne
+# frappe pas de GridMap (bord de carte, trou). Meme patron que
+# semeur.gd:_hauteur_sol_sous.
+func _hauteur_sol_sous(point: Vector3, espace: PhysicsDirectSpaceState3D, exclusions: Array) -> Variant:
+	var depart := point + Vector3(0, 100.0, 0)
+	var arrivee := point + Vector3(0, -100.0, 0)
+	var requete := PhysicsRayQueryParameters3D.create(depart, arrivee)
+	requete.exclude = exclusions
+	var frappe: Dictionary = espace.intersect_ray(requete)
+	if frappe.is_empty():
+		return null
+	if not (frappe.collider is GridMap):
+		return null
+	return (frappe.position as Vector3).y
+
+# Rend true si aucun collider autre que la GridMap n'occupe la position
+# candidate. Le sol (GridMap) est tolere -- la face basse du cube candidat
+# repose dessus par construction (voir HAUTEUR_CENTRE_CUBE).
+func _pose_libre(forme: BoxShape3D, candidat: Vector3, espace: PhysicsDirectSpaceState3D, exclusions: Array) -> bool:
+	var requete := PhysicsShapeQueryParameters3D.new()
+	requete.shape = forme
+	requete.transform = Transform3D(Basis(), candidat)
+	requete.exclude = exclusions
+	var contacts: Array = espace.intersect_shape(requete, 4)
+	for c in contacts:
+		if not (c.collider is GridMap):
+			return false
 	return true
