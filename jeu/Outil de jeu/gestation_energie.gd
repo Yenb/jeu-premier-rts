@@ -163,16 +163,6 @@ func _pondre_un_generateur() -> bool:
 	var nouveau := scene.instantiate() as Node3D
 	accueil.add_child(nouveau)
 	nouveau.global_position = pose_libre as Vector3
-	# CAUSE 2 DU FIGEAGE (2026-08-22) : sans exception de collision, le
-	# geniteur qui pousse contre ses propres generateurs peut s'immobiliser
-	# (4 generateurs mass 5 damping 2 vs geniteur mass 30 : rapport de force
-	# limite, damping tue la vitesse). L'exception est unidirectionnelle
-	# geniteur->generateur : les generateurs entre eux se collisonnent
-	# toujours normalement (patron voulu par Yael, "physique gere").
-	var geniteur_co := _geniteur as CollisionObject3D
-	var nouveau_co := nouveau as CollisionObject3D
-	if geniteur_co != null and nouveau_co != null:
-		geniteur_co.add_collision_exception_with(nouveau_co)
 	return true
 
 # Cherche un emplacement libre pour le generateur autour du geniteur.

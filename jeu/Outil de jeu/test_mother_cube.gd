@@ -1,35 +1,62 @@
 extends SceneTree
 
-# TEST TEMPORAIRE morceau 1 : instancier mother_cube.tscn, appliquer
-# 3 frappes de 1 degat, verifier la sequence vie = 2 -> 1 -> 0 -> mort
-# (queue_free). Aucune verification de rendu -- headless.
+# TEST : mother cube inscrite au monde + perception via canaux vue.
+# Verifie :
+#  - inscription au monde a _ready
+#  - percevoir_nourriture() rend un carre rouge a 15 m
+#  - percevoir_nourriture() ignore un carre rouge a 40 m (hors portee 30)
+#  - retrait du monde apres 3 frappes -> _mourir
+
+const MondePartageScript = preload("res://jeu/Outil de jeu/monde_partage.gd")
 
 func _init() -> void:
-	var scene: PackedScene = load("res://jeu/Outil de jeu/mother_cube.tscn")
-	if scene == null:
-		printerr("TEST FAIL : impossible de charger la scene")
-		quit(1)
-		return
-	var g = scene.instantiate()
-	root.add_child(g)
-	# Laisser _ready() s'executer (add_to_group, entite, barre)
+	# 1. Monde partage.
+	var mp := Node.new()
+	mp.set_script(MondePartageScript)
+	root.add_child(mp)
 	await process_frame
 
-	print("vie initiale = ", g.entite.proprietes.reserves.vie.reserve)
-	print("dans le groupe mother_cube = ", g.is_in_group("mother_cube"))
-
-	g.subir_frappe(1.0)
-	print("apres frappe 1 : vie = ", g.entite.proprietes.reserves.vie.reserve, " valide = ", is_instance_valid(g))
-
-	g.subir_frappe(1.0)
-	print("apres frappe 2 : vie = ", g.entite.proprietes.reserves.vie.reserve, " valide = ", is_instance_valid(g))
-
-	g.subir_frappe(1.0)
-	# Apres la troisieme frappe, queue_free est appelee -- l'objet reste
-	# valide jusqu'a la fin de la frame courante, mais sa reserve doit
-	# etre a 0.
-	print("apres frappe 3 : vie = ", g.entite.proprietes.reserves.vie.reserve, " valide = ", is_instance_valid(g))
+	# 2. Deux carres rouges : un a 15 m (dans portee), un a 40 m (hors).
+	# ORDRE CRITIQUE : position AVANT add_child, sinon _ready lit
+	# global_position=Vector3.ZERO et inscrit tout a l'origine.
+	var scene_cr: PackedScene = load("res://jeu/Outil de jeu/carre_rouge.tscn")
+	var cr_proche = scene_cr.instantiate() as Node3D
+	cr_proche.position = Vector3(15, 0, 0)
+	root.add_child(cr_proche)
+	var cr_loin = scene_cr.instantiate() as Node3D
+	cr_loin.position = Vector3(40, 0, 0)
+	root.add_child(cr_loin)
 	await process_frame
-	print("apres 1 frame : valide = ", is_instance_valid(g))
+
+	# 3. Mother cube a l'origine (position par defaut = ZERO, pas besoin de setter).
+	var scene_mc: PackedScene = load("res://jeu/Outil de jeu/mother_cube.tscn")
+	var mc = scene_mc.instantiate()
+	root.add_child(mc)
+	await process_frame
+
+	print("--- INSCRIPTION MONDE ---")
+	var id_mc: String = mc.entite.id
+	var trouve = mp.monde.par_id(id_mc)
+	print("mother cube inscrite au monde=", trouve != null)
+	if trouve != null:
+		print("type dans monde=", trouve.get("type", "?"))
+	print("canaux=", mc.entite.proprietes.get("canaux", []))
+	print("portee vue=", mc.entite.proprietes.canaux_config.vue.portee)
+
+	print("--- PERCEPTION ---")
+	var vus: Array = mc.percevoir_nourriture()
+	print("nombre de nourritures percues=", vus.size())
+	for v in vus:
+		print("  percept type=%s distance=%.1f nourriture=%.1f" % [v.type, v.distance, v.chose.proprietes.get("nourriture", 0.0)])
+
+	# Assertion attendue : 1 seul percept (le carre a 15m). Celui a 40m est
+	# hors portee 30m.
+
+	print("--- MORT ---")
+	mc.subir_frappe(1.0); mc.subir_frappe(1.0); mc.subir_frappe(1.0)
+	await process_frame
+	print("valide apres 3 frappes+frame=", is_instance_valid(mc))
+	var trouve_apres = mp.monde.par_id(id_mc)
+	print("encore inscrite au monde=", trouve_apres != null)
 
 	quit(0)

@@ -26,6 +26,30 @@ const Frappe = preload("res://scripts/frappe.gd")
 # cette valeur. Les frappes suivantes la font descendre ; a 0 -> queue_free.
 # Regle Yael : un cadavre encaisse 7 coups avant destruction finale.
 @export var vie_cadavre: float = 7.0
+# ENROLEMENT (morceau 2) : le generateur naissant marche vers le geniteur,
+# preleve 10 stock au contact, attend `secondes_ponte`, pond un carre rouge
+# derriere lui, recommence -- jusqu'a mort naturelle 5 min. Instinct
+# immediat (voir choix Yael 2026-08-22 : ouvriere SCV, pas d'attente).
+@export var vitesse_marche: float = 3.0
+@export var distance_contact_geniteur: float = 4.0
+@export var cout_prelevement: float = 10.0
+@export var secondes_ponte: float = 60.0
+# OFFSET PONTE : distance a laquelle le carre rouge est pose "derriere"
+# le generateur, direction OPPOSEE au geniteur. Le generateur fait 1 m,
+# le carre rouge 0.4 m -- 1.0 m suffit pour ne pas s'imbriquer.
+@export var offset_carre_rouge: float = 1.0
+
+const CarreRougeScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
+
+enum {
+	ETAT_VERS_GENITEUR,
+	ETAT_COLLE,
+	ETAT_POND,
+}
+var _etat: int = ETAT_VERS_GENITEUR
+var _geniteur: Node3D = null
+var _secondes_dans_colle: float = 0.0
+var _cout_paye_pour_ce_cycle: bool = false
 
 var entite: Dictionary
 var _barre_vie: MeshInstance3D
@@ -111,6 +135,85 @@ func _ready() -> void:
 	_materiau_vie = _barre_vie.mesh.surface_get_material(0).duplicate() as ShaderMaterial
 	_barre_vie.set_surface_override_material(0, _materiau_vie)
 	_rafraichir_barre()
+	# RESOLUTION GENITEUR : un seul geniteur dans le banc, resolu par groupe
+	# (patron transporteur.gd pour la mere). is_instance_valid teste avant
+	# chaque action de mouvement -- garde-fou valide par Yael.
+	_geniteur = get_tree().get_first_node_in_group("geniteur") as Node3D
+
+func _process(delta: float) -> void:
+	# CADAVRE : ne bouge plus, ne pond plus. Le corps reste comme ressource.
+	if _est_cadavre or _geniteur == null or not is_instance_valid(_geniteur):
+		return
+	match _etat:
+		ETAT_VERS_GENITEUR:
+			_faire_vers_geniteur(delta)
+		ETAT_COLLE:
+			_faire_colle(delta)
+		ETAT_POND:
+			_faire_pond()
+
+# Marche horizontale vers le geniteur. Meme pattern que soldat.gd et
+# geniteur.gd:_avancer_vers_cible : linear_velocity horizontal, gravite
+# gere Y. Au contact (distance <= distance_contact_geniteur), transition
+# ETAT_COLLE et reset des compteurs de cycle.
+func _faire_vers_geniteur(_delta: float) -> void:
+	var vers: Vector3 = _geniteur.global_position - global_position
+	vers.y = 0.0
+	if vers.length() <= distance_contact_geniteur:
+		# Au contact : arret horizontal, entree en ETAT_COLLE.
+		linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
+		_etat = ETAT_COLLE
+		_secondes_dans_colle = 0.0
+		_cout_paye_pour_ce_cycle = false
+		return
+	var direction := vers.normalized()
+	linear_velocity = Vector3(direction.x * vitesse_marche, linear_velocity.y, direction.z * vitesse_marche)
+
+# Colle au geniteur : paie le cout de prelevement UNE FOIS (a l'entree),
+# puis attend secondes_ponte avant de pondre. Le geniteur ne bouge pas
+# tres vite (vitesse_sol=3), s'il se deplace en cours de gestation, le
+# generateur reste sur place -- c'est un choix simple, s'il traine trop
+# loin le generateur devra remarcher au tick suivant (mais ce cycle a
+# deja depense les 10 stock, budget perdu si le geniteur meurt).
+func _faire_colle(delta: float) -> void:
+	if not _cout_paye_pour_ce_cycle:
+		if _geniteur.has_method("retirer_stock"):
+			_geniteur.retirer_stock(cout_prelevement)
+		_cout_paye_pour_ce_cycle = true
+	# Stopper toute velocite horizontale (patron geniteur.gd:_avancer_vers_cible
+	# ligne 105 : eviter la derive residuelle).
+	linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
+	_secondes_dans_colle += delta
+	if _secondes_dans_colle >= secondes_ponte:
+		_etat = ETAT_POND
+
+# Pose un carre rouge du cote OPPOSE au geniteur (Yael : "derriere lui").
+# Puis retour ETAT_VERS_GENITEUR pour recommencer le cycle. La ponte est
+# instantanee -- le vrai timer est dans ETAT_COLLE.
+func _faire_pond() -> void:
+	var vers_geniteur: Vector3 = _geniteur.global_position - global_position
+	vers_geniteur.y = 0.0
+	var direction_derriere: Vector3
+	if vers_geniteur.length() > 0.001:
+		direction_derriere = -vers_geniteur.normalized()
+	else:
+		# Colle sur le geniteur : direction arbitraire pour ne pas superposer.
+		direction_derriere = Vector3.RIGHT
+	var pose: Vector3 = global_position + direction_derriere * offset_carre_rouge
+	# POSITION AVANT add_child : sinon _ready du carre lit global_position
+	# Vector3.ZERO et inscrit tout a l'origine du monde partage (piege deja
+	# rencontre au test_mother_cube 2026-08-22).
+	var cr := CarreRougeScene.instantiate() as Node3D
+	cr.position = pose
+	# ADD_CHILD SUR LE PARENT DU GENERATEUR : universel (marche en test
+	# SceneTree ou en scene chargee). get_tree().current_scene est null en
+	# test headless SceneTree, piege rencontre le 2026-08-22.
+	var accueil := get_parent()
+	if accueil != null:
+		accueil.add_child(cr)
+	# Retour au debut du cycle : va rechercher le geniteur pour paie
+	# suivante. Meme comportement infini jusqu'a mort naturelle 5 min.
+	_etat = ETAT_VERS_GENITEUR
 
 # API publique -- appelee par ce qui frappe (arme, projectile, etc.).
 # Le degat 1 = une vie perdue (patron 3 vies = 3 unites de reserve).

@@ -1,0 +1,53 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Outil de jeu/carre_rouge.gd" id="1_cr"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
+
+; -- MATERIAU ROUGE EMISSIF : distinct visuellement du generateur (bleu)
+; -- et de la mother cube (violet). Signal "nourriture" = rouge, chaud.
+[sub_resource type="StandardMaterial3D" id="MatCoeur"]
+albedo_color = Color(0.7, 0.15, 0.15, 1)
+metallic = 0.3
+roughness = 0.4
+emission_enabled = true
+emission = Color(0.95, 0.2, 0.15, 1)
+emission_energy_multiplier = 1.8
+
+[sub_resource type="BoxMesh" id="MeshCoeur"]
+material = SubResource("MatCoeur")
+size = Vector3(0.4, 0.4, 0.4)
+
+[sub_resource type="BoxShape3D" id="ShapeCR"]
+size = Vector3(0.4, 0.4, 0.4)
+
+[sub_resource type="ShaderMaterial" id="MatBarre"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadBarre"]
+material = SubResource("MatBarre")
+size = Vector2(0.5, 0.07)
+
+; -- RigidBody3D petit, damping fort pour ne pas rouler (patron generateur
+; -- energie). mass=1 (leger), lock_rotation=true garde face vers le haut.
+[node name="CarreRouge" type="RigidBody3D" groups=["destructible"]]
+mass = 1.0
+lock_rotation = true
+linear_damp = 3.0
+angular_damp = 3.0
+script = ExtResource("1_cr")
+
+[node name="Coeur" type="MeshInstance3D" parent="."]
+mesh = SubResource("MeshCoeur")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("ShapeCR")
+
+; -- BARRE DE VIE au-dessus, offset petit car cube 0.4m.
+[node name="BarreDeVie" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.45, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
+mesh = SubResource("QuadBarre")
