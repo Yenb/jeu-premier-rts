@@ -22,10 +22,18 @@ const Frappe = preload("res://scripts/frappe.gd")
 # DUREE DE VIE : le generateur meurt automatiquement apres cette duree.
 # 300 s = 5 min par defaut. Reglable dans l'inspecteur.
 @export var duree_vie_secondes: float = 300.0
+# VIE DE CADAVRE : apres _mourir(), la reserve vie est reinitialisee a
+# cette valeur. Les frappes suivantes la font descendre ; a 0 -> queue_free.
+# Regle Yael : un cadavre encaisse 7 coups avant destruction finale.
+@export var vie_cadavre: float = 7.0
 
 var entite: Dictionary
 var _barre_vie: MeshInstance3D
 var _materiau_vie: ShaderMaterial
+# _est_cadavre : passe a true dans _mourir(). Bascule le comportement de
+# subir_frappe (a 0 -> queue_free au lieu de _mourir), et rend _mourir()
+# idempotent (le Timer 5min peut re-declencher, on skip).
+var _est_cadavre: bool = false
 
 # MORT CIVILE : le generateur reste sur place, barre a 0, ne bouge plus,
 # devient une RESSOURCE (groupe "ressource", cablage transporteur futur).
@@ -44,11 +52,33 @@ var _materiau_vie: ShaderMaterial
 # selon les versions/cache de Godot (observe le 2026-08-22 chez Yael --
 # headless parsait sans probleme, editeur non). Ordre lexical robuste.
 func _mourir() -> void:
+	if _est_cadavre:
+		return  # idempotent : Timer 5 min ne re-reinitialise pas la vie
+	_est_cadavre = true
 	remove_from_group("generateur_energie")
 	add_to_group("ressource")
 	freeze = true
-	# Barre deja a 0 via _rafraichir_barre() apres la derniere frappe.
-	# Ne pas queue_free : le cadavre reste visible et interactible.
+	# Cache la barre de vie -- le cadavre n'a plus de "vie" visible.
+	var noeud_barre := get_node_or_null("BarreDeVie") as Node3D
+	if noeud_barre != null:
+		noeud_barre.visible = false
+	# Assombrit le cube (bleu terne) : signale visuellement l'etat cadavre.
+	# Duplique le materiau pour ne pas teindre les autres generateurs qui
+	# partagent la meme sub_resource dans la scene.
+	var coeur := get_node_or_null("Coeur") as MeshInstance3D
+	if coeur != null and coeur.mesh != null:
+		var mat := coeur.mesh.surface_get_material(0)
+		if mat != null:
+			var mat_terne: StandardMaterial3D = (mat.duplicate() as StandardMaterial3D)
+			if mat_terne != null:
+				mat_terne.albedo_color = Color(0.12, 0.22, 0.4, 1)
+				mat_terne.emission = Color(0.15, 0.3, 0.55, 1)
+				mat_terne.emission_energy_multiplier = 0.5
+				coeur.set_surface_override_material(0, mat_terne)
+	# Reset la reserve vie pour la phase cadavre : les frappes suivantes
+	# la font descendre a 0, alors seulement queue_free.
+	entite.proprietes.reserves.vie.reserve = vie_cadavre
+	entite.proprietes.reserves.vie.capacite = vie_cadavre
 
 func _ready() -> void:
 	add_to_group("generateur_energie")
@@ -84,8 +114,15 @@ func _ready() -> void:
 
 # API publique -- appelee par ce qui frappe (arme, projectile, etc.).
 # Le degat 1 = une vie perdue (patron 3 vies = 3 unites de reserve).
+# Phase VIVANT : a 0 -> _mourir() (etat cadavre).
+# Phase CADAVRE : a 0 -> queue_free (destruction finale, apres vie_cadavre
+# coups). Barre non rafraichie (elle est cachee).
 func subir_frappe(degats: float) -> void:
 	Frappe.frapper(entite, degats, "vie")
+	if _est_cadavre:
+		if entite.proprietes.reserves.vie.reserve <= 0.0:
+			queue_free()
+		return
 	_rafraichir_barre()
 	if entite.proprietes.reserves.vie.reserve <= 0.0:
 		_mourir()
