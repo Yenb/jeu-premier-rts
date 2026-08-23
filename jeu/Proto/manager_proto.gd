@@ -17,7 +17,7 @@
 extends Node
 
 const ProducteurScene = preload("res://jeu/Proto/producteur.tscn")
-const CarreVisuelScene = preload("res://jeu/Proto/carre_rouge_visuel.tscn")
+const CarreVisuelScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
 
 @export var rayon_rendu: float = 40.0
 @export var groupe_observateur: StringName = &"observateur"
@@ -258,6 +258,13 @@ func _bascule_rendu_carres() -> void:
 		if d2 < r2:
 			if cr.noeud == null or not is_instance_valid(cr.noeud):
 				var n := CarreVisuelScene.instantiate() as Node3D
+				# PASSIF : desactive Timer pourriture + inscription monde
+				# partagé du carre_rouge framework. Le manager gere l'age
+				# et la mort en donnee. Toutes les autres capacites
+				# (barre de vie, destructibilite, subir_frappe, nourriture)
+				# restent actives.
+				if "passif" in n:
+					n.set("passif", true)
 				parent.add_child(n)
 				n.global_position = cr.position
 				# EXCEPTION COLLISION avec producteurs : sans ca les carres

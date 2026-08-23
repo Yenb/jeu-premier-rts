@@ -39,6 +39,12 @@ const Frappe = preload("res://scripts/frappe.gd")
 # et polluent la carte. 120 s = 2 min donne assez de temps pour qu'une
 # mother cube ait le temps d'arriver quand elle existera.
 @export var duree_pourriture: float = 600.0
+# PASSIF : quand `true`, le carre rouge n'inscrit pas au monde partage et
+# ne demarre pas son Timer de pourriture. Utilise par manager_proto qui
+# gere lui-meme l'age et la mort en donnee (split donnee/rendu). Toutes
+# les autres capacites restent actives : barre de vie, groupe
+# "destructible", subir_frappe, _mourir sur vie a zero, nourriture.
+@export var passif: bool = false
 
 var entite: Dictionary
 var _barre_vie: MeshInstance3D
@@ -87,19 +93,21 @@ func _ready() -> void:
 	# cube passera par Perception.percevoir avec canal vue pour trouver
 	# les carres rouges via cette inscription -- jamais via
 	# get_nodes_in_group + balayage distance (interdit CLAUDE.md).
-	_monde_partage = get_tree().get_first_node_in_group("monde_partage")
-	if _monde_partage != null:
-		_monde_partage.monde.ajouter(entite, "carre_rouge", global_position)
+	# PASSIF : skip. Le manager_proto gere la donnee et la vue sans monde.
+	if not passif:
+		_monde_partage = get_tree().get_first_node_in_group("monde_partage")
+		if _monde_partage != null:
+			_monde_partage.monde.ajouter(entite, "carre_rouge", global_position)
 
-	# TIMER DE POURRITURE : ephemere. Meme patron que le cadavre de
-	# generateur (duree_decomposition_cadavre). _mourir est idempotent
-	# (voir garde _est_mort), donc coexiste avec la mort par frappes.
-	var timer_pourri := Timer.new()
-	timer_pourri.wait_time = duree_pourriture
-	timer_pourri.one_shot = true
-	timer_pourri.autostart = true
-	timer_pourri.timeout.connect(_mourir)
-	add_child(timer_pourri)
+		# TIMER DE POURRITURE : ephemere. Meme patron que le cadavre de
+		# generateur (duree_decomposition_cadavre). _mourir est idempotent
+		# (voir garde _est_mort), donc coexiste avec la mort par frappes.
+		var timer_pourri := Timer.new()
+		timer_pourri.wait_time = duree_pourriture
+		timer_pourri.one_shot = true
+		timer_pourri.autostart = true
+		timer_pourri.timeout.connect(_mourir)
+		add_child(timer_pourri)
 
 	_barre_vie = get_node("BarreDeVie/Barre") as MeshInstance3D
 	# DUPLIQUE le materiau shader pour ne pas partager la fraction entre
