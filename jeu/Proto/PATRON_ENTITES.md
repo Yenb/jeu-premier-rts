@@ -108,6 +108,21 @@ func register_type(nom: String, config: Dictionary) -> void:
 Une seule méthode `_bascule_rendu_generique(nom, config)` gère tout via
 callbacks. Non implémenté aujourd'hui — attendre 5+ types pour justifier.
 
+## LA RÈGLE ABSOLUE
+
+**TOUT se passe en données. Le rendu est une peau qui s'allume quand le
+joueur arrive et montre l'état courant.**
+
+Sans exception : gravité, IA, perception, collision, mort par frappe,
+reproduction, extraction, cognement. **Aucune interaction ne dépend du
+rendu.** Le monde tourne sans le joueur : un ennemi tué en data reste
+tué, un carré tombé en data reste au sol, une reproduction en data
+produit une nouvelle entité.
+
+Quand le joueur arrive dans le rayon d'une entité, le rendu instancie
+un nœud à la position/état courants — c'est la seule chose que le
+rendu fait. **Il n'invente rien**, il montre.
+
 ## Invariants à respecter
 
 - **Simulation données tourne partout, indépendamment du rendu**. Aucune
