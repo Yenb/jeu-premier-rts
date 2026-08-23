@@ -128,11 +128,16 @@ func _tick_extraction() -> void:
 		prod.cellule_courante = cellule
 		var pris := _preleve(cellule, quantite_par_tick)
 		if pris > 0.0:
-			prod.ticks_vides = 0
 			prod.stock = minf(prod.stock + pris, capacite_stock)
 			while prod.stock >= seuil_ponte:
 				prod.stock -= seuil_ponte
 				_pondre(prod)
+		# TICKS VIDES : la regen (0.033/s) laisse pris > 0 meme quand la
+		# case est essentiellement vide. Un tick vide = "n'a pas satisfait
+		# la demande" (pris < quantite_par_tick), pas "pris nul". Sans ca,
+		# regen empeche _choisir_cible de se declencher.
+		if pris >= quantite_par_tick:
+			prod.ticks_vides = 0
 		else:
 			prod.ticks_vides += 1
 			if prod.ticks_vides >= TICKS_ROUGE_AVANT_DEPART:
@@ -249,6 +254,15 @@ func _bascule_rendu_carres() -> void:
 				var n := CarreVisuelScene.instantiate() as Node3D
 				parent.add_child(n)
 				n.global_position = cr.position
+				# EXCEPTION COLLISION avec producteurs : sans ca les carres
+				# pondus tout autour du producteur RigidBody3D le ceinturent
+				# et le bloquent physiquement (constate a l'ecran par Yael).
+				# Meme geste que jeu/Outil de jeu/generateur_energie.gd:_ready
+				# pour l'exclusion geniteur/generateur.
+				if n is CollisionObject3D:
+					for prod in _producteurs:
+						if prod.noeud != null and is_instance_valid(prod.noeud) and prod.noeud is CollisionObject3D:
+							(prod.noeud as CollisionObject3D).add_collision_exception_with(n)
 				cr.noeud = n
 			else:
 				cr.position = cr.noeud.global_position
