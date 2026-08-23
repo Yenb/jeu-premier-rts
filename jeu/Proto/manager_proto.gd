@@ -18,6 +18,7 @@ extends Node
 
 const ProducteurScene = preload("res://jeu/Proto/producteur.tscn")
 const CarreVisuelScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
+const BalleScene = preload("res://jeu/Proto/balle_violette.tscn")
 
 @export var rayon_rendu: float = 60.0
 @export var groupe_observateur: StringName = &"observateur"
@@ -68,9 +69,50 @@ var _grille: GridMap = null
 var _reserves: Dictionary = {}
 var _producteurs: Array = []
 var _carres: Array = []
+var _balles: Array = []
+var _impacts: Array = []
 var _horloge: float = 0.0
 
+# BALLES SIMULEES EN DONNEES. La collision se fait en donnee (test point-
+# segment contre chaque carre pour eviter tunneling), la peau visuelle
+# (Area3D balle_violette) est instanciee dans rayon rendu et suit la
+# position data. Aucune logique metier (mort, purge) ne depend du noeud.
+# Anti-tunneling : a 20 m/s et delta 1/60 = 0.33 m par tick, sup au rayon
+# hit 0.3 m -> test distance point-point manque des collisions rapides.
+# Solution : distance du point cible au segment [ancienne, nouvelle] pos.
+const VITESSE_BALLE := 20.0
+const DUREE_BALLE := 5.0
+const RAYON_HIT_CARRE := 0.35
+# EXCLUSION TIREUR : la balle nait 0.15 m devant le cube de l'arme ; si
+# un carre est colle a la bouche (joueur qui se colle a un carre puis
+# tire), on aurait un hit immediat. Tant que la balle n'a pas parcouru
+# RAYON_EXCLUSION_TIREUR depuis son point de depart, on ignore les
+# collisions. 1 m couvre la capsule joueur + cube arme + marge.
+const RAYON_EXCLUSION_TIREUR := 1.0
+const RAYON_EXCLUSION_TIREUR2 := RAYON_EXCLUSION_TIREUR * RAYON_EXCLUSION_TIREUR
+# COLLISION INTER-CARRES EN DONNEES : push-apart si distance < seuil.
+# Sans push, les carres empilent verticalement (deux pontes proches +
+# gravite = pile). Cote cellule spatial hash = RAYON_REPOUSSE_CARRES
+# pour que le voisinage 3x3 couvre exactement la portee de repousse.
+const RAYON_REPOUSSE_CARRES := 0.6
+const FORCE_REPOUSSE := 2.0
+# PARTICULES IMPACT : bref eclat visuel au hit. Duree courte pour ne pas
+# accumuler des noeuds dans la scene meme sous feu nourri.
+const DUREE_IMPACT := 0.35
+
 func _ready() -> void:
+	# GROUPE "manager_proto" : permet a arme_tir.gd de retrouver le manager
+	# pour lui pousser les balles (spawn_balle). Sans groupe, arme_tir
+	# devrait connaitre le chemin de scene -- fragile.
+	add_to_group("manager_proto")
+	# INSTRUMENTATION PERF : sonde mesure_perf.gd active UNIQUEMENT si env
+	# var MESURE_PERF=1 ou TAILLE_TUILE=<n>. Sans var, sonde ABSENTE --
+	# la scene tourne normalement, aucun quit automatique.
+	# Anti-piege : sans cette garde, chaque lancement quittait a 10s.
+	if OS.get_environment("MESURE_PERF") == "1" or OS.get_environment("TAILLE_TUILE") != "":
+		var script_mesure: GDScript = load("res://jeu/Proto/mesure_perf.gd")
+		var mesure: Node = script_mesure.new()
+		add_child(mesure)
 	_observateur = get_tree().get_first_node_in_group(groupe_observateur)
 	var parent := get_parent()
 	if parent != null:
@@ -126,8 +168,12 @@ func _process(delta: float) -> void:
 		_tick_regen()
 	_avancer_donnees(delta)
 	_ticker_carres(delta)
+	_repousser_carres(delta)
+	_tick_balles(delta)
+	_ticker_impacts(delta)
 	_bascule_rendu_producteurs()
 	_bascule_rendu_carres()
+	_bascule_rendu_balles()
 
 func _avancer_donnees(delta: float) -> void:
 	# La donnee ne bouge par calcul math QUE si la physique est inactive
@@ -505,3 +551,207 @@ func _sol_present_sous(pos: Vector3) -> bool:
 	var requete := PhysicsRayQueryParameters3D.create(depart, arrivee)
 	var frappe: Dictionary = espace.intersect_ray(requete)
 	return not frappe.is_empty()
+
+# SPAWN BALLE EN DONNEES. Appele par arme_tir.gd. Aucun noeud instancie
+# ici -- la peau viendra au prochain _bascule_rendu_balles si le tireur
+# est dans le rayon. Consequence : la simulation tourne meme si le rendu
+# rate. Risque : si arme_tir tire hors rayon (impossible en pratique
+# puisque le tireur = observateur), pas de peau visible. Plan B : ok.
+func spawn_balle(pos: Vector3, direction: Vector3) -> void:
+	_balles.append({
+		"position": pos,
+		"ancienne": pos,
+		"depart": pos,
+		"direction": direction.normalized(),
+		"age": 0.0,
+		"noeud": null,
+		"morte": false,
+	})
+
+# TICK BALLES DATA : avance chaque balle, teste collision segment vs
+# carres en donnee, purge sur hit ou expiration. Independant du rendu.
+func _tick_balles(delta: float) -> void:
+	var i := 0
+	while i < _balles.size():
+		var b = _balles[i]
+		if b.morte:
+			if b.noeud != null and is_instance_valid(b.noeud):
+				b.noeud.queue_free()
+			_balles.remove_at(i)
+			continue
+		b.age += delta
+		if b.age >= DUREE_BALLE:
+			b.morte = true
+			continue
+		b.ancienne = b.position
+		b.position += b.direction * VITESSE_BALLE * delta
+		# Collision segment vs carres. Distance point-segment : projeter
+		# cr.position sur [ancienne, nouvelle], clamp t dans [0,1], mesurer.
+		var seg: Vector3 = b.position - b.ancienne
+		var long2: float = seg.length_squared()
+		if long2 <= 0.0:
+			i += 1
+			continue
+		# EXCLUSION TIREUR : tant que la balle est proche du point de
+		# depart, on ignore les collisions carres (evite hit immediat
+		# quand le joueur tire colle a une cible).
+		var loin_du_tireur: bool = ((b.position as Vector3) - (b.depart as Vector3)).length_squared() >= RAYON_EXCLUSION_TIREUR2
+		if loin_du_tireur:
+			var rayon2 := RAYON_HIT_CARRE * RAYON_HIT_CARRE
+			var touche := false
+			var pos_hit: Vector3 = b.position
+			for cr in _carres:
+				if cr.est_detruit:
+					continue
+				var vers_cr: Vector3 = (cr.position as Vector3) - b.ancienne
+				var t: float = clampf(vers_cr.dot(seg) / long2, 0.0, 1.0)
+				var proche: Vector3 = b.ancienne + seg * t
+				var d2: float = ((cr.position as Vector3) - proche).length_squared()
+				if d2 <= rayon2:
+					cr.est_detruit = true
+					touche = true
+					pos_hit = cr.position
+					break
+			if touche:
+				b.morte = true
+				_spawn_impact(pos_hit)
+				continue
+		i += 1
+
+# REPOUSSE INTER-CARRES EN DONNEES : evite empilement. Spatial hash
+# reconstruit par frame (cout O(N)). Chaque carre inspecte sa cellule +
+# 8 voisines, push-apart si voisin plus proche que RAYON_REPOUSSE.
+# Ne touche PAS les carres physique-active (zone safe unfreeze) : la
+# physique du RigidBody gere deja les collisions inter-carres reelles ;
+# un push data serait ecrase par la sync data <- noeud.
+# Scale N=1000 : O(N * k) avec k ~ 3 (densite locale typique) = trivial.
+func _repousser_carres(delta: float) -> void:
+	# Bucket par cellule spatiale. Cle Vector2i sur le plan X/Z.
+	var cote := RAYON_REPOUSSE_CARRES
+	var buckets: Dictionary = {}
+	for idx in range(_carres.size()):
+		var cr = _carres[idx]
+		if cr.est_detruit:
+			continue
+		var physique_active := cr.noeud != null and is_instance_valid(cr.noeud) \
+			and cr.noeud is RigidBody3D and not (cr.noeud as RigidBody3D).freeze
+		if physique_active:
+			continue
+		var cx := int(floor((cr.position as Vector3).x / cote))
+		var cz := int(floor((cr.position as Vector3).z / cote))
+		var cle := Vector2i(cx, cz)
+		if not buckets.has(cle):
+			buckets[cle] = []
+		(buckets[cle] as Array).append(idx)
+	var seuil2 := RAYON_REPOUSSE_CARRES * RAYON_REPOUSSE_CARRES
+	# Pour chaque bucket, tester paires internes + voisines droite/bas
+	# pour eviter double comptage. On applique le push aux deux carres.
+	# Pour chaque bucket : paires internes + paires avec voisins droite/bas
+	# (evite double-comptage). Offsets voisins : (1,-1) (1,0) (1,1) (0,1).
+	var voisins_offset := [Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 1)]
+	for cle in buckets.keys():
+		var ici: Array = buckets[cle]
+		# Paires internes.
+		for i_a in range(ici.size()):
+			var a = _carres[ici[i_a]]
+			for j in range(i_a + 1, ici.size()):
+				_appliquer_repousse(a, _carres[ici[j]], seuil2, delta)
+		# Paires avec buckets voisins direction droite/bas.
+		for off in voisins_offset:
+			var voisin_cle := Vector2i(cle.x + off.x, cle.y + off.y)
+			if not buckets.has(voisin_cle):
+				continue
+			var la: Array = buckets[voisin_cle]
+			for idx_a in ici:
+				var a2 = _carres[idx_a]
+				for idx_b in la:
+					_appliquer_repousse(a2, _carres[idx_b], seuil2, delta)
+
+func _appliquer_repousse(a: Dictionary, b: Dictionary, seuil2: float, delta: float) -> void:
+	if a.est_detruit or b.est_detruit:
+		return
+	var vers: Vector3 = (b.position as Vector3) - (a.position as Vector3)
+	vers.y = 0.0  # push horizontal seul, gravite gere Y
+	var d2: float = vers.length_squared()
+	if d2 >= seuil2 or d2 <= 0.0001:
+		return
+	var d: float = sqrt(d2)
+	var chevauchement: float = RAYON_REPOUSSE_CARRES - d
+	var dir: Vector3 = vers / d
+	var push: Vector3 = dir * chevauchement * FORCE_REPOUSSE * delta * 0.5
+	a.position -= push
+	b.position += push
+
+# IMPACTS VISUELS. Petit eclair violet spawn au point de hit, dure
+# DUREE_IMPACT puis queue_free. Pas de son (aucun asset audio dispo).
+# Sans MeshInstance dedie : cree un OmniLight3D + petit MeshInstance
+# sphere en code pour eviter un nouveau tscn.
+func _spawn_impact(pos: Vector3) -> void:
+	var parent := get_parent()
+	if parent == null:
+		return
+	var n := Node3D.new()
+	n.name = "ImpactBalle"
+	parent.add_child(n)
+	n.global_position = pos
+	var mesh := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.25
+	sphere.height = 0.5
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.9, 0.4, 1.0, 0.7)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.emission_enabled = true
+	mat.emission = Color(0.9, 0.4, 1.0)
+	mat.emission_energy_multiplier = 2.0
+	sphere.material = mat
+	mesh.mesh = sphere
+	n.add_child(mesh)
+	_impacts.append({"noeud": n, "age": 0.0})
+
+func _ticker_impacts(delta: float) -> void:
+	var i := 0
+	while i < _impacts.size():
+		var imp = _impacts[i]
+		imp.age += delta
+		if imp.age >= DUREE_IMPACT:
+			if imp.noeud != null and is_instance_valid(imp.noeud):
+				imp.noeud.queue_free()
+			_impacts.remove_at(i)
+			continue
+		# Fade + shrink lineaire.
+		if imp.noeud != null and is_instance_valid(imp.noeud):
+			var t: float = 1.0 - (imp.age / DUREE_IMPACT)
+			imp.noeud.scale = Vector3.ONE * (0.5 + t)
+		i += 1
+
+# RENDU BALLES : instancie peau visuelle (balle_violette.tscn) dans rayon,
+# la retire hors rayon. La peau n'a AUCUN script actif (set_script null
+# supprime la logique projectile.gd embarquee dans le tscn). Position
+# poussee chaque frame depuis b.position.
+func _bascule_rendu_balles() -> void:
+	if _observateur == null:
+		return
+	var pos_obs: Vector3 = _observateur.global_position
+	var parent := get_parent()
+	if parent == null:
+		return
+	var r2 := rayon_rendu * rayon_rendu
+	for b in _balles:
+		var d2: float = ((b.position as Vector3) - pos_obs).length_squared()
+		if d2 < r2:
+			if b.noeud == null or not is_instance_valid(b.noeud):
+				var n := BalleScene.instantiate() as Node3D
+				# NEUTRALISE le script projectile.gd (mouvement + timer 5s
+				# autonomes). La balle devient une simple coque visuelle
+				# pilotee par le manager. set_script(null) laisse l'Area3D
+				# et ses enfants (Mesh, CollisionShape) intacts.
+				n.set_script(null)
+				parent.add_child(n)
+				b.noeud = n
+			b.noeud.global_position = b.position
+		else:
+			if b.noeud != null and is_instance_valid(b.noeud):
+				b.noeud.queue_free()
+				b.noeud = null

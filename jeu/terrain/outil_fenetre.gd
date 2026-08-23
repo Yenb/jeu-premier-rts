@@ -335,7 +335,7 @@ static func particularites_du_gridmap(grille: GridMap) -> Dictionary:
 # sur le bord de la carte se voit : le terrain s'y arrete, au lieu de se
 # prolonger dans du vide que rien ne borne.
 static func charger_tranche(grille: GridMap, source: Resource, colonnes: Array[Vector2i],
-		centre_fenetre: Vector2i, bloc: int, depuis: int, combien: int) -> Dictionary:
+		_centre_fenetre: Vector2i, bloc: int, depuis: int, combien: int) -> Dictionary:
 	var index := clampi(depuis, 0, colonnes.size())
 	var fin := mini(index + maxi(combien, 1), colonnes.size())
 	var cellules := 0

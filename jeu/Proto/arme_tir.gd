@@ -13,8 +13,6 @@
 # script a ete cree.
 extends Node3D
 
-const BalleScene := preload("res://jeu/Proto/balle_violette.tscn")
-
 # LA FACE AVANT DU CUBE : cube de 0.3 m, moitie = 0.15 m sur -Z local.
 @export var decalage_avant: float = 0.15
 
@@ -64,24 +62,18 @@ func _unhandled_input(evenement: InputEvent) -> void:
 	_tirer()
 
 func _tirer() -> void:
+	# BALLES SIMULEES EN DONNEES : on ne cree PAS de projectile physique
+	# ici. On demande au manager_proto d'ajouter une balle a son tableau
+	# _balles (position + direction). Le manager tick chaque balle
+	# (avancement, collision segment vs carres) et instancie une peau
+	# visuelle si l'observateur est dans le rayon. Consequence : la balle
+	# tue les carres meme si le tireur bouge / regarde ailleurs. Si le
+	# manager est absent (scene sans proto), le tir ne fait rien -- pas
+	# de fallback silencieux, l'absence est visible.
+	var manager := get_tree().get_first_node_in_group(&"manager_proto")
+	if manager == null:
+		push_warning("arme_tir : manager_proto introuvable, tir ignore")
+		return
 	var direction := -global_transform.basis.z
-	var balle := BalleScene.instantiate() as Node3D
-	# ATTACHE A LA RACINE, pas au parent : sinon la balle suit le tireur.
-	var accueil: Node = get_owner()
-	if accueil == null:
-		accueil = get_tree().current_scene
-	if accueil == null:
-		accueil = get_parent()
-	accueil.add_child(balle)
-	balle.global_position = to_global(Vector3(0, 0, -decalage_avant))
-	# TIREUR = le CharacterBody3D auquel l'arme est attachee, exclu des
-	# raycasts (voir en-tete).
-	var tireur := get_parent_node_3d() as PhysicsBody3D
-	if tireur == null:
-		# L'arme peut etre attachee a un enfant intermediaire ; remonter
-		# jusqu'au premier PhysicsBody3D.
-		var noeud: Node = get_parent()
-		while noeud != null and not (noeud is PhysicsBody3D):
-			noeud = noeud.get_parent()
-		tireur = noeud as PhysicsBody3D
-	balle.lancer(direction, tireur)
+	var depart := to_global(Vector3(0, 0, -decalage_avant))
+	manager.call("spawn_balle", depart, direction)
