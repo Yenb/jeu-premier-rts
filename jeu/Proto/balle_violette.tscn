@@ -1,0 +1,24 @@
+[gd_scene format=3 uid="uid://ccs62grihlbka"]
+
+[ext_resource type="Script" path="res://jeu/Outil de jeu/projectile.gd" id="1_projectile"]
+
+[sub_resource type="StandardMaterial3D" id="Materiau_violet"]
+albedo_color = Color(0.7, 0.2, 0.9, 1)
+shading_mode = 0
+
+[sub_resource type="SphereMesh" id="Mesh_sphere"]
+material = SubResource("Materiau_violet")
+radius = 0.08
+height = 0.16
+
+[sub_resource type="SphereShape3D" id="Forme_sphere"]
+radius = 0.08
+
+[node name="BalleViolette" type="Area3D"]
+script = ExtResource("1_projectile")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_sphere")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("Forme_sphere")

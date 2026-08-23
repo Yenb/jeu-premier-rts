@@ -1,0 +1,62 @@
+[gd_scene format=3 uid="uid://ctevsvpqullsq"]
+
+[ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_bloc"]
+[ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_visible"]
+[ext_resource type="Resource" path="res://jeu/Proto/proto_carte.tres" id="3_carte"]
+[ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="4_personnage"]
+[ext_resource type="Script" uid="uid://cj4hq8kgy146n" path="res://jeu/Outil de jeu/ressources_terrain.gd" id="5_ressources"]
+[ext_resource type="Resource" uid="uid://ctevmt3u48lsq" path="res://jeu/Proto/bloc_marron.tres" id="6_marron"]
+[ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="7_vblqm"]
+[ext_resource type="Script" path="res://jeu/Proto/arme_tir.gd" id="8_tir"]
+
+[sub_resource type="StandardMaterial3D" id="Materiau_repere"]
+albedo_color = Color(0.45, 0.36, 0.27, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_repere"]
+material = SubResource("Materiau_repere")
+size = Vector2(1000, 1000)
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ciel"]
+
+[sub_resource type="Sky" id="Sky_ciel"]
+sky_material = SubResource("ProceduralSkyMaterial_ciel")
+
+[sub_resource type="Environment" id="Environment_ambiance"]
+background_mode = 2
+sky = SubResource("Sky_ciel")
+ambient_light_source = 3
+
+[node name="Proto" type="Node3D" unique_id=987324013]
+
+[node name="RepereVisuel" type="MeshInstance3D" parent="." unique_id=2028792952]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.945268, 0)
+mesh = SubResource("PlaneMesh_repere")
+
+[node name="Terrain" type="GridMap" parent="." unique_id=477418575]
+mesh_library = ExtResource("1_bloc")
+data = {
+"cells": PackedInt32Array(524293, 65523, 6, 524293, 65524, 6, 524293, 65525, 6, 524293, 65526, 6, 524293, 65527, 6, 524293, 65528, 6, 524294, 65523, 6, 524294, 65524, 6, 524294, 65525, 6, 524294, 65526, 6, 524294, 65527, 6, 524294, 65528, 6, 524295, 65523, 6, 524295, 65524, 6, 524295, 65525, 6, 524295, 65526, 6, 524295, 65527, 6, 524295, 65528, 6, 524296, 65523, 6, 524296, 65524, 6, 524296, 65525, 6, 524296, 65526, 6, 524296, 65527, 6, 524296, 65528, 6, 524297, 65523, 6, 524297, 65524, 6, 524297, 65525, 6, 524297, 65526, 6, 524297, 65527, 6, 524297, 65528, 6, 524298, 65523, 6, 524298, 65524, 6, 524298, 65525, 6, 524298, 65526, 6, 524298, 65527, 6, 524298, 65528, 6, 589830, 65524, 6, 589830, 65525, 6, 589830, 65526, 6, 589830, 65527, 6, 589831, 65524, 6, 589831, 65525, 6, 589831, 65526, 6, 589831, 65527, 6, 589832, 65524, 6, 589832, 65525, 6, 589832, 65526, 6, 589832, 65527, 6, 589833, 65524, 6, 589833, 65525, 6, 589833, 65526, 6, 589833, 65527, 6, 655367, 65525, 6, 655367, 65526, 6, 655368, 65525, 6, 720904, 65525, 6, 458755, 65521, 6, 458755, 65522, 6, 458755, 65523, 6, 458755, 65524, 6, 458755, 65525, 6, 458755, 65526, 6, 458755, 65527, 6, 458755, 65528, 6, 458755, 65529, 6, 458756, 65521, 6, 458756, 65522, 6, 458756, 65523, 6, 458756, 65524, 6, 458756, 65525, 6, 458756, 65526, 6, 458756, 65527, 6, 458756, 65528, 6, 458756, 65529, 6, 458757, 65521, 6, 458757, 65522, 6, 458757, 65523, 6, 458757, 65524, 6, 458757, 65525, 6, 458757, 65526, 6, 458757, 65527, 6, 458757, 65528, 6, 458757, 65529, 6, 458758, 65521, 6, 458758, 65522, 6, 458758, 65523, 6, 458758, 65524, 6, 458758, 65525, 6, 458758, 65526, 6, 458758, 65527, 6, 458758, 65528, 6, 458758, 65529, 6, 458759, 65521, 6, 458759, 65522, 6, 458759, 65523, 6, 458759, 65524, 6, 458759, 65525, 6, 458759, 65526, 6, 458759, 65527, 6, 458759, 65528, 6, 458759, 65529, 6, 458760, 65521, 6, 458760, 65522, 6, 458760, 65523, 6, 458760, 65524, 6, 458760, 65525, 6, 458760, 65526, 6, 458760, 65527, 6, 458760, 65528, 6, 458760, 65529, 6, 458761, 65521, 6, 458761, 65522, 6, 458761, 65523, 6, 458761, 65524, 6, 458761, 65525, 6, 458761, 65526, 6, 458761, 65527, 6, 458761, 65528, 6, 458761, 65529, 6, 458762, 65521, 6, 458762, 65522, 6, 458762, 65523, 6, 458762, 65524, 6, 458762, 65525, 6, 458762, 65526, 6, 458762, 65527, 6, 458762, 65528, 6, 458762, 65529, 6, 458763, 65521, 6, 458763, 65522, 6, 458763, 65523, 6, 458763, 65524, 6, 458763, 65525, 6, 458763, 65526, 6, 458763, 65527, 6, 458763, 65528, 6, 458763, 65529, 6, 458764, 65528, 2, 458764, 65527, 2, 458764, 65526, 2, 524296, 65529, 2, 589831, 65528, 2, 589830, 65528, 6, 524295, 65529, 6, 655368, 65526, 2)
+}
+script = ExtResource("2_visible")
+carte = ExtResource("3_carte")
+rayon_cellules = 15
+metadata/_editor_floor_ = Vector3(0, 10, 0)
+
+[node name="RessourcesTerrain" type="Node" parent="." unique_id=74545153]
+script = ExtResource("5_ressources")
+profils = Array[Resource]([ExtResource("6_marron")])
+
+[node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("4_personnage")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.073797, 0)
+
+[node name="Soleil" type="DirectionalLight3D" parent="." unique_id=1651105704]
+transform = Transform3D(0.81915206, 0.43938506, -0.36868784, 0, 0.64278764, 0.76604444, 0.57357645, -0.62750685, 0.5265408, 0, 0, 0)
+shadow_enabled = true
+directional_shadow_max_distance = 400.0
+
+[node name="Ambiance" type="WorldEnvironment" parent="." unique_id=958263169]
+environment = SubResource("Environment_ambiance")
+
+[node name="Arme" parent="Personnage/Yeux" unique_id=379637259 instance=ExtResource("7_vblqm")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, -0.303458, -0.55944645)
+script = ExtResource("8_tir")

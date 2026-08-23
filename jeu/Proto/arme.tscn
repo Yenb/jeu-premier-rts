@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://cl4ka3hcjrm3y"]
+
+[sub_resource type="StandardMaterial3D" id="Materiau_arme"]
+albedo_color = Color(0.6, 0.6, 0.7, 1)
+metallic = 0.7
+roughness = 0.3
+
+[sub_resource type="BoxMesh" id="BoxMesh_arme"]
+material = SubResource("Materiau_arme")
+size = Vector3(0.3, 0.3, 0.3)
+
+[node name="Arme" type="Node3D"]
+
+[node name="Visuel" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_arme")

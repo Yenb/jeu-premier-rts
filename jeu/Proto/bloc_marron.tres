@@ -1,0 +1,10 @@
+[gd_resource type="Resource" format=3 uid="uid://ctevmt3u48lsq"]
+
+[ext_resource type="Script" uid="uid://drl8br2fktprw" path="res://jeu/Outil de jeu/profil_bloc.gd" id="1_profil"]
+
+[resource]
+script = ExtResource("1_profil")
+nom_item = "bloc"
+reserve = 50
+quantite_regen = 2
+duree_regen_secondes = 60.0
