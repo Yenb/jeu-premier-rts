@@ -55,3 +55,77 @@ Loguer chaque frame → repérer un pic isolé.
 - **Ne pas trier par Inclusif** : un parent gonfle par ses enfants.
   Toujours Self Time (Auto).
 - **Pas de spéculation avant Étape 1**. Le profiler tranche en 30 s.
+
+## Chantier 2026-08-23 — leçons (bien fait / mal fait)
+
+### BIEN FAIT (à reproduire)
+
+- **Profileur consulté AVANT de conclure** sur l'origine des spikes.
+  Le tri par Self Time a montré `_process` du terrain à 0.00-0.01 ms
+  et les 84 appels du pattern `carres_rouges` responsables du gros
+  du CPU. Sans profileur, une seconde vague de refonte terrain
+  aurait été lancée à tort.
+- **Mesure comparative avant/après** chaque changement de rendu :
+  fps, prims, draws, proc max cités depuis logs, pas de « ça va
+  mieux » sans chiffres.
+- **Anti-régression** : la logique bitwise `visible_bits_col` est
+  verrouillée par 6 tests dans `test_ecosysteme.gd` (plat, grotte,
+  pont, bord, isolé, vide) — protège contre la régression grotte/
+  pont que la première version cachait.
+- **Point de restauration git** systématique avant refonte
+  destructive (commits `4da4613`, `83f9a4c`, `76f5240`).
+
+### MAL FAIT (à ne pas répéter)
+
+- **Spéculation avant mesure** répétée : « probablement le culling »,
+  « probablement le shading » — chaque hypothèse a mangé une
+  itération. La règle « pas de spéculation avant Étape 1 » ci-dessus
+  a été violée plusieurs fois.
+- **Termes de recherche approximatifs** : « procedural voxel » cherché
+  au lieu de « sculpted cube grid dynamic Godot » — résultats hors
+  sujet (générateurs runtime au lieu de terrain sculpté statique).
+- **Pas de capture visuelle à chaque itération de rendu**. Trois
+  approches successives (SurfaceTool + vertex color, greedy, MMI)
+  ont été livrées sans capture de contrôle → régressions visuelles
+  découvertes tardivement par le user.
+- **Modifications de code non demandées** : lambdas d'instrumentation
+  ajoutées à `manager_proto` sans que le user les demande, plusieurs
+  fois. Chaque modif « rien de grave » a alimenté la méfiance.
+- **Étalement de construction sans mesure avant/après** : première
+  version staggered = proc max monté à 643 ms (vs 40 ms avant). Fix
+  stagger inter-tuiles derrière, mais le pic aurait été évité si la
+  mesure avait été faite au premier jet.
+- **Kill de Godot pendant que le user regarde** (deux fois) sans
+  demander : rupture de flux de test au moment le plus mauvais.
+
+### PIÈGES CONCRETS DOCUMENTÉS
+
+- **MultiMeshInstance3D ≠ GridMap** sur les mêmes meshes. Shading et
+  arêtes diffèrent visuellement, même avec `mesh_library` partagée
+  et transforms alignées. Un mesh utilisé dans un MMI ne rend PAS
+  identique au même mesh utilisé par un GridMap. Voir
+  `PROTOCOLE_MULTIMESH.md` § chantier 2026-08-23.
+- **`vertex_color_is_srgb = true` par défaut** en Godot 4 : les
+  `Color()` littérales GDScript sont converties comme si sRGB →
+  linéaire pour le shading, aboutit à un rendu quasi noir. Passer
+  à `false` corrige, MAIS le rendu reste différent d'un GridMap
+  sur le même mesh.
+- **`create_trimesh_collision()` crée bien le StaticBody3D** mais
+  la collision peut ne pas retenir le joueur (constaté sur un
+  MeshInstance3D procédural, cause non identifiée). Ne pas retirer
+  la collision native du GridMap Terrain sans preuve qu'un
+  remplaçant retient physiquement le joueur.
+- **Retirer `visible = false` du GridMap Terrain proche AVANT** de
+  prouver qu'un autre système rend la zone 0..rayon_interne =
+  sol invisible sous les pieds du joueur (mesuré : Y=14.18 →
+  Y=-22.8 en 3 s de chute).
+
+### CE QUE LE PROFILEUR A DIT AU FINAL (2026-08-23)
+
+`_process` du terrain_visible_multimesh : **0.00-0.01 ms** par frame.
+Les spikes en marche viennent AILLEURS : 84 carrés × fonctions
+(`_appliquer_gravite`, `_repousser_carres`, `_ticker_carres`,
+`masque`, `dans_emprise`, `sommet`, `rang_le_plus_haut`) ≈ 1 ms
+visible sur les captures profileur. Le reste des ~9 ms de Process
+Time n'a pas été isolé — chantier profileur séparé requis pour
+trancher.
