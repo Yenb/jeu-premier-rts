@@ -32,6 +32,13 @@ const Frappe = preload("res://scripts/frappe.gd")
 # NOURRITURE : valeur de croissance apportee a la mother cube quand elle
 # le mange. Yael a specifie 5. Exportee pour reglage inspecteur.
 @export var nourriture: float = 5.0
+# POURRITURE : le carre rouge disparait au timeout meme s'il n'a pas ete
+# mange. Yael 2026-08-22 : ressource EPHEMERE, pas eternelle. Sans ca,
+# les carres rouges s'accumulent indefiniment (le generateur en pond 1
+# toutes les 60s, la mother cube n'existe pas dans v2 pour les consommer)
+# et polluent la carte. 120 s = 2 min donne assez de temps pour qu'une
+# mother cube ait le temps d'arriver quand elle existera.
+@export var duree_pourriture: float = 600.0
 
 var entite: Dictionary
 var _barre_vie: MeshInstance3D
@@ -83,6 +90,16 @@ func _ready() -> void:
 	_monde_partage = get_tree().get_first_node_in_group("monde_partage")
 	if _monde_partage != null:
 		_monde_partage.monde.ajouter(entite, "carre_rouge", global_position)
+
+	# TIMER DE POURRITURE : ephemere. Meme patron que le cadavre de
+	# generateur (duree_decomposition_cadavre). _mourir est idempotent
+	# (voir garde _est_mort), donc coexiste avec la mort par frappes.
+	var timer_pourri := Timer.new()
+	timer_pourri.wait_time = duree_pourriture
+	timer_pourri.one_shot = true
+	timer_pourri.autostart = true
+	timer_pourri.timeout.connect(_mourir)
+	add_child(timer_pourri)
 
 	_barre_vie = get_node("BarreDeVie/Barre") as MeshInstance3D
 	# DUPLIQUE le materiau shader pour ne pas partager la fraction entre

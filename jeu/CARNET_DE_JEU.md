@@ -141,34 +141,52 @@ L'ÉCOSYSTÈME ENNEMI DE `test_ennemi2 Mother box` — quatre entités composée
 chacune dans son fichier. Pattern reine termite physogastrique côté mother
 cube, pattern symbiote (puceron collé à sa source) côté générateur enrolé.
 
-- LE GÉNITEUR (`geniteur.gd`) — extraction au contact-sol seulement (garde
-  `HAUTEUR_MAX_AU_SOL = 3.5 m`), double stock : `_stock_perso` (150) pour
-  lui, `_stock_accessible` (150) puisable par les générateurs enrolés
-  (barre violette visible sous la barre de vie), extraction 50/50 avec
-  débordement vers le stock non plein. `_choisir_cible` filtre distance
-  ≥ 4 m, écart vertical ≤ 5 m, exclut l'emprise 3×3. Enfants
-  `gestation_energie` (seuil 20, coût 20, gestation 20 s, max vivants 4)
-  et `gestation_mother_cube` (seuil 100, coût 100, gestation 60 s, un
-  seul dans la vie du géniteur, prérequis quatre générateurs pondus).
+- LE GÉNITEUR V2 (`geniteur_v2.gd/.tscn`, actif sur le banc) — copie du
+  géniteur sans la gestation mother cube. Extraction au contact-sol
+  (garde `HAUTEUR_MAX_AU_SOL = 3.5 m`), double stock renommé : PRIVÉE
+  (violet, 150) finance les gestations proches, PUBLIC (bleu, 150)
+  puisable par les générateurs. Extraction 50/50 avec débordement.
+  `_choisir_cible` filtre distance ≥ 4 m, écart vertical ≤ 5 m, exclut
+  l'emprise 3×3. Enfants `Gestation` (sur PUBLIC, seuil 15 = 10 %,
+  coût 15, durée 60 s, max 8) et `GestationStockeur` (sur PRIVÉE,
+  seuil 30 = 20 %, coût 30, durée 60 s, max 4). Le v1 (`geniteur.gd/
+  .tscn` + `gestation_mother_cube.gd`) reste sur disque, inutilisé.
 - LE GÉNÉRATEUR D'ÉNERGIE (`generateur_energie.gd`) — RigidBody3D amorti
-  (masse 5, damping 2/2, `lock_rotation`). Cycle enrolé : perçoit ses
-  sources par canal vue 30 m (filtre `stock_puisable > 0`), marche vers
-  la plus proche, cumule matière sur plusieurs sources jusqu'à
-  `cout_prelevement` (10), pond un carré rouge derrière lui toutes les
-  60 s. Mort à deux phases : 3 vies vivant → cadavre 7 vies (mesh terni,
-  freeze, groupe `ressource`, inscrit au monde avec `stock_puisable =
-  stock_cadavre_initial`) → `queue_free` à 0. Collision avec le géniteur
-  exclue au passage cadavre pour ne pas faire obstacle sous lui.
-- LE CARRÉ ROUGE (`carre_rouge.gd`) — nourriture de la mother cube,
-  RigidBody3D 40 cm rouge émissif, 5 vies, propriété `nourriture = 5`,
-  inscrit au monde. Le tri se fait côté saillance mother cube via la
-  propriété, jamais par `type == "carre_rouge"` (règle ADN).
-- LA MOTHER CUBE (`mother_cube.gd`) — RigidBody3D pourpre 30 cm de base,
-  taille adulte 70 m. Perception vue 30 m sur `nourriture > 0`, une
-  frappe par seconde au contact, scale lerp base → max (gain 5 %
-  décroissant avec la taille), vitesse lerp 10 → 2,5 m/s. Barre de vie
-  compensée du scale. Propriété `rayon` publiée sur l'entité pour les
-  futurs percepteurs.
+  (masse 5, damping 2/2, `lock_rotation`). Perçoit sources dans 30 m
+  filtre `stock_puisable > 0`, marche vers la plus proche, cumule matière
+  sur plusieurs sources jusqu'à `cout_prelevement` (10), pond un carré
+  rouge derrière lui toutes les 60 s. Fix boucle silencieuse : source
+  invalide + `cout_paye = true` → ETAT_POND (ponte anticipée) au lieu
+  d'ETAT_ATTENTE. Mort à deux phases : 3 vies vivant → cadavre 7 vies
+  (mesh terni, freeze, groupe `ressource`, inscrit au monde) → cadavre
+  PÉRISSABLE à 300 s (5 min) même sans consommation. Exception collision
+  avec géniteur POSÉE AU `_ready` (pas seulement au cadavre).
+- LE STOCKEUR (`stockeur.gd/.tscn`) — RigidBody3D orange 1 m, masse 5,
+  vie 3, `duree_vie_secondes = 1200` (20 min), capacité 100 nourritures.
+  Perçoit carrés rouges dans 30 m, marche, absorbe au contact (frappe
+  one-shot). Patrouille vers géniteur au-delà de `rayon_patrouille`
+  (50 m) quand rien perçu. Une fois plein → suit géniteur à
+  `distance_suivi_geniteur` (10 m) via zone morte ±1 m. Exceptions
+  collision avec géniteur, générateurs, cadavres, autres stockeurs,
+  protogéniteurs.
+- LE CARRÉ ROUGE (`carre_rouge.gd`) — nourriture pondue par le
+  générateur, RigidBody3D 40 cm rouge émissif, 5 vies, propriété
+  `nourriture = 5`, inscrit au monde. PÉRISSABLE à `duree_pourriture`
+  600 s (10 min). Le tri côté saillance passe par la propriété, jamais
+  par `type == "carre_rouge"` (règle ADN).
+- LA MOTHER CUBE (`mother_cube.gd/.tscn`) — pièce en stock, plus
+  instanciée par le géniteur v2. Reste sur disque pour un futur banc.
+- ACCÉLÉRATEUR DE JEU (`controle_vitesse.gd`) — nœud posé sur le banc.
+  Touches `+` / `-` (`Engine.time_scale ×2 / ÷2`, plafond ×10, plancher
+  ×0,25), `0` reset. OSD `Label` jaune haut-gauche. Utile pour observer
+  l'écosystème en accéléré sans attendre les timers réels.
+- PROTOGÉNITEUR (`protogeniteur.gd/.tscn` + `gestation_protogeniteur.gd`)
+  — cube bleu 3×3×3 (moitié du géniteur), auto-produit 2/s de
+  stock_public (capacité 100), suit géniteur à 60 m, expose
+  `preleve_stock_public` pour être puisé par les générateurs. Gestation
+  au seuil 120 (80 % privé), coût 120, max 3, durée 240 s. Scripts et
+  scène écrits, nœud PAS BRANCHÉ dans `geniteur_v2.tscn` — en attente
+  de fermeture du cycle par le guerrier.
 
 MONDE PARTAGÉ DU BANC — `MondePartage` posé racine de la scène (patron
 `test_ennemi`). Toute entité mouvante appelle `monde.deplacer(entite)` dans

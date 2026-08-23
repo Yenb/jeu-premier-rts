@@ -1,0 +1,113 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Outil de jeu/protogeniteur.gd" id="1_pg"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
+
+[sub_resource type="StandardMaterial3D" id="MatBase"]
+albedo_color = Color(0.15, 0.35, 0.85, 1)
+metallic = 0.6
+roughness = 0.4
+
+[sub_resource type="StandardMaterial3D" id="MatToit"]
+albedo_color = Color(0.08, 0.18, 0.55, 1)
+metallic = 0.7
+roughness = 0.3
+
+[sub_resource type="StandardMaterial3D" id="MatAntenne"]
+albedo_color = Color(0.7, 0.8, 1.0, 1)
+metallic = 0.9
+roughness = 0.2
+
+[sub_resource type="StandardMaterial3D" id="MatLampe"]
+albedo_color = Color(0.4, 0.7, 1.0, 1)
+emission_enabled = true
+emission = Color(0.5, 0.8, 1.0, 1)
+emission_energy_multiplier = 3.0
+
+[sub_resource type="BoxMesh" id="MeshBase"]
+material = SubResource("MatBase")
+size = Vector3(3, 1, 3)
+
+[sub_resource type="PrismMesh" id="MeshToit"]
+material = SubResource("MatToit")
+size = Vector3(3, 1, 3)
+
+[sub_resource type="BoxMesh" id="MeshCoeur"]
+material = SubResource("MatBase")
+size = Vector3(1.75, 1, 1.75)
+
+[sub_resource type="CylinderMesh" id="MeshAntenne"]
+material = SubResource("MatAntenne")
+top_radius = 0.075
+bottom_radius = 0.075
+height = 1.25
+
+[sub_resource type="SphereMesh" id="MeshLampe"]
+material = SubResource("MatLampe")
+radius = 0.22
+height = 0.45
+
+[sub_resource type="BoxShape3D" id="ShapePg"]
+size = Vector3(3, 3, 3)
+
+[sub_resource type="ShaderMaterial" id="MatBarreVie"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadBarreVie"]
+material = SubResource("MatBarreVie")
+size = Vector2(2, 0.25)
+
+[sub_resource type="ShaderMaterial" id="MatBarreStock"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.05, 0.08, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.4, 0.6, 0.95, 1)
+shader_parameter/fraction = 0.0
+
+[sub_resource type="QuadMesh" id="QuadBarreStock"]
+material = SubResource("MatBarreStock")
+size = Vector2(2, 0.25)
+
+[node name="Protogeniteur" type="RigidBody3D" groups=["destructible"]]
+mass = 15.0
+lock_rotation = true
+linear_damp = 2.0
+angular_damp = 2.0
+script = ExtResource("1_pg")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("ShapePg")
+
+[node name="Base" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1, 0)
+mesh = SubResource("MeshBase")
+
+[node name="Coeur" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+mesh = SubResource("MeshCoeur")
+
+[node name="Toit" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+mesh = SubResource("MeshToit")
+
+[node name="Antenne" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.125, 0)
+mesh = SubResource("MeshAntenne")
+
+[node name="Lampe" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.95, 0)
+mesh = SubResource("MeshLampe")
+
+[node name="BarreDeVie" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.6, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
+mesh = SubResource("QuadBarreVie")
+
+[node name="BarreDeStock" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.95, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeStock"]
+mesh = SubResource("QuadBarreStock")

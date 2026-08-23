@@ -231,6 +231,51 @@ Le reste suit :
 - Le relief fait le paysage sans une règle de plus : chaque espèce déclare
   jusqu'où elle monte. Les arbres dans les bas-fonds, l'herbe partout.
 
+### Écosystème ennemi — pré-câblage du cycle
+
+Le banc `test_ennemi2 Mother box` compose une colonie ennemie : géniteur
+qui extrait, générateurs qui puisent le géniteur et pondent de la
+nourriture, stockeurs qui collectent la nourriture. Le cycle attend un
+CONSOMMATEUR FINAL (guerrier) pour se refermer sur le joueur. Tant qu'il
+n'est pas câblé, la colonie produit et ne dépense rien.
+
+**Seuil = coût.** Chaque gestation enfant du géniteur se déclenche à un
+pourcentage du stock qu'elle finance, et débite ce même pourcentage à
+la naissance. 10 % pour un générateur (public), 20 % pour un stockeur
+(privée), 80 % pour un protogéniteur (privée). Une unité coûteuse
+n'apparaît qu'à saturation partielle du stock — la colonie priorise
+naturellement les unités bon marché, les rares n'arrivent qu'à
+abondance.
+
+**Cadavre et nourriture sont ÉPHÉMÈRES.** Un cadavre de générateur
+pourrit à 5 min, un carré rouge (nourriture) à 10 min, même sans être
+consommé. Sans pourrissement la cannibalisation intra-espèce nourrit la
+colonie que le joueur essaie de saigner — chaque kill du joueur revient
+neutre pour la colonie, la valeur tactique de l'attaque s'effondre. Le
+pourrissement préserve la kill.
+
+**Pas de cannibalisme entre égaux, mais entre étages du cycle.** Le
+générateur peut manger les cadavres d'autres générateurs (patron
+symbiote), mais la biologie réelle n'a pas de cannibalisme intra-caste
+utile : les fourmis évacuent leurs morts, elles ne les recyclent pas
+majoritairement. Le carré rouge (nourriture) et le stockeur qui le
+collecte forment le vrai food chain — un consommateur d'un niveau se
+nourrit d'un producteur d'un autre niveau.
+
+**Le stockeur est un PRÉ-CÂBLAGE.** Il empile 100 nourritures qui ne
+servent à rien tant que le guerrier n'existe pas. Le poser avant le
+guerrier laisse la chaîne prête et permet d'ajuster les débits (rate de
+production carré rouge / capacité stockeur / rythme de consommation
+guerrier) avant que le consommateur final entre en scène.
+
+**Genre : simulation émergente.** Le jeu appartient à la lignée Dwarf
+Fortress / RimWorld — les systèmes se construisent AVANT que le
+gameplay se stabilise, le gameplay émerge des interactions. Corollaire :
+pas de validation par playtest à chaque itération unitaire, mais
+itération sur les systèmes puis observation périodique de ce qui sort.
+L'accélérateur (`controle_vitesse.gd`, plafond ×10) sert exactement ça —
+compresser des heures d'émergence en minutes d'observation.
+
 ## Échelle — le monde vit sans le joueur
 
 La carte de référence fait **100 km²**, et elle existe **entièrement**, tout le

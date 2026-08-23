@@ -14,6 +14,16 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 2026-08-22 — géniteur v2 : copie du géniteur SANS gestation mother cube (`geniteur_v2.gd/.tscn`) ; banc `test_ennemi2 Mother box` bascule sur v2 ; v1 intact sur disque (piste mother cube en stock)
+- 2026-08-22 — stocks du géniteur renommés : `perso → privee` (barre violette), `accessible → public` (barre bleue) ; API `stock_public_courant()` + `preleve_stock_public()` ajoutée
+- 2026-08-22 — gestation des générateurs passe sur le stock PUBLIC : `gestation_generateur_public.gd` (seuil 15 = 10 % public, coût 15, max 8 vivants, durée 60 s) ; l'ancien gestation_energie reste inutilisé mais sur disque
+- 2026-08-22 — stockeur ajouté : `stockeur.gd/.tscn` cube orange 1 m, vie 3, 20 min de vie, capacité 100 nourritures ; `gestation_stockeur.gd` sur stock PRIVÉ (seuil 30 = 20 %, coût 30, max 4, durée 60 s) ; chasse carrés rouges dans 30 m, patrouille vers géniteur au-delà de 50 m, suit à 10 m quand plein
+- 2026-08-22 — cadavre de générateur PÉRISSABLE : Timer 300 s (5 min) au `_mourir()` déclenche `_decomposer()` (retrait monde + queue_free), fenêtre courte de cannibalisation
+- 2026-08-22 — carré rouge PÉRISSABLE : Timer 600 s (10 min) au `_ready()` déclenche `_mourir()`, empêche accumulation infinie
+- 2026-08-22 — fix boucle silencieuse « générateur mange cadavre plein » : dans `_faire_colle`, source invalide + `_cout_paye_pour_ce_cycle = true` → transition ETAT_POND (ponte anticipée qui reset matiere_cumulee) au lieu d'ETAT_ATTENTE ; sans ce shortcut, prochain cycle demande reste = 0 → pris = 0 → boucle géniteur↔ATTENTE
+- 2026-08-22 — exception collision géniteur↔générateur POSÉE AU `_ready()` du générateur (pas seulement au `_mourir()` cadavre) ; sans elle, RigidBody masse 5 pousse RigidBody masse 30 non-freeze au contact. Même patron dans `stockeur.gd:_ready` avec groupes `geniteur/generateur_energie/ressource/stockeur/protogeniteur`
+- 2026-08-22 — accélérateur `controle_vitesse.gd` : touches `+` / `-` (×2 / ÷2), `0` reset, plafond ×10, plancher ×0.25, OSD Label jaune haut-gauche
+- 2026-08-22 — protogéniteur ÉCRIT mais NON BRANCHÉ : `protogeniteur.gd/.tscn` (cube bleu 3×3×3, auto-produit 2/s de stock_public, suit géniteur à 60 m) + `gestation_protogeniteur.gd` (seuil 120 = 80 % privé, coût 120, max 3, durée 240 s = 4 min) ; le nœud n'est pas dans `geniteur_v2.tscn`, à cabler quand la boucle vers guerrier sera fermée
 - d09a008 — écosystème ennemi, bugs latents fermés : `monde.deplacer` appelé par toute entité mouvante (géniteur, mother cube, carré rouge), `MondePartage` posé au banc `test_ennemi2 Mother box` (sans lui perception morte), collision géniteur↔cadavre exclue, perception mother cube et générateur throttlées à 2/s, barre de vie mother cube compensée du scale, propriété `rayon` publiée sur l'entité
 - 8818c58 — cadavre-mange : le générateur enrolé perçoit la source la plus proche parmi géniteur et cadavres (filtre `stock_puisable > 0`), cumule matière sur plusieurs sources jusqu'à `cout_prelevement`
 - 8d69362 — mother cube perception + mange + croissance : vue 30 m sur `nourriture > 0`, une frappe par seconde au contact, scale lerp base → 70 m (gain 5 % décroissant avec la taille), vitesse lerp 10 → 2,5 m/s ; géniteur devient double-stock (`_stock_perso` 150 + `_stock_accessible` 150, extraction 50/50, barre violette visible)
@@ -340,6 +350,35 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## DÉCISIONS
 
+- STOCK DU GÉNITEUR : deux stocks nommés PRIVÉE (violet) et PUBLIC (bleu),
+  jamais « perso » ni « accessible ». Le stock PRIVÉ finance les
+  gestations qui restent proches du géniteur (stockeur, protogéniteur) ;
+  le stock PUBLIC finance les générateurs et se puise par eux à distance.
+- SEUIL = COÛT sur les gestations enfants du géniteur : le seuil de
+  déclenchement d'une gestation est aussi son coût. 10 % pour un
+  générateur (15 sur public), 20 % pour un stockeur (30 sur privé),
+  80 % pour un protogéniteur (120 sur privé). Une gestation ne se
+  déclenche qu'à saturation partielle du stock qui la finance.
+- CADAVRE ET CARRÉ ROUGE SONT ÉPHÉMÈRES. Sinon la cannibalisation
+  intra-espèce nourrit la colonie même quand le joueur en tue —
+  transformant chaque kill du joueur en neutre pour la colonie. Le
+  pourrissement (5 min cadavre / 10 min carré rouge) préserve la valeur
+  tactique de l'attaque.
+- LE STOCKEUR EST UN PRÉ-CÂBLAGE : sans consommateur final il empile
+  100 nourritures qui ne servent à rien encore. Le CONSOMMATEUR PRÉVU
+  est le GUERRIER (puise stockeur, va attaquer le joueur). Le stockeur
+  est posé avant le guerrier pour que la chaîne de production existe
+  déjà quand on cablera le guerrier.
+- LE PROTOGÉNITEUR EST EN ATTENTE de la fermeture du cycle par le
+  guerrier — sans consommateur final, empiler un producteur
+  supplémentaire (auto-produit énergie, suit géniteur à 60 m) ne révèle
+  rien. Les scripts sont écrits, le nœud n'est pas branché dans la scène.
+- PHILOSOPHIE DE DEV : le projet appartient au genre SIMULATION
+  ÉMERGENTE (Dwarf Fortress, RimWorld). Les systèmes se construisent
+  AVANT que le gameplay se stabilise ; le gameplay ÉMERGE de leurs
+  interactions. Pas de playtest à chaque itération unitaire, plutôt
+  itération sur les systèmes puis observation périodique de ce qui sort.
+
 - TOUT EST DONNÉE ; LE RENDU ET LA COLLISION SONT UNE COUCHE TEMPORAIRE. Vaut
   pour TOUT objet à venir, pas seulement le terrain. Loin du joueur, un objet
   n'a ni nœud ni corps physique : il est une position et des propriétés, et
@@ -431,8 +470,51 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 4. Carré rouge (joueur) + carré violet (IA) + caméra scrollable
 5. Premier Modelfile agent stratégie avec system prompt
 6. Boucle complète : état → résumé → modèle → clé → action visible
+7. GESTATION MOTHER CUBE MISE EN STOCK — `test_ennemi2 Mother box` pointe
+   désormais vers `geniteur_v2.tscn` (copie sans nœud `GestationMother`).
+   `geniteur.gd`, `geniteur.tscn` et `gestation_mother_cube.gd` restent
+   intacts sur disque, réutilisables. Le gameplay mother cube est une
+   piste à reprendre quand la lignée du géniteur v2 sera stabilisée
 
 ## PIÈGES DÉJÀ PAYÉS
+
+- LE GÉNÉRATEUR POUSSE LE GÉNITEUR AU CONTACT. Symptôme : les 4 générateurs
+  s'enfoncent dans le collider du géniteur, le géniteur dérive lentement au
+  lieu de rester posé. Cause : RigidBody masse 5 vs RigidBody masse 30
+  non-freeze, `distance_contact_geniteur = 4 m` avec collider géniteur 3 m
+  de demi-largeur — le check « arrivé » s'évalue par tick et la vélocité
+  3 m/s avale les 0,5 m de marge avant que le stop ne s'applique. Règle :
+  `add_collision_exception_with(self)` au `_ready()` du générateur — le
+  patron existait déjà au `_mourir()` pour le cadavre, il fallait
+  simplement l'appliquer aussi à la naissance. Généralisable : toute
+  entité amie qui approche le géniteur ou une autre amie doit avoir
+  l'exception croisée dès `_ready()`.
+- GÉNÉRATEUR MANGE UN CADAVRE PLEIN PUIS RESTE BLOQUÉ EN BOUCLE
+  SILENCIEUSE. Symptôme : après avoir vidé un cadavre (stock 10 =
+  cout_prelevement 10), le générateur oscille au contact du géniteur sans
+  pondre. Cause : `_matiere_cumulee = 10` et `_cout_paye_pour_ce_cycle =
+  true` restent tels quels quand la source meurt en COLLE (jamais reset,
+  intentionnel pour cumul multi-sources). Cycle suivant : le générateur
+  arrive au géniteur avec `reste = cout_prelevement - matiere_cumulee =
+  0`, `preleve(0) = 0`, `if pris <= 0: return ATTENTE`. Règle : dans
+  `_faire_colle` branche source invalide, si `_cout_paye_pour_ce_cycle`
+  est vrai, transition ETAT_POND (ponte anticipée qui reset dans
+  `_faire_pond`) au lieu d'ETAT_ATTENTE. Préserve le cumul multi-sources
+  quand cout_paye est faux.
+- STOCKEUR RESTE PLANTÉ APRÈS AVOIR MANGÉ LOIN DU GÉNITEUR. Symptôme :
+  stockeur mange un carré rouge éloigné, ne perçoit plus de nourriture,
+  reste immobile indéfiniment ; pendant ce temps le géniteur s'est
+  déplacé, les nouveaux carrés rouges sont hors perception. Cause :
+  `_faire_cherche_nourriture` immobile si `vus.is_empty()`. Règle :
+  `_appliquer_patrouille` qui fait revenir le stockeur vers le géniteur
+  au-delà de `rayon_patrouille` (50 m). Le stockeur reste dans la zone
+  de production, la perception 30 m suffit à repérer les carrés rouges
+  quand il y retourne.
+- GODOT FULLSCREEN BORDERLESS IGNORE `ShowWindow SW_MINIMIZE`. Symptôme :
+  `IsIconic` retourne true mais la fenêtre reste peinte ; `CopyFromScreen`
+  capture Godot quand même. Règle : ne pas dépendre du minimize pour
+  isoler visuellement ; demander à l'utilisateur de mettre en arrière-plan
+  volontairement si nécessaire.
 
 - TROIS COPIES DE LA MÊME CHOSE, ET UNE SEULE QUE LE JEU LIT. Le GridMap de la
   scène, la carte, le fichier de scène : on sculpte dans le premier, le jeu ne

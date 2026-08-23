@@ -7,7 +7,7 @@
 [ext_resource type="Script" uid="uid://tudqsgyk7wcj" path="res://jeu/Outil de jeu/presence_dans_monde.gd" id="8_presence"]
 [ext_resource type="Script" uid="uid://b12cv03ble3qs" path="res://jeu/Outil de jeu/vie_joueur.gd" id="9_vie"]
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/barre_joueur.tscn" id="10_barre"]
-[ext_resource type="PackedScene" path="res://jeu/Outil de jeu/geniteur.tscn" id="16_hqypk"]
+[ext_resource type="PackedScene" path="res://jeu/Outil de jeu/geniteur_v2.tscn" id="16_hqypk"]
 [ext_resource type="Script" uid="uid://cj4hq8kgy146n" path="res://jeu/Outil de jeu/ressources_terrain.gd" id="20_ress"]
 [ext_resource type="Resource" uid="uid://dnue86cvdtf8o" path="res://jeu/Outil de jeu/profils_blocs/bloc.tres" id="21_pbloc"]
 [ext_resource type="Resource" uid="uid://cj5fjet8iax3y" path="res://jeu/Outil de jeu/profils_blocs/rampe.tres" id="23_pramp"]
@@ -18,7 +18,8 @@
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/inspecteur_bloc.tscn" id="28_insp"]
 [ext_resource type="Script" uid="uid://d1xwr8v708icp" path="res://jeu/Outil de jeu/stock_joueur.gd" id="29_stock"]
 [ext_resource type="PackedScene" path="res://jeu/Outil de jeu/barre_ressource.tscn" id="30_bres"]
-[ext_resource type="Script" path="res://jeu/Outil de jeu/monde_partage.gd" id="31_monde"]
+[ext_resource type="Script" uid="uid://bx0d3sj1mvtlt" path="res://jeu/Outil de jeu/monde_partage.gd" id="31_monde"]
+[ext_resource type="Script" uid="uid://dblf1pmbhc8yi" path="res://jeu/Outil de jeu/controle_vitesse.gd" id="99_ctlv"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ah4o0"]
 
@@ -40,7 +41,7 @@ data = {
 metadata/_editor_floor_ = Vector3(0, 6, 0)
 
 [node name="Camera" type="Camera3D" parent="." unique_id=1698849872]
-transform = Transform3D(1, 0, 0, 0, 0.3454088, 0.93845236, 0, -0.93845236, 0.3454088, 26.155113, 256.88602, 115.36823)
+transform = Transform3D(1, 0, 0, 0, 0.16272824, 0.9866709, 0, -0.9866709, 0.16272824, 26.155113, 186.95432, 46.413544)
 current = true
 
 [node name="Soleil" type="DirectionalLight3D" parent="." unique_id=667210419]
@@ -53,6 +54,9 @@ environment = SubResource("Environment_orrkm")
 
 [node name="Personnage" parent="." unique_id=1960685541 instance=ExtResource("5_perso")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 83.17275, 13.891258, 42.957382)
+
+[node name="Yeux" parent="Personnage" index="2"]
+current = false
 
 [node name="Interaction" type="Node3D" parent="Personnage" unique_id=1954902885]
 script = ExtResource("6_interaction")
@@ -79,13 +83,17 @@ script = ExtResource("29_stock")
 script = ExtResource("20_ress")
 profils = Array[Resource]([ExtResource("21_pbloc"), ExtResource("23_pramp"), ExtResource("24_prg"), ExtResource("25_pnr"), ExtResource("26_pbl"), ExtResource("27_pvt")])
 
-[node name="MondePartage" type="Node" parent="."]
+[node name="MondePartage" type="Node" parent="." unique_id=1674944439]
 script = ExtResource("31_monde")
 
 [node name="InspecteurBloc" parent="." unique_id=1847977899 instance=ExtResource("28_insp")]
 
 [node name="Geniteur" parent="." unique_id=2052068274 instance=ExtResource("16_hqypk")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 65.150696, 48.750877, 34.288094)
+capacite_privee = 300
+
+[node name="ControleVitesse" type="Node" parent="." unique_id=1130613520]
+script = ExtResource("99_ctlv")
 
 [editable path="Personnage"]
 [editable path="Geniteur"]

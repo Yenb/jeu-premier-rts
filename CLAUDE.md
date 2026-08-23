@@ -562,6 +562,7 @@ PATH), jamais `&&` pour chaîner (n'existe pas en PowerShell 5.1 ; utiliser
   argument positionnel est silencieusement ignoré, Godot retombe sur
   `run/main_scene` sans erreur ni avertissement)
 - Lancer un seul test : `& "<chemin>" --headless --script jeu/test_xxx.gd`
+- VOIR la fenêtre Godot pendant qu'elle tourne : Claude PEUT (multimodal). Méthode PowerShell `System.Drawing` `CopyFromScreen` (écran entier) ou `DwmGetWindowAttribute` + `CopyFromScreen` (fenêtre par titre `*Godot*`) → PNG → `Read`. Détail et pièges dans la mémoire perso Claude `reference-capture-ecran-godot`. Les sessions précédentes ont dit à tort « impossible ».
 
 Lors d'une édition manuelle de fichiers `.tscn` ou `.tres`, préserver la version de format existante (`format=3`) et les références `uid://` — le système d'UID de Godot relie scènes et ressources par ces identifiants, et un décalage casse les références silencieusement jusqu'au réimport.
 

@@ -41,6 +41,13 @@ const CATALOGUE_CANAUX := {
 # (queue_free). Regle Yael 2026-08-22 : valeur separee, cumul possible
 # sur plusieurs sources pour atteindre cout_prelevement=10.
 @export var stock_cadavre_initial: float = 10.0
+# DECOMPOSITION : le cadavre disparait apres cette duree meme s'il n'a pas
+# ete entierement consomme. Yael 2026-08-22 : cadavre = ressource EPHEMERE,
+# pas eternelle. Sans decomposition, tuer un gen finit par NOURRIR ses freres
+# via cannibalisation illimitee -- l'action du joueur devient neutre. 30 s
+# donne une fenetre courte de consommation mais pas eternelle. Retire du
+# monde partage + queue_free au timeout.
+@export var duree_decomposition_cadavre: float = 300.0
 # ENROLEMENT (morceau 2) : le generateur naissant marche vers le geniteur,
 # preleve 10 stock au contact, attend `secondes_ponte`, pond un carre rouge
 # derriere lui, recommence -- jusqu'a mort naturelle 5 min. Instinct
@@ -168,6 +175,26 @@ func _mourir() -> void:
 	if geniteur_node != null and geniteur_node is CollisionObject3D:
 		var g_co: CollisionObject3D = geniteur_node
 		g_co.add_collision_exception_with(self)
+	# TIMER DE DECOMPOSITION : le cadavre disparait au timeout meme s'il
+	# n'a pas ete entierement consomme. Voir @export
+	# duree_decomposition_cadavre en tete pour le pourquoi (design Yael :
+	# tuer un gen doit couter a la colonie, la cannibalisation eternelle
+	# neutralise cette intention).
+	var timer_decompo := Timer.new()
+	timer_decompo.wait_time = duree_decomposition_cadavre
+	timer_decompo.one_shot = true
+	timer_decompo.autostart = true
+	timer_decompo.timeout.connect(_decomposer)
+	add_child(timer_decompo)
+
+# Decomposition : appelee par le Timer de duree_decomposition_cadavre.
+# Retire du monde partage (evite fantome perceptible) puis queue_free.
+# Idempotent avec la destruction par consommation totale (preleve_stock_puisable
+# fait deja retirer + queue_free) : is_instance_valid protege.
+func _decomposer() -> void:
+	if _monde_partage != null and not _entite_cadavre.is_empty():
+		_monde_partage.monde.retirer(_entite_cadavre.id)
+	queue_free()
 
 # API publique -- utilisee UNIQUEMENT en phase cadavre (avant, le
 # generateur ne porte pas de stock puisable). Preleve dans le stock
@@ -190,6 +217,28 @@ func preleve_stock_puisable(quantite: float) -> float:
 
 func _ready() -> void:
 	add_to_group("generateur_energie")
+	# EXCEPTION COLLISION AVEC LE GENITEUR : le generateur enrole marche vers
+	# le geniteur pour prelever (distance_contact_geniteur = 4 m). Le collider
+	# du geniteur (BoxShape3D 6x6x6) commence a 3 m du centre horizontal ; le
+	# check "arrive" s'evalue par tick, la velocite (3 m/s) avale les 0.5 m de
+	# marge avant que le stop ne s'applique -- le generateur enfonce le
+	# geniteur (RigidBody3D masse 30, non-freeze) et le pousse. Meme patron
+	# que la phase cadavre (_mourir ligne 167-170), applique des la naissance :
+	# le generateur passe A TRAVERS le collider du geniteur, s'arrete au
+	# seuil de distance sans jamais transferer de quantite de mouvement. Les
+	# autres collisions (sol, autres generateurs, mother cube) restent intactes.
+	var geniteur_node := get_tree().get_first_node_in_group("geniteur")
+	if geniteur_node != null and geniteur_node is CollisionObject3D:
+		var g_co: CollisionObject3D = geniteur_node
+		g_co.add_collision_exception_with(self)
+	# EXCEPTION COLLISION AVEC LES STOCKEURS DEJA NES : un generateur qui
+	# naît apres un stockeur doit passer a travers lui (le stockeur circule
+	# pour ramasser les carres rouges). L'inverse (stockeur naissant apres
+	# un generateur) est deja couvert dans stockeur.gd:_ready.
+	for grp in ["stockeur", "protogeniteur"]:
+		for autre in get_tree().get_nodes_in_group(grp):
+			if autre is CollisionObject3D and autre != self:
+				(autre as CollisionObject3D).add_collision_exception_with(self)
 	# TIMER DE MORT NATURELLE : un seul Timer par generateur, cohérent avec
 	# le geniteur lui-même (peu d'individus : 4 max par geniteur, ~40
 	# total prevus). Le canevas champ scalaire est reserve aux populations
@@ -300,6 +349,7 @@ func _faire_vers_source(_delta: float) -> void:
 	if _source == null or not is_instance_valid(_source):
 		_source = null
 		_etat = ETAT_ATTENTE
+		print("[gen ", get_instance_id(), "] VERS_SOURCE -> ATTENTE (source invalide)")
 		return
 	var vers: Vector3 = _source.global_position - global_position
 	vers.y = 0.0
@@ -308,6 +358,7 @@ func _faire_vers_source(_delta: float) -> void:
 		linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
 		_etat = ETAT_COLLE
 		_secondes_dans_colle = 0.0
+		print("[gen ", get_instance_id(), "] VERS_SOURCE -> COLLE (source ", _source.get_instance_id(), " dist=", snappedf(vers.length(), 0.01), " seuil=", seuil, " ressource=", _source.is_in_group("ressource"), ")")
 		return
 	var direction := vers.normalized()
 	linear_velocity = Vector3(direction.x * vitesse_marche, linear_velocity.y, direction.z * vitesse_marche)
@@ -329,7 +380,21 @@ func _distance_contact_pour(source: Node3D) -> float:
 func _faire_colle(delta: float) -> void:
 	if _source == null or not is_instance_valid(_source):
 		_source = null
-		_etat = ETAT_ATTENTE
+		# BUGFIX 2026-08-22 : si le repas etait COMPLET (cout_paye = true) et
+		# la source meurt avant que les secondes_ponte ne s'ecoulent (cadavre
+		# vide + queue_free immediat, cas courant avec stock_cadavre_initial
+		# = cout_prelevement = 10), on saute a ETAT_POND au lieu d'ATTENTE.
+		# Sans ce shortcut, matiere_cumulee reste a 10 (jamais reset -- le
+		# reset se fait uniquement dans _faire_pond), et le prochain cycle
+		# arrive au geniteur avec reste = 10 - 10 = 0 -> pris = 0 -> ATTENTE
+		# instant -> boucle silencieuse "gen touche geniteur, repart, revient".
+		# Cumul multi-sources (cout_paye false) reste intact -- on preserve.
+		if _cout_paye_pour_ce_cycle:
+			_etat = ETAT_POND
+			print("[gen ", get_instance_id(), "] COLLE -> POND (source morte, repas complet -> ponte anticipee)")
+		else:
+			_etat = ETAT_ATTENTE
+			print("[gen ", get_instance_id(), "] COLLE -> ATTENTE (source invalide, cumul partiel=", snappedf(_matiere_cumulee, 0.01), " preserve)")
 		return
 	linear_velocity = Vector3(0.0, linear_velocity.y, 0.0)
 	# PAIEMENT UNIFORME via preleve_stock_puisable. La source rend la
@@ -344,15 +409,18 @@ func _faire_colle(delta: float) -> void:
 		if _source.has_method("preleve_stock_puisable"):
 			var pris: float = float(_source.preleve_stock_puisable(reste))
 			_matiere_cumulee += pris
+			print("[gen ", get_instance_id(), "] pump source=", _source.get_instance_id(), " demande=", snappedf(reste, 0.01), " pris=", snappedf(pris, 0.01), " cumul=", snappedf(_matiere_cumulee, 0.01), " ressource=", _source.is_in_group("ressource"))
 			if pris <= 0.0:
 				# Source epuisee ce tick (le cadavre queue_free apres retour).
 				# Retour ATTENTE pour rechercher une autre source. Le cumul
 				# est PRESERVE (le generateur porte deja la matiere prise).
 				_source = null
 				_etat = ETAT_ATTENTE
+				print("[gen ", get_instance_id(), "] COLLE -> ATTENTE (pris=0, source epuisee)")
 				return
 			if _matiere_cumulee >= cout_prelevement:
 				_cout_paye_pour_ce_cycle = true
+				print("[gen ", get_instance_id(), "] cout paye -> attente ponte ", secondes_ponte, "s")
 		elif _source.has_method("retirer_stock"):
 			# Fallback pour mocks sans preleve_stock_puisable.
 			_source.retirer_stock(cout_prelevement)
@@ -371,6 +439,7 @@ func _faire_colle(delta: float) -> void:
 		_secondes_dans_colle += delta
 		if _secondes_dans_colle >= secondes_ponte:
 			_etat = ETAT_POND
+			print("[gen ", get_instance_id(), "] COLLE -> POND (attente ", snappedf(_secondes_dans_colle, 0.1), "s ecoulee)")
 
 # Pose un carre rouge du cote OPPOSE a la source (patron puceron : produit
 # le miellat de son cote, pas colle a la plante hote). Puis retour ATTENTE

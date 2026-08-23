@@ -1,0 +1,85 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://jeu/Outil de jeu/stockeur.gd" id="1_st"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
+
+[sub_resource type="StandardMaterial3D" id="MatCoeur"]
+albedo_color = Color(0.95, 0.55, 0.15, 1)
+metallic = 0.55
+roughness = 0.35
+emission_enabled = true
+emission = Color(1.0, 0.7, 0.25, 1)
+emission_energy_multiplier = 1.4
+
+[sub_resource type="BoxMesh" id="MeshCoeur"]
+material = SubResource("MatCoeur")
+size = Vector3(1, 1, 1)
+
+[sub_resource type="BoxShape3D" id="ShapeSt"]
+size = Vector3(1, 1, 1)
+
+; -- LAMPE : sphere emissive au sommet, orange pour identifier le stockeur.
+[sub_resource type="StandardMaterial3D" id="MatLampe"]
+albedo_color = Color(1.0, 0.85, 0.3, 1)
+emission_enabled = true
+emission = Color(1.0, 0.9, 0.35, 1)
+emission_energy_multiplier = 3.5
+
+[sub_resource type="SphereMesh" id="MeshLampe"]
+material = SubResource("MatLampe")
+radius = 0.15
+height = 0.3
+
+[sub_resource type="ShaderMaterial" id="MatBarreVie"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 1.0
+
+[sub_resource type="QuadMesh" id="QuadBarreVie"]
+material = SubResource("MatBarreVie")
+size = Vector2(0.8, 0.1)
+
+; -- BARRE DE STOCK : orange, meme geometrie que la barre de vie mais
+; -- au-dessus. Rendue par le shader partage.
+[sub_resource type="ShaderMaterial" id="MatBarreStock"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.08, 0.02, 1)
+shader_parameter/couleur_pleine = Color(1.0, 0.6, 0.15, 1)
+shader_parameter/fraction = 0.0
+
+[sub_resource type="QuadMesh" id="QuadBarreStock"]
+material = SubResource("MatBarreStock")
+size = Vector2(0.8, 0.1)
+
+; -- RigidBody3D masse 5, damping 2/2, lock_rotation. Meme choix que
+; -- generateur_energie : la physique repousse naturellement quand deux
+; -- entites se posent au meme endroit, sans interpenetration statique.
+[node name="Stockeur" type="RigidBody3D" groups=["destructible"]]
+mass = 5.0
+lock_rotation = true
+linear_damp = 2.0
+angular_damp = 2.0
+script = ExtResource("1_st")
+
+[node name="Coeur" type="MeshInstance3D" parent="."]
+mesh = SubResource("MeshCoeur")
+
+[node name="Forme" type="CollisionShape3D" parent="."]
+shape = SubResource("ShapeSt")
+
+[node name="Lampe" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.65, 0)
+mesh = SubResource("MeshLampe")
+
+[node name="BarreDeVie" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeVie"]
+mesh = SubResource("QuadBarreVie")
+
+[node name="BarreDeStock" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeStock"]
+mesh = SubResource("QuadBarreStock")
