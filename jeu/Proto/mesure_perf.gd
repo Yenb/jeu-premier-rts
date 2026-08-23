@@ -48,10 +48,12 @@ func _ready() -> void:
 			_log("[MESURE] observateur pos_depart = %s" % str(_pos_depart))
 
 func _compter_mmi_dans_arbre(n: Node) -> int:
-	# Parcours recursif pour compter les MultiMeshInstance3D vivants.
-	# Cout : O(N noeuds), acceptable a 1 Hz (INTERVALLE_LOG).
+	# Parcours recursif : compte MultiMeshInstance3D ET MeshInstance3D.
+	# terrain_visible_multimesh.gd a bascule de MMI vers MI en cours de
+	# chantier ; sans les deux, la sonde renvoyait 0. Cout : O(N noeuds),
+	# acceptable a 1 Hz (INTERVALLE_LOG).
 	var c := 0
-	if n is MultiMeshInstance3D:
+	if n is MultiMeshInstance3D or n is MeshInstance3D:
 		c += 1
 	for enfant in n.get_children():
 		c += _compter_mmi_dans_arbre(enfant)

@@ -48,12 +48,10 @@ metadata/_editor_floor_ = Vector3(0, 7, 0)
 script = ExtResource("2_visible_mm")
 carte = ExtResource("3_carte")
 mesh_library = ExtResource("1_bloc")
-rayon_cellules = 120
-rayon_interne_cellules = 15
-taille_tuile_cellules = 100
+taille_tuile_cellules = 20
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("4_personnage")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.179514, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.379713, 0)
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("13_arme")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)

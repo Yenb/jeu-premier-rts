@@ -105,6 +105,62 @@ func _ready() -> void:
 	# pour lui pousser les balles (spawn_balle). Sans groupe, arme_tir
 	# devrait connaitre le chemin de scene -- fragile.
 	add_to_group("manager_proto")
+	# Wrapper local pour differer le save_png apres la premiere frame.
+	# Sans await, get_viewport().get_texture() renvoie une texture vide.
+	var _capturer_apres_frame := func():
+		await RenderingServer.frame_post_draw
+		var img := get_viewport().get_texture().get_image()
+		if img != null:
+			var chemin := "user://capture_gridmap_tuile.png"
+			img.save_png(chemin)
+			print("PNG saved: %s" % chemin)
+		else:
+			print("PNG saved: IMAGE NULL")
+	# DIAGNOSTIC RepereVisuel : cache le plan de reference et capture PNG.
+	# Consequence si echec : scene demarre normalement. Plan B : rollback.
+	var repere = get_node_or_null("../RepereVisuel")
+	if repere:
+		repere.visible = false
+		print("RepereVisuel CACHE")
+	else:
+		print("RepereVisuel NON TROUVE -- chemin incorrect")
+	_capturer_apres_frame.call_deferred()
+	# --- Q8 DIAGNOSTIC : verifier Terrain + Y du joueur apres 1s. ---
+	# Consequence : $Personnage peut crash (path relatif = manager_proto
+	# n'a pas d'enfant Personnage). Rollback : suppression du bloc.
+	var _q8 := func():
+		await get_tree().create_timer(3.0).timeout
+		var terrain = get_node_or_null("../Terrain")
+		if terrain:
+			print("Cellules GridMap Terrain : ", terrain.get_used_cells().size())
+			print("Terrain.visible : ", terrain.visible)
+		else:
+			print("TERRAIN ABSENT")
+		var perso = get_node_or_null("../Personnage")
+		if perso:
+			print("JOUEUR Y APRES 3s : ", perso.global_position.y)
+		else:
+			print("JOUEUR ABSENT")
+		var tl = get_node_or_null("../TerrainLointain")
+		if tl == null:
+			print("TERRAIN_LOINTAIN ABSENT")
+			return
+		var mi_count := 0
+		var mi_with_sb := 0
+		for enfant in tl.get_children():
+			if enfant is MeshInstance3D:
+				mi_count += 1
+				for sous in enfant.get_children():
+					if sous is StaticBody3D:
+						mi_with_sb += 1
+						break
+		print("MI dans TerrainLointain : ", mi_count, " ; MI avec StaticBody3D enfant : ", mi_with_sb)
+		# Q4 : couleur assignee a l'item 0 dans TerrainLointain._couleurs_par_item
+		if tl.has_method("get") and tl.get("_couleurs_par_item") != null:
+			var pal: Dictionary = tl.get("_couleurs_par_item")
+			print("Couleur item 0 : ", pal.get(0, "ABSENT"))
+			print("Couleur item 6 : ", pal.get(6, "ABSENT"))
+	_q8.call_deferred()
 	# INSTRUMENTATION PERF : sonde mesure_perf.gd active UNIQUEMENT si env
 	# var MESURE_PERF=1 ou TAILLE_TUILE=<n>. Sans var, sonde ABSENTE --
 	# la scene tourne normalement, aucun quit automatique.
