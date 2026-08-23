@@ -2,3 +2,7 @@
 # reimportes, caches de shaders. Le versionner ferait bouger le depot a chaque
 # ouverture de l'editeur, sans qu'aucun de ces octets ne soit une source.
 .godot/
+
+# .claude/ contient l'etat local Claude Code : verrou de hook (last_test_ok),
+# settings locaux de session. Aucune source de verite, purement local.
+.claude/
