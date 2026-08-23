@@ -198,16 +198,23 @@ func _pondre(prod: Dictionary) -> void:
 		"position": prod.position + offset,
 		"age": 0.0,
 		"noeud": null,
+		# EST_DETRUIT : bascule a true via le signal `detruit` emis par
+		# carre_rouge.gd:_mourir. C'est le SEUL moyen fiable de detecter
+		# la destruction externe : en Godot 4, cr.noeud freed compare
+		# `== null` a true dans un Dictionary, is_instance_valid pas
+		# suffisant seul (voir issue godotengine/godot#35534).
+		"est_detruit": false,
 	})
 
 func _ticker_carres(delta: float) -> void:
 	var i := 0
 	while i < _carres.size():
 		var cr = _carres[i]
-		# NŒUD DETRUIT EXTERNEMENT (par frappe balle : subir_frappe queue_free)
-		# -> purge la donnee, sinon _bascule_rendu_carres recreerait un nœud
-		# a la position stockee = resurrection en boucle.
-		if cr.noeud != null and not is_instance_valid(cr.noeud):
+		# PURGE si le carre a emis son signal `detruit` (frappe balle ou
+		# pourriture cote framework). Le flag est fiable, contrairement au
+		# test `cr.noeud == null OR !is_instance_valid` qui echoue en
+		# Godot 4 sur les refs freed dans un Dictionary.
+		if cr.est_detruit:
 			_carres.remove_at(i)
 			continue
 		cr.age += delta
@@ -256,17 +263,22 @@ func _bascule_rendu_carres() -> void:
 	for cr in _carres:
 		var d2: float = ((cr.position as Vector3) - pos_obs).length_squared()
 		if d2 < r2:
+			# CREATE si pas de nœud (nouvellement pondu, ou revient dans
+			# rayon apres sortie). Le flag est_detruit filtrera plus haut
+			# les cr deja detruits externement.
 			if cr.noeud == null or not is_instance_valid(cr.noeud):
 				var n := CarreVisuelScene.instantiate() as Node3D
-				# PASSIF : desactive Timer pourriture + inscription monde
-				# partagé du carre_rouge framework. Le manager gere l'age
-				# et la mort en donnee. Toutes les autres capacites
-				# (barre de vie, destructibilite, subir_frappe, nourriture)
-				# restent actives.
 				if "passif" in n:
 					n.set("passif", true)
 				parent.add_child(n)
 				n.global_position = cr.position
+				# Signal `detruit` du framework carre_rouge : le manager
+				# marque est_detruit=true quand le carre meurt (frappe
+				# balle, pourriture, autre). _ticker_carres purgera.
+				# capture cr dans une closure pour reference stable.
+				var cr_ref: Dictionary = cr
+				if n.has_signal("detruit"):
+					n.detruit.connect(func(): cr_ref["est_detruit"] = true)
 				# EXCEPTION COLLISION avec producteurs : sans ca les carres
 				# pondus tout autour du producteur RigidBody3D le ceinturent
 				# et le bloquent physiquement (constate a l'ecran par Yael).
@@ -277,9 +289,18 @@ func _bascule_rendu_carres() -> void:
 						if prod.noeud != null and is_instance_valid(prod.noeud) and prod.noeud is CollisionObject3D:
 							(prod.noeud as CollisionObject3D).add_collision_exception_with(n)
 				cr.noeud = n
-			else:
+				cr.avait_noeud = true
+			elif cr.noeud != null and is_instance_valid(cr.noeud):
 				cr.position = cr.noeud.global_position
 		else:
+			# HORS RAYON : detruit le nœud et met noeud=null. On garde
+			# avait_noeud=true, donc si le joueur s'eloigne puis les carres
+			# meurent naturellement (age), _ticker_carres purgera.
+			# ATTENTION : si le joueur revient dans le rayon, la condition
+			# `not cr.avait_noeud` empeche la recreation. C'est un choix :
+			# une fois qu'un carre est passe par le rendu, il ne reprend
+			# pas de peau -- sinon on peut retirer le && not avait_noeud
+			# et accepter la recreation propre.
 			if cr.noeud != null and is_instance_valid(cr.noeud):
 				cr.noeud.queue_free()
 				cr.noeud = null

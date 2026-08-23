@@ -28,6 +28,11 @@ extends RigidBody3D
 
 const Frappe = preload("res://scripts/frappe.gd")
 
+# Emis dans _mourir. Un manager (proto ou test) qui gere le carre en
+# donnee peut se connecter pour retirer l'entree correspondante lors
+# d'une destruction externe (frappe, pourriture, autre).
+signal detruit
+
 @export var vie_max: float = 5.0
 # NOURRITURE : valeur de croissance apportee a la mother cube quand elle
 # le mange. Yael a specifie 5. Exportee pour reglage inspecteur.
@@ -66,6 +71,9 @@ func _mourir() -> void:
 	# monde.gd et s'y dirigerait pour rien.
 	if _monde_partage != null:
 		_monde_partage.monde.retirer(entite.id)
+	# EMET AVANT queue_free : les listeners (manager_proto) doivent voir
+	# le signal tant que l'objet est encore valide pour identifier le carre.
+	detruit.emit()
 	queue_free()
 
 func _process(_delta: float) -> void:

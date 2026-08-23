@@ -14,6 +14,7 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 2026-08-23 — split donnée/rendu du terrain (cubes verts sculptés dans `proto_carte.tres`) : vérifié fonctionnel via framework `terrain_visible` + `carte_terrain`. Item `bloc_vert` (id 6) stocké dans `particularites` de la carte, restitué à l'identique après cycle éloignement/retour du joueur. Sculpture persistante entre sessions, aucune régression, aucune intervention du proto nécessaire
 - 2026-08-22 — géniteur v2 : copie du géniteur SANS gestation mother cube (`geniteur_v2.gd/.tscn`) ; banc `test_ennemi2 Mother box` bascule sur v2 ; v1 intact sur disque (piste mother cube en stock)
 - 2026-08-22 — stocks du géniteur renommés : `perso → privee` (barre violette), `accessible → public` (barre bleue) ; API `stock_public_courant()` + `preleve_stock_public()` ajoutée
 - 2026-08-22 — gestation des générateurs passe sur le stock PUBLIC : `gestation_generateur_public.gd` (seuil 15 = 10 % public, coût 15, max 8 vivants, durée 60 s) ; l'ancien gestation_energie reste inutilisé mais sur disque
