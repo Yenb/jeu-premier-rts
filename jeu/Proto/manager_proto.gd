@@ -41,6 +41,15 @@ const CarreVisuelScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
 const TICKS_ROUGE_AVANT_DEPART := 2
 const DISTANCE_MIN_CIBLE := 4.0
 const ECART_VERTICAL_MAX_CIBLE := 5.0
+# MARGE SOUS LE RAYON TERRAIN GARANTI : le terrain streame a un rayon
+# reel garanti = rayon_cellules - pas_de_rafraichissement (voir
+# terrain_visible.gd:62-65). MARGE_SAFE ajoute une marge supplementaire
+# contre le chargement etale sur plusieurs frames (terrain_visible.gd:67).
+const MARGE_SAFE := 4.0
+# Fallback si _grille absent au _ready. Recalcule au _ready si _grille
+# present : _rayon_safe = (rayon_cellules - pas_de_rafraichissement) * cote - MARGE_SAFE
+var _rayon_safe: float = 20.0
+var _rayon_safe2: float = 400.0  # au carre (pour comparaison distance2)
 
 var _observateur: Node3D = null
 var _carte: Resource = null
@@ -62,6 +71,15 @@ func _ready() -> void:
 		push_warning("manager_proto : carte introuvable")
 	if _grille == null:
 		push_warning("manager_proto : GridMap introuvable")
+	# RAYON SAFE DYNAMIQUE : lu depuis _grille.rayon_cellules pour eviter
+	# dependance a une constante figee. Si rayon_cellules du terrain change
+	# un jour (config, biome), _rayon_safe s'ajuste automatiquement.
+	if _grille != null and _carte != null:
+		var rayon_cellules_terrain: int = _grille.get("rayon_cellules") if "rayon_cellules" in _grille else 15
+		var pas: int = _grille.get("pas_de_rafraichissement") if "pas_de_rafraichissement" in _grille else 4
+		var cote: float = _carte.get("cote") if "cote" in _carte else 2.0
+		_rayon_safe = max(0.0, float(rayon_cellules_terrain - pas) * cote - MARGE_SAFE)
+		_rayon_safe2 = _rayon_safe * _rayon_safe
 	call_deferred("_convertir_producteurs_initiaux")
 
 func _convertir_producteurs_initiaux() -> void:
@@ -288,19 +306,66 @@ func _bascule_rendu_carres() -> void:
 					for prod in _producteurs:
 						if prod.noeud != null and is_instance_valid(prod.noeud) and prod.noeud is CollisionObject3D:
 							(prod.noeud as CollisionObject3D).add_collision_exception_with(n)
+				# FREEZE PAR DEFAUT AU SPAWN : evite chute si sol physique
+				# pas encore cook (terrain_visible etale le chargement sur
+				# plusieurs frames). Sera degele par le check ci-dessous
+				# si sol confirme.
+				if n is RigidBody3D:
+					(n as RigidBody3D).freeze = true
 				cr.noeud = n
-				cr.avait_noeud = true
-			elif cr.noeud != null and is_instance_valid(cr.noeud):
+			# BASCULE FREEZE DYNAMIQUE (patron Minecraft simulation vs render
+			# distance) : sous _rayon_safe ET sol confirme -> unfreeze
+			# (physique active, cognable). Au-dela ou sol absent -> freeze
+			# (visible mais immobile, evite chute dans zone terrain non
+			# streamed). Set freeze SEULEMENT si l'etat change (evite
+			# spam physics).
+			if cr.noeud is RigidBody3D:
+				var rb: RigidBody3D = cr.noeud
+				var doit_freeze := true
+				if d2 < _rayon_safe2 and _sol_present_sous(rb.global_position):
+					doit_freeze = false
+				if rb.freeze != doit_freeze:
+					if not doit_freeze:
+						# DEGEL : reset velocity (issue godotengine/godot#92891
+						# documente vitesse residuelle bizarre apres unfreeze).
+						rb.linear_velocity = Vector3.ZERO
+						rb.angular_velocity = Vector3.ZERO
+					rb.freeze = doit_freeze
+			# SYNC POSITION UNIQUEMENT quand unfreeze : le carre etait
+			# physique, son deplacement (cognement par joueur) est legitime.
+			# Si freeze, cr.position reste stable a la ponte.
+			if cr.noeud is RigidBody3D and not (cr.noeud as RigidBody3D).freeze:
 				cr.position = cr.noeud.global_position
 		else:
-			# HORS RAYON : detruit le nœud et met noeud=null. On garde
-			# avait_noeud=true, donc si le joueur s'eloigne puis les carres
-			# meurent naturellement (age), _ticker_carres purgera.
-			# ATTENTION : si le joueur revient dans le rayon, la condition
-			# `not cr.avait_noeud` empeche la recreation. C'est un choix :
-			# une fois qu'un carre est passe par le rendu, il ne reprend
-			# pas de peau -- sinon on peut retirer le && not avait_noeud
-			# et accepter la recreation propre.
+			# HORS RAYON : queue_free du nœud, remise a null explicite.
+			# Le cr reste dans _carres, sera recree au retour du joueur.
 			if cr.noeud != null and is_instance_valid(cr.noeud):
 				cr.noeud.queue_free()
 				cr.noeud = null
+
+# CONFIRME SOL PHYSIQUE PRESENT SOUS `pos` via raycast vertical court.
+# Utilise pour decider si un carre peut etre degele sans tomber
+# (terrain_visible cook les cellules sur plusieurs frames -- distance <
+# rayon_safe ne garantit PAS que le sol est cook). Raycast de 0.5m
+# au-dessus de pos vers 3m dessous : tolere une petite hauteur au-dessus
+# du sol (repos naturel). Rend false si get_world_3d absent (ex. hors
+# arbre).
+func _sol_present_sous(pos: Vector3) -> bool:
+	# Le manager est un Node (pas Node3D), get_world_3d n'existe pas ici.
+	# On passe par _grille (GridMap, descendant Node3D) qui a la meme
+	# World3D. Fallback : get_viewport().find_world_3d() si _grille absent.
+	var monde: World3D = null
+	if _grille != null:
+		monde = _grille.get_world_3d()
+	elif get_viewport() != null:
+		monde = get_viewport().find_world_3d()
+	if monde == null:
+		return false
+	var espace := monde.direct_space_state
+	if espace == null:
+		return false
+	var depart := pos + Vector3(0, 0.5, 0)
+	var arrivee := pos + Vector3(0, -3.0, 0)
+	var requete := PhysicsRayQueryParameters3D.create(depart, arrivee)
+	var frappe: Dictionary = espace.intersect_ray(requete)
+	return not frappe.is_empty()
