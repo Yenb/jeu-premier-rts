@@ -204,6 +204,12 @@ func _ticker_carres(delta: float) -> void:
 	var i := 0
 	while i < _carres.size():
 		var cr = _carres[i]
+		# NŒUD DETRUIT EXTERNEMENT (par frappe balle : subir_frappe queue_free)
+		# -> purge la donnee, sinon _bascule_rendu_carres recreerait un nœud
+		# a la position stockee = resurrection en boucle.
+		if cr.noeud != null and not is_instance_valid(cr.noeud):
+			_carres.remove_at(i)
+			continue
 		cr.age += delta
 		if cr.age >= duree_pourriture_carre:
 			if cr.noeud != null and is_instance_valid(cr.noeud):
