@@ -41,6 +41,11 @@ const CarreVisuelScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
 const TICKS_ROUGE_AVANT_DEPART := 2
 const DISTANCE_MIN_CIBLE := 4.0
 const ECART_VERTICAL_MAX_CIBLE := 5.0
+# FRAMES SANS SOL AVANT SNAP LOGIQUE : le terrain_visible cook les
+# cellules sur ~7 frames (voir terrain_visible.gd:67-77). 14 frames
+# (~0.23s a 60fps) = deux cycles de chargement complets. Au-dela, on
+# snap au sol via carte_terrain (donnee), independant de la physique.
+const FRAMES_SANS_SOL_MAX := 14
 # MARGE SOUS LE RAYON TERRAIN GARANTI : le terrain streame a un rayon
 # reel garanti = rayon_cellules - pas_de_rafraichissement (voir
 # terrain_visible.gd:62-65). MARGE_SAFE ajoute une marge supplementaire
@@ -222,6 +227,11 @@ func _pondre(prod: Dictionary) -> void:
 		# `== null` a true dans un Dictionary, is_instance_valid pas
 		# suffisant seul (voir issue godotengine/godot#35534).
 		"est_detruit": false,
+		# FRAMES_SANS_SOL : compte les frames consecutives ou le carre est
+		# en zone safe mais raycast sol echoue (terrain pas encore cook).
+		# Au-dela de FRAMES_SANS_SOL_MAX, snap au sol logique via carte
+		# (donnee) pour eviter le carre coince freeze eternellement.
+		"frames_sans_sol": 0,
 	})
 
 func _ticker_carres(delta: float) -> void:
@@ -328,8 +338,33 @@ func _bascule_rendu_carres() -> void:
 			if cr.noeud is RigidBody3D:
 				var rb: RigidBody3D = cr.noeud
 				var doit_freeze := true
-				if d2 < _rayon_safe2 and _sol_present_sous(rb.global_position):
-					doit_freeze = false
+				var en_zone_safe := d2 < _rayon_safe2
+				var sol_ok := false
+				if en_zone_safe:
+					sol_ok = _sol_present_sous(rb.global_position)
+					if sol_ok:
+						doit_freeze = false
+						cr.frames_sans_sol = 0
+					else:
+						cr.frames_sans_sol += 1
+						# TIMEOUT : sol jamais trouve alors qu'on est en zone
+						# safe. Snap au sol logique via carte (donnee), puis
+						# reset compteur. Evite carre coince freeze
+						# eternellement dans une zone ou le raycast rate en
+						# permanence (bug de terrain non cook, ou position
+						# invalide).
+						if cr.frames_sans_sol >= FRAMES_SANS_SOL_MAX and _carte != null:
+							var col_x: int = int(floor(cr.position.x / cote_cellule))
+							var col_z: int = int(floor(cr.position.z / cote_cellule))
+							var som: Variant = _carte.sommet(Vector2i(col_x, col_z))
+							if som != null:
+								# Sommet couche k -> face haute Y = (k+1) * cote. Carre pose au-dessus (mi-hauteur 0.2).
+								var y_sol: float = (float(int(som)) + 1.0) * cote_cellule + 0.2
+								cr.position.y = y_sol
+								rb.global_position = cr.position
+								cr.frames_sans_sol = 0
+				else:
+					cr.frames_sans_sol = 0
 				if rb.freeze != doit_freeze:
 					if not doit_freeze:
 						# DEGEL : reset velocity (issue godotengine/godot#92891
