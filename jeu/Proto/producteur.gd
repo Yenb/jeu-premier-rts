@@ -78,9 +78,11 @@ func _ready() -> void:
 	if _passif:
 		set_process(false)
 		return
+	# RessourcesTerrain optionnel : le manager_proto (mode passif) gere ses
+	# propres reserves. En mode non-passif (test_ennemi2 ou usage direct),
+	# ce nœud doit exister. Absence silencieuse -- les usages de
+	# _ressources plus bas sont null-checked.
 	_ressources = get_tree().get_first_node_in_group("ressources_terrain")
-	if _ressources == null:
-		push_warning("producteur.gd : RessourcesTerrain absent, extraction desactivee")
 	_timer = Timer.new()
 	_timer.wait_time = intervalle_extraction
 	_timer.one_shot = false

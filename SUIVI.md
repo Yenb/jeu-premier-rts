@@ -14,6 +14,7 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 2026-08-23 — pattern extensible split donnée/rendu dans `manager_proto.gd` : helper `_gerer_freeze_kinematic(rb, data, en_zone_safe)` réutilisable pour toute entité physique. Trois zones (hors safe / safe+sol / safe+timeout+snap). Applicable aux futurs ennemis mobiles avec sync données→nœud chaque frame (patron producteur déjà en place) + `carte_terrain.est_pleine(colonne, couche)` consultée pour éviter pathfinding dans les murs
 - 2026-08-23 — split donnée/rendu du terrain (cubes verts sculptés dans `proto_carte.tres`) : vérifié fonctionnel via framework `terrain_visible` + `carte_terrain`. Item `bloc_vert` (id 6) stocké dans `particularites` de la carte, restitué à l'identique après cycle éloignement/retour du joueur. Sculpture persistante entre sessions, aucune régression, aucune intervention du proto nécessaire
 - 2026-08-22 — géniteur v2 : copie du géniteur SANS gestation mother cube (`geniteur_v2.gd/.tscn`) ; banc `test_ennemi2 Mother box` bascule sur v2 ; v1 intact sur disque (piste mother cube en stock)
 - 2026-08-22 — stocks du géniteur renommés : `perso → privee` (barre violette), `accessible → public` (barre bleue) ; API `stock_public_courant()` + `preleve_stock_public()` ajoutée

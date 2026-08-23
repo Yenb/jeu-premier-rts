@@ -336,42 +336,7 @@ func _bascule_rendu_carres() -> void:
 			# streamed). Set freeze SEULEMENT si l'etat change (evite
 			# spam physics).
 			if cr.noeud is RigidBody3D:
-				var rb: RigidBody3D = cr.noeud
-				var doit_freeze := true
-				var en_zone_safe := d2 < _rayon_safe2
-				var sol_ok := false
-				if en_zone_safe:
-					sol_ok = _sol_present_sous(rb.global_position)
-					if sol_ok:
-						doit_freeze = false
-						cr.frames_sans_sol = 0
-					else:
-						cr.frames_sans_sol += 1
-						# TIMEOUT : sol jamais trouve alors qu'on est en zone
-						# safe. Snap au sol logique via carte (donnee), puis
-						# reset compteur. Evite carre coince freeze
-						# eternellement dans une zone ou le raycast rate en
-						# permanence (bug de terrain non cook, ou position
-						# invalide).
-						if cr.frames_sans_sol >= FRAMES_SANS_SOL_MAX and _carte != null:
-							var col_x: int = int(floor(cr.position.x / cote_cellule))
-							var col_z: int = int(floor(cr.position.z / cote_cellule))
-							var som: Variant = _carte.sommet(Vector2i(col_x, col_z))
-							if som != null:
-								# Sommet couche k -> face haute Y = (k+1) * cote. Carre pose au-dessus (mi-hauteur 0.2).
-								var y_sol: float = (float(int(som)) + 1.0) * cote_cellule + 0.2
-								cr.position.y = y_sol
-								rb.global_position = cr.position
-								cr.frames_sans_sol = 0
-				else:
-					cr.frames_sans_sol = 0
-				if rb.freeze != doit_freeze:
-					if not doit_freeze:
-						# DEGEL : reset velocity (issue godotengine/godot#92891
-						# documente vitesse residuelle bizarre apres unfreeze).
-						rb.linear_velocity = Vector3.ZERO
-						rb.angular_velocity = Vector3.ZERO
-					rb.freeze = doit_freeze
+				_gerer_freeze_kinematic(cr.noeud, cr, d2 < _rayon_safe2)
 			# SYNC POSITION UNIQUEMENT quand unfreeze : le carre etait
 			# physique, son deplacement (cognement par joueur) est legitime.
 			# Si freeze, cr.position reste stable a la ponte.
@@ -391,6 +356,67 @@ func _bascule_rendu_carres() -> void:
 # au-dessus de pos vers 3m dessous : tolere une petite hauteur au-dessus
 # du sol (repos naturel). Rend false si get_world_3d absent (ex. hors
 # arbre).
+# HELPER GENERIQUE : gere la bascule freeze KINEMATIC d'un RigidBody3D
+# selon zone safe + presence de sol physique + timeout snap logique.
+# Reutilisable pour toute entite physique du proto (carre rouge, futurs
+# ennemis mobiles, autres objets). Le `data` doit contenir un champ
+# `frames_sans_sol: int` et un champ `position: Vector3` (mise a jour
+# si snap logique declenche).
+#
+# Trois zones :
+#   - Hors zone safe -> freeze (pas de chute possible hors terrain streamed)
+#   - Zone safe + sol raycast OK -> unfreeze (physique active, cognable)
+#   - Zone safe + sol absent > FRAMES_SANS_SOL_MAX -> snap au sol logique
+#     via carte, reset compteur
+#
+# Au degel : reset velocity (issue godotengine/godot#92891). Set freeze
+# seulement si l'etat change (evite spam physics chaque frame).
+func _gerer_freeze_kinematic(rb: RigidBody3D, data: Dictionary, en_zone_safe: bool) -> void:
+	var doit_freeze := true
+	if en_zone_safe:
+		if _sol_present_sous(rb.global_position):
+			doit_freeze = false
+			data.frames_sans_sol = 0
+		else:
+			data.frames_sans_sol += 1
+			if data.frames_sans_sol >= FRAMES_SANS_SOL_MAX and _carte != null:
+				if _snap_sol_via_carte(data):
+					rb.global_position = data.position
+					data.frames_sans_sol = 0
+	else:
+		data.frames_sans_sol = 0
+	if rb.freeze != doit_freeze:
+		if not doit_freeze:
+			rb.linear_velocity = Vector3.ZERO
+			rb.angular_velocity = Vector3.ZERO
+		rb.freeze = doit_freeze
+
+# SNAP AU SOL LOGIQUE via carte_terrain (donnee, indep de physique cook).
+# Cherche cellule courante d'abord ; si sommet null, scan les 8 voisines
+# spirale. Modifie cr.position en place. Rend true si sommet trouve.
+# Utile quand raycast physique rate en permanence -- la carte reste
+# source de verite pour "sol logique".
+func _snap_sol_via_carte(cr: Dictionary) -> bool:
+	var col_x: int = int(floor(cr.position.x / cote_cellule))
+	var col_z: int = int(floor(cr.position.z / cote_cellule))
+	# Scan cellule courante + 8 voisines (rayon 1). Chaque cellule
+	# valide donne un Y = (sommet+1)*cote + mi-hauteur carre.
+	for dx in [0, 1, -1]:
+		for dz in [0, 1, -1]:
+			var col := Vector2i(col_x + dx, col_z + dz)
+			var som: Variant = _carte.sommet(col)
+			if som == null:
+				continue
+			# Trouve. Snap Y + optionnellement X/Z au centre de la cellule
+			# si on n'est pas dans la case courante (evite d'etre imbrique
+			# dans un mur X/Z).
+			if dx != 0 or dz != 0:
+				cr.position.x = float(col.x) * cote_cellule + cote_cellule * 0.5
+				cr.position.z = float(col.y) * cote_cellule + cote_cellule * 0.5
+			cr.position.y = (float(int(som)) + 1.0) * cote_cellule + 0.2
+			return true
+	return false
+
 func _sol_present_sous(pos: Vector3) -> bool:
 	# Le manager est un Node (pas Node3D), get_world_3d n'existe pas ici.
 	# On passe par _grille (GridMap, descendant Node3D) qui a la meme

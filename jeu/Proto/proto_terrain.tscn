@@ -4,8 +4,6 @@
 [ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_visible"]
 [ext_resource type="Resource" path="res://jeu/Proto/proto_carte.tres" id="3_carte"]
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="4_personnage"]
-[ext_resource type="Script" uid="uid://cj4hq8kgy146n" path="res://jeu/Outil de jeu/ressources_terrain.gd" id="5_ressources"]
-[ext_resource type="Resource" uid="uid://ctevmt3u48lsq" path="res://jeu/Proto/bloc_marron.tres" id="6_marron"]
 [ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="9_prod"]
 [ext_resource type="Script" uid="uid://c8j7b1t8xknu1" path="res://jeu/terrain/murs_limite.gd" id="12_murs"]
 [ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="13_arme"]
@@ -44,10 +42,6 @@ script = ExtResource("2_visible")
 carte = ExtResource("3_carte")
 rayon_cellules = 15
 metadata/_editor_floor_ = Vector3(0, 10, 0)
-
-[node name="RessourcesTerrain" type="Node" parent="." unique_id=74545153]
-script = ExtResource("5_ressources")
-profils = Array[Resource]([ExtResource("6_marron")])
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("4_personnage")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.179514, 0)
