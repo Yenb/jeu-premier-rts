@@ -44,6 +44,11 @@ var _rayon_tuiles: int = 0
 var _rayon_interne_tuiles: int = 0
 var _pas_tuiles: int = 1
 var _biblio_sans_collision: MeshLibrary = null
+# Prochaine frame absolue autorisee pour DEMARRER la construction
+# d'une tuile. Chaque nouvelle tuile prend le slot suivant, puis
+# incremente. Evite que N tuiles arrivees la meme frame executent
+# TOUTES leur etape 0 avant le premier await -> pic massif.
+var _prochain_slot_frame: int = -1
 
 const ITEM_LIMITE := 1
 
@@ -113,63 +118,101 @@ static func visible_bits_col(bits: int, nxp: int, nxm: int, nzp: int, nzm: int) 
 	var sealed_bits := (bits >> 1) & nxp & nxm & nzp & nzm
 	return bits & ~sealed_bits
 
-# Bat le GridMap de la tuile : place UNE cellule par rang visible via
-# set_cell_item. Aucune collision (mesh_library depouillee).
-# Consequence si erreur : rendu absent ou double. Plan B : rollback.
+# Nombre d'etapes de construction etalees sur autant de frames.
+# Un chunk devient visible SEULEMENT apres la derniere etape.
+# Etalement lisse les pics de construction sur les nouveaux chunks
+# qui entrent dans le rayon (evite un spike a 5 chunks x N cellules
+# en une seule frame).
+const ETAPES_CONSTRUCTION := 5
+
+# Cree le GridMap invisible et enregistre-le immediatement dans
+# `_tuiles` (empeche une seconde creation par le prochain refresh).
+# Lance la coroutine `_construire_etalee` qui remplit sur 5 frames
+# et rend visible a la fin.
 func _creer_tuile(tuile: Vector2i) -> void:
 	var cote: float = carte.get("cote")
-	var couche_base: int = int(carte.couche_base)
-	var particularites: Dictionary = carte.particularites
-	var taille := taille_tuile_cellules
-	var origine_col := Vector2i(tuile.x * taille, tuile.y * taille)
-
 	var grille := GridMap.new()
 	grille.mesh_library = _biblio_sans_collision
 	grille.cell_size = Vector3(cote, cote, cote)
 	# Cell_center_*=true par defaut : cell (i,j,k) au centre (i*cote,
 	# j*cote, k*cote), pareil que le Terrain proche.
+	grille.visible = false
 	add_child(grille)
-
-	var memo_bits: Dictionary = {}
-	var posee := 0
-
-	for lx in range(taille):
-		for lz in range(taille):
-			var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
-			var bits: int = _masque_col(col, memo_bits)
-			if bits == 0:
-				continue
-			var nxp := _masque_col(Vector2i(col.x + 1, col.y), memo_bits)
-			var nxm := _masque_col(Vector2i(col.x - 1, col.y), memo_bits)
-			var nzp := _masque_col(Vector2i(col.x, col.y + 1), memo_bits)
-			var nzm := _masque_col(Vector2i(col.x, col.y - 1), memo_bits)
-			var visible_bits := visible_bits_col(bits, nxp, nxm, nzp, nzm)
-			if visible_bits == 0:
-				continue
-			var r_top := CarteTerrain.rang_le_plus_haut(bits)
-			for rang in range(r_top + 1):
-				if (visible_bits & (1 << rang)) == 0:
-					continue
-				var couche := couche_base + rang
-				var cellule := Vector3i(col.x, couche, col.y)
-				var code: int = int(particularites.get(cellule, -1))
-				var item: int
-				var orientation: int = CarteTerrain.ORIENTATION_DEFAUT
-				if code == -1:
-					item = CarteTerrain.ITEM_DEFAUT
-				else:
-					item = CarteTerrain.item_du_code(code)
-					orientation = CarteTerrain.orientation_du_code(code)
-				if item == ITEM_LIMITE:
-					continue
-				grille.set_cell_item(cellule, item, orientation)
-				posee += 1
-
-	if posee == 0:
-		grille.queue_free()
-		_tuiles[tuile] = null
-		return
 	_tuiles[tuile] = grille
+	# STAGGER : chaque nouvelle tuile prend le slot frame suivant.
+	# Si plusieurs tuiles sont creees la meme frame, elles demarrent
+	# a frames+0, frames+1, frames+2, ... - une seule etape 0 par
+	# frame reelle au lieu de N.
+	var frame_courante := Engine.get_process_frames()
+	if _prochain_slot_frame < frame_courante:
+		_prochain_slot_frame = frame_courante
+	var decalage := _prochain_slot_frame - frame_courante
+	_prochain_slot_frame += 1
+	_construire_etalee(tuile, grille, decalage)
+
+# COROUTINE. Repartit le peuplement du GridMap sur ETAPES_CONSTRUCTION
+# frames consecutives, une tranche de colonnes par etape. La derniere
+# etape rend le GridMap visible. Si `_supprimer_tuile` est appele
+# entre-temps, la grille devient invalide -> la coroutine sort
+# proprement sans plus rien poser.
+# Consequence si erreur : chunk jamais visible, ou visible avec cellules
+# manquantes. Plan B : rollback ce fichier.
+func _construire_etalee(tuile: Vector2i, grille: GridMap, decalage_initial: int) -> void:
+	# STAGGER inter-tuiles : attend `decalage_initial` frames avant
+	# de faire quoi que ce soit. Assure qu'une seule tuile execute
+	# son etape 0 par frame reelle.
+	for _i in range(decalage_initial):
+		if not is_instance_valid(grille):
+			return
+		await get_tree().process_frame
+	var couche_base: int = int(carte.couche_base)
+	var particularites: Dictionary = carte.particularites
+	var taille := taille_tuile_cellules
+	var origine_col := Vector2i(tuile.x * taille, tuile.y * taille)
+	var memo_bits: Dictionary = {}
+
+	for etape in range(ETAPES_CONSTRUCTION):
+		if not is_instance_valid(grille):
+			return
+		# Tranche de colonnes lx traitees a cette etape. Division qui
+		# tolere une taille non multiple de 5 (tranches vides possibles
+		# a l'extremite, benin).
+		var lx_start := int(floor(float(etape) * float(taille) / float(ETAPES_CONSTRUCTION)))
+		var lx_end := int(floor(float(etape + 1) * float(taille) / float(ETAPES_CONSTRUCTION)))
+		for lx in range(lx_start, lx_end):
+			for lz in range(taille):
+				var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
+				var bits: int = _masque_col(col, memo_bits)
+				if bits == 0:
+					continue
+				var nxp := _masque_col(Vector2i(col.x + 1, col.y), memo_bits)
+				var nxm := _masque_col(Vector2i(col.x - 1, col.y), memo_bits)
+				var nzp := _masque_col(Vector2i(col.x, col.y + 1), memo_bits)
+				var nzm := _masque_col(Vector2i(col.x, col.y - 1), memo_bits)
+				var visible_bits := visible_bits_col(bits, nxp, nxm, nzp, nzm)
+				if visible_bits == 0:
+					continue
+				var r_top := CarteTerrain.rang_le_plus_haut(bits)
+				for rang in range(r_top + 1):
+					if (visible_bits & (1 << rang)) == 0:
+						continue
+					var couche := couche_base + rang
+					var cellule := Vector3i(col.x, couche, col.y)
+					var code: int = int(particularites.get(cellule, -1))
+					var item: int
+					var orientation: int = CarteTerrain.ORIENTATION_DEFAUT
+					if code == -1:
+						item = CarteTerrain.ITEM_DEFAUT
+					else:
+						item = CarteTerrain.item_du_code(code)
+						orientation = CarteTerrain.orientation_du_code(code)
+					if item == ITEM_LIMITE:
+						continue
+					grille.set_cell_item(cellule, item, orientation)
+		if etape < ETAPES_CONSTRUCTION - 1:
+			await get_tree().process_frame
+	if is_instance_valid(grille):
+		grille.visible = true
 
 # Masque bitwise complet d'une colonne, memoize par tuile.
 func _masque_col(col: Vector2i, memo: Dictionary) -> int:
