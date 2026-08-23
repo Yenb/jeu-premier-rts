@@ -106,6 +106,10 @@ func _convertir_producteurs_initiaux() -> void:
 			"cellule_courante": null,
 			"angle_ponte": 0.0,
 			"noeud": enfant as Node3D,
+			# FRAMES_SANS_SOL : compte les frames zone-safe sans sol
+			# detecte, pour timeout snap logique (voir helper
+			# _gerer_freeze_kinematic).
+			"frames_sans_sol": 0,
 		})
 
 func _process(delta: float) -> void:
@@ -120,9 +124,16 @@ func _process(delta: float) -> void:
 	_bascule_rendu_carres()
 
 func _avancer_donnees(delta: float) -> void:
+	# La donnee ne bouge par calcul math QUE si la physique est inactive
+	# (nœud absent = hors rayon rendu, OU nœud freeze = zone buffer). En
+	# zone safe (nœud unfrozen), la physique pilote et sync donnee<-noeud.
 	for prod in _producteurs:
 		if prod.cible == null:
 			continue
+		var physique_active := prod.noeud != null and is_instance_valid(prod.noeud) \
+			and prod.noeud is RigidBody3D and not (prod.noeud as RigidBody3D).freeze
+		if physique_active:
+			continue  # velocity pilote via _bascule_rendu_producteurs
 		var vers: Vector3 = (prod.cible as Vector3) - prod.position
 		vers.y = 0.0
 		if vers.length() <= 1.0:
@@ -264,15 +275,46 @@ func _bascule_rendu_producteurs() -> void:
 	for prod in _producteurs:
 		var d2: float = (prod.position - pos_obs).length_squared()
 		if d2 < r2:
+			# CREATE si pas de nœud (nouveau ou revient dans rayon).
+			# Freeze KINEMATIC par defaut, degel par le helper si zone safe.
 			if prod.noeud == null or not is_instance_valid(prod.noeud):
 				var n := ProducteurScene.instantiate() as Node3D
 				if n.has_method("set_passif"):
 					n.set_passif(true)
+				if n is RigidBody3D:
+					var rb_new: RigidBody3D = n
+					rb_new.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+					rb_new.freeze = true
 				parent.add_child(n)
 				n.global_position = prod.position
 				prod.noeud = n
-			else:
-				prod.noeud.global_position = prod.position
+			# BASCULE FREEZE (helper generique).
+			if prod.noeud is RigidBody3D:
+				_gerer_freeze_kinematic(prod.noeud, prod, d2 < _rayon_safe2)
+			# ZONE SAFE (freeze=false, physique active) : velocity pilote
+			# vers cible (patron scalable, evite teleport chaque frame).
+			# Sync donnee <- noeud (position portee par physique).
+			# ZONE BUFFER (freeze=true KINEMATIC) : donnee bouge via
+			# _avancer_donnees, push noeud <- donnee (freeze KINEMATIC
+			# autorise set global_position).
+			if prod.noeud is RigidBody3D:
+				var rb: RigidBody3D = prod.noeud
+				if not rb.freeze:
+					# Velocity vers cible, sinon 0.
+					var vel := Vector3.ZERO
+					if prod.cible != null:
+						var vers: Vector3 = (prod.cible as Vector3) - rb.global_position
+						vers.y = 0.0
+						if vers.length() <= 1.0:
+							prod.cible = null
+						else:
+							vel = vers.normalized() * vitesse_sol
+					rb.linear_velocity = Vector3(vel.x, rb.linear_velocity.y, vel.z)
+					prod.position = rb.global_position
+				else:
+					# Freeze KINEMATIC : donnee bouge, noeud suit par teleport
+					# (physique inactive donc set_global_position ok).
+					rb.global_position = prod.position
 			if prod.noeud.has_method("set_stock_visuel"):
 				prod.noeud.set_stock_visuel(prod.stock)
 		else:
