@@ -228,22 +228,21 @@ func _choisir_cible(prod: Dictionary) -> void:
 func _pondre(prod: Dictionary) -> void:
 	prod.angle_ponte += pas_angle_ponte
 	var offset := Vector3(cos(prod.angle_ponte), 0.0, sin(prod.angle_ponte)) * rayon_ponte
-	_carres.append({
+	var cr := {
 		"position": prod.position + offset,
 		"age": 0.0,
 		"noeud": null,
-		# EST_DETRUIT : bascule a true via le signal `detruit` emis par
-		# carre_rouge.gd:_mourir. C'est le SEUL moyen fiable de detecter
-		# la destruction externe : en Godot 4, cr.noeud freed compare
-		# `== null` a true dans un Dictionary, is_instance_valid pas
-		# suffisant seul (voir issue godotengine/godot#35534).
 		"est_detruit": false,
-		# FRAMES_SANS_SOL : compte les frames consecutives ou le carre est
-		# en zone safe mais raycast sol echoue (terrain pas encore cook).
-		# Au-dela de FRAMES_SANS_SOL_MAX, snap au sol logique via carte
-		# (donnee) pour eviter le carre coince freeze eternellement.
 		"frames_sans_sol": 0,
-	})
+	}
+	# SNAP AU SOL LOGIQUE DES LA PONTE : sans ca, cr.position est a la
+	# hauteur du producteur (~Y=14.96) et y reste (donnee stable). Une
+	# IA au sol (creature qui mange) ne peut pas trouver le carre en
+	# l'air. Snap immediat via carte_terrain.sommet(colonne), independant
+	# de la physique (le nœud rendu sera cree au sol des la 1re frame).
+	if _carte != null:
+		_snap_sol_via_carte(cr)
+	_carres.append(cr)
 
 func _ticker_carres(delta: float) -> void:
 	var i := 0
