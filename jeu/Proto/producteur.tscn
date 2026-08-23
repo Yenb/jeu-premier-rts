@@ -1,0 +1,42 @@
+[gd_scene format=3 uid="uid://bodhl7e84ikma"]
+
+[ext_resource type="Script" path="res://jeu/Proto/producteur.gd" id="1_prod"]
+[ext_resource type="Shader" path="res://jeu/Outil de jeu/barre_de_vie.gdshader" id="2_shader"]
+
+[sub_resource type="StandardMaterial3D" id="Materiau_producteur"]
+albedo_color = Color(0.2, 0.75, 0.8, 1)
+metallic = 0.3
+roughness = 0.5
+
+[sub_resource type="BoxMesh" id="BoxMesh_producteur"]
+material = SubResource("Materiau_producteur")
+size = Vector3(2, 2, 2)
+
+[sub_resource type="BoxShape3D" id="BoxShape_producteur"]
+size = Vector3(2, 2, 2)
+
+[sub_resource type="ShaderMaterial" id="MatBarre_producteur"]
+shader = ExtResource("2_shader")
+shader_parameter/couleur_vide = Color(0.15, 0.15, 0.15, 1)
+shader_parameter/couleur_pleine = Color(0.15, 0.9, 0.2, 1)
+shader_parameter/fraction = 0.0
+
+[sub_resource type="QuadMesh" id="QuadBarre_producteur"]
+material = SubResource("MatBarre_producteur")
+size = Vector2(1.6, 0.2)
+
+[node name="Producteur" type="RigidBody3D"]
+mass = 20.0
+script = ExtResource("1_prod")
+
+[node name="Corps" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_producteur")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_producteur")
+
+[node name="BarreDeStock" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 0)
+
+[node name="Barre" type="MeshInstance3D" parent="BarreDeStock"]
+mesh = SubResource("QuadBarre_producteur")

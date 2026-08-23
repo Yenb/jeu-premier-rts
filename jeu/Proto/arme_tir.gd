@@ -28,8 +28,27 @@ const BalleScene := preload("res://jeu/Proto/balle_violette.tscn")
 var _prete: bool = false
 
 func _process(_delta: float) -> void:
-	if not _prete and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+	# APRES UN ECHAP (mode=VISIBLE), le prochain clic recapture -- il ne
+	# doit pas tirer. Sans ce reset, _prete reste true entre deux captures
+	# et un clic de recapture tire par accident. La regle est la meme
+	# qu'au demarrage : une frame de latence apres chaque passage a
+	# CAPTURED.
+	if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_prete = true
+	else:
+		_prete = false
+	# RECOPIE TANGAGE YEUX : l'arme est enfant direct de Personnage (pas de
+	# Personnage/Yeux) pour eviter la purge silencieuse de Godot 4 sur les
+	# enfants ajoutes a des noeuds internes d'instances sans editable_children
+	# (issues #87809, #99452, #91542). L'arme herite deja de la rotation Y
+	# (lacet) via Personnage ; il ne lui manque que le tangage (rotation X)
+	# de la camera Yeux, qu'on recopie ici. Sans cette recopie, la balle
+	# partirait toujours horizontalement.
+	var parent := get_parent()
+	if parent != null:
+		var yeux := parent.get_node_or_null("Yeux") as Node3D
+		if yeux != null:
+			rotation.x = yeux.rotation.x
 
 func _unhandled_input(evenement: InputEvent) -> void:
 	if not (evenement is InputEventMouseButton):

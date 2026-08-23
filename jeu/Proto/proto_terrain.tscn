@@ -6,8 +6,11 @@
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="4_personnage"]
 [ext_resource type="Script" uid="uid://cj4hq8kgy146n" path="res://jeu/Outil de jeu/ressources_terrain.gd" id="5_ressources"]
 [ext_resource type="Resource" uid="uid://ctevmt3u48lsq" path="res://jeu/Proto/bloc_marron.tres" id="6_marron"]
-[ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="7_vblqm"]
-[ext_resource type="Script" path="res://jeu/Proto/arme_tir.gd" id="8_tir"]
+[ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="9_prod"]
+[ext_resource type="Script" uid="uid://c8j7b1t8xknu1" path="res://jeu/terrain/murs_limite.gd" id="12_murs"]
+[ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="13_arme"]
+[ext_resource type="Script" path="res://jeu/Proto/arme_tir.gd" id="14_tir"]
+[ext_resource type="Script" path="res://jeu/Proto/manager_proto.gd" id="15_mgr"]
 
 [sub_resource type="StandardMaterial3D" id="Materiau_repere"]
 albedo_color = Color(0.45, 0.36, 0.27, 1)
@@ -47,7 +50,7 @@ script = ExtResource("5_ressources")
 profils = Array[Resource]([ExtResource("6_marron")])
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("4_personnage")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.073797, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 14.179514, 0)
 
 [node name="Soleil" type="DirectionalLight3D" parent="." unique_id=1651105704]
 transform = Transform3D(0.81915206, 0.43938506, -0.36868784, 0, 0.64278764, 0.76604444, 0.57357645, -0.62750685, 0.5265408, 0, 0, 0)
@@ -57,6 +60,19 @@ directional_shadow_max_distance = 400.0
 [node name="Ambiance" type="WorldEnvironment" parent="." unique_id=958263169]
 environment = SubResource("Environment_ambiance")
 
-[node name="Arme" parent="Personnage/Yeux" unique_id=379637259 instance=ExtResource("7_vblqm")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, -0.303458, -0.55944645)
-script = ExtResource("8_tir")
+[node name="Producteur" parent="." unique_id=106170456 instance=ExtResource("9_prod")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 14.961149, 5)
+
+[node name="Limites" type="Node3D" parent="." unique_id=679171299]
+
+[node name="Murs" type="GridMap" parent="Limites" unique_id=1443053294]
+mesh_library = ExtResource("1_bloc")
+script = ExtResource("12_murs")
+carte = ExtResource("3_carte")
+
+[node name="Arme" parent="Personnage" instance=ExtResource("13_arme")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
+script = ExtResource("14_tir")
+
+[node name="ManagerProto" type="Node" parent="."]
+script = ExtResource("15_mgr")
