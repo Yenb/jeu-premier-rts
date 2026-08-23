@@ -46,6 +46,12 @@ const ECART_VERTICAL_MAX_CIBLE := 5.0
 # (~0.23s a 60fps) = deux cycles de chargement complets. Au-dela, on
 # snap au sol via carte_terrain (donnee), independant de la physique.
 const FRAMES_SANS_SOL_MAX := 14
+# GRAVITE POUR SIMULATION DONNEE. Applique quand la physique est
+# inactive (nœud absent hors rayon, ou nœud freeze en zone buffer).
+# Assure que la data suit la gravite naturelle, meme quand le joueur
+# n'est pas la. Sans ca, les carres restent suspendus a la hauteur du
+# producteur pour l'eternite en donnees.
+const GRAVITE_DATA := 9.8
 # MARGE SOUS LE RAYON TERRAIN GARANTI : le terrain streame a un rayon
 # reel garanti = rayon_cellules - pas_de_rafraichissement (voir
 # terrain_visible.gd:62-65). MARGE_SAFE ajoute une marge supplementaire
@@ -228,30 +234,23 @@ func _choisir_cible(prod: Dictionary) -> void:
 func _pondre(prod: Dictionary) -> void:
 	prod.angle_ponte += pas_angle_ponte
 	var offset := Vector3(cos(prod.angle_ponte), 0.0, sin(prod.angle_ponte)) * rayon_ponte
-	var cr := {
+	# Le carre nait a hauteur du producteur avec vy=0. La gravite data
+	# le fait tomber tick apres tick dans _ticker_carres jusqu'au sol
+	# logique (via carte). SIMULATION DE PHYSIQUE EN DONNEES : ce qui
+	# se passe dans le monde ne depend pas de la presence du joueur.
+	_carres.append({
 		"position": prod.position + offset,
+		"vy": 0.0,
 		"age": 0.0,
 		"noeud": null,
 		"est_detruit": false,
 		"frames_sans_sol": 0,
-	}
-	# SNAP AU SOL LOGIQUE DES LA PONTE : sans ca, cr.position est a la
-	# hauteur du producteur (~Y=14.96) et y reste (donnee stable). Une
-	# IA au sol (creature qui mange) ne peut pas trouver le carre en
-	# l'air. Snap immediat via carte_terrain.sommet(colonne), independant
-	# de la physique (le nœud rendu sera cree au sol des la 1re frame).
-	if _carte != null:
-		_snap_sol_via_carte(cr)
-	_carres.append(cr)
+	})
 
 func _ticker_carres(delta: float) -> void:
 	var i := 0
 	while i < _carres.size():
 		var cr = _carres[i]
-		# PURGE si le carre a emis son signal `detruit` (frappe balle ou
-		# pourriture cote framework). Le flag est fiable, contrairement au
-		# test `cr.noeud == null OR !is_instance_valid` qui echoue en
-		# Godot 4 sur les refs freed dans un Dictionary.
 		if cr.est_detruit:
 			_carres.remove_at(i)
 			continue
@@ -261,7 +260,36 @@ func _ticker_carres(delta: float) -> void:
 				cr.noeud.queue_free()
 			_carres.remove_at(i)
 			continue
+		# SIMULATION GRAVITE EN DONNEES : uniquement si physique inactive
+		# (nœud absent ou nœud freeze). En zone safe unfreeze, la physique
+		# pilote et sync data <- noeud.global_position (voir bascule
+		# rendu). Ici on couvre le cas "loin du joueur" et "zone buffer".
+		var physique_active := cr.noeud != null and is_instance_valid(cr.noeud) \
+			and cr.noeud is RigidBody3D and not (cr.noeud as RigidBody3D).freeze
+		if not physique_active:
+			_appliquer_gravite_data(cr, delta)
 		i += 1
+
+# GRAVITE DATA : chute simulee jusqu'au sol logique (via carte).
+# Clamp au sol quand touche. Sans clamp, le carre s'enfonce.
+func _appliquer_gravite_data(cr: Dictionary, delta: float) -> void:
+	if _carte == null:
+		return
+	var col_x: int = int(floor(cr.position.x / cote_cellule))
+	var col_z: int = int(floor(cr.position.z / cote_cellule))
+	var som: Variant = _carte.sommet(Vector2i(col_x, col_z))
+	if som == null:
+		return  # hors emprise, pas de sol logique
+	# Y sol = face haute cellule + mi-hauteur carre (0.2).
+	var y_sol: float = (float(int(som)) + 1.0) * cote_cellule + 0.2
+	if cr.position.y > y_sol:
+		cr.vy -= GRAVITE_DATA * delta
+		cr.position.y += cr.vy * delta
+		if cr.position.y <= y_sol:
+			cr.position.y = y_sol
+			cr.vy = 0.0
+	else:
+		cr.vy = 0.0
 
 func _bascule_rendu_producteurs() -> void:
 	if _observateur == null:
