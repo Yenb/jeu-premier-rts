@@ -310,8 +310,14 @@ func _bascule_rendu_carres() -> void:
 				# pas encore cook (terrain_visible etale le chargement sur
 				# plusieurs frames). Sera degele par le check ci-dessous
 				# si sol confirme.
+				# FREEZE_MODE_KINEMATIC (pas STATIC) : sans quoi Area3D ne
+				# detecte pas les collisions (voir forum.godotengine.org
+				# thread 79351). Les balles violettes (Area3D) doivent
+				# pouvoir toucher les carres frozen.
 				if n is RigidBody3D:
-					(n as RigidBody3D).freeze = true
+					var rb_new: RigidBody3D = n
+					rb_new.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+					rb_new.freeze = true
 				cr.noeud = n
 			# BASCULE FREEZE DYNAMIQUE (patron Minecraft simulation vs render
 			# distance) : sous _rayon_safe ET sol confirme -> unfreeze
