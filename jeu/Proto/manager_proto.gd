@@ -19,7 +19,7 @@ extends Node
 const ProducteurScene = preload("res://jeu/Proto/producteur.tscn")
 const CarreVisuelScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
 
-@export var rayon_rendu: float = 40.0
+@export var rayon_rendu: float = 60.0
 @export var groupe_observateur: StringName = &"observateur"
 
 @export var intervalle_extraction: float = 1.0
