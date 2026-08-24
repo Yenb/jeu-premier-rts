@@ -1,0 +1,134 @@
+[gd_scene format=3 uid="uid://dg7xc0kbdbc5d"]
+
+[ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_csflq"]
+[ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_5x3xq"]
+[ext_resource type="Resource" path="res://jeu/Proto/proto_carte.tres" id="3_g2etm"]
+[ext_resource type="Script" uid="uid://n0vcmkgvpq5l" path="res://jeu/Proto/terrain_visible_multimesh.gd" id="4_bafdo"]
+[ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="5_eu0d1"]
+[ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="6_nkfda"]
+[ext_resource type="Script" uid="uid://bixhgftw3ffyi" path="res://jeu/Proto/arme_tir.gd" id="7_13q3l"]
+[ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="8_imahp"]
+[ext_resource type="Script" uid="uid://c8j7b1t8xknu1" path="res://jeu/terrain/murs_limite.gd" id="9_kuhus"]
+[ext_resource type="Script" uid="uid://brarnqvow1rlx" path="res://jeu/Proto/manager_proto.gd" id="10_3n01v"]
+[ext_resource type="Script" uid="uid://dkp4ecef4kc0d" path="res://jeu/terrain/outil_fenetre.gd" id="11_fenetre"]
+[ext_resource type="Script" uid="uid://bmypt23ew8xau" path="res://jeu/plantes/couvert.gd" id="12_couvert"]
+[ext_resource type="Script" uid="uid://dljn3feguvcg" path="res://jeu/plantes/espece.gd" id="13_espece"]
+[ext_resource type="PackedScene" path="res://jeu/plantes/arbre.tscn" id="14_arbre"]
+
+[sub_resource type="StandardMaterial3D" id="Materiau_repere"]
+albedo_color = Color(0.45, 0.36, 0.27, 1)
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_repere"]
+material = SubResource("Materiau_repere")
+size = Vector2(1000, 1000)
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ciel"]
+
+[sub_resource type="Sky" id="Sky_ciel"]
+sky_material = SubResource("ProceduralSkyMaterial_ciel")
+
+[sub_resource type="Environment" id="Environment_ambiance"]
+background_mode = 2
+sky = SubResource("Sky_ciel")
+ambient_light_source = 3
+
+[node name="Proto" type="Node3D" unique_id=987324013]
+
+[node name="RepereVisuel" type="MeshInstance3D" parent="." unique_id=2028792952]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.945268, 0)
+mesh = SubResource("PlaneMesh_repere")
+
+[node name="Terrain" type="GridMap" parent="." unique_id=477418575]
+mesh_library = ExtResource("1_csflq")
+cell_octant_size = 2
+data = {
+"cells": PackedInt32Array(524287, 6, 6, 524287, 28, 6, 524287, 53, 6, 524286, 81, 6, 524286, 105, 6, 524287, 136, 6, 524287, 135, 6, 524287, 134, 6, 524287, 133, 6, 524286, 133, 6, 524286, 132, 6, 524286, 131, 6, 524286, 130, 6, 524285, 130, 6, 524285, 129, 6, 524285, 128, 6, 524284, 127, 6, 524284, 126, 6, 524284, 125, 6, 524283, 125, 6, 524284, 124, 6, 524283, 124, 6, 524284, 123, 6, 524284, 122, 6, 524284, 121, 6, 524283, 120, 6, 524283, 119, 6, 524283, 118, 6, 524283, 117, 6, 524283, 116, 6, 524283, 115, 6, 524283, 114, 6, 524283, 113, 6, 524283, 112, 6, 524284, 112, 6, 524284, 111, 6, 524285, 111, 6, 524286, 110, 6, 524287, 110, 6, 524287, 109, 6, 524287, 108, 6, 524286, 107, 6, 524286, 106, 6, 524286, 104, 6, 524286, 103, 6, 524286, 102, 6, 524286, 101, 6, 524286, 100, 6, 524286, 99, 6, 524285, 98, 6, 524285, 97, 6, 524285, 96, 6, 524285, 95, 6, 524286, 94, 6, 524286, 93, 6, 524286, 92, 6, 524286, 91, 6, 524286, 90, 6, 524286, 89, 6, 524287, 88, 6, 524287, 87, 6, 458752, 86, 6, 458752, 85, 6, 458752, 84, 6, 458752, 83, 6, 524287, 82, 6, 524287, 81, 6, 524286, 80, 6, 524286, 79, 6, 524285, 78, 6, 524285, 77, 6, 524284, 77, 6, 524284, 76, 6, 524285, 75, 6, 524285, 74, 6, 524286, 73, 6, 524286, 72, 6, 524286, 71, 6, 524286, 70, 6, 524286, 69, 6, 524287, 68, 6, 524286, 67, 6, 524287, 67, 6, 524287, 66, 6, 524287, 65, 6, 524287, 64, 6, 524286, 63, 6, 524286, 62, 6, 524286, 61, 6, 524286, 60, 6, 524286, 59, 6, 524286, 58, 6, 524286, 57, 6, 524285, 56, 6, 524285, 55, 6, 524285, 54, 6, 524285, 53, 6, 524285, 52, 6, 524286, 52, 6, 524286, 51, 6, 524286, 50, 6, 524286, 49, 6, 524287, 48, 6, 524287, 47, 6, 458752, 46, 6, 458752, 45, 6, 458752, 44, 6, 458753, 43, 6, 458753, 42, 6, 458753, 41, 6, 458752, 40, 6, 458752, 39, 6, 458752, 38, 6, 524287, 37, 6, 524286, 36, 6, 524286, 35, 6, 524285, 34, 6, 524285, 33, 6, 524285, 32, 6, 524285, 31, 6, 524285, 30, 6, 524285, 29, 6, 524285, 28, 6, 524286, 28, 6, 524286, 27, 6, 524287, 27, 6, 524287, 26, 6, 524287, 25, 6, 458752, 25, 6, 458752, 24, 6, 458752, 23, 6, 458752, 22, 6, 458752, 21, 6, 458752, 20, 6, 524287, 19, 6, 458752, 19, 6, 458752, 18, 6, 458752, 17, 6, 458752, 16, 6, 458753, 16, 6, 458753, 15, 6, 458753, 14, 6, 458753, 13, 6, 458753, 12, 6, 458752, 12, 6, 458752, 11, 6, 458752, 10, 6, 458752, 9, 6, 458752, 8, 6, 458753, 8, 6, 458752, 7, 6, 458753, 7, 6, 458753, 6, 6, 458752, 6, 1048578, 524284, 55, 655362, 524285, 63, 655362, 524284, 70, 655362, 524285, 70, 655366, 524284, 36, 655362, 524287, 43, 655362, 524286, 39, 655362, 524284, 49, 655362, 524285, 36, 655366, 524287, 39, 655366, 458752, 43, 655366, 524285, 49, 655366, 524286, 55, 655366, 524286, 54, 655366, 524286, 53, 655366, 524286, 56, 655366, 524287, 63, 655366, 524287, 69, 655366)
+}
+script = ExtResource("2_5x3xq")
+carte = ExtResource("3_g2etm")
+rayon_cellules = 15
+metadata/_editor_floor_ = Vector3(0, 7, 0)
+
+[node name="Couvert" type="Node3D" parent="Terrain" unique_id=809794594]
+script = ExtResource("12_couvert")
+ticks_prechauffage = 100
+delta_prechauffage = 5.0
+
+[node name="Arbre" type="Node" parent="Terrain/Couvert" unique_id=809794595]
+script = ExtResource("13_espece")
+nom = "arbre"
+nom_stade_1 = "enfant"
+duree_stade_1 = 60.0
+nom_stade_2 = "ado"
+duree_stade_2 = 120.0
+stature_stade_2 = 5.0
+nom_stade_3 = "jeune"
+stature_stade_3 = 9.0
+nom_stade_4 = "adulte"
+duree_stade_4 = 240.0
+stature_stade_4 = 14.0
+nom_stade_5 = "vieux"
+duree_stade_5 = 300.0
+stature_stade_5 = 10.0
+nom_stade_6 = "pourri"
+duree_stade_6 = 200.0
+stature_stade_6 = 7.0
+rayon_dispersion_min = 2
+rayon_dispersion_max = 10
+max_voisins = 4
+stade_reproduction_min = 4
+stade_reproduction_max = 4
+intervalle_reproduction = 40.0
+stade_production_min = 4
+max_produits_par_plante = 50
+ressource = "graine"
+rayon_collision = 1.5
+couleur = Color(0.32, 0.55, 0.24, 1)
+
+[node name="SemisArbre" parent="Terrain/Couvert" unique_id=809794596 instance=ExtResource("14_arbre")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.8456078, 13.958998, -8.11676)
+
+[node name="TerrainLointain" type="Node3D" parent="." unique_id=800000001]
+script = ExtResource("4_bafdo")
+carte = ExtResource("3_g2etm")
+mesh_library = ExtResource("1_csflq")
+taille_tuile_cellules = 20
+
+[node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -32.080513, 14.379713, 0)
+
+[node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
+script = ExtResource("7_13q3l")
+
+[node name="Soleil" type="DirectionalLight3D" parent="." unique_id=1651105704]
+transform = Transform3D(0.81915206, 0.43938506, -0.36868784, 0, 0.64278764, 0.76604444, 0.57357645, -0.62750685, 0.5265408, 0, 0, 0)
+shadow_enabled = true
+directional_shadow_max_distance = 400.0
+
+[node name="Ambiance" type="WorldEnvironment" parent="." unique_id=958263169]
+environment = SubResource("Environment_ambiance")
+
+[node name="Producteur" parent="." unique_id=106170456 instance=ExtResource("8_imahp")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 14.961149, 129.5379)
+
+[node name="Producteur2" parent="." unique_id=1159118802 instance=ExtResource("8_imahp")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 14.943811, 149.04399)
+
+[node name="Producteur3" parent="." unique_id=205883804 instance=ExtResource("8_imahp")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 14.731552, 123.30885)
+
+[node name="Limites" type="Node3D" parent="." unique_id=679171299]
+
+[node name="Murs" type="GridMap" parent="Limites" unique_id=1443053294]
+mesh_library = ExtResource("1_csflq")
+script = ExtResource("9_kuhus")
+carte = ExtResource("3_g2etm")
+
+[node name="ManagerProto" type="Node" parent="." unique_id=1054806237]
+script = ExtResource("10_3n01v")
+
+[node name="Fenetre" type="Node3D" parent="." unique_id=1900000000]
+script = ExtResource("11_fenetre")
+carte = ExtResource("3_g2etm")
+demi_fenetre = 50

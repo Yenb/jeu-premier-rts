@@ -20,24 +20,28 @@ const ProducteurScene = preload("res://jeu/Proto/producteur.tscn")
 const CarreVisuelScene = preload("res://jeu/Outil de jeu/carre_rouge.tscn")
 const BalleScene = preload("res://jeu/Proto/balle_violette.tscn")
 
+@export_group("Rendu")
 @export var rayon_rendu: float = 60.0
 @export var groupe_observateur: StringName = &"observateur"
 
+@export_group("Producteurs")
 @export var intervalle_extraction: float = 1.0
 @export var quantite_par_tick: float = 1.0
 @export var seuil_ponte: float = 5.0
 @export var capacite_stock: float = 50.0
+@export var rayon_detection: float = 30.0
+@export var vitesse_sol: float = 3.0
 
+@export_group("Ressources sol")
 @export var capacite_case: float = 50.0
 @export var quantite_regen_par_tick: float = 0.033
+@export var cote_cellule: float = 2.0
 
+@export_group("Carres rouges")
 @export var duree_pourriture_carre: float = 3600.0
 @export var pas_angle_ponte: float = 0.7
 @export var rayon_ponte: float = 1.5
 
-@export var rayon_detection: float = 30.0
-@export var vitesse_sol: float = 3.0
-@export var cote_cellule: float = 2.0
 
 const TICKS_ROUGE_AVANT_DEPART := 2
 const DISTANCE_MIN_CIBLE := 4.0

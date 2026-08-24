@@ -157,6 +157,23 @@ const NOM_TRONC := "Tronc"
 # masque.
 @export var ticks_max_par_image: int = 4
 
+@export_group("Collision")
+
+# LE RAYON AUTOUR DE L'OBSERVATEUR OU LES TRONCS SOLIDES EXISTENT. Hors de ce
+# rayon, l'arbre pousse et vit en donnee sans StaticBody3D -- le rendu MMI
+# reste peuple et Godot cull le mesh au-dela de `distance_rendu`. Zero
+# collision loin du joueur = zero cout physique pour une foret de milliers
+# d'arbres. Le patron MANQUAIT au couvert : le rendu etait deja batche, mais
+# chaque adulte fertile portait son StaticBody3D en permanence, partout.
+@export var rayon_collision_metres: float = 60.0
+
+# LE GROUPE OU CHERCHER L'OBSERVATEUR. Meme convention que manager_proto :
+# le noeud du joueur (ou de la camera) porte `groups=["observateur"]` dans sa
+# tscn. Absent -> aucun tronc n'est pose, tout est en donnee. Autrement dit,
+# le culling collision est une OPTION qui s'active par la seule presence de
+# l'observateur.
+@export var groupe_observateur: StringName = &"observateur"
+
 @export_group("Observation")
 
 # Multiplie le pas de temps de la simulation, jamais celui du moteur. Il est
@@ -188,6 +205,13 @@ var _pas_max := 0.0
 # Le temps simule en attente d'etre joue. Le tick etant a pas FIXE, ce qui reste
 # sous un pas complet est reporte a l'image suivante.
 var _accumulateur := 0.0
+# LE JOUEUR (ou la camera), trouve par groupe au _ready. Null jusqu'a ce que
+# quelqu'un porte le groupe -- auquel cas aucun tronc n'est pose.
+var _observateur: Node3D = null
+# Les troncs actuellement portes : id de plante -> numero de stade pose. Sert
+# a detecter les changements de stade (rayon fixe mais hauteur suit la
+# stature) et a savoir quels troncs liberer quand la plante sort du rayon.
+var _troncs_actifs: Dictionary = {}
 
 func _ready() -> void:
 	var grille := get_parent() as GridMap
@@ -250,6 +274,8 @@ func _ready() -> void:
 		_poser_graine(String(graine.id))
 	_liberer_les_semis_disparus(semis)
 
+	_observateur = get_tree().get_first_node_in_group(groupe_observateur)
+
 	# LE COMPTE EST CELUI DES VIVANTES, jamais la taille de la liste : les mortes y
 	# figurent jusqu'a la purge du tick suivant, et une trace qui les compte annonce
 	# une foret plus grande que celle qu'on voit.
@@ -270,18 +296,16 @@ func _process(delta: float) -> void:
 	if joues >= ticks_max_par_image:
 		# Le retard restant est ABANDONNE -- voir ticks_max_par_image.
 		_accumulateur = 0.0
+	_bascule_rendu()
 
 # Le rendu, et rien d'autre : il RELIT le rapport du tick, il ne recalcule jamais
-# ce qui vient de se passer.
+# ce qui vient de se passer. NAISSANCES ET CHANGEMENTS DE STADE NE POSENT
+# PLUS DE RENDU ICI : _bascule_rendu s'en charge, seulement pour les plantes
+# dans le rayon de l'observateur. Ce que garde _appliquer : purger les mortes
+# (qui pouvaient etre visibles) et gerer les produits (rares, non streames).
 func _appliquer(rapport: Dictionary) -> void:
 	for id in rapport.morts:
 		_retirer_plante(String(id))
-	for changement in rapport.changements:
-		_poser_modele(String(changement.id), String(changement.type), int(changement.numero))
-	for naissance in rapport.naissances:
-		var nee: Variant = _plante_par_id(String(naissance.id))
-		if nee != null:
-			_poser_plante(nee)
 	for produit in rapport.produits:
 		_poser_graine(String(produit.id))
 	for id in rapport.perdues:
@@ -408,6 +432,11 @@ func _preparer_les_rendus() -> void:
 			var stature := float((type.stades as Array)[i].get("stature", 1.0))
 			if i < chemins.size() and String(chemins[i]) != "":
 				stades.append(_corps_depuis_chemin(String(chemins[i])))
+			elif float(type.rayon_collision) > 0.0:
+				# UNE ESPECE QUI DECLARE UN TRONC recoit une silhouette d'arbre
+				# stylise (cylindre + cone). Gate arithmetique, jamais une
+				# branche qui nommerait une espece.
+				stades.append(_corps_arbre(stature, type.couleur))
 			else:
 				stades.append(_corps_touffe(stature, largeur, brins, type.couleur))
 		var produit := _corps_touffe(largeur, largeur, brins, type.couleur)
@@ -470,6 +499,9 @@ func _corps_depuis_chemin(chemin: String) -> Dictionary:
 func _corps_touffe(hauteur: float, largeur: float, brins: int, couleur: Array) -> Dictionary:
 	return {"maillage": maillage_touffe(hauteur, largeur, brins, couleur), "decalage": Vector3.ZERO}
 
+func _corps_arbre(hauteur: float, couleur: Array) -> Dictionary:
+	return {"maillage": maillage_arbre(hauteur, couleur), "decalage": Vector3.ZERO}
+
 # LA TOUFFE : quelques lames verticales croisees, posees sur y = 0 et hautes comme
 # la stature du stade. Elles se croisent en tournant autour de l'axe vertical, ce
 # qui donne du volume sous n'importe quel angle sans qu'aucune ne soit orientee
@@ -484,6 +516,57 @@ func _corps_touffe(hauteur: float, largeur: float, brins: int, couleur: Array) -
 # stade sont identiques -- grossier, mais reproductible, et une variation
 # aleatoire devrait passer par le RNG seede de l'etat, qui n'a rien a faire dans
 # le rendu.
+# SILHOUETTE ARBRE STYLISE : un CylinderMesh de Godot pour le tronc, un
+# second CylinderMesh a top_radius=0 pour le cone de canopee. Deux surfaces
+# dans un seul ArrayMesh, deux materiaux. Les primitives de Godot sont
+# fermees et propres -- pas un sommet a fabriquer a la main.
+#
+# TRONC : 30 % de la hauteur, rayon = 6 %. Base au sol (origine du
+# CylinderMesh au centre, decale de h/2 vers le haut).
+# CANOPEE : 70 % restants, rayon a la base = 23 %, pointe en haut.
+static func maillage_arbre(hauteur: float, couleur: Array) -> ArrayMesh:
+	var maillage := ArrayMesh.new()
+	if hauteur <= 0.0:
+		return maillage
+
+	var h_tronc := hauteur * 0.30
+	var r_tronc := hauteur * 0.06
+	var h_canopee := hauteur * 0.70
+	var r_canopee := hauteur * 0.23
+
+	var tronc := CylinderMesh.new()
+	tronc.top_radius = r_tronc
+	tronc.bottom_radius = r_tronc
+	tronc.height = h_tronc
+	var arrays_tronc := tronc.surface_get_arrays(0)
+	_decaler_vertices(arrays_tronc, h_tronc * 0.5)
+	var mat_tronc := StandardMaterial3D.new()
+	mat_tronc.albedo_color = Color(0.35, 0.22, 0.13)
+	maillage.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays_tronc)
+	maillage.surface_set_material(0, mat_tronc)
+
+	var canopee := CylinderMesh.new()
+	canopee.top_radius = 0.0
+	canopee.bottom_radius = r_canopee
+	canopee.height = h_canopee
+	var arrays_canopee := canopee.surface_get_arrays(0)
+	_decaler_vertices(arrays_canopee, h_tronc + h_canopee * 0.5)
+	var mat_canopee := StandardMaterial3D.new()
+	mat_canopee.albedo_color = Color(float(couleur[0]), float(couleur[1]), float(couleur[2]))
+	maillage.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays_canopee)
+	maillage.surface_set_material(1, mat_canopee)
+
+	return maillage
+
+# Un CylinderMesh de Godot a son origine au CENTRE. Pour poser une piece a
+# une hauteur y donnee, on decale tous ses sommets. Modifie le tableau
+# arrays en place.
+static func _decaler_vertices(arrays: Array, dy: float) -> void:
+	var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	for i in range(v.size()):
+		v[i] += Vector3(0.0, dy, 0.0)
+	arrays[Mesh.ARRAY_VERTEX] = v
+
 static func maillage_touffe(hauteur: float, largeur: float, brins: int, couleur: Array) -> ArrayMesh:
 	var sommets := PackedVector3Array()
 	var normales := PackedVector3Array()
@@ -619,7 +702,12 @@ func _poser_plante(plante: Dictionary) -> void:
 # arbre mature.
 func _poser_modele(id: String, espece: String, numero: int) -> void:
 	_radier(id)
-	_liberer_tronc(id)
+	# LE TRONC N'EST PLUS POSE ICI. Il vit dans _bascule_troncs, qui decide
+	# selon la distance a l'observateur. On invalide juste l'etat courant
+	# pour que le prochain tick de _bascule_troncs reevalue.
+	if _troncs_actifs.has(id):
+		_liberer_tronc(id)
+		_troncs_actifs.erase(id)
 	if not _rendus.has(espece):
 		return
 	var rendu: Dictionary = _rendus[espece]
@@ -627,7 +715,6 @@ func _poser_modele(id: String, espece: String, numero: int) -> void:
 	if numero < 1 or numero > stades.size():
 		return
 	_inscrire(_cle_de_lot(espece, str(numero)), stades[numero - 1], id)
-	_poser_tronc(id, rendu.troncs, numero)
 
 # LE TRONC EST LE SEUL NOEUD QU'UNE PLANTE GARDE, et seulement si son espece
 # declare un rayon : un corps physique ne rentre pas dans un lot de rendu, le
@@ -733,6 +820,14 @@ func _lot(cle: String, entree: Dictionary) -> Dictionary:
 		# pas a porter un nom de contenu.
 		noeud.name = "lot_%d_%d" % [_lots.size(), i]
 		noeud.multimesh = multi
+		# INTERPOLATION PHYSIQUE COUPEE sur les MMI : set_instance_transform
+		# est appele depuis _process (le tick du couvert), jamais depuis
+		# _physics_process. Sans ce coupe-circuit, Godot rale "MultiMesh
+		# interpolation is being triggered from outside physics process" a
+		# chaque tick. Les transforms des plantes ne bougent QUE aux naissances,
+		# morts et changements de stade -- rien qui doive s'interpoler entre
+		# deux frames physiques.
+		noeud.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 		if piece.get("materiau") != null:
 			noeud.material_override = piece.materiau
 		poser_distance_rendu(noeud, float(entree.get("distance_rendu", 0.0)))
@@ -800,6 +895,7 @@ func _ecrire_lot(lot: Dictionary, rang: int) -> void:
 
 # La transform d'une ligne : la position de la plante, portant la piece la ou elle
 # etait dans le modele.
+@warning_ignore("shadowed_variable_base_class")
 static func pose_de_ligne(position: Vector3, piece: Transform3D) -> Transform3D:
 	return Transform3D(Basis(), position) * piece
 
@@ -841,6 +937,7 @@ static func poser_distance_rendu(corps: Node, distance: float) -> int:
 func _retirer_plante(id: String) -> void:
 	_radier(id)
 	_poses.erase(id)
+	_troncs_actifs.erase(id)
 	if not _noeuds.has(id):
 		return
 	_noeuds[id].queue_free()
@@ -866,3 +963,90 @@ func _poser_graine(id: String) -> void:
 func retirer_graine(id: String) -> void:
 	_radier(id)
 	_poses.erase(id)
+
+# ---- Culling COMPLET par distance a l'observateur ----
+#
+# HORS DU RAYON `rayon_collision_metres`, la plante N'EST NI DESSINEE NI
+# SOLIDE : aucune ligne dans un lot MultiMesh, aucun StaticBody3D, aucun
+# Node3D porteur. La simulation continue en donnee -- ombre, croissance,
+# reproduction, mort -- exactement comme avec un joueur present. Ce que ce
+# cycle fait, c'est basculer le rendu et la collision selon la distance,
+# comme manager_proto le fait pour ses producteurs et ses carres.
+#
+# APPELE PAR TICK (au bout de _process). L'index de scripts/monde.gd:
+# choses_dans_rayon range par case : le cout suit le RAYON, pas la population
+# totale. Voir MESURES_COUVERT.md §4.
+#
+# TROIS ETATS PAR PLANTE :
+#  - hors rayon : rien pose. La plante n'existe que dans etat.plantes.
+#  - dans rayon, stade non-fertile : ligne dans un lot MMI. Aucun corps.
+#  - dans rayon, stade fertile a rayon_collision > 0 : ligne MMI + tronc +
+#    Node3D porteur (le tronc n'a nulle part ou vivre sans porteur).
+#
+# LE STADE EST STOCKE dans _lot_de (implicite via _lot_de[id] = cle_du_lot)
+# et dans _troncs_actifs (pour detecter les changements de hauteur de tronc
+# quand la stature change). Un changement de stade dans le rayon = radier
+# l'ancien lot, inscrire dans le nouveau, reposer le tronc.
+func _bascule_rendu() -> void:
+	if _observateur == null:
+		return
+	if _etat.is_empty():
+		return
+	var pos_obs: Vector3 = _observateur.global_position
+	var doit: Dictionary = {}
+	for entree in _etat.monde.choses_dans_rayon(pos_obs, rayon_collision_metres):
+		var plante: Dictionary = entree.chose
+		if Vegetation.est_disparue(plante, _config):
+			continue
+		var type: Dictionary = Vegetation.type_de(plante, _types)
+		if type.is_empty():
+			continue
+		var espece := String(type.nom)
+		if not _rendus.has(espece):
+			continue
+		var numero := Vegetation.numero_de_stade(plante, type)
+		if numero < 1:
+			continue
+		var stades: Array = _rendus[espece].stades
+		if numero > stades.size():
+			continue
+		var id := String(plante.id)
+		doit[id] = true
+		# RENDU : inscrit dans le bon lot si absent ou dans un autre lot
+		# (changement de stade -> changement de lot).
+		var cle_lot := _cle_de_lot(espece, str(numero))
+		if String(_lot_de.get(id, "")) != cle_lot:
+			_radier(id)
+			_poses[id] = plante.position
+			_inscrire(cle_lot, stades[numero - 1], id)
+		# COLLISION : pose le tronc si l'espece en declare un et que le stade
+		# porte une forme. Repose si le stade a change (hauteur suit stature).
+		var troncs: Array = _rendus[espece].troncs
+		if numero <= troncs.size() and troncs[numero - 1] != null:
+			if int(_troncs_actifs.get(id, -1)) != numero:
+				_liberer_tronc(id)
+				_poser_tronc(id, troncs, numero)
+				_troncs_actifs[id] = numero
+		elif _troncs_actifs.has(id):
+			# Passe d'un stade a tronc vers un stade sans tronc.
+			_liberer_tronc(id)
+			_troncs_actifs.erase(id)
+	# LES SORTIES : plantes actuellement inscrites qui ne sont plus dans le
+	# rayon. Radier du lot, liberer tronc et porteur.
+	var inscrits := _lot_de.keys().duplicate()
+	for id in inscrits:
+		if not doit.has(id):
+			_radier(id)
+			_liberer_tronc(id)
+			_liberer_porteur(id)
+			_troncs_actifs.erase(id)
+			_poses.erase(id)
+
+# LE PORTEUR NODE3D est libere avec le rendu : il n'existe QUE pour porter
+# le tronc. Le laisser vivant apres retrait garderait un Node3D vide par
+# arbre-passe-a-portee, ce que le patron populations massives interdit.
+func _liberer_porteur(id: String) -> void:
+	if not _noeuds.has(id):
+		return
+	_noeuds[id].queue_free()
+	_noeuds.erase(id)

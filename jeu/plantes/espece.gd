@@ -18,10 +18,13 @@ extends Node
 # de reproduction se calculent dans vegetation.gd:preparer_depuis_champs -- un
 # calcul range dans la donnee finirait par contredire la donnee qui le nourrit.
 #
-# TROIS STADES, ET C'EST DELIBERE. Des stades en nombre libre demanderaient une
-# ressource imbriquee par stade, donc deux clics de plus pour lire une duree. Le
-# jour ou une espece en reclame un quatrieme, c'est un champ de plus ici -- pas
-# une refonte.
+# JUSQU'A SIX STADES, dont les trois derniers optionnels. Chaque stade renseigne
+# nom + duree + stature (+ modele) ; un stade au nom vide OU a duree nulle est
+# ignore par champs(), l'espece ne le declare tout simplement pas. Une espece
+# a trois stades reste identique a ce qu'elle etait quand la limite etait
+# gravee : elle laisse les trois derniers champs a vide, et champs() rend
+# trois entrees. Ajouter un septieme demandera un champ de plus ici, pas une
+# refonte -- vegetation.gd itere deja sur la taille de la table.
 #
 # Regles tenues : aucun texte joueur. Rien de scripts/, data/ ni addons/ n'est
 # ecrit.
@@ -51,6 +54,24 @@ extends Node
 @export var duree_stade_3: float = 180.0
 @export var stature_stade_3: float = 5.0
 @export_file("*.glb", "*.tscn", "*.scn") var modele_stade_3: String = ""
+
+# Stades 4-6 OPTIONNELS. Nom vide OU duree nulle = stade ignore, l'espece n'en
+# declare pas. Les defauts ci-dessous laissent tout a vide -- une espece qui
+# tenait dans trois stades n'a rien a toucher.
+@export var nom_stade_4: String = ""
+@export var duree_stade_4: float = 0.0
+@export var stature_stade_4: float = 0.0
+@export_file("*.glb", "*.tscn", "*.scn") var modele_stade_4: String = ""
+
+@export var nom_stade_5: String = ""
+@export var duree_stade_5: float = 0.0
+@export var stature_stade_5: float = 0.0
+@export_file("*.glb", "*.tscn", "*.scn") var modele_stade_5: String = ""
+
+@export var nom_stade_6: String = ""
+@export var duree_stade_6: float = 0.0
+@export var stature_stade_6: float = 0.0
+@export_file("*.glb", "*.tscn", "*.scn") var modele_stade_6: String = ""
 
 # DE COMBIEN LA VIE D'UN INDIVIDU S'ECARTE DE CELLE DE SON ESPECE, en fraction.
 # A 0.3, une plante vit entre 70 % et 130 % des durees declarees ci-dessus --
@@ -180,13 +201,45 @@ extends Node
 
 # Les reglages, ramasses en un Dictionary. C'est la SEULE chose que ce noeud rend,
 # et la seule que couvert.gd lui demande.
+# STADES FILTRES : ne sont declares que les stades dont le nom n'est pas vide ET
+# la duree est strictement positive. Un stade a duree nulle figerait la plante
+# a son premier stade (stade.gd:avancer) et une espece a 4 stades declares dont
+# le 4e est vide passerait pour une espece a 4 stades avec un dernier stade
+# instable. Filtrer ici garde couvert.gd et vegetation.gd generiques.
 func champs() -> Dictionary:
+	var noms_bruts: Array = [
+		nom_stade_1, nom_stade_2, nom_stade_3,
+		nom_stade_4, nom_stade_5, nom_stade_6,
+	]
+	var durees_brutes: Array = [
+		duree_stade_1, duree_stade_2, duree_stade_3,
+		duree_stade_4, duree_stade_5, duree_stade_6,
+	]
+	var statures_brutes: Array = [
+		stature_stade_1, stature_stade_2, stature_stade_3,
+		stature_stade_4, stature_stade_5, stature_stade_6,
+	]
+	var modeles_bruts: Array = [
+		modele_stade_1, modele_stade_2, modele_stade_3,
+		modele_stade_4, modele_stade_5, modele_stade_6,
+	]
+	var noms: Array = []
+	var durees: Array = []
+	var statures: Array = []
+	var modeles: Array = []
+	for i in range(noms_bruts.size()):
+		if String(noms_bruts[i]) == "" or float(durees_brutes[i]) <= 0.0:
+			continue
+		noms.append(String(noms_bruts[i]))
+		durees.append(float(durees_brutes[i]))
+		statures.append(float(statures_brutes[i]))
+		modeles.append(String(modeles_bruts[i]))
 	return {
-		"noms_stades": [nom_stade_1, nom_stade_2, nom_stade_3],
-		"durees_stades": [duree_stade_1, duree_stade_2, duree_stade_3],
-		"statures_stades": [stature_stade_1, stature_stade_2, stature_stade_3],
+		"noms_stades": noms,
+		"durees_stades": durees,
+		"statures_stades": statures,
 		"dispersion_duree": dispersion_duree,
-		"modeles_stades": [modele_stade_1, modele_stade_2, modele_stade_3],
+		"modeles_stades": modeles,
 		"marge_couches": marge_couches,
 		"trouee_max_voisins": trouee_max_voisins,
 		"rayon_dispersion_min": rayon_dispersion_min,

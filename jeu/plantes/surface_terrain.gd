@@ -80,6 +80,7 @@ static func relever(grille: GridMap) -> Dictionary:
 		if not sommets.has(colonne) or cellule.y > int(sommets[colonne]):
 			sommets[colonne] = cellule.y
 
+	@warning_ignore("shadowed_variable_base_class")
 	var reference := 0
 	var premier := true
 	for colonne in sommets:
@@ -132,6 +133,7 @@ static func plancher_de_carte(carte: Resource) -> int:
 	var volumes: Dictionary = carte.volumes
 	# LE DEFAUT NE COMPTE QUE S'IL RESTE UNE COLONNE POUR LE PORTER : sur une
 	# carte entierement sculptee, il ne decrit plus aucun endroit du terrain.
+	@warning_ignore("shadowed_variable_base_class")
 	var reference: int = carte.sommet_de_base()
 	var premier: bool = volumes.size() < carte.colonnes()
 	for colonne in volumes:
