@@ -127,13 +127,13 @@ var _bloc := GridMap.INVALID_CELL_ITEM
 
 func _ready() -> void:
 	# RENDU GridMap RESTAURE. La ligne `visible = false` a ete retiree :
-	# le TerrainLointain ne couvre pas la zone 0..rayon_interne autour
+	# le TerrainStreame ne couvre pas la zone 0..rayon_interne autour
 	# du joueur, donc sans le GridMap visible le sol proche est absent.
 	# Le GridMap rend ses 6 faces par cube (pas de HFC natif) sur le
 	# rayon 15 -- cout accepte pour avoir le sol beige sous les pieds.
 	# COLLISION GridMap NATIVE PRESERVEE. L'appel sans_collision a ete
 	# retire : create_trimesh_collision cree bien des StaticBody3D dans
-	# TerrainLointain (verifie : 113/113 MI ont un enfant StaticBody3D)
+	# TerrainStreame (verifie : 113/113 MI ont un enfant StaticBody3D)
 	# mais le joueur tombe quand meme (mesure : Y=14.18 -> -22.8 en 2s).
 	# La collision native GridMap est donc le seul sol physique fiable
 	# aujourd'hui. Doublage assume (GridMap + trimesh multimesh) le temps

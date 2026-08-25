@@ -74,7 +74,7 @@ Pattern éprouvé par le plugin Spatial Gardener. Recette :
   il en sort. Pas de free-list intra-chunk nécessaire (le chunk est
   monolithique, créé/détruit d'un bloc).
 
-Implémentation : `jeu/Proto/terrain_visible_multimesh.gd`.
+Implémentation : `jeu/Proto/terrain_streame.gd`.
 
 ## Mesure à faire AVANT de coder une optimisation
 
@@ -91,7 +91,7 @@ Cf. section « CANEVAS DE BASE DES POPULATIONS MASSIVES » de
 
 ## Chantier terrain lointain 2026-08-23 : rendu IDENTIQUE au GridMap
 
-Objectif atteint : `jeu/Proto/terrain_visible_multimesh.gd` est
+Objectif atteint : `jeu/Proto/terrain_streame.gd` est
 maintenant un GridMap dynamique par tuile. Un GridMap enfant par
 tuile, populé par `set_cell_item` avec la MeshLibrary du proche
 (dépouillée de collision via `Outil.sans_collision`). Streaming par
@@ -101,9 +101,9 @@ les cellules exposées sont posées. Point de sauvegarde : commit
 
 ### Pistes ÉCARTÉES, à ne pas réintroduire
 
-Le nom du fichier reste `terrain_visible_multimesh.gd` pour ne pas
-casser les références, MAIS le rendu n'utilise plus MultiMesh. Cinq
-approches ont été essayées et abandonnées :
+Le fichier s'appelle `terrain_streame.gd` (le rendu n'utilise plus
+MultiMesh, et il rend le sol streamé autour de l'observateur, pas un
+horizon lointain). Cinq approches ont été essayées et abandonnées :
 
 1. **MultiMeshInstance3D de cubes complets** (chunks Spatial Gardener-
    like). Rendu VISUELLEMENT DIFFÉRENT du GridMap : instances MMI

@@ -109,6 +109,12 @@ func _ready() -> void:
 	# pour lui pousser les balles (spawn_balle). Sans groupe, arme_tir
 	# devrait connaitre le chemin de scene -- fragile.
 	add_to_group("manager_proto")
+	# GROUPE "ressources_terrain" : contrat d'interface (quantite_a + preleve)
+	# que inspecteur_bloc.gd cherche par groupe. Le manager EST la source des
+	# reserves du sol sur cette scene -- il remplace ressources_terrain.gd, qui
+	# scanne un GridMap statique. Aucun cout : l'inspecteur interroge, le manager
+	# ne pousse rien.
+	add_to_group("ressources_terrain")
 	_observateur = get_tree().get_first_node_in_group(groupe_observateur)
 	var parent := get_parent()
 	if parent != null:
@@ -231,6 +237,19 @@ func _preleve(cellule: Vector3i, quantite: float) -> float:
 	var pris: float = minf(quantite, stock)
 	_reserves[cellule] = stock - pris
 	return pris
+
+# API RESSOURCES pour inspecteur_bloc.gd -- meme contrat que
+# ressources_terrain.gd. LECTURE SEULE, O(1) : `_reserves.get` avec defaut
+# n'ecrit rien et ne cree aucune entree. Le defaut `capacite_case` rend une
+# cellule jamais entamee comme pleine, sans la stocker.
+func quantite_a(cellule: Vector3i) -> int:
+	return int(floor(_reserves.get(cellule, capacite_case)))
+
+# PRELEVEMENT, O(1) : delegue au meme geste que l'extraction des producteurs.
+# La cellule entamee entre dans _tick_regen (regen locale) -- exactement le
+# comportement d'une case minee par un producteur, aucun cout par frame ajoute.
+func preleve(cellule: Vector3i, quantite: float) -> float:
+	return _preleve(cellule, quantite)
 
 func _tick_regen() -> void:
 	for cellule in _reserves.keys():

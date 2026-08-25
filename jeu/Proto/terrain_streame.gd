@@ -1,4 +1,5 @@
-# RENDU du terrain lointain via TUILES de GridMap dynamiques. Chaque
+# RENDU du terrain visible STREAME autour de l'observateur, via TUILES
+# de GridMap dynamiques. Chaque
 # tuile = un noeud GridMap enfant, peuple par set_cell_item avec la
 # MEME MeshLibrary que le GridMap Terrain proche. Le rendu est
 # VISUELLEMENT IDENTIQUE au proche parce que c'est le meme moteur de
@@ -54,10 +55,10 @@ const ITEM_LIMITE := 1
 
 func _ready() -> void:
 	if carte == null:
-		push_error("terrain_visible_multimesh sans carte")
+		push_error("terrain_streame sans carte")
 		return
 	if mesh_library == null:
-		push_error("terrain_visible_multimesh sans mesh_library")
+		push_error("terrain_streame sans mesh_library")
 		return
 	_biblio_sans_collision = Outil.sans_collision(mesh_library)
 	_rayon_tuiles = int(ceil(float(rayon_cellules) / float(taille_tuile_cellules)))

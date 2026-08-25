@@ -122,7 +122,7 @@ Loguer chaque frame → repérer un pic isolé.
 
 ### CE QUE LE PROFILEUR A DIT AU FINAL (2026-08-23)
 
-`_process` du terrain_visible_multimesh : **0.00-0.01 ms** par frame.
+`_process` du terrain_streame : **0.00-0.01 ms** par frame.
 Les spikes en marche viennent AILLEURS : 84 carrés × fonctions
 (`_appliquer_gravite`, `_repousser_carres`, `_ticker_carres`,
 `masque`, `dans_emprise`, `sommet`, `rang_le_plus_haut`) ≈ 1 ms

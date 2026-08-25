@@ -2,11 +2,11 @@
 
 [ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_bloc"]
 [ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_visible"]
-[ext_resource type="Script" uid="uid://n0vcmkgvpq5l" path="res://jeu/Proto/terrain_visible_multimesh.gd" id="2_visible_mm"]
+[ext_resource type="Script" uid="uid://n0vcmkgvpq5l" path="res://jeu/Proto/terrain_streame.gd" id="2_visible_mm"]
 [ext_resource type="Resource" path="res://jeu/Proto/proto_carte.tres" id="3_carte"]
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="4_personnage"]
 [ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="9_prod"]
-[ext_resource type="Script" uid="uid://c8j7b1t8xknu1" path="res://jeu/terrain/murs_limite.gd" id="12_murs"]
+[ext_resource type="Script" path="res://jeu/terrain/murs_limite_boite.gd" id="12_murs"]
 [ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="13_arme"]
 [ext_resource type="Script" uid="uid://bixhgftw3ffyi" path="res://jeu/Proto/arme_tir.gd" id="14_tir"]
 [ext_resource type="Script" uid="uid://brarnqvow1rlx" path="res://jeu/Proto/manager_proto.gd" id="15_mgr"]
@@ -42,7 +42,7 @@ carte = ExtResource("3_carte")
 rayon_cellules = 15
 metadata/_editor_floor_ = Vector3(0, 7, 0)
 
-[node name="TerrainLointain" type="Node3D" parent="." unique_id=800000001]
+[node name="TerrainStreame" type="Node3D" parent="." unique_id=800000001]
 script = ExtResource("2_visible_mm")
 carte = ExtResource("3_carte")
 mesh_library = ExtResource("1_bloc")
@@ -74,8 +74,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 14.731552, 123.30885)
 
 [node name="Limites" type="Node3D" parent="." unique_id=679171299]
 
-[node name="Murs" type="GridMap" parent="Limites" unique_id=1443053294]
-mesh_library = ExtResource("1_bloc")
+[node name="Murs" type="StaticBody3D" parent="Limites" unique_id=1443053294]
 script = ExtResource("12_murs")
 carte = ExtResource("3_carte")
 

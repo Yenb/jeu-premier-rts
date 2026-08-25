@@ -245,6 +245,33 @@ var _file_peuplement: Array = []
 # NOTIFICATION_PREDELETE.
 var _shapes_rid: Dictionary = {}
 
+# Compteurs d'instrumentation (audit performance), remis a zero par
+# prelever_stats(). Passifs : aucune logique de simulation n'en depend.
+var _stat_body_create := 0
+var _stat_free_rid := 0
+var _stat_set_transform := 0
+var _stat_realloc := 0
+var _stat_ticks := 0
+var _stat_temps_tick_us := 0
+
+# Rend les compteurs accumules depuis le dernier appel, puis les remet a zero.
+func prelever_stats() -> Dictionary:
+	var s := {
+		"body_create": _stat_body_create,
+		"free_rid": _stat_free_rid,
+		"set_transform": _stat_set_transform,
+		"realloc": _stat_realloc,
+		"ticks": _stat_ticks,
+		"temps_tick_us": _stat_temps_tick_us,
+	}
+	_stat_body_create = 0
+	_stat_free_rid = 0
+	_stat_set_transform = 0
+	_stat_realloc = 0
+	_stat_ticks = 0
+	_stat_temps_tick_us = 0
+	return s
+
 func _ready() -> void:
 	var grille := get_parent() as GridMap
 	if grille == null:
@@ -325,11 +352,15 @@ func _process(delta: float) -> void:
 	_consommer_file_peuplement()
 	_accumulateur += delta * facteur_temps
 	var joues := 0
+	var t0_tick := Time.get_ticks_usec()
 	while _accumulateur >= pas_simulation and joues < ticks_max_par_image:
 		_accumulateur -= pas_simulation
 		joues += 1
 		_appliquer(Vegetation.avancer_par_tranches(
 			_etat, _config, _types, _releve, pas_simulation, _pas_max))
+	if joues > 0:
+		_stat_ticks += joues
+		_stat_temps_tick_us += Time.get_ticks_usec() - t0_tick
 	if joues >= ticks_max_par_image:
 		# Le retard restant est ABANDONNE -- voir ticks_max_par_image.
 		_accumulateur = 0.0
@@ -900,6 +931,7 @@ func _poser_corps(id: String, espece: String, numero: int, position: Vector3) ->
 	var stades: Array = _types[espece].stades
 	var stature := float(stades[numero - 1].get("stature", 0.0))
 	var body_rid := PhysicsServer3D.body_create()
+	_stat_body_create += 1
 	PhysicsServer3D.body_set_mode(body_rid, PhysicsServer3D.BODY_MODE_STATIC)
 	PhysicsServer3D.body_set_space(body_rid, get_world_3d().space)
 	PhysicsServer3D.body_add_shape(body_rid, shape_rid)
@@ -922,6 +954,7 @@ func _liberer_corps(id: String) -> void:
 	var body_rid: RID = _corps_actifs[id].rid
 	if body_rid.is_valid():
 		PhysicsServer3D.free_rid(body_rid)
+		_stat_free_rid += 1
 	_corps_actifs.erase(id)
 
 # NETTOYAGE FINAL : libere tous les RID (bodies + shapes) a la destruction
@@ -1050,12 +1083,15 @@ func _ecrire_lot(lot: Dictionary, rang: int) -> void:
 		var multi: MultiMesh = (instance.noeud as MultiMeshInstance3D).multimesh
 		if tout:
 			multi.instance_count = int(lot.capacite)
+			_stat_realloc += 1
 			for i in range(combien):
 				multi.set_instance_transform(i, pose_de_ligne(
 					(lot.poses as Array)[i], instance.pose))
+				_stat_set_transform += 1
 		elif rang >= 0 and rang < combien:
 			multi.set_instance_transform(rang, pose_de_ligne(
 				(lot.poses as Array)[rang], instance.pose))
+			_stat_set_transform += 1
 		multi.visible_instance_count = combien
 
 # La transform d'une ligne : la position de la plante, portant la piece la ou elle

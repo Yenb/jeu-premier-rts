@@ -14,6 +14,9 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## FAIT
 
+- 2026-08-25 — INSPECTEUR RESSOURCES sur terrain dynamique : `manager_proto.gd` expose `quantite_a`/`preleve` (public, O(1), défaut `capacite_case`) et rejoint le groupe `ressources_terrain` ; `InspecteurBloc` + `StockJoueur` + `BarreRessource` ajoutés à `verification.tscn`. La réserve par cellule vit en donnée (défaut + Dict des écarts), sans le scan GridMap statique de `ressources_terrain.gd`. Aucun surcoût par frame : lecture Dict O(1), crédit au clic seul.
+- 2026-08-25 — CEINTURE DE CARTE : GridMap de cellules → StaticBody3D + 4 BoxShape3D, sur les trois scènes qui la portaient : `Proto/verification.tscn`, `Proto/proto_terrain.tscn`, `terrain/carte_prototype.tscn`. `jeu/terrain/murs_limite_boite.gd` (`@tool`, quatre boîtes déduites de l'emprise par `faces()` : faces internes à ±`demi_cote·cote`, épaisseur 10 m poussée VERS L'EXTÉRIEUR — la barrière ne bouge pas, seule la face externe recule —, hauteur 22 couches = 44 m). `murs_limite.gd` RETIRÉ DÉFINITIVEMENT (plus aucune référence code). Mesuré sur verification (demi_cote 250) : mémoire de la ceinture 15,7 → 0,68 Mo (~23×), 44088 formes de collision → 4. Verrouillé par `test_ceinture_infranchissable.gd` (barrière 4 côtés, tunneling projectile 100 m/s CCD, jitter, glissement), paramétrable `-- scene=` ; couvre trois bugs Godot loin de l'origine, dont AUCUN ne se manifeste (variance 0, glissement libre) ni sur GridMap avant ni sur boîtes après : #75537 (jitter CharacterBody vs grande StaticBody à ±500 m), #39095 (tunneling corps multi-formes), #69683 (snapping). DETTE : `test_carte_prototype.gd:113-177` vérifie encore la ceinture EN GridMap (early-return si pas un GridMap) → obsolète depuis ce refactor, à réécrire en contrôle fonctionnel.
+- 2026-08-25 — RENAME `TerrainLointain` → `TerrainStreame`, fichier `terrain_visible_multimesh.gd` → `terrain_streame.gd` : le nom disait « horizon » alors que le système rend le sol streamé AUTOUR du joueur (rayon 120 = 240 m, sans collision). Nœud dans `verification.tscn` et `proto_terrain.tscn`, fichier + uid, preload de `test_ecosysteme.gd`, commentaires de `terrain_visible.gd`, refs docs `PROTOCOLE_MULTIMESH.md` et `METHODE_DIAGNOSTIC_PERF.md`.
 - c571a3d — compte de voisins passé en SIGNAL EN ÉCRITURE (incrémental), pas seulement en lecture. Avant : `rafraichir_plante` rescannait `voisinage()` → `choses_dans_rayon()` à chaque foyer (naissance, mort, ET changement de stade). Après : `rafraichir_plante` ne fait plus que l'ombre ; le compte est maintenu par `maj_voisins_naissances` (+1 par naissance sur les voisins, le nouveau-né pose son compte par un scan) et `_maj_voisins_incremental` (−1 par mort), appelés une fois par tick à §8 ; `poser_voisins_initial` scanne une fois à `etat_initial` ; `retirer` fait le −1. Changement de stade = zéro écriture du compteur. `couvert.gd` Peuplement appelle `maj_voisins_naissances` (source unique). Mesuré : requêtes `choses_dans_rayon`/tick 185 → 10, candidats mesurés 13247 → 659, temps tick 28 → 24 ms. Verrouillé par `test_compteur_voisins.gd` (compteur == scan de contrôle après chaque naissance/mort/stade/retirer/séquence longue). Commentaire `vegetation.gd:445` corrigé — il prétendait faussement « AUCUNE requête », il disait signal en lecture mais scan en écriture ; il dit maintenant le vrai.
 - c571a3d — cache des vivantes : `etat.plantes` devient la liste toujours-propre (purge immédiate des mortes en §2b via `assign` en place, rejets intégrés après la boucle §7, plus de purge paresseuse à §8). `encore` alias `plantes` directement — L.666 passe de scan O(N) à O(1). §7 refactoré : les rejets s'accumulent dans `nouveaux`, intégrés après la boucle (sinon ils seraient itérés/reproduits le même tick). Verrouillé par `test_cache_vivantes.gd` (aucune morte dans `etat.plantes` après chaque opération). Gain sur `vivantes` : 11.7% → 2.3% au profileur ; sur le temps de tick, dans le bruit (les scans `vivantes` n'étaient pas le goulot — c'était `choses_dans_rayon`, voir entrée du dessus).
 - c571a3d — PIÈGE : un commentaire de code peut mentir sur le coût réel. `vegetation.gd:445` affirmait le compte de voisins « porté en signal, AUCUNE requête », alors que la LECTURE seule l'était — l'ÉCRITURE était un scan. La règle « signal, pas question » de la doctrine ne s'appliquait qu'à la moitié. Leçon : tracer l'écriture, pas croire le commentaire. Symptôme : `choses_dans_rayon` à 34% du tick au profileur. Cause : `voisinage().size()` recalculé à chaque foyer. Corrigé (entrée du dessus).
@@ -289,6 +292,12 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## EN COURS
 
+- OMBRES : À OPTIMISER, JAMAIS À COUPER (décision Yael). Le `DirectionalLight3D`
+  en PSSM 4 splits fait rendre chaque objet jusqu'à 5× (compté par « primitives
+  dessinées » du moniteur). Optimiser = alléger la géométrie qui projette +
+  régler cascades/distance/résolution ; SUPPRIMER l'ombre ou baisser les splits
+  en dur est ÉCARTÉ. Lié au chantier rendu terrain/arbres (cubes pleins GridMap
+  du sol + `couvert.gd:maillage_arbre` à 64 segments par défaut).
 - CANEVAS DE BASE APPLIQUÉ à l'herbe, au lichen et au préchauffeur.
   `manager_herbe.gd` + `manager_lichen.gd` remplacent `cube_herbe.gd` +
   `cube_lichen.gd` en scène active (fichiers cube gardés sur disque pour
@@ -347,9 +356,10 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 - LA CHAÎNE ÉDITEUR N'EST PARCOURUE PAR AUCUN TEST — voir PIÈGES, « ce qu'un
   banc headless ne voit pas ». Trois défauts s'y sont succédé sans qu'aucun ne
   rougisse
-- TROIS FICHIERS DE `carte_prototype.tscn` NE VIENNENT PAS DE CETTE SESSION :
-  `murs_limite.gd`, `semer_objets.gd`, `carte_prototype.tres`. À rattacher à un
-  chantier avant d'y écrire — un fichier, un écrivain
+- DEUX FICHIERS DE `carte_prototype.tscn` NE VIENNENT PAS DE CETTE SESSION :
+  `semer_objets.gd`, `carte_prototype.tres`. À rattacher à un chantier avant d'y
+  écrire — un fichier, un écrivain. (`murs_limite.gd` rattaché puis retiré au
+  refactor ceinture du 2026-08-25, voir FAIT.)
 - `carte_100km2.tscn` embarque les cellules du GridMap dès qu'on enregistre la
   scène en cours de sculpture — 7,8 Mo par sauvegarde, pour un contenu que la
   carte reconstruit. « vider » avant Ctrl+S le ramène à 3 Ko ; rien ne le force

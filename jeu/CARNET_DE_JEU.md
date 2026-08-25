@@ -91,7 +91,7 @@ bloc pas encore inventé.
 - la bibliothèque `bloc.tres` porte trois items : le bloc plein, la **limite**
   (collisionne sans se dessiner), la **rampe** (prisme, collision qui épouse ses
   six sommets, demi-tour qui inverse la montée)
-- la ceinture : `murs_limite.gd` la pose au lancement depuis la carte ;
+- la ceinture : `murs_limite_boite.gd` (StaticBody3D + 4 BoxShape3D) la pose au lancement depuis la carte ;
   `generer_murs.gd` l'écrit en dur dans une scène
 - index fichier par fichier, gestes de sculpture, tests : `MANUEL_CARTE.md`
 
@@ -322,7 +322,7 @@ contenu.
   `carte_prototype.tscn` est la seule scène où tout tourne ensemble.
 - **L'LLM.** Rien dans `jeu/` ne parle à Ollama. Le seul appel prouvé est un banc
   du framework, `scripts/banc_llm_connexion.gd`.
-- **`godot_rl_agents/`** est un greffon posé à la racine, activé par rien et
+- **`godot_rl_agents/`** est un greffon posé dans `addons/`, activé par rien et
   référencé par aucun fichier du jeu.
 - **Bancs jetables encore sur le disque** : `jeu/terrain/diag_temp.gd`. Un banc
   jetable se supprime après avoir tranché (`MANUEL_CARTE.md` § Diagnostiquer).

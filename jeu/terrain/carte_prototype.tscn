@@ -3,7 +3,7 @@
 [ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_bloc"]
 [ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_visible"]
 [ext_resource type="Resource" path="res://jeu/terrain/carte_prototype.tres" id="3_carte"]
-[ext_resource type="Script" uid="uid://c8j7b1t8xknu1" path="res://jeu/terrain/murs_limite.gd" id="4_murs"]
+[ext_resource type="Script" path="res://jeu/terrain/murs_limite_boite.gd" id="4_murs"]
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="5_personnage"]
 [ext_resource type="Script" uid="uid://dkp4ecef4kc0d" path="res://jeu/terrain/outil_fenetre.gd" id="6_fenetre"]
 [ext_resource type="Script" uid="uid://bbi6ytwr53gcr" path="res://jeu/terrain/outil_sculpture.gd" id="7_sculpture"]
@@ -130,8 +130,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -9, 14, -11)
 
 [node name="Limites" type="Node3D" parent="." unique_id=1272771151]
 
-[node name="Murs" type="GridMap" parent="Limites" unique_id=2062834634]
-mesh_library = ExtResource("1_bloc")
+[node name="Murs" type="StaticBody3D" parent="Limites" unique_id=2062834634]
 script = ExtResource("4_murs")
 carte = ExtResource("3_carte")
 
