@@ -13,7 +13,7 @@
 [ext_resource type="Script" uid="uid://dkp4ecef4kc0d" path="res://jeu/terrain/outil_fenetre.gd" id="11_fenetre"]
 [ext_resource type="Script" uid="uid://bmypt23ew8xau" path="res://jeu/plantes/couvert.gd" id="12_couvert"]
 [ext_resource type="Script" uid="uid://dljn3feguvcg" path="res://jeu/plantes/espece.gd" id="13_espece"]
-[ext_resource type="PackedScene" path="res://jeu/plantes/arbre.tscn" id="14_arbre"]
+[ext_resource type="Script" uid="uid://b0s230ie7wjm5" path="res://jeu/plantes/peuplement.gd" id="15_peuplement"]
 
 [sub_resource type="StandardMaterial3D" id="Materiau_repere"]
 albedo_color = Color(0.45, 0.36, 0.27, 1)
@@ -85,8 +85,12 @@ ressource = "graine"
 rayon_collision = 1.5
 couleur = Color(0.32, 0.55, 0.24, 1)
 
-[node name="SemisArbre" parent="Terrain/Couvert" unique_id=809794596 instance=ExtResource("14_arbre")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.8456078, 13.958998, -8.11676)
+[node name="Peuplement" type="Node3D" parent="Terrain/Couvert" unique_id=809794597]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -1.6785431, -73.79845)
+script = ExtResource("15_peuplement")
+espece = "arbre"
+rayon_dispersion = 300.0
+nombres_par_stade = Array[int]([0, 0, 0, 1000, 0, 0])
 
 [node name="TerrainLointain" type="Node3D" parent="." unique_id=800000001]
 script = ExtResource("4_bafdo")

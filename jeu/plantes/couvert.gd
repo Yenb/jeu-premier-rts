@@ -36,15 +36,21 @@ extends Node3D
 # LOTS DE RENDU » plus bas pour ce que le regroupement fait perdre.
 #
 # ---- ET UN TRONC, QUAND L'ESPECE EN DECLARE UN ----
-# Une espece qui pose un `rayon_collision` recoit, sous le meme porteur, un
-# StaticBody3D nomme d'apres son role : un cylindre de ce rayon, haut comme la
-# stature du stade, qu'aucune unite ne traverse. Il est ECHANGE AVEC LE MODELE a
-# chaque changement de stade -- une pousse ne barre pas le passage comme un arbre
-# mature. A rayon nul, aucun corps n'est pose : c'est le cas de l'herbe, et le
-# defaut.
+# Une espece qui pose un `rayon_collision` recoit un CORPS PhysicsServer3D
+# pur (RID, aucun noeud d'arbre de scene) : un cylindre de ce rayon, haut
+# comme la stature du stade, qu'aucune unite ne traverse. Il est echange
+# a chaque changement de stade -- une pousse ne barre pas le passage comme
+# un arbre mature. A rayon nul, aucun corps n'est pose : c'est le cas de
+# l'herbe, et le defaut.
 #
-# LA FORME EST PARTAGEE PAR TOUTES LES PLANTES D'UNE ESPECE ET D'UN STADE : une
-# Shape3D est une ressource, la decrire une fois suffit pour mille arbres.
+# LE CORPS EST UN RID DE PhysicsServer3D, PAS UN NODE. Mesure d'octobre :
+# 5x moins cher qu'un StaticBody3D a 2827 corps actifs simultanes (~3 ms/
+# frame de physics vs ~16 ms). Aucun overhead de noeud (pas de signaux, pas
+# de notifications, pas de traversee d'arbre par frame).
+#
+# LA SHAPE (RID) EST PARTAGEE PAR TOUTES LES PLANTES D'UNE ESPECE ET D'UN
+# STADE : une shape RID vit dans le serveur physique, decrire une fois suffit
+# pour mille arbres. Liberee au NOTIFICATION_PREDELETE du Couvert.
 #
 # ---- DEUX FACONS D'AVOIR UN CORPS ----
 # Une espece qui declare des chemins de modeles recoit ses .glb. Une espece qui
@@ -81,8 +87,21 @@ const Vegetation = preload("res://jeu/plantes/vegetation.gd")
 const Surface = preload("res://jeu/plantes/surface_terrain.gd")
 const PlanteScript = preload("res://jeu/plantes/plante.gd")
 const EspeceScript = preload("res://jeu/plantes/espece.gd")
+const PeuplementScript = preload("res://jeu/plantes/peuplement.gd")
 
-const NOM_TRONC := "Tronc"
+# Ancien constant `NOM_TRONC` supprime : le tronc n'est plus un noeud
+# StaticBody3D nomme, c'est un corps PhysicsServer3D pur (RID). Aucun
+# fils de porteur a chercher par nom.
+#
+# POUR LE FUTUR : si un raycast physique doit un jour identifier QUEL arbre
+# il touche (par exemple pour un colon qui abat un arbre choisi visuellement),
+# il faudra ajouter un appel PhysicsServer3D.body_attach_object_instance_id
+# apres body_create, avec un id qui permette de remonter a l'entree data de
+# la plante (etat.plantes). Aujourd'hui aucun raycast n'a ce besoin --
+# `interaction_destruction.gd` du banc test_ennemi vise le groupe
+# "destructible" et les arbres du couvert n'y sont pas ; la destruction
+# externe d'un arbre passe par vegetation.gd:retirer(id) sur un id data,
+# jamais via collider.
 
 # ---- LES REGLAGES DE L'INSPECTEUR ----
 #
@@ -187,7 +206,8 @@ var _types: Dictionary = {}
 var _releve: Dictionary = {}
 var _etat: Dictionary = {}
 var _rendus: Dictionary = {}
-var _noeuds: Dictionary = {}
+# Ancien `_noeuds: Dictionary` supprime : plus aucun Node3D porteur par
+# plante. La collision vit dans PhysicsServer3D via `_corps_actifs`.
 # LES LOTS DE RENDU : une cle « espece#stade » -> un paquet de MultiMesh, un par
 # maillage du modele. C'est ce qui remplace un noeud de dessin par plante.
 var _lots: Dictionary = {}
@@ -208,10 +228,22 @@ var _accumulateur := 0.0
 # LE JOUEUR (ou la camera), trouve par groupe au _ready. Null jusqu'a ce que
 # quelqu'un porte le groupe -- auquel cas aucun tronc n'est pose.
 var _observateur: Node3D = null
-# Les troncs actuellement portes : id de plante -> numero de stade pose. Sert
-# a detecter les changements de stade (rayon fixe mais hauteur suit la
-# stature) et a savoir quels troncs liberer quand la plante sort du rayon.
-var _troncs_actifs: Dictionary = {}
+# LES CORPS PHYSIQUES DES TRONCS, portes par PhysicsServer3D (pas par des
+# noeuds). id de plante -> {"rid": RID, "numero": int}. Le numero sert a
+# detecter un changement de stade (hauteur suit la stature -- nouveau body
+# necessaire avec la shape du bon stade).
+var _corps_actifs: Dictionary = {}
+# FILE D'ATTENTE DES PLANTES DE PEUPLEMENT, consommee par tick dans _process
+# a raison de budget_par_frame plantes. Chaque entree :
+# {id, colonne, type, age_initial, budget}. Sans cette file, N plantes d'un
+# coup au ready donnent un pic de fabrication ingerable (~650 ms a N=1000).
+var _file_peuplement: Array = []
+# LES SHAPES RID PAR ESPECE ET PAR STADE, fabriquees une fois au ready et
+# partagees par tous les corps du meme stade de la meme espece. Structure :
+# nom_espece -> Array[RID] indexe par (numero - 1). RID vide (null) pour un
+# stade dont la forme est nulle (rayon zero ou stature zero). Liberees au
+# NOTIFICATION_PREDELETE.
+var _shapes_rid: Dictionary = {}
 
 func _ready() -> void:
 	var grille := get_parent() as GridMap
@@ -286,6 +318,11 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _etat.is_empty():
 		return
+	# ETALEMENT DES PEUPLEMENTS : chaque tick, on consomme jusqu'au budget
+	# de la premiere entree de la file. Le budget vient du noeud Peuplement
+	# lui-meme (budget_par_frame @export). Le rebuild du monde et le
+	# rafraichir_autour ne se font qu'UNE FOIS a la fin du batch.
+	_consommer_file_peuplement()
 	_accumulateur += delta * facteur_temps
 	var joues := 0
 	while _accumulateur >= pas_simulation and joues < ticks_max_par_image:
@@ -297,6 +334,46 @@ func _process(delta: float) -> void:
 		# Le retard restant est ABANDONNE -- voir ticks_max_par_image.
 		_accumulateur = 0.0
 	_bascule_rendu()
+
+# Consomme jusqu'a `budget` plantes de la file, les fabrique via
+# Vegetation.fabriquer_plante (age_initial preserve), les append a
+# etat.plantes. Rebuild le monde et rafraichir_autour les nouveaux foyers en
+# une seule passe a la fin -- coute O(N_vivantes) une fois par tick au lieu
+# de N fois.
+func _consommer_file_peuplement() -> void:
+	if _file_peuplement.is_empty():
+		return
+	var budget: int = int(_file_peuplement[0].get("budget", 30))
+	var a_ajouter: int = mini(budget, _file_peuplement.size())
+	var foyers: Array = []
+	var nouvelles: Array = []
+	for _n in range(a_ajouter):
+		var entree: Dictionary = _file_peuplement.pop_front()
+		var type: Dictionary = _types.get(String(entree.type), {})
+		if type.is_empty():
+			continue
+		var plante := Vegetation.fabriquer_plante(
+			String(entree.id), entree.colonne, _releve, _config, type,
+			_etat.rng, float(entree.age_initial))
+		if plante.is_empty():
+			continue
+		(_etat.plantes as Array).append(plante)
+		# AJOUT INCREMENTAL au monde indexe : evite le rebuild O(N) par batch
+		# qui rendait l'etalement plus cher que le pic initial. monde.ajouter
+		# ne balaie que les niveaux d'index deja ouverts, coute O(niveaux).
+		_etat.monde.ajouter(plante, String(plante.proprietes.type_plante), plante.position)
+		nouvelles.append(plante)
+		foyers.append(plante.position)
+	if not nouvelles.is_empty():
+		# OMBRE des nouvelles (utilise_ombre) + pose du rendu.
+		for plante in nouvelles:
+			Vegetation.rafraichir_plante(plante, _etat.monde, _config, _releve)
+			_poser_plante(plante)
+		# COMPTE DE VOISINS : maintenance incrementale du framework, cote
+		# NAISSANCE uniquement (aucune mort dans un batch de peuplement). Chaque
+		# nouvelle pose son propre compte, chaque existante voisine prend +1.
+		# Meme geste que le §7 du tick -- une seule source de verite.
+		Vegetation.maj_voisins_naissances(_etat, _config, _releve, nouvelles)
 
 # Le rendu, et rien d'autre : il RELIT le rapport du tick, il ne recalcule jamais
 # ce qui vient de se passer. NAISSANCES ET CHANGEMENTS DE STADE NE POSENT
@@ -374,18 +451,76 @@ static func appliquer_reglages(base: Dictionary, valeurs: Dictionary) -> Diction
 func _semis() -> Array:
 	var semis: Array = []
 	for enfant in get_children():
-		if enfant.get_script() != PlanteScript:
-			continue
-		var espece := String(enfant.type)
-		if espece == "":
-			espece = String(_config.type_par_defaut)
-		semis.append({
-			"id": String(enfant.name),
-			"colonne": Surface.colonne_de(enfant.position, _releve),
-			"type": espece,
-			"noeud": enfant,
-		})
+		if enfant.get_script() == PlanteScript:
+			var espece := String(enfant.type)
+			if espece == "":
+				espece = String(_config.type_par_defaut)
+			semis.append({
+				"id": String(enfant.name),
+				"colonne": Surface.colonne_de(enfant.position, _releve),
+				"type": espece,
+				"noeud": enfant,
+			})
+		elif enfant.get_script() == PeuplementScript:
+			# UN PEUPLEMENT s'expande en N semis avec age_initial calcule
+			# depuis les durees des stades precedents (milieu du stade cible).
+			# Les positions sont tirees dans un disque autour du peuplement,
+			# RNG seede : deux parties meme graine donnent le meme dessin.
+			_expander_peuplement(enfant, semis)
 	return semis
+
+# EXPANSE un noeud Peuplement en autant de semis que declare son tableau
+# `nombres_par_stade`. Chaque semis recoit un age_initial qui le pose au
+# milieu du stade cible, prêt a vivre. Les positions sont tirees dans un
+# disque autour du peuplement (uniforme, rayon = sqrt(u) * rayon_max pour
+# eviter la concentration au centre).
+func _expander_peuplement(noeud: Node3D, _semis_ignores: Array) -> void:
+	var espece := String(noeud.get("espece"))
+	if espece == "" or not _types.has(espece):
+		push_warning("couvert.gd : peuplement '%s' nomme une espece '%s' inconnue" % [noeud.name, espece])
+		return
+	var type: Dictionary = _types[espece]
+	var stades: Array = type.stades
+	var nombres: Array = noeud.get("nombres_par_stade")
+	var rayon: float = float(noeud.get("rayon_dispersion"))
+	var seed_rng: int = int(noeud.get("seed_rng"))
+	var duree_dispersion: float = float(noeud.get("duree_dispersion_apparition"))
+	var vitesse := float(_config.annees_par_seconde)
+	var dispersion_age: float = duree_dispersion * vitesse * 0.5
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_rng
+	var index_semis := 0
+	var age_seuils: Array = []
+	var cumul := 0.0
+	for stade in stades:
+		age_seuils.append(cumul)
+		cumul += float(stade.duree)
+	# LES ENTREES NE VONT PAS DANS `semis` (etat_initial les fabriquerait
+	# TOUTES au ready = pic 650 ms a N=1000). Elles vont dans _file_peuplement,
+	# consommee par tick dans _process a raison de budget_par_frame plantes.
+	var budget: int = int(noeud.get("budget_par_frame"))
+	for i in range(mini(nombres.size(), stades.size())):
+		var nombre := int(nombres[i])
+		if nombre <= 0:
+			continue
+		var age_cible := float(age_seuils[i]) + float(stades[i].duree) * 0.5
+		for _n in range(nombre):
+			var angle := rng.randf_range(0.0, TAU)
+			var r := sqrt(rng.randf()) * rayon
+			var pos_locale := noeud.position + Vector3(cos(angle) * r, 0.0, sin(angle) * r)
+			var id := "%s_%d" % [noeud.name, index_semis]
+			index_semis += 1
+			# ALEA d'age_initial dans une fenetre centree sur l'age cible.
+			# Chaque plante atteint son stade cible a un instant different,
+			# apparition visuellement dispersee sur duree_dispersion secondes.
+			var age_avec_alea := age_cible + rng.randf_range(-dispersion_age, dispersion_age)
+			_file_peuplement.append({
+				"id": id,
+				"colonne": Surface.colonne_de(pos_locale, _releve),
+				"type": espece,
+				"age_initial": maxf(0.0, age_avec_alea),
+				"budget": budget,
+			})
 
 # LES ESPECES DECLAREES A L'INSPECTEUR, indexees par leur nom -- celui qu'un semis
 # ecrit dans son champ `Type`. Une espece sans nom, sans stade, ou dont le nom est
@@ -447,11 +582,34 @@ func _preparer_les_rendus() -> void:
 		# et le moteur physique ne la decrit qu'une fois. En fabriquer une par
 		# plante multiplierait la memoire par la population sans rien changer a
 		# l'ecran. Vide quand l'espece ne declare aucun rayon.
+		# LE RAYON EST PROPORTIONNEL A LA STATURE DU STADE. rayon_collision de
+		# l'espece est le rayon MAXIMAL, atteint au stade le plus grand. Un
+		# enfant a un tronc plus fin qu'un adulte -- sans ca un arbrisseau de
+		# 2 m bloquerait le passage sur 3 m de diametre. Gate arithmetique : une
+		# espece dont la plus grande stature est 0 rend un rayon 0 partout.
+		var stature_max := 0.0
+		for stade in (type.stades as Array):
+			stature_max = maxf(stature_max, float(stade.get("stature", 0.0)))
 		var troncs: Array = []
+		var troncs_rid: Array = []
 		for i in range((type.stades as Array).size()):
-			troncs.append(forme_de_tronc(
-				float(type.rayon_collision),
-				float((type.stades as Array)[i].get("stature", 0.0))))
+			var stature_stade := float((type.stades as Array)[i].get("stature", 0.0))
+			var rayon_stade := 0.0
+			if stature_max > 0.0:
+				rayon_stade = float(type.rayon_collision) * stature_stade / stature_max
+			troncs.append(forme_de_tronc(rayon_stade, stature_stade))
+			# SHAPE RID JUMELLE DE LA FORME NODE : meme rayon et meme hauteur.
+			# La forme Node reste fabriquee pour que test_plante:_juger_le_tronc
+			# continue a interroger forme_de_tronc en static. La shape RID
+			# porte la collision reelle du jeu, sans passer par un noeud.
+			if rayon_stade > 0.0 and stature_stade > 0.0:
+				var shape_rid := PhysicsServer3D.cylinder_shape_create()
+				PhysicsServer3D.shape_set_data(shape_rid,
+					{"radius": rayon_stade, "height": stature_stade})
+				troncs_rid.append(shape_rid)
+			else:
+				troncs_rid.append(RID())
+		_shapes_rid[String(type.nom)] = troncs_rid
 		# LA DISTANCE DE RENDU VOYAGE AVEC L'ENTREE, jamais relue au moment de
 		# poser : le lot ne connait que l'entree qu'on lui donne, et lui
 		# faire retrouver l'espece rouvrirait une table a chaque plante posee.
@@ -702,12 +860,11 @@ func _poser_plante(plante: Dictionary) -> void:
 # arbre mature.
 func _poser_modele(id: String, espece: String, numero: int) -> void:
 	_radier(id)
-	# LE TRONC N'EST PLUS POSE ICI. Il vit dans _bascule_troncs, qui decide
-	# selon la distance a l'observateur. On invalide juste l'etat courant
-	# pour que le prochain tick de _bascule_troncs reevalue.
-	if _troncs_actifs.has(id):
-		_liberer_tronc(id)
-		_troncs_actifs.erase(id)
+	# LE CORPS PHYSIQUE N'EST PLUS POSE ICI. Il vit dans _bascule_rendu, qui
+	# decide selon la distance a l'observateur. On invalide juste l'etat
+	# courant pour que le prochain tick reevalue.
+	if _corps_actifs.has(id):
+		_liberer_corps(id)
 	if not _rendus.has(espece):
 		return
 	var rendu: Dictionary = _rendus[espece]
@@ -716,64 +873,72 @@ func _poser_modele(id: String, espece: String, numero: int) -> void:
 		return
 	_inscrire(_cle_de_lot(espece, str(numero)), stades[numero - 1], id)
 
-# LE TRONC EST LE SEUL NOEUD QU'UNE PLANTE GARDE, et seulement si son espece
-# declare un rayon : un corps physique ne rentre pas dans un lot de rendu, le
-# moteur physique en veut un par obstacle. Une plante sans tronc n'a donc AUCUN
-# noeud -- c'est le cas de l'herbe, et c'est la ou le regroupement rapporte le
-# plus.
-func _poser_tronc(id: String, troncs: Array, numero: int) -> void:
-	var corps := _corps_solide(troncs, numero)
-	if corps == null:
-		return
-	_porteur(id).add_child(corps)
-
-# Le noeud d'une plante, cree au premier besoin. Il REPREND celui que le game
-# designer a pose quand il existe : son nom est l'identifiant de la plante, et le
-# perdre couperait le lien entre ce qu'il a place et ce qui pousse.
-func _porteur(id: String) -> Node3D:
-	if _noeuds.has(id):
-		return _noeuds[id]
-	var noeud := get_node_or_null(NodePath(id)) as Node3D
-	if noeud == null:
-		noeud = Node3D.new()
-		noeud.name = id
-		add_child(noeud)
-	noeud.position = _poses.get(id, Vector3.ZERO)
-	_noeuds[id] = noeud
-	return noeud
-
-# LE TRONC EST DETACHE TOUT DE SUITE (remove_child) avant d'etre libere :
-# queue_free ne prend effet qu'en fin d'image, si bien que deux corps se
-# superposeraient le temps d'une frame.
-func _liberer_tronc(id: String) -> void:
-	if not _noeuds.has(id):
-		return
-	var porteur: Node3D = _noeuds[id]
-	var ancien := porteur.get_node_or_null(NodePath(NOM_TRONC))
-	if ancien == null:
-		return
-	porteur.remove_child(ancien)
-	ancien.queue_free()
-
-# LE CORPS SOLIDE D'UN STADE : un StaticBody3D qui porte la forme partagee. C'est
-# lui qui BLOQUE -- une Area3D detecterait sans arreter, ce qui n'est pas ce qu'un
-# tronc fait. Rend null quand le stade ne declare aucune forme, auquel cas la
-# plante n'a tout simplement pas d'enfant de collision.
+# POSE UN CORPS PHYSIQUE STATIQUE POUR LE TRONC via PhysicsServer3D pur.
+# Aucun noeud n'est cree -- le corps existe uniquement dans le serveur
+# physique. Il bloque le personnage comme un StaticBody3D le ferait, mais
+# sans le cout d'un noeud dans l'arbre de scene (mesure ~5x moins cher
+# qu'un StaticBody3D a 2827 corps actifs).
 #
-# CE NOEUD N'EXISTE QUE POUR LE MOTEUR PHYSIQUE. La simulation ne le lit jamais et
-# tourne identiquement sans lui (CLAUDE.md, « La simulation ne depend JAMAIS de
-# l'affichage ») : jeu/plantes/vegetation.gd ignore jusqu'a son existence.
-func _corps_solide(troncs: Array, numero: int) -> StaticBody3D:
-	if numero < 1 or numero > troncs.size() or troncs[numero - 1] == null:
-		return null
-	var forme: CylinderShape3D = troncs[numero - 1]
-	var corps := StaticBody3D.new()
-	corps.name = NOM_TRONC
-	var collision := CollisionShape3D.new()
-	collision.shape = forme
-	collision.position = Vector3(0.0, forme.height * 0.5, 0.0)
-	corps.add_child(collision)
-	return corps
+# LE BODY EST POSITIONNE A `position + (0, stature/2, 0)` : la shape
+# CylinderShape3D est centree sur son origine, il faut la remonter d'une
+# demi-hauteur pour que sa base repose au sol (`position` est au pied de
+# l'arbre).
+#
+# BODY_MODE_STATIC obligatoire : le defaut de body_create est BODY_MODE_RIGID,
+# qui pousserait le tronc a la moindre collision.
+# body_set_space obligatoire : sans ca le body existe mais n'est dans aucune
+# simulation, silencieusement.
+func _poser_corps(id: String, espece: String, numero: int, position: Vector3) -> void:
+	if not _shapes_rid.has(espece):
+		return
+	var shapes: Array = _shapes_rid[espece]
+	if numero < 1 or numero > shapes.size():
+		return
+	var shape_rid: RID = shapes[numero - 1]
+	if not shape_rid.is_valid():
+		return
+	var stades: Array = _types[espece].stades
+	var stature := float(stades[numero - 1].get("stature", 0.0))
+	var body_rid := PhysicsServer3D.body_create()
+	PhysicsServer3D.body_set_mode(body_rid, PhysicsServer3D.BODY_MODE_STATIC)
+	PhysicsServer3D.body_set_space(body_rid, get_world_3d().space)
+	PhysicsServer3D.body_add_shape(body_rid, shape_rid)
+	# LAYER ET MASK POSES EXPLICITEMENT a 1. La doc dit que body_create()
+	# initialise deja layer=1, mask=1 -- mais rien de devine : les lignes
+	# sont ecrites pour que le contrat de collision (couche 1, comme les
+	# StaticBody3D par defaut du reste du projet) soit lisible ici sans
+	# supposer un defaut de moteur.
+	PhysicsServer3D.body_set_collision_layer(body_rid, 1)
+	PhysicsServer3D.body_set_collision_mask(body_rid, 1)
+	PhysicsServer3D.body_set_state(body_rid, PhysicsServer3D.BODY_STATE_TRANSFORM,
+		Transform3D(Basis(), position + Vector3(0.0, stature * 0.5, 0.0)))
+	_corps_actifs[id] = {"rid": body_rid, "numero": numero}
+
+# LIBERE LE BODY RID (immediat, pas de queue). L'appelant peut immediatement
+# recreer un body au meme id sans risque de sur-population transitoire.
+func _liberer_corps(id: String) -> void:
+	if not _corps_actifs.has(id):
+		return
+	var body_rid: RID = _corps_actifs[id].rid
+	if body_rid.is_valid():
+		PhysicsServer3D.free_rid(body_rid)
+	_corps_actifs.erase(id)
+
+# NETTOYAGE FINAL : libere tous les RID (bodies + shapes) a la destruction
+# du Couvert. Sans ca, chaque RID cree fuite jusqu'a la fermeture du jeu --
+# invisible tant que la scene n'est pas rechargee.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		for entree in _corps_actifs.values():
+			var rid: RID = entree.rid
+			if rid.is_valid():
+				PhysicsServer3D.free_rid(rid)
+		_corps_actifs.clear()
+		for shapes in _shapes_rid.values():
+			for shape_rid in shapes:
+				if (shape_rid as RID).is_valid():
+					PhysicsServer3D.free_rid(shape_rid)
+		_shapes_rid.clear()
 
 # ---- LES LOTS DE RENDU ----
 #
@@ -937,11 +1102,7 @@ static func poser_distance_rendu(corps: Node, distance: float) -> int:
 func _retirer_plante(id: String) -> void:
 	_radier(id)
 	_poses.erase(id)
-	_troncs_actifs.erase(id)
-	if not _noeuds.has(id):
-		return
-	_noeuds[id].queue_free()
-	_noeuds.erase(id)
+	_liberer_corps(id)
 
 func _poser_graine(id: String) -> void:
 	if _lot_de.has(id):
@@ -980,13 +1141,13 @@ func retirer_graine(id: String) -> void:
 # TROIS ETATS PAR PLANTE :
 #  - hors rayon : rien pose. La plante n'existe que dans etat.plantes.
 #  - dans rayon, stade non-fertile : ligne dans un lot MMI. Aucun corps.
-#  - dans rayon, stade fertile a rayon_collision > 0 : ligne MMI + tronc +
-#    Node3D porteur (le tronc n'a nulle part ou vivre sans porteur).
+#  - dans rayon, stade fertile a rayon_collision > 0 : ligne MMI + corps
+#    PhysicsServer3D. Aucun Node3D par plante.
 #
 # LE STADE EST STOCKE dans _lot_de (implicite via _lot_de[id] = cle_du_lot)
-# et dans _troncs_actifs (pour detecter les changements de hauteur de tronc
-# quand la stature change). Un changement de stade dans le rayon = radier
-# l'ancien lot, inscrire dans le nouveau, reposer le tronc.
+# et dans _corps_actifs.numero (pour detecter les changements de hauteur de
+# corps quand la stature change). Un changement de stade dans le rayon =
+# radier l'ancien lot, inscrire dans le nouveau, reposer le corps.
 func _bascule_rendu() -> void:
 	if _observateur == null:
 		return
@@ -1019,34 +1180,24 @@ func _bascule_rendu() -> void:
 			_radier(id)
 			_poses[id] = plante.position
 			_inscrire(cle_lot, stades[numero - 1], id)
-		# COLLISION : pose le tronc si l'espece en declare un et que le stade
-		# porte une forme. Repose si le stade a change (hauteur suit stature).
-		var troncs: Array = _rendus[espece].troncs
-		if numero <= troncs.size() and troncs[numero - 1] != null:
-			if int(_troncs_actifs.get(id, -1)) != numero:
-				_liberer_tronc(id)
-				_poser_tronc(id, troncs, numero)
-				_troncs_actifs[id] = numero
-		elif _troncs_actifs.has(id):
-			# Passe d'un stade a tronc vers un stade sans tronc.
-			_liberer_tronc(id)
-			_troncs_actifs.erase(id)
+		# COLLISION : pose le corps si l'espece declare une forme non nulle
+		# pour ce stade. Repose si le stade a change (hauteur suit stature,
+		# nouveau body avec la shape du bon stade).
+		var shapes: Array = _shapes_rid.get(espece, [])
+		var a_une_shape := numero <= shapes.size() and (shapes[numero - 1] as RID).is_valid()
+		if a_une_shape:
+			var actuel: int = int(_corps_actifs.get(id, {}).get("numero", -1))
+			if actuel != numero:
+				_liberer_corps(id)
+				_poser_corps(id, espece, numero, plante.position)
+		elif _corps_actifs.has(id):
+			# Passe d'un stade a corps vers un stade sans corps.
+			_liberer_corps(id)
 	# LES SORTIES : plantes actuellement inscrites qui ne sont plus dans le
-	# rayon. Radier du lot, liberer tronc et porteur.
+	# rayon. Radier du lot, liberer le corps PhysicsServer.
 	var inscrits := _lot_de.keys().duplicate()
 	for id in inscrits:
 		if not doit.has(id):
 			_radier(id)
-			_liberer_tronc(id)
-			_liberer_porteur(id)
-			_troncs_actifs.erase(id)
+			_liberer_corps(id)
 			_poses.erase(id)
-
-# LE PORTEUR NODE3D est libere avec le rendu : il n'existe QUE pour porter
-# le tronc. Le laisser vivant apres retrait garderait un Node3D vide par
-# arbre-passe-a-portee, ce que le patron populations massives interdit.
-func _liberer_porteur(id: String) -> void:
-	if not _noeuds.has(id):
-		return
-	_noeuds[id].queue_free()
-	_noeuds.erase(id)

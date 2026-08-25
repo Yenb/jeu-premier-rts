@@ -93,6 +93,21 @@ extends Node
 # unique les met tous a l'echelle sans jamais pouvoir les croiser.
 @export var dispersion_duree: float = 0.0
 
+@export_group("Ombre")
+
+# ACTIVE LE MECANISME DE DOMINANCE PAR OMBRE. Par defaut DESACTIVE : une
+# espece isolee (ou dont tous les stades ont la meme stature) n'a pas besoin
+# de calculer l'ombre entre ses plantes -- le mecanisme tournerait a vide et
+# couterait N requetes de voisinage a chaque rafraichissement.
+#
+# ACTIVER SEULEMENT QUAND UNE ESPECE DOIT ETRE DOMINEE PAR UNE AUTRE (ex :
+# herbe sous arbre, ou stade jeune sous stade adulte de la meme espece si tu
+# veux mesurer). Une espece qui l'active recoit les requetes de voisinage a
+# chaque rafraichir_plante, et son age gele quand une voisine porte une
+# stature strictement superieure. Le compte de voisins reste calcule de toute
+# facon (utilise par la densite de reproduction), independamment de ce champ.
+@export var utilise_ombre: bool = false
+
 @export_group("Terrain")
 
 # Combien de couches au-dessus du sol le plus bas de la carte cette espece
@@ -240,6 +255,7 @@ func champs() -> Dictionary:
 		"statures_stades": statures,
 		"dispersion_duree": dispersion_duree,
 		"modeles_stades": modeles,
+		"utilise_ombre": utilise_ombre,
 		"marge_couches": marge_couches,
 		"trouee_max_voisins": trouee_max_voisins,
 		"rayon_dispersion_min": rayon_dispersion_min,

@@ -977,6 +977,7 @@ func _espece_haute() -> Node:
 	espece.stade_production_min = 2; espece.intervalle_production = 120.0
 	espece.max_produits_par_plante = 3; espece.ralentissement_dernier_stade = 2.0
 	espece.duree_vie_produit = 300.0; espece.ressource = "graine"
+	espece.utilise_ombre = true
 	return espece
 
 func _espece_basse() -> Node:
@@ -994,6 +995,7 @@ func _espece_basse() -> Node:
 	espece.stade_production_min = 99
 	espece.max_produits_par_plante = 0; espece.ralentissement_dernier_stade = 1.0
 	espece.duree_vie_produit = 60.0; espece.ressource = "herbe"
+	espece.utilise_ombre = true
 	return espece
 
 func _par_id(choses: Array, id: String) -> Variant:
