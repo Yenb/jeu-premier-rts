@@ -761,11 +761,21 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	# 4. la production. Le compteur est plafonne a un intervalle : sans ce plafond,
 	# une plante longtemps bloquee par son plafond de produits en relacherait
 	# plusieurs d'affilee des qu'une place se libere.
+	# LES FERTILES ET LES GESTANTS DE CE TICK, ramasses pendant cette passe --
+	# deja post-purge des mortes (§2b), deja en ordre. §5 n'itere que les
+	# fertiles, §6 et §7 que les gestants : un stade ni fertile ni en gestation
+	# ne coute plus un continue par boucle de reproduction.
+	var fertiles: Array = []
+	var gestants: Array = []
 	var decalages_depot := anneau(1, int(config.rayon_depot_cellules))
 	for plante in encore:
 		var type_prod := type_de(plante, types)
 		if type_prod.is_empty():
 			continue
+		if plante.proprietes.has("gestation"):
+			gestants.append(plante)
+		elif stade_fertile(plante, type_prod):
+			fertiles.append(plante)
 		var intervalle := intervalle_de_production(plante, type_prod)
 		var compteur := float(plante.proprietes.get("compteur_production", 0.0)) + delta
 		if intervalle == INF:
@@ -804,21 +814,18 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	# (par espece). gestation.gd ne lit ni l'un ni l'autre -- c'est le refus de
 	# l'appeler qui EST le gate. Chaque espece passe SON catalogue : elles n'ont
 	# pas le meme rythme et gestation.gd resout la meme reference pour toutes.
-	for plante in encore:
-		if plante.proprietes.has("gestation"):
-			continue
+	for plante in fertiles:
 		var type_pousse := type_de(plante, types)
-		if type_pousse.is_empty() or not stade_fertile(plante, type_pousse):
+		if type_pousse.is_empty():
 			continue
 		if not peut_pousser(plante, type_pousse, monde, config, releve):
 			continue
 		Gestation.poser(plante, null,
 			plante.proprietes.get("reproduction_locale", type_pousse.reproduction_locale))
+		gestants.append(plante)
 
 	# 6. le compteur avance.
-	for plante in encore:
-		if not plante.proprietes.has("gestation"):
-			continue
+	for plante in gestants:
 		var type_gest := type_de(plante, types)
 		if type_gest.is_empty():
 			continue
@@ -840,7 +847,7 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	# les rejets (ils se reproduiraient le meme tick) et muterait la liste
 	# parcourue. Ils sont integres a `plantes` APRES la boucle.
 	var nouveaux: Array = []
-	for plante in encore:
+	for plante in gestants:
 		var gestation: Dictionary = plante.proprietes.get("gestation", {})
 		if gestation.is_empty() or not gestation.get("naissance_prete", false):
 			continue
