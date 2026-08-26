@@ -167,6 +167,12 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	# les couches possibles ne se ferait jamais culler.
 	var couche_min := couche_base + CarteTerrain.COUCHES_MAXIMALES
 	var couche_max := couche_base
+	# LE SOL DE BASE N'OCCULTE RIEN (il est plat). Seuls les cubes qui EMERGENT
+	# au-dessus du sommet de base -- murs, batiments, relief -- bloquent la vue et
+	# entrent dans l'occludeur. Le sol plat streame en permanence ; l'en exclure
+	# evite une recomputation d'occlusion a chaque pas.
+	var sommet_base := int(carte.sommet_de_base())
+	var positions_occl: Array[Vector3] = []
 
 	for lx in range(taille):
 		for lz in range(taille):
@@ -212,6 +218,8 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				par_forme[item].append(t)
 				couche_min = mini(couche_min, couche)
 				couche_max = maxi(couche_max, couche)
+				if couche > sommet_base:
+					positions_occl.append(pos)
 
 	var noeuds: Array = []
 	for item in par_forme.keys():
@@ -219,6 +227,12 @@ func _creer_tuile(tuile: Vector2i) -> void:
 		if mmi != null:
 			add_child(mmi)
 			noeuds.append(mmi)
+	# L'OCCLUDEUR DU RELIEF, s'il y en a. Ce qui est derriere ces cubes -- autres
+	# cubes, arbres, unites -- n'est plus dessine par Godot.
+	if not positions_occl.is_empty():
+		var occl := _occludeur_de_cubes(positions_occl, cote)
+		add_child(occl)
+		noeuds.append(occl)
 	_tuiles[tuile] = noeuds
 
 # UN MultiMeshInstance3D pour une forme : le mesh vient de la bibliotheque, une
@@ -252,6 +266,37 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		float(taille) * cote + 2.0 * cote)
 	mmi.custom_aabb = AABB(pos_aabb, taille_aabb)
 	return mmi
+
+# UN OccluderInstance3D pour une liste de cubes (leurs centres). Chaque cube est
+# une boite fermee de cote `cote` ; Godot rasterise cette geometrie et n'affiche
+# plus ce qui tombe entierement derriere. Les sommets sont en coordonnees monde
+# (ce noeud est a l'origine), comme les MultiMesh.
+func _occludeur_de_cubes(positions: Array, cote: float) -> OccluderInstance3D:
+	var h := cote * 0.5
+	var coins := [
+		Vector3(-h, -h, -h), Vector3(h, -h, -h), Vector3(h, -h, h), Vector3(-h, -h, h),
+		Vector3(-h, h, -h), Vector3(h, h, -h), Vector3(h, h, h), Vector3(-h, h, h)]
+	var faces := [
+		0, 2, 1, 0, 3, 2,
+		4, 5, 6, 4, 6, 7,
+		0, 1, 5, 0, 5, 4,
+		1, 2, 6, 1, 6, 5,
+		2, 3, 7, 2, 7, 6,
+		3, 0, 4, 3, 4, 7]
+	var sommets := PackedVector3Array()
+	var indices := PackedInt32Array()
+	var base := 0
+	for c in positions:
+		for coin in coins:
+			sommets.append(c + coin)
+		for idx in faces:
+			indices.append(base + idx)
+		base += 8
+	var occ := ArrayOccluder3D.new()
+	occ.set_arrays(sommets, indices)
+	var inst := OccluderInstance3D.new()
+	inst.occluder = occ
+	return inst
 
 func _supprimer_tuile(tuile: Vector2i) -> void:
 	if not _tuiles.has(tuile):
