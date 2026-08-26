@@ -221,10 +221,13 @@ static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, 
 	var position: Variant = Surface.position_posee(colonne, releve)
 	if position == null:
 		return {}
-	# LES SEUILS SONT COPIES PAR PLANTE DEPUIS TOUJOURS (duplicate) : il ne
-	# manquait qu'une raison de les rendre differents. La voici.
 	var facteur := facteur_de_vie(type, rng)
-	var seuils_etales: Array = (type.stades_config as Array).duplicate(true)
+	# PARTAGE PAR DEFAUT, COPIE SEULEMENT SI ON MODIFIE. Sans dispersion (facteur
+	# 1.0), les seuils sont identiques d'une plante a l'autre : les dupliquer par
+	# plante (copie profonde des stades) etait le premier poste de fabriquer_plante,
+	# paye pour rien. On partage stades_config du type en lecture seule ; on ne le
+	# duplique QUE quand le facteur va mettre les seuils a l'echelle (juste dessous).
+	var seuils_etales: Array = type.stades_config
 	# TOUTE L'HORLOGE DE L'INDIVIDU, JAMAIS LA MOITIE. Mettre les seuils de stade
 	# a l'echelle sans toucher a la reproduction raccourcit la FENETRE FERTILE
 	# sans raccourcir l'intervalle entre deux pousses : la plante rapide seme
@@ -235,6 +238,7 @@ static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, 
 	# fecondite.
 	var reproduction: Dictionary = (type.reproduction_locale as Dictionary)
 	if not is_equal_approx(facteur, 1.0):
+		seuils_etales = (type.stades_config as Array).duplicate(true)
 		for entree in seuils_etales:
 			entree["age_seuil"] = float(entree.age_seuil) * facteur
 		reproduction = reproduction.duplicate(true)
