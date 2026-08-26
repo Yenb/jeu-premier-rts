@@ -153,3 +153,23 @@ substantial performance gain ») :
 Ne PAS baisser les splits (4→2) en dur : dégrade la qualité (voir la doctrine
 « jamais couper les ombres »). `cast_shadow` par objet existe mais n'est PAS
 généraliste — dernier recours pour un objet précis, jamais la méthode.
+
+LEVIER CODE, TERRAIN : le sol de base ne PROJETTE pas d'ombre. Dans
+`rendu_terrain_multimesh.gd`, les cubes au niveau du sol (couche ==
+sommet_de_base) passent en `cast_shadow off` ; tout ce qui ÉMERGE garde
+`cast_shadow on`, toutes ses faces. Un sol plat ne jette aucune ombre utile
+(elle tomberait sous lui) et les passes d'ombre ignorent l'occlusion → l'y
+garder re-dessine tout le sol pour rien. Gain mesuré : primitives d'ombre
+réduites de plus de moitié. Le sol REÇOIT toujours les ombres des objets posés
+dessus — `cast_shadow` ne touche que la PROJECTION, jamais la réception.
+
+ÉCARTÉ : trier par ORIENTATION DE FACE (faces horizontales off, verticales on)
+CASSE l'ombre du relief — le SOMMET d'un cube qui dépasse est justement la face
+qui reçoit le soleil et jette l'ombre. Le tri correct est par NIVEAU (sol de
+base vs émergent), pas par face.
+
+LE VRAI PLAFOND est hors Godot : cache d'ombre statique, cascades en une passe
+(multiview), ombres en shader (horizon tracing) — proposés pour le moteur
+(godot-proposals #6948, #4635) mais PAS implémentés, et absents des addons. Les
+avoir demande un shader custom ou du C++ (GDExtension) : porte ouverte le jour
+où l'ombre devient un vrai goulot, jamais une limite subie.
