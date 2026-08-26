@@ -908,7 +908,7 @@ func _poser_modele(id: String, espece: String, numero: int) -> void:
 	var stades: Array = rendu.stades
 	if numero < 1 or numero > stades.size():
 		return
-	_inscrire(_cle_de_lot(espece, str(numero)), stades[numero - 1], id)
+	_inscrire(_cle_de_lot(espece, str(numero), _poses.get(id, Vector3.ZERO)), stades[numero - 1], id)
 
 # POSE UN CORPS PHYSIQUE STATIQUE POUR LE TRONC via PhysicsServer3D pur.
 # Aucun noeud n'est cree -- le corps existe uniquement dans le serveur
@@ -1000,8 +1000,28 @@ func _notification(what: int) -> void:
 #
 # LE RETRAIT NE DECALE RIEN : la derniere ligne prend la place de celle qui part.
 # Recompacter la liste ferait payer la population a chaque mort.
-func _cle_de_lot(espece: String, stade: String) -> String:
-	return "%s#%s" % [espece, stade]
+# CHUNKING SPATIAL : la cle porte AUSSI la tuile ou l'arbre se trouve. Un lot =
+# une espece, un stade, UNE tuile carree -- pas tout le disque. C'est ce qui rend
+# chaque MultiMeshInstance3D cullable par Godot : sans tuile, l'AABB d'un lot
+# s'etend sur tout le voisinage, la camera est dedans, et NI le frustum NI
+# l'occlusion ne peuvent le couper (Godot ne cull pas par instance dans un
+# MultiMesh -- voir jeu/PROTOCOLE_MULTIMESH.md). Decoupe en tuiles, Godot cull
+# les tuiles hors champ (derriere, sur les cotes) et celles cachees. Le prix :
+# plus de MultiMeshInstance3D, donc plus de draw calls -- compromis assume, le
+# meme que le terrain (rendu_terrain_multimesh.gd).
+const TAILLE_TUILE_RENDU := 24.0
+# L'AABB d'une tuile : serree en X/Z (la tuile + une marge pour canopees et
+# modeles decales), genereuse en Y (couvre sol + arbres sans risque de pop). Le
+# gain de culling vient du X/Z ; le Y large ne coute qu'une occlusion un peu
+# moins fine.
+const MARGE_TUILE_RENDU := 8.0
+const AABB_TUILE_Y_BAS := -20.0
+const AABB_TUILE_Y_HAUTEUR := 140.0
+
+func _cle_de_lot(espece: String, stade: String, position: Vector3) -> String:
+	var tx := int(floor(position.x / TAILLE_TUILE_RENDU))
+	var tz := int(floor(position.z / TAILLE_TUILE_RENDU))
+	return "%s#%s#%d#%d" % [espece, stade, tx, tz]
 
 # Le lot d'une cle, cree au premier besoin. Rend un Dictionary VIDE quand l'entree
 # ne porte aucune piece -- un modele manquant a deja ete signale au chargement, et
@@ -1032,6 +1052,17 @@ func _lot(cle: String, entree: Dictionary) -> Dictionary:
 		# morts et changements de stade -- rien qui doive s'interpoler entre
 		# deux frames physiques.
 		noeud.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+		# CHUNK : AABB serree a la tuile de la cle -- c'est elle qui rend ce
+		# MultiMeshInstance3D cullable par le frustum et l'occlusion. Sans ca,
+		# l'AABB automatique s'etend sur tout le voisinage et n'est jamais coupee.
+		var parts := cle.split("#")
+		if parts.size() >= 4:
+			var tx := float(int(parts[2])) * TAILLE_TUILE_RENDU
+			var tz := float(int(parts[3])) * TAILLE_TUILE_RENDU
+			noeud.custom_aabb = AABB(
+				Vector3(tx - MARGE_TUILE_RENDU, AABB_TUILE_Y_BAS, tz - MARGE_TUILE_RENDU),
+				Vector3(TAILLE_TUILE_RENDU + 2.0 * MARGE_TUILE_RENDU, AABB_TUILE_Y_HAUTEUR,
+					TAILLE_TUILE_RENDU + 2.0 * MARGE_TUILE_RENDU))
 		if piece.get("materiau") != null:
 			noeud.material_override = piece.materiau
 		poser_distance_rendu(noeud, float(entree.get("distance_rendu", 0.0)))
@@ -1158,7 +1189,7 @@ func _poser_graine(id: String) -> void:
 		if not _rendus.has(espece):
 			return
 		_poses[id] = graine.position
-		_inscrire(_cle_de_lot(espece, "produit"), _rendus[espece].produit, id)
+		_inscrire(_cle_de_lot(espece, "produit", graine.position), _rendus[espece].produit, id)
 		return
 
 # Retire le corps d'un produit perdu OU ramasse. Le ramassage par les unites
@@ -1220,7 +1251,7 @@ func _bascule_rendu() -> void:
 		doit[id] = true
 		# RENDU : inscrit dans le bon lot si absent ou dans un autre lot
 		# (changement de stade -> changement de lot).
-		var cle_lot := _cle_de_lot(espece, str(numero))
+		var cle_lot := _cle_de_lot(espece, str(numero), plante.position)
 		if String(_lot_de.get(id, "")) != cle_lot:
 			_radier(id)
 			_poses[id] = plante.position
@@ -1269,7 +1300,7 @@ func _reconstruire_occludeur_arbres() -> void:
 	var base := 0
 	for cle in _lots:
 		var parts := String(cle).split("#")
-		if parts.size() != 2:
+		if parts.size() < 2:
 			continue
 		var espece := String(parts[0])
 		if not _types.has(espece):
