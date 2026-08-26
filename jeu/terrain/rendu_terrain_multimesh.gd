@@ -162,6 +162,11 @@ func _creer_tuile(tuile: Vector2i) -> void:
 
 	# forme (item) -> Array[Transform3D] des cellules de cette forme.
 	var par_forme: Dictionary = {}
+	# HAUTEUR REELLE DE LA TUILE, suivie au fil des poses : l'AABB s'y serre pour
+	# que le frustum culling ecarte les tuiles hors champ. Un AABB haut de toutes
+	# les couches possibles ne se ferait jamais culler.
+	var couche_min := couche_base + CarteTerrain.COUCHES_MAXIMALES
+	var couche_max := couche_base
 
 	for lx in range(taille):
 		for lz in range(taille):
@@ -205,10 +210,12 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				if not par_forme.has(item):
 					par_forme[item] = [] as Array
 				par_forme[item].append(t)
+				couche_min = mini(couche_min, couche)
+				couche_max = maxi(couche_max, couche)
 
 	var noeuds: Array = []
 	for item in par_forme.keys():
-		var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_base, taille, cote)
+		var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote)
 		if mmi != null:
 			add_child(mmi)
 			noeuds.append(mmi)
@@ -218,7 +225,7 @@ func _creer_tuile(tuile: Vector2i) -> void:
 # instance par transform. `custom_aabb` serre a la boite de la tuile pour le
 # frustum culling. Rend null si la forme n'a pas de maillage (ex. limite).
 func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
-		couche_base: int, taille: int, cote: float) -> MultiMeshInstance3D:
+		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
 	var mesh := mesh_library.get_item_mesh(item)
 	if mesh == null:
 		return null
@@ -231,15 +238,17 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	# BOITE SERREE A LA TUILE, en coordonnees monde (ce noeud est a l'origine).
-	# Hauteur = toutes les couches representables, plus une marge d'une cellule.
-	var couches := CarteTerrain.COUCHES_MAXIMALES
+	# Hauteur = la plage REELLE des couches posees dans cette tuile, plus une
+	# marge d'une cellule pour le debord du mesh. Serree, elle laisse le frustum
+	# culling ecarter la tuile hors champ ; haute de toutes les couches, jamais.
+	var hauteur_couches := couche_max - couche_min + 1
 	var pos_aabb := Vector3(
 		float(origine_col.x) * cote - cote,
-		float(couche_base) * cote - cote,
+		float(couche_min) * cote - cote,
 		float(origine_col.y) * cote - cote)
 	var taille_aabb := Vector3(
 		float(taille) * cote + 2.0 * cote,
-		float(couches) * cote + 2.0 * cote,
+		float(hauteur_couches) * cote + 2.0 * cote,
 		float(taille) * cote + 2.0 * cote)
 	mmi.custom_aabb = AABB(pos_aabb, taille_aabb)
 	return mmi
