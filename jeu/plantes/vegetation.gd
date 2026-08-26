@@ -758,24 +758,31 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	# poste de cout une fois l'ombre passee en signal.
 	var prises := colonnes_prises(etat, config)
 
-	# 4. la production. Le compteur est plafonne a un intervalle : sans ce plafond,
-	# une plante longtemps bloquee par son plafond de produits en relacherait
-	# plusieurs d'affilee des qu'une place se libere.
-	# LES FERTILES ET LES GESTANTS DE CE TICK, ramasses pendant cette passe --
-	# deja post-purge des mortes (§2b), deja en ordre. §5 n'itere que les
-	# fertiles, §6 et §7 que les gestants : un stade ni fertile ni en gestation
-	# ne coute plus un continue par boucle de reproduction.
+	# CLASSIFICATION EN UNE PASSE, post-purge des mortes (§2b) et en ordre : qui
+	# PRODUIT, qui se REPRODUIT, qui GESTATE. Les boucles §4/§5/§6/§7 n'iterent
+	# ensuite que leur sous-ensemble, jamais toute la population -- un stade sans
+	# role dans un cycle ne coute plus un continue par boucle. L'ordre des
+	# plantes est conserve, donc l'ordre de consommation du RNG aussi.
+	var producteurs: Array = []
 	var fertiles: Array = []
 	var gestants: Array = []
-	var decalages_depot := anneau(1, int(config.rayon_depot_cellules))
 	for plante in encore:
-		var type_prod := type_de(plante, types)
-		if type_prod.is_empty():
+		var type_cl := type_de(plante, types)
+		if type_cl.is_empty():
 			continue
 		if plante.proprietes.has("gestation"):
 			gestants.append(plante)
-		elif stade_fertile(plante, type_prod):
+		elif stade_fertile(plante, type_cl):
 			fertiles.append(plante)
+		if intervalle_de_production(plante, type_cl) != INF:
+			producteurs.append(plante)
+
+	# 4. la production. Le compteur est plafonne a un intervalle : sans ce plafond,
+	# une plante longtemps bloquee par son plafond de produits en relacherait
+	# plusieurs d'affilee des qu'une place se libere.
+	var decalages_depot := anneau(1, int(config.rayon_depot_cellules))
+	for plante in producteurs:
+		var type_prod := type_de(plante, types)
 		var intervalle := intervalle_de_production(plante, type_prod)
 		var compteur := float(plante.proprietes.get("compteur_production", 0.0)) + delta
 		if intervalle == INF:
