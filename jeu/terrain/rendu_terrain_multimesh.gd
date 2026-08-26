@@ -71,6 +71,16 @@ var _pas_tuiles: int = 1
 # cellules.
 var _regle: GridMap
 
+# LES SIX FACES D'UN CUBE : la normale (vers le vide) et la rotation qui oriente
+# le quad vers elle. Un cube n'est PAS rendu plein : il ne pose qu'un quad par
+# face exposee (voisin vide). Une face collee a un voisin plein ne se voit
+# jamais et n'existe pas dans le rendu -- c'est le vrai economie de triangles.
+var _faces: Array = []
+# item -> PlaneMesh (avec le materiau du cube) pour les formes CUBIQUES. Une
+# forme non-cube (rampe, cylindre, sphere) n'y figure pas : elle garde son mesh
+# complet, instancie tel quel -- le face culling n'a de sens que pour un cube.
+var _quad_par_item: Dictionary = {}
+
 func _ready() -> void:
 	if carte == null:
 		push_error("rendu_terrain_multimesh sans carte")
@@ -88,7 +98,37 @@ func _ready() -> void:
 	_regle.cell_size = Vector3(cote, cote, cote)
 	_regle.visible = false
 	add_child(_regle)
+	# Les six orientations de face : le quad (PlaneMesh, normale +Y) tourne pour
+	# pointer sa normale vers le vide.
+	_faces = [
+		{"n": Vector3(0, 1, 0), "b": Basis()},
+		{"n": Vector3(0, -1, 0), "b": Basis(Vector3(1, 0, 0), PI)},
+		{"n": Vector3(1, 0, 0), "b": Basis(Vector3(0, 0, 1), -PI / 2.0)},
+		{"n": Vector3(-1, 0, 0), "b": Basis(Vector3(0, 0, 1), PI / 2.0)},
+		{"n": Vector3(0, 0, 1), "b": Basis(Vector3(1, 0, 0), PI / 2.0)},
+		{"n": Vector3(0, 0, -1), "b": Basis(Vector3(1, 0, 0), -PI / 2.0)},
+	]
+	_preparer_quads(cote)
 	_rafraichir_vers(_centre_tuile_observateur())
+
+# UN QUAD PAR FORME CUBIQUE. Chaque cube (BoxMesh) sera rendu face par face au
+# lieu d'un cube plein. Le quad porte le materiau du cube, en DOUBLE FACE pour
+# ne jamais laisser de trou si une face etait orientee a l'envers.
+func _preparer_quads(cote: float) -> void:
+	for item in mesh_library.get_item_list():
+		var mesh := mesh_library.get_item_mesh(item)
+		if not (mesh is BoxMesh):
+			continue
+		var quad := PlaneMesh.new()
+		quad.size = Vector2(cote, cote)
+		var mat := (mesh as BoxMesh).material
+		if mat is BaseMaterial3D:
+			var mat2 := (mat as BaseMaterial3D).duplicate() as BaseMaterial3D
+			mat2.cull_mode = BaseMaterial3D.CULL_DISABLED
+			quad.material = mat2
+		elif mat != null:
+			quad.material = mat
+		_quad_par_item[item] = quad
 
 func _process(_delta: float) -> void:
 	var centre := _centre_tuile_observateur()
@@ -204,18 +244,33 @@ func _creer_tuile(tuile: Vector2i) -> void:
 					orientation = CarteTerrain.orientation_du_code(code)
 				if item == ITEM_LIMITE:
 					continue
-				# POSITION, ORIENTATION ET CALAGE PAR LES CONVERSIONS NATIVES DU
-				# GRIDMAP, jamais calcules a la main : `map_to_local` pour le centre
-				# de la cellule, `get_basis_with_orthogonal_index` pour la rotation,
-				# `get_item_mesh_transform` pour le calage propre de la forme.
-				# GENERIQUE : toute forme future orientee tombe juste sans une ligne
-				# de plus.
+				# Position du centre de la cellule par la conversion native.
 				var pos := _regle.map_to_local(cellule)
-				var base := _regle.get_basis_with_orthogonal_index(orientation)
-				var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
-				if not par_forme.has(item):
-					par_forme[item] = [] as Array
-				par_forme[item].append(t)
+				if _quad_par_item.has(item):
+					# CUBE : un quad par face exposee. Une face n'est CACHEE que si le
+					# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
+					# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
+					# cellule, laisse la face visible -- sinon un trou apparait.
+					if not _voisin_couvre(col, couche + 1, bits, rang + 1):
+						_ajouter_face(par_forme, item, pos, 0, cote)
+					if not _voisin_couvre(col, couche - 1, bits, rang - 1):
+						_ajouter_face(par_forme, item, pos, 1, cote)
+					if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
+						_ajouter_face(par_forme, item, pos, 2, cote)
+					if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
+						_ajouter_face(par_forme, item, pos, 3, cote)
+					if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
+						_ajouter_face(par_forme, item, pos, 4, cote)
+					if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
+						_ajouter_face(par_forme, item, pos, 5, cote)
+				else:
+					# FORME NON-CUBE (rampe, cylindre, sphere) : mesh complet, orientee
+					# par les conversions natives du GridMap.
+					var base := _regle.get_basis_with_orthogonal_index(orientation)
+					var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
+					if not par_forme.has(item):
+						par_forme[item] = [] as Array
+					par_forme[item].append(t)
 				couche_min = mini(couche_min, couche)
 				couche_max = maxi(couche_max, couche)
 				if couche > sommet_base:
@@ -235,12 +290,37 @@ func _creer_tuile(tuile: Vector2i) -> void:
 		noeuds.append(occl)
 	_tuiles[tuile] = noeuds
 
-# UN MultiMeshInstance3D pour une forme : le mesh vient de la bibliotheque, une
-# instance par transform. `custom_aabb` serre a la boite de la tuile pour le
-# frustum culling. Rend null si la forme n'a pas de maillage (ex. limite).
+# LE VOISIN COUVRE-T-IL LA FACE ? Vrai seulement s'il est PLEIN a cette couche ET
+# que c'est un CUBE (il remplit sa cellule entiere). Une rampe, un cylindre, une
+# sphere sont "pleins" au sens du masque mais laissent un vide -- ils ne couvrent
+# pas, la face du cube derriere reste visible. Hors des couches representables,
+# aucun voisin : la face est exposee.
+func _voisin_couvre(col: Vector2i, couche: int, masque: int, rang: int) -> bool:
+	if rang < 0 or rang >= CarteTerrain.COUCHES_MAXIMALES:
+		return false
+	if (masque & (1 << rang)) == 0:
+		return false
+	return _quad_par_item.has(carte.item_de(Vector3i(col.x, couche, col.y)))
+
+# Ajoute une instance de quad pour la face `i` d'un cube centre en `centre` :
+# translation vers le centre de la face (normale x demi-cote) et rotation qui
+# oriente le quad vers le vide.
+func _ajouter_face(par_forme: Dictionary, item: int, centre: Vector3, i: int, cote: float) -> void:
+	var f: Dictionary = _faces[i]
+	var t := Transform3D(f.b, centre + (f.n as Vector3) * (cote * 0.5))
+	if not par_forme.has(item):
+		par_forme[item] = [] as Array
+	par_forme[item].append(t)
+
+# UN MultiMeshInstance3D pour une forme. Le mesh est le QUAD de la forme si elle
+# est cubique (rendu face par face), sinon le mesh complet de la bibliotheque.
+# `custom_aabb` serre a la boite de la tuile pour le frustum culling. Rend null
+# si la forme n'a aucun maillage (ex. limite).
 func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
-	var mesh := mesh_library.get_item_mesh(item)
+	var mesh: Mesh = _quad_par_item.get(item, null)
+	if mesh == null:
+		mesh = mesh_library.get_item_mesh(item)
 	if mesh == null:
 		return null
 	var mm := MultiMesh.new()
