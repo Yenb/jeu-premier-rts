@@ -87,11 +87,14 @@ avec les entités actives devient floue et la règle absolue se dilue.
 
 **Problème posé aujourd'hui.** Le rayon rendu des entités (`rayon_rendu`
 dans `manager_proto.gd`) est aligné sur le rayon terrain streamé
-(`rayon_cellules` × `cote` dans `terrain_visible.gd`) pour éviter que
-des entités flottent dans le vide sans sol visuel sous elles. À
-rayon_cellules=120 (cote=2), le terrain visuel monte à 240 m. Au-delà,
-il faudrait un LOD terrain (mesh grossier, textures basse résolution)
-pour continuer d'afficher un sol sans multiplier les cellules.
+(`rayon_cellules` × `cote` dans `rendu_terrain_multimesh.gd`) pour éviter
+que des entités flottent dans le vide sans sol visuel sous elles. À
+rayon_cellules=120 (cote=2), le terrain visuel monte à 240 m.
+
+**Déjà en place :** un LOD PAR DISTANCE — `distance_rendu_metres` /
+`visibility_range_end` sur `rendu_terrain_multimesh.gd` — cesse de dessiner
+une tuile au-delà d'un seuil. Ce qui reste à trancher, c'est un LOD de
+DÉTAIL (mesh grossier au loin plutôt que simplement caché).
 
 **Non tranché.** Le format du LOD (heightmap, mesh unique à faible
 polycount, tuiles à plusieurs niveaux) n'est pas décidé. Le

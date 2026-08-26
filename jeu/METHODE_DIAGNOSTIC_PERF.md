@@ -100,16 +100,15 @@ Loguer chaque frame → repérer un pic isolé.
 
 ### PIÈGES CONCRETS DOCUMENTÉS
 
-- **MultiMeshInstance3D ≠ GridMap** sur les mêmes meshes. Shading et
-  arêtes diffèrent visuellement, même avec `mesh_library` partagée
-  et transforms alignées. Un mesh utilisé dans un MMI ne rend PAS
-  identique au même mesh utilisé par un GridMap. Voir
-  `PROTOCOLE_MULTIMESH.md` § chantier 2026-08-23.
 - **`vertex_color_is_srgb = true` par défaut** en Godot 4 : les
   `Color()` littérales GDScript sont converties comme si sRGB →
   linéaire pour le shading, aboutit à un rendu quasi noir. Passer
-  à `false` corrige, MAIS le rendu reste différent d'un GridMap
-  sur le même mesh.
+  à `false` corrige. Piège des approches à VERTEX COLORS ; le rendu
+  terrain actuel (`rendu_terrain_multimesh.gd`) l'évite en dupliquant
+  le matériau de chaque forme, sans vertex color. (L'idée « un MMI rend
+  différemment d'un GridMap » ne valait que pour ces approches
+  procédurales : un MultiMesh de vrais meshes rend identique — le terrain
+  visible est aujourd'hui rendu en MultiMesh.)
 - **`create_trimesh_collision()` crée bien le StaticBody3D** mais
   la collision peut ne pas retenir le joueur (constaté sur un
   MeshInstance3D procédural, cause non identifiée). Ne pas retirer

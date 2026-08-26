@@ -33,7 +33,7 @@ Ce qu'il ne contient pas, et où c'est :
   SIMULATION          vegetation.gd — aucun nœud, aucun rendu, testable headless
        │              rend un RAPPORT par tick ; ne connaît ni GridMap ni .glb
        ▼
-  COUCHE VISIBLE      terrain_visible.gd · couvert.gd · objets_visibles.gd
+  COUCHE VISIBLE      rendu_terrain_multimesh.gd · couvert.gd · objets_visibles.gd
        │              fabriquée autour de l'observateur, libérée derrière lui
        ▼
   ÉCRAN
@@ -88,9 +88,11 @@ bloc pas encore inventé.
 
 - lire : `carte_terrain.gd:sommet`, `est_pleine`, `hauteur_du_sol`, `masque` — temps constant
 - écrire : `poser_masque`, `sculpter`, `poser_cellule`, `retirer_cellule`
-- la bibliothèque `bloc.tres` porte trois items : le bloc plein, la **limite**
-  (collisionne sans se dessiner), la **rampe** (prisme, collision qui épouse ses
-  six sommets, demi-tour qui inverse la montée)
+- la bibliothèque `bloc.tres` porte neuf items : le bloc plein, quatre blocs
+  colorés (rouge, noir, bleu, vert), le **cylindre** et la **sphère** (vraies
+  primitives), la **limite** (collisionne sans se dessiner), la **rampe** (prisme,
+  collision qui épouse ses six sommets, demi-tour qui inverse la montée). Ajouter
+  une forme = un item : `terrain/AJOUTER_UNE_FORME.md`
 - la ceinture : `murs_limite_boite.gd` (StaticBody3D + 4 BoxShape3D) la pose au lancement depuis la carte ;
   `generer_murs.gd` l'écrit en dur dans une scène
 - index fichier par fichier, gestes de sculpture, tests : `MANUEL_CARTE.md`
@@ -300,7 +302,9 @@ contenu.
 
 `demi_cote` (l'emprise, portée par la carte elle-même), `couche_base`,
 `couches_pleines`, `cote` sur `carte_terrain.gd` ; `rayon_cellules` et
-`pas_de_rafraichissement` sur `terrain_visible.gd` — le rayon décide seul du coût.
+`pas_de_rafraichissement` sur `terrain_visible.gd` bornent la COLLISION proche ;
+le RENDU lointain a son propre `rayon_cellules`, `taille_tuile_cellules` et
+`distance_rendu_metres` sur `rendu_terrain_multimesh.gd`.
 
 ### Sur les objets et le personnage
 

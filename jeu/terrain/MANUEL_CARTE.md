@@ -94,7 +94,8 @@ code : coût par colonne sculptée, sol sous le personnage.
 |---|---|
 | `carte_terrain.gd` | LA DONNÉE : emprise, sommet de chaque colonne, `hauteur_du_sol`. Aucun nœud |
 | `ecrire_carte_terrain.gd` | outil d'échafaudage : écrit une carte vierge (`emprise=`, `vers=`, `forcer`) |
-| `terrain_visible.gd` | rend un disque de terrain autour de l'observateur, en jeu |
+| `terrain_visible.gd` | porte la COLLISION du terrain proche (disque autour de l'observateur) ; NE DESSINE PLUS (bibliothèque `sans_mesh`) |
+| `rendu_terrain_multimesh.gd` | DESSINE le terrain lointain : MultiMesh par forme, face culling, occlusion, LOD (voir `jeu/PROTOCOLE_MULTIMESH.md`) |
 | `outil_fenetre.gd` | `charger` / `enregistrer` / `vider` / déplacement automatique |
 | `repere_fenetre.gd` | la dalle orange : curseur déplaçable, écrit le centre de la fenêtre |
 | `maquette.gd` | la vue d'ensemble, éditeur seulement |
