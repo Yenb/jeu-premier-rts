@@ -160,8 +160,7 @@ func _verifier_peuplement() -> void:
 	peuplement.set("rayon_dispersion", 15.0)
 	peuplement.set("seed_rng", 99)
 	peuplement.set("budget_par_frame", 30)
-	var nombres: Array[int] = [0, 0, 0, 80, 0, 0]
-	peuplement.set("nombres_par_stade", nombres)
+	peuplement.set("nombre_stade_4", 80)
 	couvert.add_child(peuplement)
 
 	_racine.add_child(grille)

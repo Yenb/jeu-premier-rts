@@ -28,10 +28,22 @@ extends Node3D
 @export var espece: String = ""
 @export var rayon_dispersion: float = 30.0
 @export var seed_rng: int = 20260824
-# COMBIEN D'INDIVIDUS PAR STADE. L'index i donne le nombre au stade i+1 :
-# `[0, 0, 0, 50, 0, 0]` = 50 adultes au stade 4. Les entrees au-dela du
-# dernier stade de l'espece sont ignorees en signalant en console.
-@export var nombres_par_stade: Array[int] = [0, 0, 0, 0, 0, 0]
+# COMBIEN D'INDIVIDUS PAR STADE, un champ nomme par stade au lieu d'un tableau
+# opaque indexe. Le stade 1 est le PLUS JEUNE de l'espece, le stade 6 le PLUS
+# VIEUX. Les NOMS des stades (enfant, adulte, vieux...) vivent sur le noeud de
+# l'espece, pas ici : ce noeud est generique et ne connait aucune espece. Un
+# stade au-dela du dernier de l'espece est ignore (signale en console).
+@export_group("Nombre d'individus par stade")
+## Le plus jeune stade de l'espece.
+@export var nombre_stade_1: int = 0
+@export var nombre_stade_2: int = 0
+@export var nombre_stade_3: int = 0
+@export var nombre_stade_4: int = 0
+@export var nombre_stade_5: int = 0
+## Le plus vieux stade de l'espece.
+@export var nombre_stade_6: int = 0
+
+@export_group("Etalement")
 
 # COMBIEN DE PLANTES FABRIQUEES PAR TICK (etalement du spawn). Sans ce
 # budget, N plantes fabriquees d'un coup donnent un pic ~650 ms a N=1000
@@ -45,12 +57,18 @@ extends Node3D
 # progressive au lieu d'un pop-in bloc. Independant du budget frame.
 @export var duree_dispersion_apparition: float = 3.0
 
+# LES NOMBRES, rassembles en tableau indexe par stade (index 0 = stade 1) --
+# c'est la SEULE chose que couvert.gd lit, il ne connait jamais les champs.
+func nombres() -> Array[int]:
+	return [nombre_stade_1, nombre_stade_2, nombre_stade_3,
+		nombre_stade_4, nombre_stade_5, nombre_stade_6]
+
 func _get_configuration_warnings() -> PackedStringArray:
 	var alertes := PackedStringArray()
 	if espece == "":
 		alertes.append("Ce peuplement ne nomme aucune espece : le Couvert l'ignorera.")
 	var total := 0
-	for n in nombres_par_stade:
+	for n in nombres():
 		total += int(n)
 	if total <= 0:
 		alertes.append("Ce peuplement ne declare aucun individu : il ne pose rien.")

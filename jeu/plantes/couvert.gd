@@ -559,7 +559,7 @@ func _expander_peuplement(noeud: Node3D, _semis_ignores: Array) -> void:
 		return
 	var type: Dictionary = _types[espece]
 	var stades: Array = type.stades
-	var nombres: Array = noeud.get("nombres_par_stade")
+	var nombres: Array = noeud.call("nombres")
 	var rayon: float = float(noeud.get("rayon_dispersion"))
 	var seed_rng: int = int(noeud.get("seed_rng"))
 	var duree_dispersion: float = float(noeud.get("duree_dispersion_apparition"))
