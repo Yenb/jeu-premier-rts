@@ -245,6 +245,15 @@ var _file_peuplement: Array = []
 # NOTIFICATION_PREDELETE.
 var _shapes_rid: Dictionary = {}
 
+# L'OCCLUDEUR DES CANOPEES. Un seul OccluderInstance3D pour toutes les canopees
+# d'arbres actuellement rendues : ce qui est entierement derriere elles n'est
+# plus dessine. Il ne se reconstruit QUE quand la population rendue change
+# (naissance, mort, changement de stade, entree/sortie du rayon) -- signalee par
+# `_occl_dirty`. Les arbres sont statiques entre deux changements ; aucune
+# reconstruction par frame, meme principe que l'occludeur du terrain.
+var _occl_arbres: OccluderInstance3D = null
+var _occl_dirty := false
+
 # Compteurs d'instrumentation (audit performance), remis a zero par
 # prelever_stats(). Passifs : aucune logique de simulation n'en depend.
 var _stat_body_create := 0
@@ -1045,6 +1054,7 @@ func _inscrire(cle: String, entree: Dictionary, id: String) -> void:
 	(lot.index as Dictionary)[id] = rang
 	_lot_de[id] = cle
 	_ecrire_lot(lot, rang)
+	_occl_dirty = true
 
 func _radier(id: String) -> void:
 	if not _lot_de.has(id):
@@ -1062,6 +1072,7 @@ func _radier(id: String) -> void:
 	(lot.ids as Array).resize(dernier)
 	(lot.poses as Array).resize(dernier)
 	_ecrire_lot(lot, rang if rang != dernier else -1)
+	_occl_dirty = true
 
 # Ecrit le lot dans ses MultiMesh. `rang` designe la seule ligne qui a bouge, -1
 # n'en redresse aucune.
@@ -1237,3 +1248,68 @@ func _bascule_rendu() -> void:
 			_radier(id)
 			_liberer_corps(id)
 			_poses.erase(id)
+	# L'OCCLUDEUR NE SE REFAIT QUE SI LA POPULATION RENDUE A CHANGE ce tour
+	# (inscription, radiation, changement de stade l'ont marque). Immobile en
+	# foret etablie, rien ne change et rien ne se reconstruit.
+	if _occl_dirty:
+		_reconstruire_occludeur_arbres()
+		_occl_dirty = false
+
+# REFAIT L'OCCLUDEUR DES CANOPEES a partir des lots actuellement rendus. Une boite
+# par canopee d'arbre (espece a tronc) ; l'herbe, sans canopee opaque, n'occulte
+# rien et n'y entre pas. Sommets en coordonnees monde : ce noeud vit dans le
+# repere local du GridMap, a l'identite (verifie au _ready), donc local = monde.
+func _reconstruire_occludeur_arbres() -> void:
+	if _occl_arbres != null and is_instance_valid(_occl_arbres):
+		_occl_arbres.queue_free()
+		_occl_arbres = null
+	var sommets := PackedVector3Array()
+	var indices := PackedInt32Array()
+	var faces := PackedInt32Array([
+		0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4,
+		1, 2, 6, 1, 6, 5, 2, 3, 7, 2, 7, 6, 3, 0, 4, 3, 4, 7])
+	var base := 0
+	for cle in _lots:
+		var parts := String(cle).split("#")
+		if parts.size() != 2:
+			continue
+		var espece := String(parts[0])
+		if not _types.has(espece):
+			continue
+		var type: Dictionary = _types[espece]
+		if float(type.get("rayon_collision", 0.0)) <= 0.0:
+			continue
+		var numero := int(parts[1])
+		var stades: Array = type.stades
+		if numero < 1 or numero > stades.size():
+			continue
+		var h := float((stades[numero - 1] as Dictionary).get("stature", 0.0))
+		if h <= 0.0:
+			continue
+		# La canopee de maillage_arbre va de y=h*0.3 a y=h, rayon ~h*0.23 : la
+		# boite s'y cale, centre a h*0.65.
+		var dx := h * 0.23
+		var dy := h * 0.35
+		var cy := h * 0.65
+		var lot: Dictionary = _lots[cle]
+		for p in (lot.poses as Array):
+			var c := (p as Vector3) + Vector3(0.0, cy, 0.0)
+			sommets.append(c + Vector3(-dx, -dy, -dx))
+			sommets.append(c + Vector3(dx, -dy, -dx))
+			sommets.append(c + Vector3(dx, -dy, dx))
+			sommets.append(c + Vector3(-dx, -dy, dx))
+			sommets.append(c + Vector3(-dx, dy, -dx))
+			sommets.append(c + Vector3(dx, dy, -dx))
+			sommets.append(c + Vector3(dx, dy, dx))
+			sommets.append(c + Vector3(-dx, dy, dx))
+			for idx in faces:
+				indices.append(base + idx)
+			base += 8
+	if sommets.is_empty():
+		return
+	var occ := ArrayOccluder3D.new()
+	occ.set_arrays(sommets, indices)
+	var inst := OccluderInstance3D.new()
+	inst.occluder = occ
+	add_child(inst)
+	_occl_arbres = inst
