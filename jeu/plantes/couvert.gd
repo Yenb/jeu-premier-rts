@@ -186,6 +186,12 @@ const PeuplementScript = preload("res://jeu/plantes/peuplement.gd")
 # chaque adulte fertile portait son StaticBody3D en permanence, partout.
 @export var rayon_collision_metres: float = 60.0
 
+# DE COMBIEN L'OBSERVATEUR DOIT S'ECARTER avant qu'on rescanne le voisinage pour
+# le rendu et la collision. Entre deux, la liste des arbres proches ne change pas
+# (la simulation est figee hors tick, le joueur bouge peu) -- rescanner a chaque
+# frame est du gaspillage. Le rescan a lieu aussi a chaque tick joue.
+@export var seuil_rescan_metres: float = 4.0
+
 # LE GROUPE OU CHERCHER L'OBSERVATEUR. Meme convention que manager_proto :
 # le noeud du joueur (ou de la camera) porte `groups=["observateur"]` dans sa
 # tscn. Absent -> aucun tronc n'est pose, tout est en donnee. Autrement dit,
@@ -253,6 +259,13 @@ var _shapes_rid: Dictionary = {}
 # reconstruction par frame, meme principe que l'occludeur du terrain.
 var _occl_arbres: OccluderInstance3D = null
 var _occl_dirty := false
+
+# THROTTLE DU SCAN DE BASCULE. `_bascule_rendu` fait une requete spatiale
+# (`choses_dans_rayon`) ; la relancer a chaque frame gaspille, car la liste des
+# arbres proches ne change qu'au tick (changement de stade) ou quand
+# l'observateur se deplace. On retient sa derniere position de scan.
+var _derniere_pos_bascule := Vector3.ZERO
+var _amorce_bascule := false
 
 # Compteurs d'instrumentation (audit performance), remis a zero par
 # prelever_stats(). Passifs : aucune logique de simulation n'en depend.
@@ -373,7 +386,24 @@ func _process(delta: float) -> void:
 	if joues >= ticks_max_par_image:
 		# Le retard restant est ABANDONNE -- voir ticks_max_par_image.
 		_accumulateur = 0.0
-	_bascule_rendu()
+	# LE SCAN NE SE RELANCE QU'AU TICK OU AU DEPLACEMENT. Voir _doit_basculer.
+	if _doit_basculer(joues):
+		_bascule_rendu()
+
+# Le scan spatial de _bascule_rendu ne se justifie qu'a deux moments : un tick a
+# ete joue (un stade a pu changer -> `joues > 0`), ou l'observateur s'est ecarte
+# de `seuil_rescan_metres` depuis le dernier scan (des arbres entrent ou sortent
+# du rayon). Entre les deux, la liste des arbres proches est identique et il n'y
+# a rien a refaire. Le tout premier passage scanne toujours (`_amorce_bascule`).
+func _doit_basculer(joues: int) -> bool:
+	if _observateur == null:
+		return false
+	if not _amorce_bascule:
+		_amorce_bascule = true
+		return true
+	if joues > 0:
+		return true
+	return _observateur.global_position.distance_to(_derniere_pos_bascule) >= seuil_rescan_metres
 
 # Consomme jusqu'a `budget` plantes de la file, les fabrique via
 # Vegetation.fabriquer_plante (age_initial preserve), les append a
@@ -1201,6 +1231,7 @@ func _bascule_rendu() -> void:
 	if _etat.is_empty():
 		return
 	var pos_obs: Vector3 = _observateur.global_position
+	_derniere_pos_bascule = pos_obs
 	var doit: Dictionary = {}
 	for entree in _etat.monde.choses_dans_rayon(pos_obs, rayon_collision_metres):
 		var plante: Dictionary = entree.chose
