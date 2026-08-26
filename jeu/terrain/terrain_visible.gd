@@ -1,93 +1,59 @@
 extends GridMap
 
-# LE DESSINATEUR de la carte de terrain, et rien d'autre. Il lit une
-# carte_terrain.gd et pose, dans SES propres cellules, les colonnes qui tombent
-# dans un rayon autour de l'observateur. Il ne decide rien du terrain : la carte
-# est la seule autorite sur ce qui est plein.
+# POSE LES CELLULES DE COLLISION du terrain proche autour de l'observateur. Il
+# lit une carte_terrain.gd et pose, dans ses propres cellules, les colonnes qui
+# tombent dans un rayon autour de l'observateur. La carte est la seule autorite
+# sur ce qui est plein ; ce noeud n'en decide rien.
 #
 # Entree : une carte (exportee), un rayon en cellules, un groupe ou trouver
 # l'observateur. Sortie : ses cellules, posees et effacees au fil des
 # deplacements.
 #
-# LE COMPTE DE CELLULES EST BORNE PAR LE RAYON, JAMAIS PAR LA CARTE. C'est la
-# seule raison d'etre de ce fichier : un GridMap qui porterait la carte entiere
-# coute 16,5 octets de scene et 86 octets de memoire par cellule, ce qui borne
-# l'emprise bien avant que le jeu ne le demande. Ici le cout suit r², et rien
-# d'autre -- doubler le rayon coute quatre fois, agrandir la carte coute zero.
+# IL NE DESSINE RIEN : sa bibliotheque finale est privee de ses maillages
+# (sans_mesh), les formes de collision restent. Le sol est dessine par le
+# TerrainStreame ; ce noeud ne sert qu'a porter le joueur.
+#
+# LE COMPTE DE CELLULES EST BORNE PAR LE RAYON, jamais par la carte : le cout
+# suit r². Un GridMap qui porterait la carte entiere bornerait l'emprise bien
+# avant que le jeu ne le demande.
 #
 # L'OBSERVATEUR SE TROUVE PAR GROUPE, jamais par un champ a remplir sur chaque
-# type : c'est la camera du joueur qui decide de ce qui se dessine, et aucun
-# objet du monde n'a besoin de savoir ou elle est. Sans observateur, le disque
-# se pose autour de l'origine et n'en bouge plus -- un cas neutre, pas une
-# panne.
+# type. Sans observateur, le disque se pose autour de l'origine -- cas neutre,
+# pas une panne.
 #
-# LE CALCUL EST HORS DE _process, tout entier en fonctions statiques : la boucle
-# d'images DECLENCHE, elle ne calcule jamais. Ce qui se verrouille sans moteur
-# de rendu ni clavier est exactement ce qui decide de ce qui est pose.
+# LE CALCUL EST HORS DE _process, en fonctions statiques : la boucle d'images
+# declenche, elle ne calcule jamais. Ce qui decide de la pose se verrouille sans
+# moteur de rendu ni clavier.
 #
-# RIEN N'EST SUPPOSE DE LA GEOMETRIE DE LA CELLULE : la colonne sous une
-# position se demande a local_to_map, jamais recalculee ici. Le centrage des
-# cellules est un reglage du noeud.
+# LA GEOMETRIE DE LA CELLULE N'EST PAS SUPPOSEE : la colonne sous une position se
+# demande a local_to_map. LA TAILLE DE LA CELLULE SE LIT SUR LA CARTE (`cote`),
+# jamais reglee ici -- sinon deux verites divergeraient, celle de la scene
+# gagnant en silence.
 #
-# LA TAILLE DE LA CELLULE SE LIT SUR LA CARTE, elle ne se regle pas ici. La
-# carte porte deja `cote` ; la reecrire dans la scene ferait deux vérités, et
-# celle de la scene gagnerait en silence -- un terrain dessine a la mauvaise
-# echelle, sur une carte qui dit autre chose, et aucune erreur nulle part.
+# IL REPREND LA BIBLIOTHEQUE DE JEU DE LA SCENE avant de poser : l'outil de
+# sculpture y laisse une bibliotheque sans collision, qui rendrait le sol
+# traversable en jeu. Ce que la scene transporte ne fait pas autorite.
 #
-# IL REPREND LA BIBLIOTHEQUE DE JEU AVANT DE DESSINER. La meme scene sert a
-# SCULPTER : l'outil de fenetre y pose alors une bibliotheque privee de ses
-# formes de collision, parce qu'un GridMap cree un corps physique par cellule et
-# que six cent mille corps coutent vingt-huit secondes. Enregistree ainsi, la
-# scene rend un SOL TRAVERSABLE en jeu -- les cellules se voient, rien ne les
-# arrete, et aucune erreur ne sort. Le terrain redemande donc au lancement celle
-# que l'outil a mise de cote. Meme regle que la taille de cellule : ce que la
-# scene transporte n'est pas ce qui fait autorite.
+# IL PREND LE TRAVAIL SCULPTE QUE LA SCENE PORTE, l'ecrit dans la carte, puis
+# efface et redessine : ce qui est dans le GridMap de la scene est du travail,
+# pas un residu. La grille part vide ensuite, et le compte redevient borne par
+# le seul rayon.
 #
-# IL PREND CE QUE LA SCENE PORTE AVANT DE L'EFFACER, et c'est ce qui rend le
-# terrain sculpte FIABLE. La meme scene sert a sculpter : ce que le GridMap
-# transporte est du TRAVAIL, pas un residu. L'effacer sans le lire perd tout ce
-# qui n'a pas transite par l'editeur -- et ce transit depend d'un _process
-# d'editeur, d'un script recharge, d'une fenetre chargee : quatre conditions
-# dont aucune ne se signale quand elle manque.
+# LE RAFRAICHISSEMENT A UN SEUIL (`pas_de_rafraichissement`) : le rayon garanti
+# est `rayon_cellules - pas_de_rafraichissement`. Pose et effacement partent dans
+# deux files (`_a_poser`, `_a_effacer`), drainees par `_process` a raison de
+# `colonnes_par_image`. `rafraichir()` reste synchrone : elle pose le premier
+# affichage, et c'est elle que verrouillent les tests.
 #
-# ON LE PREND, ON L'ECRIT DANS LA CARTE, PUIS on efface et on redessine. Le
-# GridMap de la scene cesse d'etre une impasse : ce qui y est sculpte et
-# enregistre avec la scene arrive dans le jeu, toujours, quel que soit ce qui a
-# tourne ou non dans l'editeur.
-#
-# ENSUITE SEULEMENT LA GRILLE PART VIDE : le compte de cellules redevient
-# independant de ce que la scene transporte, et ce qui tombe hors du disque du
-# joueur ne reste pas pose pour toujours.
-#
-# LE RAFRAICHISSEMENT A UN SEUIL. Sans lui, un observateur qui marche
-# recalculerait deux disques entiers a chaque image pour un ou deux pas de
-# grille de difference. Le seuil se paie en marge : le rayon reellement garanti
-# est `rayon_cellules - pas_de_rafraichissement`.
-#
-# CE QUE LE SEUIL DECLENCHE S'ETALE SUR PLUSIEURS IMAGES, EN JEU. MESURE
-# (test_terrain_visible.gd, _cout_au_rayon_de_jeu) : au rayon et au pas
-# reellement utilises, un seul seuil franchi coute 12,5 ms pour 796 colonnes
-# entrantes et sortantes -- les trois quarts d'une image a soixante par
-# seconde, POUR CHAQUE fois que l'observateur avance de huit metres. Pose et
-# effacement partent donc dans deux files d'attente (`_a_poser`,
-# `_a_effacer`), et `_process` n'en draine que `colonnes_par_image` a chaque
-# image. `rafraichir()` reste inchangee, entiere et synchrone -- c'est elle
-# que verrouillent les tests, et c'est elle que pose le PREMIER affichage : un
-# monde vide qui se remplit sur plusieurs images serait pire que le cout unique
-# du depart.
-#
-# UN SEUIL FRANCHI PENDANT QU'UNE FILE SE VIDE NE LA REDEMARRE PAS : il
-# AJUSTE les deux files a la nouvelle cible. Une colonne qui redevient visee
-# alors qu'elle attendait d'etre effacee sort de cette file sans qu'un seul
-# bloc n'ait bouge ; une colonne qui n'est plus visee alors qu'elle attendait
-# d'etre posee sort de l'autre file, tout aussi gratuitement. Repartir de zero
-# a chaque seuil franchi referait le travail deja fait ET le perdrait au
-# demi-tour suivant.
+# UN SEUIL FRANCHI PENDANT QU'UNE FILE SE VIDE NE LA REDEMARRE PAS : `_retargeter`
+# ajuste les deux files a la nouvelle cible. Une colonne qui redevient visee sort
+# de la file d'effacement, une colonne qui ne l'est plus sort de la file de pose,
+# sans qu'un bloc bouge.
 #
 # Regles tenues : positions en Vector3, jamais Vector2 -- une COLONNE est un
-# Vector2i, un index et pas une position, meme convention que
-# surface_terrain.gd. Aucun hasard. Aucun texte visible par le joueur. Aucun nom
-# de contenu. Rien de scripts/, data/ ni documents/ n'est lu ni ecrit.
+# Vector2i, un index et pas une position. Aucun hasard. Aucun texte visible par
+# le joueur. Aucun nom de contenu. Rien de scripts/, data/ ni documents/ n'est
+# lu ni ecrit.
 
 const Commun = preload("res://jeu/terrain/terrain_commun.gd")
 const Outil = preload("res://jeu/terrain/outil_fenetre.gd")
@@ -126,18 +92,11 @@ var _a_effacer: Dictionary = {}
 var _bloc := GridMap.INVALID_CELL_ITEM
 
 func _ready() -> void:
-	# RENDU GridMap RESTAURE. La ligne `visible = false` a ete retiree :
-	# le TerrainStreame ne couvre pas la zone 0..rayon_interne autour
-	# du joueur, donc sans le GridMap visible le sol proche est absent.
-	# Le GridMap rend ses 6 faces par cube (pas de HFC natif) sur le
-	# rayon 15 -- cout accepte pour avoir le sol beige sous les pieds.
-	# COLLISION GridMap NATIVE PRESERVEE. L'appel sans_collision a ete
-	# retire : create_trimesh_collision cree bien des StaticBody3D dans
-	# TerrainStreame (verifie : 113/113 MI ont un enfant StaticBody3D)
-	# mais le joueur tombe quand meme (mesure : Y=14.18 -> -22.8 en 2s).
-	# La collision native GridMap est donc le seul sol physique fiable
-	# aujourd'hui. Doublage assume (GridMap + trimesh multimesh) le temps
-	# de diagnostiquer pourquoi trimesh ne retient pas le joueur.
+	# CE GRIDMAP NE DESSINE RIEN : sa bibliotheque finale est privee de
+	# ses maillages (sans_mesh), les formes de collision restent. Il ne
+	# sert qu'a porter le joueur -- le TerrainStreame dessine le sol, y
+	# compris sous les pieds. La collision native GridMap est le seul sol
+	# physique fiable : celle du TerrainStreame ne retient pas le joueur.
 	_bloc = Commun.premier_bloc(self)
 	if carte == null:
 		push_error("terrain_visible sans carte : rien a dessiner")
@@ -165,6 +124,12 @@ func _ready() -> void:
 			print("terrain_visible : %d colonnes reprises de la scene et ecrites dans la carte" % prises)
 		clear()
 		print("terrain_visible : %d cellules transportees par la scene, reprises puis effacees" % transportees)
+	# LE RENDU EST COUPE, LA COLLISION RESTE. La bibliotheque finale est privee
+	# de ses maillages : chaque cellule posee cree sa forme de collision et ne
+	# dessine rien. Inconditionnel -- quelle que soit la source de la biblio,
+	# ce GridMap ne rend jamais.
+	mesh_library = sans_mesh(mesh_library)
+	_bloc = Commun.premier_bloc(self)
 	_rafraichir_vers(_centre_observateur())
 
 func _process(_delta: float) -> void:
@@ -303,6 +268,21 @@ static func poser_colonne(grille: GridMap, source: Resource, colonne: Vector2i, 
 		grille.set_cell_item(cellule, item, source.orientation_de(cellule))
 		posees += 1
 	return posees
+
+# LA MEME BIBLIOTHEQUE, privee de ses maillages. Formes de collision, noms et
+# navmesh sont conserves : le GridMap cree toujours sa collision par cellule et
+# ne dessine plus aucun triangle. Les identifiants d'items restent les memes --
+# ce que la carte designe continue de designer le meme bloc.
+static func sans_mesh(source: MeshLibrary) -> MeshLibrary:
+	var allegee := MeshLibrary.new()
+	for identifiant in source.get_item_list():
+		allegee.create_item(identifiant)
+		allegee.set_item_name(identifiant, source.get_item_name(identifiant))
+		allegee.set_item_shapes(identifiant, source.get_item_shapes(identifiant))
+		var navmesh := source.get_item_navigation_mesh(identifiant)
+		if navmesh != null:
+			allegee.set_item_navigation_mesh(identifiant, navmesh)
+	return allegee
 
 static func effacer_colonne(grille: GridMap, source: Resource, colonne: Vector2i) -> int:
 	var effacees := 0
