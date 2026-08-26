@@ -49,9 +49,14 @@ const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 @export var mesh_library: MeshLibrary
 @export var rayon_cellules: int = 120
 @export var rayon_interne_cellules: int = 0
-@export var taille_tuile_cellules: int = 20
+@export var taille_tuile_cellules: int = 10
 @export var pas_de_rafraichissement: int = 4
 @export var groupe_observateur: StringName = &"observateur"
+
+# DISTANCE DE RENDU (LOD par distance). Au-dela, une tuile n'est plus dessinee --
+# le lointain n'a pas besoin d'etre net. Posee sur chaque MultiMeshInstance3D via
+# `visibility_range_end`. A 0, aucune limite : tout se dessine jusqu'au rayon.
+@export var distance_rendu_metres: float = 0.0
 
 # La forme "limite" ne porte aucun maillage (mur invisible) : jamais rendue.
 const ITEM_LIMITE := 1
@@ -345,6 +350,10 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		float(hauteur_couches) * cote + 2.0 * cote,
 		float(taille) * cote + 2.0 * cote)
 	mmi.custom_aabb = AABB(pos_aabb, taille_aabb)
+	# LOD PAR DISTANCE : au-dela de `distance_rendu_metres`, Godot cesse de dessiner
+	# cette tuile. 0 = pas de limite.
+	if distance_rendu_metres > 0.0:
+		mmi.visibility_range_end = distance_rendu_metres
 	return mmi
 
 # UN OccluderInstance3D pour une liste de cubes (leurs centres). Chaque cube est
