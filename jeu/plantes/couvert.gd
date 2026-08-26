@@ -435,10 +435,17 @@ func _consommer_file_peuplement() -> void:
 		nouvelles.append(plante)
 		foyers.append(plante.position)
 	if not nouvelles.is_empty():
-		# OMBRE des nouvelles (utilise_ombre) + pose du rendu.
+		# OMBRE des nouvelles (utilise_ombre). LE RENDU N'EST PAS POSE ICI :
+		# c'est _bascule_rendu, et lui seul, qui inscrit une plante dans un lot
+		# -- et SEULEMENT si elle est dans le rayon de l'observateur. Poser le
+		# rendu ici inscrivait chaque nouvelle plante quelle que soit sa
+		# distance ; avec un peuplement disperse sur des kilometres, budget
+		# arbres par frame apparaissaient au loin a chaque frame et n'etaient
+		# radies qu'au tick suivant -- un scintillement d'arbres lointains
+		# pendant tout le peuplement. Meme regle que les naissances de
+		# reproduction, qui ne posent deja aucun rendu (voir _appliquer).
 		for plante in nouvelles:
 			Vegetation.rafraichir_plante(plante, _etat.monde, _config, _releve)
-			_poser_plante(plante)
 		# COMPTE DE VOISINS : maintenance incrementale du framework, cote
 		# NAISSANCE uniquement (aucune mort dans un batch de peuplement). Chaque
 		# nouvelle pose son propre compte, chaque existante voisine prend +1.
@@ -749,6 +756,17 @@ func _corps_arbre(hauteur: float, couleur: Array) -> Dictionary:
 # dans un seul ArrayMesh, deux materiaux. Les primitives de Godot sont
 # fermees et propres -- pas un sommet a fabriquer a la main.
 #
+# LE COMPTE DE SEGMENTS EST BAS ET C'EST OBLIGATOIRE. Le defaut d'un
+# CylinderMesh de Godot est radial_segments=64, rings=4 : ~1000 triangles
+# par arbre. Le maillage est PARTAGE par un MultiMesh, donc chaque arbre
+# rendu paie ces triangles a l'ecran -- a quelques milliers d'arbres, le
+# GPU dessine plusieurs MILLIONS de triangles pour des silhouettes qu'on
+# voit de loin. A radial_segments=6, rings=1, un arbre pese ~36 triangles
+# et la silhouette tronc + cone reste la meme. Un tronc a 6 cotes suffit :
+# monter ce chiffre n'ajoute que du cout, jamais de la lecture a distance.
+const SEGMENTS_ARBRE := 6
+const ANNEAUX_ARBRE := 1
+
 # TRONC : 30 % de la hauteur, rayon = 6 %. Base au sol (origine du
 # CylinderMesh au centre, decale de h/2 vers le haut).
 # CANOPEE : 70 % restants, rayon a la base = 23 %, pointe en haut.
@@ -766,6 +784,8 @@ static func maillage_arbre(hauteur: float, couleur: Array) -> ArrayMesh:
 	tronc.top_radius = r_tronc
 	tronc.bottom_radius = r_tronc
 	tronc.height = h_tronc
+	tronc.radial_segments = SEGMENTS_ARBRE
+	tronc.rings = ANNEAUX_ARBRE
 	var arrays_tronc := tronc.surface_get_arrays(0)
 	_decaler_vertices(arrays_tronc, h_tronc * 0.5)
 	var mat_tronc := StandardMaterial3D.new()
@@ -777,6 +797,8 @@ static func maillage_arbre(hauteur: float, couleur: Array) -> ArrayMesh:
 	canopee.top_radius = 0.0
 	canopee.bottom_radius = r_canopee
 	canopee.height = h_canopee
+	canopee.radial_segments = SEGMENTS_ARBRE
+	canopee.rings = ANNEAUX_ARBRE
 	var arrays_canopee := canopee.surface_get_arrays(0)
 	_decaler_vertices(arrays_canopee, h_tronc + h_canopee * 0.5)
 	var mat_canopee := StandardMaterial3D.new()

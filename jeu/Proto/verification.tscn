@@ -57,7 +57,6 @@ rayon_cellules = 15
 metadata/_editor_floor_ = Vector3(0, 10, 0)
 
 [node name="Couvert" type="Node3D" parent="Terrain" unique_id=809794594]
-process_mode = 4
 script = ExtResource("12_couvert")
 ticks_prechauffage = 100
 delta_prechauffage = 5.0
@@ -96,8 +95,7 @@ couleur = Color(0.32, 0.55, 0.24, 1)
 [node name="Peuplement" type="Node3D" parent="Terrain/Couvert" unique_id=809794597]
 script = ExtResource("15_peuplement")
 espece = "arbre"
-rayon_dispersion = 300.0
-nombres_par_stade = Array[int]([0, 0, 0, 500, 4000, 0])
+nombres_par_stade = Array[int]([0, 0, 0, 500, 10000, 0])
 
 [node name="TerrainStreame" type="Node3D" parent="." unique_id=800000001]
 script = ExtResource("19_rendu")
@@ -105,7 +103,7 @@ carte = ExtResource("3_g2etm")
 mesh_library = ExtResource("1_csflq")
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 15.161987, 14.379713, -2.9424477)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.8654861, 22.132938, -38.82501)
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
@@ -114,7 +112,10 @@ script = ExtResource("7_13q3l")
 [node name="Soleil" type="DirectionalLight3D" parent="." unique_id=1651105704]
 transform = Transform3D(0.81915206, 0.43938506, -0.36868784, 0, 0.64278764, 0.76604444, 0.57357645, -0.62750685, 0.5265408, 0, 0, 0)
 shadow_enabled = true
-directional_shadow_max_distance = 400.0
+directional_shadow_mode = 1
+directional_shadow_fade_start = 0.485
+directional_shadow_max_distance = 162.4
+directional_shadow_pancake_size = 10.0
 
 [node name="Ambiance" type="WorldEnvironment" parent="." unique_id=958263169]
 environment = SubResource("Environment_ambiance")
