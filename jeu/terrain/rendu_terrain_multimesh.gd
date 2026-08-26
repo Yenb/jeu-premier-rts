@@ -205,8 +205,15 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	var origine_col := Vector2i(tuile.x * taille, tuile.y * taille)
 	var memo_bits: Dictionary = {}
 
-	# forme (item) -> Array[Transform3D] des cellules de cette forme.
+	# forme (item) -> Array[Transform3D]. Deux groupes pour l'OMBRE, selon le NIVEAU
+	# du cube. `par_forme` : tout ce qui EMERGE (relief, murs, batiments) et les
+	# formes non-cube -> projette normalement. `par_forme_sol` : le sol de base
+	# (couche == sommet_de_base) -> `cast_shadow off`, car un sol plat ne jette
+	# aucune ombre utile (elle tomberait sous lui) et les passes d'ombre ignorent
+	# l'occlusion : l'y garder re-dessine tout le sol pour rien. Il RECOIT toujours
+	# les ombres des objets poses dessus.
 	var par_forme: Dictionary = {}
+	var par_forme_sol: Dictionary = {}
 	# HAUTEUR REELLE DE LA TUILE, suivie au fil des poses : l'AABB s'y serre pour
 	# que le frustum culling ecarte les tuiles hors champ. Un AABB haut de toutes
 	# les couches possibles ne se ferait jamais culler.
@@ -251,26 +258,30 @@ func _creer_tuile(tuile: Vector2i) -> void:
 					continue
 				# Position du centre de la cellule par la conversion native.
 				var pos := _regle.map_to_local(cellule)
+				# LE SOL DE BASE (couche == sommet) ne projette pas d'ombre ; tout ce
+				# qui emerge projette. Le RENDU (les faces) est identique dans les deux
+				# cas -- seul le GROUPE change, donc le cast_shadow du MMi.
+				var cible: Dictionary = par_forme_sol if couche == sommet_base else par_forme
 				if _quad_par_item.has(item):
 					# CUBE : un quad par face exposee. Une face n'est CACHEE que si le
 					# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
 					# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
 					# cellule, laisse la face visible -- sinon un trou apparait.
 					if not _voisin_couvre(col, couche + 1, bits, rang + 1):
-						_ajouter_face(par_forme, item, pos, 0, cote)
+						_ajouter_face(cible, item, pos, 0, cote)
 					if not _voisin_couvre(col, couche - 1, bits, rang - 1):
-						_ajouter_face(par_forme, item, pos, 1, cote)
+						_ajouter_face(cible, item, pos, 1, cote)
 					if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
-						_ajouter_face(par_forme, item, pos, 2, cote)
+						_ajouter_face(cible, item, pos, 2, cote)
 					if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
-						_ajouter_face(par_forme, item, pos, 3, cote)
+						_ajouter_face(cible, item, pos, 3, cote)
 					if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
-						_ajouter_face(par_forme, item, pos, 4, cote)
+						_ajouter_face(cible, item, pos, 4, cote)
 					if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
-						_ajouter_face(par_forme, item, pos, 5, cote)
+						_ajouter_face(cible, item, pos, 5, cote)
 				else:
-					# FORME NON-CUBE (rampe, cylindre, sphere) : mesh complet, orientee
-					# par les conversions natives du GridMap.
+					# FORME NON-CUBE (rampe, cylindre, sphere) : mesh complet, orientee.
+					# Elle a du volume -> projette toujours (jamais dans par_forme_sol).
 					var base := _regle.get_basis_with_orthogonal_index(orientation)
 					var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
 					if not par_forme.has(item):
@@ -285,6 +296,15 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	for item in par_forme.keys():
 		var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote)
 		if mmi != null:
+			add_child(mmi)
+			noeuds.append(mmi)
+	# LE SOL DE BASE NE PROJETTE PAS : il quitte les passes d'ombre. Il RECOIT
+	# toujours les ombres des objets poses dessus -- `cast_shadow` ne touche que la
+	# projection, jamais la reception.
+	for item in par_forme_sol.keys():
+		var mmi := _mmi_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote)
+		if mmi != null:
+			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			add_child(mmi)
 			noeuds.append(mmi)
 	# L'OCCLUDEUR DU RELIEF, s'il y en a. Ce qui est derriere ces cubes -- autres
