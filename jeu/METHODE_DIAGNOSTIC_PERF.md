@@ -128,3 +128,28 @@ Les spikes en marche viennent AILLEURS : 84 carrés × fonctions
 visible sur les captures profileur. Le reste des ~9 ms de Process
 Time n'a pas été isolé — chantier profileur séparé requis pour
 trancher.
+
+## OPTIMISER LES OMBRES — RÉGLAGE GLOBAL, JAMAIS PAR OBJET
+
+Les ombres directionnelles se règlent GLOBALEMENT sur le `DirectionalLight3D`,
+jamais objet par objet : un seul réglage vaut pour tout ce qui projette
+(terrain, arbres, ennemis, unités). Décision Yael : on OPTIMISE les ombres, on
+ne les COUPE jamais.
+
+Le PSSM re-dessine la scène dans CHAQUE cascade : un objet vu dans les 4 splits
+est rendu 5 fois (4 passes d'ombre + le rendu principal). D'où un coût d'ombre
+qui multiplie primitives et draw calls (mesuré ×10 sur le terrain à
+`shadow_max_distance = 400`).
+
+Leviers, du plus impactant au moindre (confirmé par la doc Godot
+« lights_and_shadows », `directional_shadow_max_distance` donnant « the most
+substantial performance gain ») :
+1. `directional_shadow_max_distance` — distance au-delà de laquelle plus rien ne
+   projette. Généraliste, un seul curseur pour toute la scène ; une valeur trop
+   haute fait re-dessiner tout le terrain streamé dans chaque cascade.
+2. `directional_shadow_size` (résolution) — 4096 par défaut, 2048 sur GPU faible.
+3. Fade start/length et la distance du premier split — concentrer le détail près.
+
+Ne PAS baisser les splits (4→2) en dur : dégrade la qualité (voir la doctrine
+« jamais couper les ombres »). `cast_shadow` par objet existe mais n'est PAS
+généraliste — dernier recours pour un objet précis, jamais la méthode.
