@@ -515,7 +515,7 @@ func _pousse_avec(espece: String, voisines: int) -> bool:
 			"type": ESPECE_BASSE,
 		})
 	var etat := Vegetation.etat_initial(semis, _releve, _config, _types)
-	return Vegetation.peut_pousser(etat.plantes[0], _types[espece])
+	return Vegetation.peut_pousser(etat.plantes[0], _types[espece], etat.monde, _config, _releve)
 
 func _couronne(nombre: int) -> Array:
 	var decalages: Array = []
@@ -622,7 +622,6 @@ func _juger_l_ombre_par_signal() -> void:
 
 		var vivantes := Vegetation.vivantes(etat.plantes, _config)
 		var verite := Vegetation.ombres(vivantes, etat.monde, _config, _releve)
-		var rayon := Surface.metres_par_cellules(float(_config.rayon_voisinage_cellules), _releve)
 		for plante in vivantes:
 			var vraie: bool = verite[String(plante.id)]
 			if vraie:
@@ -632,15 +631,6 @@ func _juger_l_ombre_par_signal() -> void:
 				if premiere == "":
 					premiere = "t=%.0f s, '%s' porte l'ombre %s alors que le calcul dit %s" % [
 						temps, plante.id, plante.proprietes.get("ombragee", false), vraie]
-			# LE COMPTE DE VOISINS EST PORTE COMME L'OMBRE, et se verifie pareil :
-			# un compte perime laisse une plante se reproduire dans une foule, ou
-			# refuser de pousser dans le vide -- sans que rien ne le signale.
-			var compte := Vegetation.voisinage(plante.position, etat.monde, rayon)
-			if int(plante.proprietes.get("voisins", -1)) != compte:
-				divergences += 1
-				if premiere == "":
-					premiere = "t=%.0f s, '%s' porte %s voisins alors que le calcul en trouve %d" % [
-						temps, plante.id, plante.proprietes.get("voisins", -1), compte]
 
 	_v.v(divergences == 0,
 		"%d divergence(s) entre ce que les plantes portent et le calcul complet -- premiere : %s" % [

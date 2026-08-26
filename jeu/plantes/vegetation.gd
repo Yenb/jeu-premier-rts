@@ -285,7 +285,6 @@ static func fabriquer_plante(id: String, colonne: Vector2i, releve: Dictionary, 
 			"compteur_production": 0.0,
 			"stature": 0.0,
 			"ombragee": false,
-			"voisins": 0,
 			# Court-circuit d'ombre : porte par la plante pour que
 			# rafraichir_plante n'ait pas a rouvrir la table types.
 			"utilise_ombre": bool(type.get("utilise_ombre", false)),
@@ -345,9 +344,6 @@ static func etat_initial(semis: Array, releve: Dictionary, config: Dictionary, t
 	}
 	etat["monde"] = monde_des_vivantes(plantes, config)
 	rafraichir_toutes(plantes, etat.monde, config, releve)
-	# POSE INITIALE du compte de voisins par scan (la seule requete de compte
-	# autorisee hors naissance). Ensuite, incrementale pure.
-	poser_voisins_initial(plantes, etat.monde, config, releve)
 	return etat
 
 # ---- Lectures pures ----
@@ -445,17 +441,16 @@ static func voisinage(position: Vector3, monde, rayon: float) -> int:
 # rafraichissement d'une plante a l'autre, alors qu'il est choisi une fois pour
 # tout le couvert (voir rafraichir_autour).
 #
-# LE COMPTE EST UN SIGNAL, EN LECTURE COMME EN ECRITURE.
-#   - LECTURE (ici, peut_pousser) : zero requete, lit `proprietes.voisins`.
-#   - ECRITURE : INCREMENTALE. Une naissance fait +1 sur chaque voisin dans le
-#     rayon (et la nouvelle pose son propre compte par UN scan, a la naissance).
-#     Une mort fait -1 sur chaque survivant dans le rayon. Un changement de
-#     stade ne touche RIEN -- il ne change pas le nombre de voisins. Voir
-#     maj_voisins_naissances / _maj_voisins_incremental (§8 du tick) et retirer.
-# Le seul scan de compte est la pose initiale (poser_voisins_initial) et le
-# comptage propre d'un nouveau-ne. Aucun rescan du voisinage a chaque foyer.
-static func peut_pousser(plante: Dictionary, type: Dictionary) -> bool:
-	return int(plante.proprietes.get("voisins", 0)) <= int(type.max_voisins)
+# LE COMPTE EST CALCULE A LA DEMANDE, JAMAIS TENU. peut_pousser est le SEUL
+# lecteur du nombre de voisins, et le tick ne l'appelle que pour une plante
+# FERTILE (gate stade_fertile en amont). Il compte donc lui-meme, ici, a
+# l'instant ou il en a besoin : un scan par plante fertile qui tente de
+# pousser, jamais un compte maintenu pour toute la population. Poser une plante
+# ne compte plus rien -- ni un vieux qui ne poussera jamais, ni un jeune tant
+# qu'il n'est pas fertile. Le compte n'existe qu'a l'instant de la reproduction.
+static func peut_pousser(plante: Dictionary, type: Dictionary, monde, config: Dictionary, releve: Dictionary) -> bool:
+	var rayon := Surface.metres_par_cellules(float(config.rayon_voisinage_cellules), releve)
+	return voisinage(plante.position, monde, rayon) <= int(type.max_voisins)
 
 # L'ETABLISSEMENT : un rejet renonce la ou c'est deja trop dense POUR SON ESPECE.
 # Compte AU POINT D'ARRIVEE, jamais autour de la mere -- c'est l'endroit ou l'on
@@ -570,65 +565,6 @@ static func rafraichir_plante(plante: Dictionary, monde, config: Dictionary, rel
 	else:
 		plante.proprietes["ombragee"] = false
 
-# POSE INITIALE DU COMPTE DE VOISINS, par scan -- la SEULE requete de compte
-# autorisee hors naissance : au demarrage, il n'y a pas d'evenement anterieur
-# d'ou deriver un incrementale. Apres ca, le compte ne bouge plus que par
-# +1/-1 aux naissances et aux morts.
-static func poser_voisins_initial(plantes: Array, monde, config: Dictionary, releve: Dictionary) -> void:
-	var rayon := Surface.metres_par_cellules(float(config.rayon_voisinage_cellules), releve)
-	for plante in plantes:
-		plante.proprietes["voisins"] = voisinage(plante.position, monde, rayon)
-
-# MAINTENANCE INCREMENTALE DU COMPTE DE VOISINS, appelee UNE FOIS par tick
-# apres la reconstruction du Monde (§8), quand la composition a change.
-#   - MORT : chaque survivant dans le rayon d'une morte perd 1. Les mortes
-#     sont deja hors du Monde ; on saute les nouveaux (ils comptent frais).
-#   - NAISSANCE : chaque nouveau compte SON propre voisinage par UN scan
-#     (autorise a la naissance) et incremente de 1 chaque voisin EXISTANT
-#     (non-nouveau) dans son rayon. Deux nouveaux voisins ne s'incrementent
-#     pas mutuellement -- chacun s'est deja compte l'autre dans son scan.
-# Cout : (morts + naissances) requetes par tick, ZERO sur un tick a
-# changements de stade seuls. Remplace le rescan de tout le voisinage a
-# chaque foyer.
-static func _maj_voisins_incremental(etat: Dictionary, config: Dictionary, releve: Dictionary,
-		positions_mortes: Array, nouveaux: Array) -> void:
-	var rayon := Surface.metres_par_cellules(float(config.rayon_voisinage_cellules), releve)
-	var monde = etat.monde
-	var ids_nouveaux: Dictionary = {}
-	for p in nouveaux:
-		ids_nouveaux[String(p.id)] = true
-	# MORTS d'abord : -1 sur les survivants dans le rayon de chaque morte (les
-	# mortes sont hors du Monde). On saute les nouveaux -- ils se comptent frais.
-	for pos in positions_mortes:
-		for entree in monde.choses_dans_rayon(pos, rayon):
-			var v: Dictionary = entree.chose
-			if ids_nouveaux.has(String(v.id)):
-				continue
-			v.proprietes["voisins"] = int(v.proprietes.get("voisins", 0)) - 1
-	maj_voisins_naissances(etat, config, releve, nouveaux)
-
-# LE VOLET NAISSANCE, isolé pour etre appele aussi par le peuplement (qui
-# ajoute des plantes hors du §7 du tick). Chaque nouvelle pose son propre
-# compte par UN scan (le Monde contient deja toutes les nouvelles), et
-# +1 chaque voisin EXISTANT (non-nouveau). Deux nouvelles ne s'incrementent
-# pas -- chacune s'est comptee l'autre dans son scan.
-static func maj_voisins_naissances(etat: Dictionary, config: Dictionary, releve: Dictionary,
-		nouveaux: Array) -> void:
-	if nouveaux.is_empty():
-		return
-	var rayon := Surface.metres_par_cellules(float(config.rayon_voisinage_cellules), releve)
-	var monde = etat.monde
-	var ids_nouveaux: Dictionary = {}
-	for p in nouveaux:
-		ids_nouveaux[String(p.id)] = true
-	for p in nouveaux:
-		var voisins_de: Array = monde.choses_dans_rayon(p.position, rayon)
-		p.proprietes["voisins"] = voisins_de.size()
-		for entree in voisins_de:
-			var v: Dictionary = entree.chose
-			if String(v.id) == String(p.id) or ids_nouveaux.has(String(v.id)):
-				continue
-			v.proprietes["voisins"] = int(v.proprietes.get("voisins", 0)) + 1
 
 # Le calcul COMPLET, pour une seule chose : la pose initiale. Apres quoi plus
 # personne ne balaie tout le monde -- sauf le test, pour verifier.
@@ -734,10 +670,6 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	var produits: Array = []
 	var perdues: Array = []
 	var changements: Array = []
-	# LES POSITIONS DES MORTES DE CE TICK : la maintenance incrementale du
-	# compte de voisins (§8) en a besoin pour -1 les survivants alentour,
-	# alors que les mortes ont deja quitte le Monde reconstruit.
-	var positions_mortes: Array = []
 
 	# ETAT.PLANTES EST LE CACHE DES VIVANTES : il ne contient AUCUNE morte a
 	# l'entree du tick (purge immediate en §2b, ajout des rejets apres §7,
@@ -798,7 +730,6 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 		if morte == null or not est_disparue(morte, config):
 			continue
 		foyers.append(morte.position)
-		positions_mortes.append((morte as Dictionary).position)
 		morts.append(String(id))
 
 	# 2b. PURGE IMMEDIATE des mortes de ce tick, EN PLACE dans etat.plantes.
@@ -879,7 +810,7 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 		var type_pousse := type_de(plante, types)
 		if type_pousse.is_empty() or not stade_fertile(plante, type_pousse):
 			continue
-		if not peut_pousser(plante, type_pousse):
+		if not peut_pousser(plante, type_pousse, monde, config, releve):
 			continue
 		Gestation.poser(plante, null,
 			plante.proprietes.get("reproduction_locale", type_pousse.reproduction_locale))
@@ -966,10 +897,6 @@ static func avancer(etat: Dictionary, config: Dictionary, types: Dictionary, rel
 	etat["morts"] = int(etat.morts) + morts.size()
 	if not morts.is_empty() or not naissances.is_empty():
 		etat["monde"] = monde_des_vivantes(plantes, config, true)
-		# MAINTENANCE INCREMENTALE DU COMPTE DE VOISINS, sur le Monde qui vient
-		# d'etre reconstruit (mortes hors, nouveaux dedans). +1 par naissance,
-		# -1 par mort, rien pour les changements de stade.
-		_maj_voisins_incremental(etat, config, releve, positions_mortes, nouveaux)
 
 	# APRES la reconstruction du Monde, jamais avant : relire l'OMBRE (pas le
 	# compte de voisins -- il est deja a jour) sur un Monde qui contient encore
@@ -1084,14 +1011,7 @@ static func retirer(etat: Dictionary, id: String, config: Dictionary, releve: Di
 	var position: Vector3 = plante.position
 	etat["plantes"] = vivantes(etat.plantes, config)
 	etat["monde"] = monde_des_vivantes(etat.plantes, config)
-	# MAINTENANCE INCREMENTALE : une mort, donc -1 sur chaque survivant dans
-	# le rayon de la plante retiree (elle est deja hors du Monde reconstruit).
-	# Meme geste que _maj_voisins_incremental cote mort, pour une seule morte.
-	var rayon := Surface.metres_par_cellules(float(config.rayon_voisinage_cellules), releve)
-	for entree in etat.monde.choses_dans_rayon(position, rayon):
-		var v: Dictionary = entree.chose
-		v.proprietes["voisins"] = int(v.proprietes.get("voisins", 0)) - 1
-	# rafraichir_autour relit l'OMBRE autour du trou (le compte est deja a jour).
+	# rafraichir_autour relit l'OMBRE autour du trou.
 	rafraichir_autour(etat, config, releve, [position])
 	return true
 

@@ -418,7 +418,13 @@ func _consommer_file_peuplement() -> void:
 	var foyers: Array = []
 	var nouvelles: Array = []
 	for _n in range(a_ajouter):
-		var entree: Dictionary = _file_peuplement.pop_front()
+		# VIDAGE PAR L'ARRIERE : pop_back est O(1), pop_front decale tout le
+		# tableau a chaque retrait (O(N)) -- a 30 retraits/frame sur une file de
+		# centaines de milliers, c'est un cout O(N) paye CHAQUE frame dans
+		# _process, hors rendu et hors streaming. L'ordre n'a aucune importance :
+		# chaque entree porte deja sa position et son age, tires dans
+		# _expander_peuplement.
+		var entree: Dictionary = _file_peuplement.pop_back()
 		var type: Dictionary = _types.get(String(entree.type), {})
 		if type.is_empty():
 			continue
@@ -446,11 +452,6 @@ func _consommer_file_peuplement() -> void:
 		# reproduction, qui ne posent deja aucun rendu (voir _appliquer).
 		for plante in nouvelles:
 			Vegetation.rafraichir_plante(plante, _etat.monde, _config, _releve)
-		# COMPTE DE VOISINS : maintenance incrementale du framework, cote
-		# NAISSANCE uniquement (aucune mort dans un batch de peuplement). Chaque
-		# nouvelle pose son propre compte, chaque existante voisine prend +1.
-		# Meme geste que le §7 du tick -- une seule source de verite.
-		Vegetation.maj_voisins_naissances(_etat, _config, _releve, nouvelles)
 
 # Le rendu, et rien d'autre : il RELIT le rapport du tick, il ne recalcule jamais
 # ce qui vient de se passer. NAISSANCES ET CHANGEMENTS DE STADE NE POSENT
