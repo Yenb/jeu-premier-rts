@@ -103,7 +103,7 @@ carte = ExtResource("3_g2etm")
 mesh_library = ExtResource("1_csflq")
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.7138863, 14.379713, 149.43735)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 85.61734, 14.379713, 240.9942)
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
@@ -131,6 +131,7 @@ demi_fenetre = 50
 
 [node name="ManagerProto" type="Node" parent="." unique_id=1054806237]
 script = ExtResource("10_3n01v")
+capacite_case = 150.0
 
 [node name="StockJoueur" type="Node" parent="." unique_id=810000002]
 script = ExtResource("17_stock")

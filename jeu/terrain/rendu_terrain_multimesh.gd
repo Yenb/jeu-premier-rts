@@ -184,18 +184,27 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				var cellule := Vector3i(col.x, couche, col.y)
 				var code: int = int(particularites.get(cellule, -1))
 				var item: int
+				var orientation: int
 				if code == -1:
 					item = CarteTerrain.ITEM_DEFAUT
+					orientation = CarteTerrain.ORIENTATION_DEFAUT
 				else:
 					item = CarteTerrain.item_du_code(code)
+					orientation = CarteTerrain.orientation_du_code(code)
 				if item == ITEM_LIMITE:
 					continue
-				# POSITION PAR LA CONVERSION NATIVE, jamais calculee a la main :
-				# la regle applique le meme centrage de cellule que l'ancien rendu.
+				# POSITION, ORIENTATION ET CALAGE PAR LES CONVERSIONS NATIVES DU
+				# GRIDMAP, jamais calcules a la main : `map_to_local` pour le centre
+				# de la cellule, `get_basis_with_orthogonal_index` pour la rotation,
+				# `get_item_mesh_transform` pour le calage propre de la forme.
+				# GENERIQUE : toute forme future orientee tombe juste sans une ligne
+				# de plus.
 				var pos := _regle.map_to_local(cellule)
+				var base := _regle.get_basis_with_orthogonal_index(orientation)
+				var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
 				if not par_forme.has(item):
 					par_forme[item] = [] as Array
-				par_forme[item].append(Transform3D(Basis(), pos))
+				par_forme[item].append(t)
 
 	var noeuds: Array = []
 	for item in par_forme.keys():
