@@ -43,18 +43,14 @@ extends Node3D
 ## Le plus vieux stade de l'espece.
 @export var nombre_stade_6: int = 0
 
-@export_group("Etalement")
+@export_group("Dispersion des ages")
 
-# COMBIEN DE PLANTES FABRIQUEES PAR TICK (etalement du spawn). Sans ce
-# budget, N plantes fabriquees d'un coup donnent un pic ~650 ms a N=1000
-# (fabriquer_plante + rebuild monde + rafraichir_toutes). A 30 plantes/tick,
-# le pic disparait : ~20-25 ms par frame etalees sur ceil(N/30) ticks.
-@export var budget_par_frame: int = 30
-
-# FENETRE D'ETALEMENT VISUEL, en secondes. Chaque plante recoit un
+# FENETRE D'ETALEMENT DES AGES, en secondes. Chaque plante recoit un
 # age_initial = age_seuil_cible + aleatoire dans [-duree/2, +duree/2]. Les
-# plantes atteignent leur stade cible a des instants disperses -> apparence
-# progressive au lieu d'un pop-in bloc. Independant du budget frame.
+# plantes atteignent leur stade cible a des instants disperses : elles ne
+# franchissent pas toutes leurs stades en meme temps (pas de cohorte
+# synchronisee qui ferait un pic de tick), meme si elles sont toutes posees
+# d'un bloc au chargement.
 @export var duree_dispersion_apparition: float = 3.0
 
 # LES NOMBRES, rassembles en tableau indexe par stade (index 0 = stade 1) --

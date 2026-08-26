@@ -239,11 +239,6 @@ var _observateur: Node3D = null
 # detecter un changement de stade (hauteur suit la stature -- nouveau body
 # necessaire avec la shape du bon stade).
 var _corps_actifs: Dictionary = {}
-# FILE D'ATTENTE DES PLANTES DE PEUPLEMENT, consommee par tick dans _process
-# a raison de budget_par_frame plantes. Chaque entree :
-# {id, colonne, type, age_initial, budget}. Sans cette file, N plantes d'un
-# coup au ready donnent un pic de fabrication ingerable (~650 ms a N=1000).
-var _file_peuplement: Array = []
 # LES SHAPES RID PAR ESPECE ET PAR STADE, fabriquees une fois au ready et
 # partagees par tous les corps du meme stade de la meme espece. Structure :
 # nom_espece -> Array[RID] indexe par (numero - 1). RID vide (null) pour un
@@ -367,11 +362,6 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _etat.is_empty():
 		return
-	# ETALEMENT DES PEUPLEMENTS : chaque tick, on consomme jusqu'au budget
-	# de la premiere entree de la file. Le budget vient du noeud Peuplement
-	# lui-meme (budget_par_frame @export). Le rebuild du monde et le
-	# rafraichir_autour ne se font qu'UNE FOIS a la fin du batch.
-	_consommer_file_peuplement()
 	_accumulateur += delta * facteur_temps
 	var joues := 0
 	var t0_tick := Time.get_ticks_usec()
@@ -404,54 +394,6 @@ func _doit_basculer(joues: int) -> bool:
 	if joues > 0:
 		return true
 	return _observateur.global_position.distance_to(_derniere_pos_bascule) >= seuil_rescan_metres
-
-# Consomme jusqu'a `budget` plantes de la file, les fabrique via
-# Vegetation.fabriquer_plante (age_initial preserve), les append a
-# etat.plantes. Rebuild le monde et rafraichir_autour les nouveaux foyers en
-# une seule passe a la fin -- coute O(N_vivantes) une fois par tick au lieu
-# de N fois.
-func _consommer_file_peuplement() -> void:
-	if _file_peuplement.is_empty():
-		return
-	var budget: int = int(_file_peuplement[0].get("budget", 30))
-	var a_ajouter: int = mini(budget, _file_peuplement.size())
-	var foyers: Array = []
-	var nouvelles: Array = []
-	for _n in range(a_ajouter):
-		# VIDAGE PAR L'ARRIERE : pop_back est O(1), pop_front decale tout le
-		# tableau a chaque retrait (O(N)) -- a 30 retraits/frame sur une file de
-		# centaines de milliers, c'est un cout O(N) paye CHAQUE frame dans
-		# _process, hors rendu et hors streaming. L'ordre n'a aucune importance :
-		# chaque entree porte deja sa position et son age, tires dans
-		# _expander_peuplement.
-		var entree: Dictionary = _file_peuplement.pop_back()
-		var type: Dictionary = _types.get(String(entree.type), {})
-		if type.is_empty():
-			continue
-		var plante := Vegetation.fabriquer_plante(
-			String(entree.id), entree.colonne, _releve, _config, type,
-			_etat.rng, float(entree.age_initial))
-		if plante.is_empty():
-			continue
-		(_etat.plantes as Array).append(plante)
-		# AJOUT INCREMENTAL au monde indexe : evite le rebuild O(N) par batch
-		# qui rendait l'etalement plus cher que le pic initial. monde.ajouter
-		# ne balaie que les niveaux d'index deja ouverts, coute O(niveaux).
-		_etat.monde.ajouter(plante, String(plante.proprietes.type_plante), plante.position)
-		nouvelles.append(plante)
-		foyers.append(plante.position)
-	if not nouvelles.is_empty():
-		# OMBRE des nouvelles (utilise_ombre). LE RENDU N'EST PAS POSE ICI :
-		# c'est _bascule_rendu, et lui seul, qui inscrit une plante dans un lot
-		# -- et SEULEMENT si elle est dans le rayon de l'observateur. Poser le
-		# rendu ici inscrivait chaque nouvelle plante quelle que soit sa
-		# distance ; avec un peuplement disperse sur des kilometres, budget
-		# arbres par frame apparaissaient au loin a chaque frame et n'etaient
-		# radies qu'au tick suivant -- un scintillement d'arbres lointains
-		# pendant tout le peuplement. Meme regle que les naissances de
-		# reproduction, qui ne posent deja aucun rendu (voir _appliquer).
-		for plante in nouvelles:
-			Vegetation.rafraichir_plante(plante, _etat.monde, _config, _releve)
 
 # Le rendu, et rien d'autre : il RELIT le rapport du tick, il ne recalcule jamais
 # ce qui vient de se passer. NAISSANCES ET CHANGEMENTS DE STADE NE POSENT
@@ -552,7 +494,7 @@ func _semis() -> Array:
 # milieu du stade cible, prêt a vivre. Les positions sont tirees dans un
 # disque autour du peuplement (uniforme, rayon = sqrt(u) * rayon_max pour
 # eviter la concentration au centre).
-func _expander_peuplement(noeud: Node3D, _semis_ignores: Array) -> void:
+func _expander_peuplement(noeud: Node3D, semis: Array) -> void:
 	var espece := String(noeud.get("espece"))
 	if espece == "" or not _types.has(espece):
 		push_warning("couvert.gd : peuplement '%s' nomme une espece '%s' inconnue" % [noeud.name, espece])
@@ -573,10 +515,12 @@ func _expander_peuplement(noeud: Node3D, _semis_ignores: Array) -> void:
 	for stade in stades:
 		age_seuils.append(cumul)
 		cumul += float(stade.duree)
-	# LES ENTREES NE VONT PAS DANS `semis` (etat_initial les fabriquerait
-	# TOUTES au ready = pic 650 ms a N=1000). Elles vont dans _file_peuplement,
-	# consommee par tick dans _process a raison de budget_par_frame plantes.
-	var budget: int = int(noeud.get("budget_par_frame"))
+	# LES ENTREES VONT DANS `semis` : etat_initial les pose TOUTES au ready,
+	# pendant le chargement, avant que le joueur prenne la main. La pose est
+	# donc hors du temps de jeu -- le joueur n'est pas immobilise pendant
+	# qu'elle se fait, et le monde est deja coherent quand il arrive. Poser
+	# tout au ready n'etait pas tenable tant que la pose scannait le voisinage
+	# de chaque plante ; ca l'est depuis que ce scan est retire (vegetation.gd).
 	for i in range(mini(nombres.size(), stades.size())):
 		var nombre := int(nombres[i])
 		if nombre <= 0:
@@ -592,12 +536,12 @@ func _expander_peuplement(noeud: Node3D, _semis_ignores: Array) -> void:
 			# Chaque plante atteint son stade cible a un instant different,
 			# apparition visuellement dispersee sur duree_dispersion secondes.
 			var age_avec_alea := age_cible + rng.randf_range(-dispersion_age, dispersion_age)
-			_file_peuplement.append({
+			semis.append({
 				"id": id,
 				"colonne": Surface.colonne_de(pos_locale, _releve),
 				"type": espece,
 				"age_initial": maxf(0.0, age_avec_alea),
-				"budget": budget,
+				"noeud": null,
 			})
 
 # LES ESPECES DECLAREES A L'INSPECTEUR, indexees par leur nom -- celui qu'un semis

@@ -23,7 +23,7 @@ extends SceneTree
 #   1. apres etat_initial
 #   2. apres chaque avancer() complet (morts + naissances + purge)
 #   3. apres retirer() externe
-#   4. apres _consommer_file_peuplement (batch Peuplement, via un Couvert)
+#   4. apres un Peuplement pose au ready (via un Couvert)
 #
 # Regles tenues : positions en Vector3, colonnes en Vector2i. Aucun hasard
 # hors du RNG seede. Rien de scripts/, data/ ni documents/ n'est ecrit.
@@ -109,7 +109,7 @@ func _tout() -> void:
 		_v.v(ok, "3 retirer() a echoue sur un id vivant")
 		_verifier(etat, "3 apres retirer()")
 
-	# --- 4. apres _consommer_file_peuplement ---
+	# --- 4. apres un Peuplement pose au ready ---
 	await _verifier_peuplement()
 
 	_racine.queue_free()
@@ -159,7 +159,6 @@ func _verifier_peuplement() -> void:
 	peuplement.set("espece", NOM_ESPECE)
 	peuplement.set("rayon_dispersion", 15.0)
 	peuplement.set("seed_rng", 99)
-	peuplement.set("budget_par_frame", 30)
 	peuplement.set("nombre_stade_4", 80)
 	couvert.add_child(peuplement)
 
@@ -170,10 +169,10 @@ func _verifier_peuplement() -> void:
 
 	var etat: Dictionary = couvert.get("_etat")
 	if etat.is_empty():
-		_v.v(false, "4 le couvert n'a pas d'etat apres consommation peuplement")
+		_v.v(false, "4 le couvert n'a pas d'etat apres peuplement au ready")
 		return
-	_v.v((etat.plantes as Array).size() > 0, "4 aucune plante apres consommation peuplement")
-	_verifier(etat, "4 apres _consommer_file_peuplement")
+	_v.v((etat.plantes as Array).size() > 0, "4 aucune plante apres peuplement au ready")
+	_verifier(etat, "4 apres peuplement au ready")
 
 func _terrain_plat() -> GridMap:
 	var g := GridMap.new()
@@ -211,5 +210,5 @@ func _conclure() -> void:
 		print("ECHEC: cache vivantes desynchronise (%d)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: cache vivantes -- synchronise apres etat_initial, chaque tick (morts+naissances+purge), retirer(), et consommation peuplement")
+	print("OK: cache vivantes -- synchronise apres etat_initial, chaque tick (morts+naissances+purge), retirer(), et peuplement pose au ready")
 	quit(0)
