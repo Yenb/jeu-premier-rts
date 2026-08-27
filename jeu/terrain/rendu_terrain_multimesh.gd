@@ -141,6 +141,17 @@ func _preparer_quads(cote: float) -> void:
 		if mat is BaseMaterial3D:
 			var mat2 := (mat as BaseMaterial3D).duplicate() as BaseMaterial3D
 			mat2.cull_mode = BaseMaterial3D.CULL_DISABLED
+			# ALLEGE LE FRAGMENT DU SOL SANS TOUCHER A LA LUMIERE NI A L'OMBRE.
+			# Le sol est de la couleur unie : il n'a ni metal, ni reflet, ni relief
+			# speculaire a calculer. On coupe tout le calcul PBR inutile -- speculaire,
+			# metal, rugosite variable -- et on garde l'eclairage diffus + l'ombre en
+			# PER-PIXEL (shading_mode non touche), donc l'ombre reste nette. Diffuse
+			# Lambert au lieu de Burley : la BRDF diffuse la moins chere. C'est la passe
+			# opaque du sol qui domine le GPU ; ce fragment allege agit dessus.
+			mat2.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+			mat2.metallic = 0.0
+			mat2.roughness = 1.0
+			mat2.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
 			quad.material = mat2
 		elif mat != null:
 			quad.material = mat
