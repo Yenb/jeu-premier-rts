@@ -52,6 +52,12 @@ const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 @export var taille_tuile_cellules: int = 10
 @export var pas_de_rafraichissement: int = 4
 @export var groupe_observateur: StringName = &"observateur"
+# COMBIEN DE TUILES BATIES PAR FRAME. Franchir une bordure fait entrer tout un
+# ANNEAU de tuiles d'un coup ; les batir toutes dans la meme frame (avec un
+# occludeur bake par tuile) gele le jeu -- mesure : 127 ms. Elles sont mises en
+# file et batties quelques-unes par frame. Meme etalement que
+# jeu/Proto/terrain_streame.gd, patron deja eprouve.
+@export var tuiles_par_frame: int = 1
 
 # DISTANCE DE RENDU (LOD par distance). Au-dela, une tuile n'est plus dessinee --
 # le lointain n'a pas besoin d'etre net. Posee sur chaque MultiMeshInstance3D via
@@ -68,6 +74,11 @@ var _amorce := false
 var _rayon_tuiles: int = 0
 var _rayon_interne_tuiles: int = 0
 var _pas_tuiles: int = 1
+# LES TUILES EN ATTENTE DE CONSTRUCTION, drainee par _process a raison de
+# `tuiles_par_frame`. Une tuile en file est marquee dans `_tuiles` par un Array
+# VIDE (batie -> Array de noeuds). Si elle sort du disque avant d'etre batie,
+# _supprimer_tuile la retire de `_tuiles` et le drain la saute.
+var _file_creation: Array = []
 
 # GRIDMAP DE REFERENCE, jamais peuple ni rendu : sert UNIQUEMENT a convertir une
 # cellule en position par `map_to_local`, exactement comme le rendu GridMap le
@@ -139,6 +150,15 @@ func _process(_delta: float) -> void:
 	var centre := _centre_tuile_observateur()
 	if _doit_rafraichir(centre):
 		_rafraichir_vers(centre)
+	# ETALEMENT : quelques tuiles par frame, jamais tout l'anneau d'un coup.
+	var faits := 0
+	while faits < tuiles_par_frame and not _file_creation.is_empty():
+		var t: Vector2i = _file_creation.pop_back()
+		# Sautee si retiree du disque entre-temps (le joueur a bouge) : elle n'est
+		# plus dans _tuiles, ou elle a deja ete batie.
+		if _tuiles.has(t) and (_tuiles[t] as Array).is_empty():
+			_creer_tuile(t)
+			faits += 1
 
 func _centre_tuile_observateur() -> Vector2i:
 	var obs := get_tree().get_first_node_in_group(groupe_observateur) as Node3D
@@ -161,7 +181,10 @@ func _rafraichir_vers(centre: Vector2i) -> void:
 	var vise := _tuiles_du_disque(centre)
 	for t in vise.keys():
 		if not _tuiles.has(t):
-			_creer_tuile(t)
+			# MARQUEE EN FILE (Array vide) : _process la batira. La marquer tout de
+			# suite empeche un rafraichissement suivant de la re-mettre en file.
+			_tuiles[t] = []
+			_file_creation.append(t)
 	for t in _tuiles.keys():
 		if not vise.has(t):
 			_supprimer_tuile(t)
