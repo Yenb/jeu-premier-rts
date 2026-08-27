@@ -44,6 +44,7 @@
 extends Node3D
 
 const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
+const SolShader = preload("res://jeu/terrain/sol_minimal.gdshader")
 
 @export var carte: Resource
 @export var mesh_library: MeshLibrary
@@ -138,23 +139,18 @@ func _preparer_quads(cote: float) -> void:
 		var quad := PlaneMesh.new()
 		quad.size = Vector2(cote, cote)
 		var mat := (mesh as BoxMesh).material
+		# SHADER CUSTOM MINIMAL : couleur unie + ombre, zero PBR.
+		var smat := ShaderMaterial.new()
+		smat.shader = SolShader
+		var c := Color(0.45, 0.36, 0.27, 1.0)
 		if mat is BaseMaterial3D:
-			var mat2 := (mat as BaseMaterial3D).duplicate() as BaseMaterial3D
-			mat2.cull_mode = BaseMaterial3D.CULL_DISABLED
-			# ALLEGE LE FRAGMENT DU SOL SANS TOUCHER A LA LUMIERE NI A L'OMBRE.
-			# Le sol est de la couleur unie : il n'a ni metal, ni reflet, ni relief
-			# speculaire a calculer. On coupe tout le calcul PBR inutile -- speculaire,
-			# metal, rugosite variable -- et on garde l'eclairage diffus + l'ombre en
-			# PER-PIXEL (shading_mode non touche), donc l'ombre reste nette. Diffuse
-			# Lambert au lieu de Burley : la BRDF diffuse la moins chere. C'est la passe
-			# opaque du sol qui domine le GPU ; ce fragment allege agit dessus.
-			mat2.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-			mat2.metallic = 0.0
-			mat2.roughness = 1.0
-			mat2.diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT
-			quad.material = mat2
+			c = (mat as BaseMaterial3D).albedo_color
 		elif mat != null:
 			quad.material = mat
+			_quad_par_item[item] = quad
+			continue
+		smat.set_shader_parameter("couleur", c)
+		quad.material = smat
 		_quad_par_item[item] = quad
 
 func _process(_delta: float) -> void:
