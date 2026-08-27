@@ -70,9 +70,9 @@ extends Node3D
 #
 # LES SEMIS SONT SES PROPRES ENFANTS : chaque jeu/plantes/plante.tscn pose a la
 # main sous ce noeud devient une plante de simulation, de l'espece qu'il declare,
-# a la colonne ou le game designer l'a laisse. Son noeud est REUTILISE comme
-# porteur, et ses enfants d'editeur sont liberes -- ils n'existent que pour se
-# voir et se deplacer dans l'editeur.
+# a la colonne ou le game designer l'a laisse. Ses enfants d'editeur sont liberes
+# -- ils n'existent que pour se voir et se deplacer dans l'editeur -- et son noeud
+# ne porte plus rien : le rendu vit dans les lots MMI, la collision dans des RID.
 #
 # UN SEMIS HORS COUCHE EST POSE QUAND MEME, et seulement signale en console : le
 # mecanisme ne supprime jamais ce que le game designer a place. Un semis d'espece
@@ -341,16 +341,26 @@ func _ready() -> void:
 
 	_prechauffer()
 
-	# LA POSE VIENT APRES, EN UNE SEULE PASSE. Pendant le prechauffage il n'y a
-	# rien a l'ecran : poser puis retirer des milliers de noeuds pour montrer une
-	# croissance que personne ne regarde coute cher et ne rend rien.
-	for plante in _etat.plantes:
-		_poser_plante(plante)
+	# L'OBSERVATEUR EST OPTIONNEL, ET SA RECHERCHE NE DOIT PAS FAIRE PLANTER UN
+	# _ready DETACHE DE L'ARBRE (test headless qui appelle _ready a la main :
+	# get_tree() y est null). Absent -> aucun culling, tout est pose.
+	var arbre := get_tree()
+	_observateur = arbre.get_first_node_in_group(groupe_observateur) if arbre != null else null
+
+	# LA POSE INITIALE DES PLANTES N'A LIEU QUE SANS OBSERVATEUR. Avec un
+	# observateur, le culling par distance (_bascule_rendu, joue des le 1er tick)
+	# pose les seules plantes du rayon : poser ici les milliers d'autres pour les
+	# radier a la frame suivante etait un gaspillage pur -- mesure sur la scene de
+	# verification, 1000 lignes / 619 MultiMeshInstance3D posees puis 100 % radiees.
+	# Sans observateur rien ne cull, et cette passe EST le rendu.
+	if _observateur == null:
+		for plante in _etat.plantes:
+			_poser_plante(plante)
+	# LES GRAINES SONT RARES ET NON STREAMEES : posees dans les deux cas, jamais
+	# radiees par distance.
 	for graine in _etat.graines:
 		_poser_graine(String(graine.id))
 	_liberer_les_semis_disparus(semis)
-
-	_observateur = get_tree().get_first_node_in_group(groupe_observateur)
 
 	# LE COMPTE EST CELUI DES VIVANTES, jamais la taille de la liste : les mortes y
 	# figurent jusqu'a la purge du tick suivant, et une trace qui les compte annonce
@@ -435,10 +445,17 @@ func _prechauffer() -> void:
 # libere ici, sans quoi chaque lancement laisserait autant de fantomes que de
 # semis trop vieux.
 func _liberer_les_semis_disparus(semis: Array) -> void:
+	# LA SURVIE SE LIT DANS L'ETAT, PAS DANS LE RENDU. `_poses` n'est plus rempli
+	# pour toutes les plantes (pose initiale sautee quand un observateur cull) ;
+	# la presence dans `_etat.plantes` reste, elle, le signal fidele de ce qui a
+	# passe le prechauffage.
+	var presents: Dictionary = {}
+	for plante in _etat.plantes:
+		presents[String(plante.id)] = true
 	for graine in semis:
 		if graine.noeud == null:
 			continue
-		if _poses.has(String(graine.id)):
+		if presents.has(String(graine.id)):
 			continue
 		graine.noeud.queue_free()
 
@@ -876,12 +893,6 @@ static func ramasser_pieces(noeud: Node, pose: Transform3D, pieces: Array) -> vo
 		ramasser_pieces(enfant, locale, pieces)
 
 # ---- Le rendu ----
-
-func _plante_par_id(id: String) -> Variant:
-	for plante in _etat.plantes:
-		if String(plante.id) == id:
-			return plante
-	return null
 
 func _poser_plante(plante: Dictionary) -> void:
 	var id := String(plante.id)
