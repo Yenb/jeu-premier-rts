@@ -137,8 +137,8 @@ func _volume() -> void:
 		"le vide entre les deux niveaux a ete rempli : la carte reste un relief")
 	_v.v(not carte.est_pleine(plateforme, base + 5), "le vide n'est pas complet")
 	_v.v(carte.est_pleine(plateforme, base + 7), "le niveau du haut a disparu")
-	_v.v(carte.sommet(plateforme) == base + 7,
-		"le sommet ne designe pas la couche la plus haute : %s" % [carte.sommet(plateforme)])
+	_v.v(carte.sommet_max_colonne(plateforme) == base + 7,
+		"le sommet ne designe pas la couche la plus haute : %s" % [carte.sommet_max_colonne(plateforme)])
 
 	# UNE GROTTE : la colonne est pleine, sauf en son milieu.
 	var grotte := Vector2i(-7, 3)
@@ -148,7 +148,7 @@ func _volume() -> void:
 	_v.v(not carte.est_pleine(grotte, base + 3), "la grotte a ete rebouchee")
 	_v.v(carte.est_pleine(grotte, base + 2) and carte.est_pleine(grotte, base + 4),
 		"la grotte a emporte ses voisines")
-	_v.v(carte.sommet(grotte) == carte.sommet_de_base(),
+	_v.v(carte.sommet_max_colonne(grotte) == carte.sommet_de_base(),
 		"creuser au milieu a change le sommet")
 	_v.v(carte.cellules_de(grotte).size() == carte.couches_pleines - 1,
 		"la colonne creusee rend %d cellules, %d attendues" % [
@@ -185,8 +185,8 @@ func _emprise_et_sommet() -> void:
 	]
 	for colonne in dedans:
 		_v.v(carte.dans_emprise(colonne), "colonne %v rejetee de l'emprise" % colonne)
-		_v.v(carte.sommet(colonne) == base,
-			"colonne %v : sommet %s, %d attendu" % [colonne, carte.sommet(colonne), base])
+		_v.v(carte.sommet_max_colonne(colonne) == base,
+			"colonne %v : sommet %s, %d attendu" % [colonne, carte.sommet_max_colonne(colonne), base])
 
 	var dehors: Array[Vector2i] = [
 		Vector2i(-EMPRISE_LIVREE - 1, 0),
@@ -196,7 +196,7 @@ func _emprise_et_sommet() -> void:
 	]
 	for colonne in dehors:
 		_v.v(not carte.dans_emprise(colonne), "colonne %v acceptee hors emprise" % colonne)
-		_v.v(carte.sommet(colonne) == null,
+		_v.v(carte.sommet_max_colonne(colonne) == null,
 			"colonne %v hors emprise rend un sommet au lieu de null" % colonne)
 
 	var cellules: Array[Vector3i] = carte.cellules_de(Vector2i.ZERO)
@@ -215,7 +215,7 @@ func _sculpture() -> void:
 	var colonne := Vector2i(12, -34)
 
 	_v.v(carte.sculpter(colonne, base + 3), "sculpter dans l'emprise a echoue")
-	_v.v(carte.sommet(colonne) == base + 3, "le sommet sculpte n'est pas relu")
+	_v.v(carte.sommet_max_colonne(colonne) == base + 3, "le sommet sculpte n'est pas relu")
 	_v.v(carte.colonnes_sculptees() == 1,
 		"%d colonnes stockees apres une sculpture" % carte.colonnes_sculptees())
 	_v.v(carte.cellules_de(colonne).size() == carte.couches_pleines + 3,
@@ -226,12 +226,12 @@ func _sculpture() -> void:
 	_v.v(carte.sculpter(colonne, base), "remettre une colonne au defaut a echoue")
 	_v.v(carte.colonnes_sculptees() == 0,
 		"une colonne remise au defaut reste stockee (%d)" % carte.colonnes_sculptees())
-	_v.v(carte.sommet(colonne) == base, "une colonne remise au defaut ne rend plus le defaut")
+	_v.v(carte.sommet_max_colonne(colonne) == base, "une colonne remise au defaut ne rend plus le defaut")
 
 	# Creusee jusqu'au vide : plus de sommet, plus de cellules.
 	_v.v(carte.sculpter(colonne, carte.couche_base - 1), "creuser jusqu'au vide a echoue")
-	_v.v(carte.sommet(colonne) == null,
-		"une colonne creusee jusqu'au vide rend %s au lieu de null" % carte.sommet(colonne))
+	_v.v(carte.sommet_max_colonne(colonne) == null,
+		"une colonne creusee jusqu'au vide rend %s au lieu de null" % carte.sommet_max_colonne(colonne))
 	_v.v(carte.cellules_de(colonne).is_empty(), "une colonne vide rend des cellules")
 
 	_v.v(not carte.sculpter(Vector2i(999, 0), base + 1), "sculpter hors emprise a ete accepte")
@@ -265,7 +265,7 @@ func _serialisation() -> void:
 		"%d colonnes relues, %d ecrites" % [relue.colonnes_sculptees(), attendus.size()])
 	var divergentes := 0
 	for colonne in attendus:
-		if relue.sommet(colonne) != attendus[colonne]:
+		if relue.sommet_max_colonne(colonne) != attendus[colonne]:
 			divergentes += 1
 	_v.v(divergentes == 0, "%d colonnes ont un sommet different apres relecture" % divergentes)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(chemin))
@@ -308,7 +308,7 @@ func _lire(carte: Resource, colonnes: Array[Vector2i]) -> int:
 	var debut := Time.get_ticks_usec()
 	var somme := 0
 	for colonne in colonnes:
-		var haut: Variant = carte.sommet(colonne)
+		var haut: Variant = carte.sommet_max_colonne(colonne)
 		if haut != null:
 			somme += int(haut)
 	# La somme est CONSOMMEE : sans usage, rien ne garantit que la boucle mesuree

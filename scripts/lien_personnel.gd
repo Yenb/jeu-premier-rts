@@ -75,7 +75,7 @@ static func avancer(entite: Dictionary, delta: float, catalogue: Dictionary) -> 
 	for chose_id in a_retirer:
 		liens.erase(chose_id)
 
-static func force(entite: Dictionary, chose_id: String, catalogue: Dictionary) -> float:
+static func force(entite: Dictionary, chose_id: String, _catalogue: Dictionary) -> float:
 	var proprietes: Dictionary = entite.get("proprietes", {})
 	if not proprietes.has("liens_personnels"):
 		push_error("lien_personnel.gd : propriete structurelle 'liens_personnels' absente de proprietes")

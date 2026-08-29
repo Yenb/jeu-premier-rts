@@ -927,7 +927,7 @@ func _poser_modele(id: String, espece: String, numero: int) -> void:
 # sans le cout d'un noeud dans l'arbre de scene (mesure ~5x moins cher
 # qu'un StaticBody3D a 2827 corps actifs).
 #
-# LE BODY EST POSITIONNE A `position + (0, stature/2, 0)` : la shape
+# LE BODY EST POSITIONNE A `pos + (0, stature/2, 0)` : la shape
 # CylinderShape3D est centree sur son origine, il faut la remonter d'une
 # demi-hauteur pour que sa base repose au sol (`position` est au pied de
 # l'arbre).
@@ -936,7 +936,7 @@ func _poser_modele(id: String, espece: String, numero: int) -> void:
 # qui pousserait le tronc a la moindre collision.
 # body_set_space obligatoire : sans ca le body existe mais n'est dans aucune
 # simulation, silencieusement.
-func _poser_corps(id: String, espece: String, numero: int, position: Vector3) -> void:
+func _poser_corps(id: String, espece: String, numero: int, pos: Vector3) -> void:
 	if not _shapes_rid.has(espece):
 		return
 	var shapes: Array = _shapes_rid[espece]
@@ -960,7 +960,7 @@ func _poser_corps(id: String, espece: String, numero: int, position: Vector3) ->
 	PhysicsServer3D.body_set_collision_layer(body_rid, 1)
 	PhysicsServer3D.body_set_collision_mask(body_rid, 1)
 	PhysicsServer3D.body_set_state(body_rid, PhysicsServer3D.BODY_STATE_TRANSFORM,
-		Transform3D(Basis(), position + Vector3(0.0, stature * 0.5, 0.0)))
+		Transform3D(Basis(), pos + Vector3(0.0, stature * 0.5, 0.0)))
 	_corps_actifs[id] = {"rid": body_rid, "numero": numero}
 
 # LIBERE LE BODY RID (immediat, pas de queue). L'appelant peut immediatement
@@ -1029,9 +1029,9 @@ const MARGE_TUILE_RENDU := 8.0
 const AABB_TUILE_Y_BAS := -20.0
 const AABB_TUILE_Y_HAUTEUR := 140.0
 
-func _cle_de_lot(espece: String, stade: String, position: Vector3) -> String:
-	var tx := int(floor(position.x / TAILLE_TUILE_RENDU))
-	var tz := int(floor(position.z / TAILLE_TUILE_RENDU))
+func _cle_de_lot(espece: String, stade: String, pos: Vector3) -> String:
+	var tx := int(floor(pos.x / TAILLE_TUILE_RENDU))
+	var tz := int(floor(pos.z / TAILLE_TUILE_RENDU))
 	return "%s#%s#%d#%d" % [espece, stade, tx, tz]
 
 # Le lot d'une cle, cree au premier besoin. Rend un Dictionary VIDE quand l'entree

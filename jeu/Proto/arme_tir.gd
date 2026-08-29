@@ -16,6 +16,13 @@ extends Node3D
 # LA FACE AVANT DU CUBE : cube de 0.3 m, moitie = 0.15 m sur -Z local.
 @export var decalage_avant: float = 0.15
 
+# CORPS-A-CORPS AU CLIC DROIT : portee courte, cadence rapide, ennemis
+# uniquement. Le manager fait le test cone.
+@export var portee_melee: float = 2.0
+@export var degat_melee: int = 2
+@export var cadence_melee: float = 0.4  # secondes entre deux coups
+var _cooldown_melee: float = 0.0
+
 # LE PREMIER CLIC POSE mouse_mode=CAPTURED (voir personnage.gd) et
 # personnage.gd ne consomme PAS l'evenement -- l'ordre d'appel de
 # _unhandled_input entre noeuds n'est pas garanti. Sans ce flag, si
@@ -25,7 +32,7 @@ extends Node3D
 # le premier clic est donc toujours consomme par la capture.
 var _prete: bool = false
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# APRES UN ECHAP (mode=VISIBLE), le prochain clic recapture -- il ne
 	# doit pas tirer. Sans ce reset, _prete reste true entre deux captures
 	# et un clic de recapture tire par accident. La regle est la meme
@@ -35,6 +42,10 @@ func _process(_delta: float) -> void:
 		_prete = true
 	else:
 		_prete = false
+	# Horloge de cadence corps-a-corps : decroit meme quand curseur
+	# relache, sinon un ECHAP prolongerait le cooldown au retour.
+	if _cooldown_melee > 0.0:
+		_cooldown_melee = max(0.0, _cooldown_melee - delta)
 	# RECOPIE TANGAGE YEUX : l'arme est enfant direct de Personnage (pas de
 	# Personnage/Yeux) pour eviter la purge silencieuse de Godot 4 sur les
 	# enfants ajoutes a des noeuds internes d'instances sans editable_children
@@ -51,15 +62,28 @@ func _process(_delta: float) -> void:
 func _unhandled_input(evenement: InputEvent) -> void:
 	if not (evenement is InputEventMouseButton):
 		return
-	if evenement.button_index != MOUSE_BUTTON_LEFT:
-		return
 	if not evenement.pressed:
 		return
 	if not _prete:
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		return
-	_tirer()
+	if evenement.button_index == MOUSE_BUTTON_RIGHT:
+		_tirer()
+	elif evenement.button_index == MOUSE_BUTTON_LEFT:
+		_frapper()
+
+func _frapper() -> void:
+	if _cooldown_melee > 0.0:
+		return
+	var manager := get_tree().get_first_node_in_group(&"manager_proto")
+	if manager == null:
+		push_warning("arme_tir : manager_proto introuvable, coup ignore")
+		return
+	var direction := -global_transform.basis.z
+	var origine := to_global(Vector3(0, 0, -decalage_avant))
+	manager.call("frapper_melee", origine, direction, portee_melee, degat_melee)
+	_cooldown_melee = cadence_melee
 
 func _tirer() -> void:
 	# BALLES SIMULEES EN DONNEES : on ne cree PAS de projectile physique

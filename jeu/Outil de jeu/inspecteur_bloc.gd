@@ -23,8 +23,14 @@ extends Node3D
 var _ressources: Node = null
 var _stock_joueur: Node = null
 var _cellule_active: Variant = null  # Vector3i ou null
+var _grille_active: GridMap = null   # pour convertir cellule -> monde
 var _nom_item_actif: String = ""
 var _verrouille: bool = false
+
+# PORTEE D'EXTRACTION : le joueur ne peut collecter que dans un rayon de N
+# cases autour de lui. Au-dela, l'inspecteur affiche la cellule (halo + label)
+# mais preleve() est refuse silencieusement.
+const PORTEE_EXTRACTION_CASES := 3
 
 # EXTRACTION AU CLIC GAUCHE : 1 unite au moment du clic, puis 1
 # unite par seconde tant qu'il est maintenu. `_extract_maintenu` reste
@@ -63,11 +69,30 @@ func _extraire_une_unite() -> void:
 		return
 	if _ressources == null:
 		return
+	# Portee : refuse si le joueur est a plus de PORTEE_EXTRACTION_CASES du
+	# centre de la cellule. Distance 3D en metres.
+	if _grille_active == null:
+		return
+	var observateur := get_tree().get_first_node_in_group(&"observateur") as Node3D
+	if observateur == null:
+		return
+	var centre_cellule := _grille_active.to_global(_grille_active.map_to_local(_cellule_active))
+	var portee_metres: float = float(PORTEE_EXTRACTION_CASES) * _grille_active.cell_size.x
+	if (centre_cellule - observateur.global_position).length() > portee_metres:
+		return
 	var pris := float(_ressources.preleve(_cellule_active, 1.0))
 	if pris <= 0.0:
 		return
 	if _stock_joueur != null:
 		_stock_joueur.ajouter(pris)
+	# NOURRIR LE PERSONNAGE : chaque unite prelevee sur un bloc profile
+	# donne 1.5 point de faim au joueur (et reset son compteur inanition).
+	if observateur.has_method("nourrir"):
+		observateur.call("nourrir", 1.5)
+	# Bloc bleu = nourriture : +1.5 a la faim du joueur si l'item pointe est
+	# un bloc_bleu et que l'observateur expose la methode nourrir().
+	if _nom_item_actif == "bloc_bleu" and observateur.has_method("nourrir"):
+		observateur.nourrir(1.5)
 
 func _process(delta: float) -> void:
 	# MAINTIEN DU CLIC GAUCHE : 1 unite par seconde apres le clic initial.
@@ -90,8 +115,14 @@ func _process(delta: float) -> void:
 	# Persistance : quand le viseur quitte un bloc, on garde la derniere info.
 	if not _verrouille and not cible.is_empty():
 		_cellule_active = cible.cellule
+		_grille_active = cible.grille
 		var item: int = cible.grille.get_cell_item(cible.cellule)
-		_nom_item_actif = cible.grille.mesh_library.get_item_name(item) if cible.grille.mesh_library != null else "?"
+		if item == GridMap.INVALID_CELL_ITEM:
+			# Case creusee : le raycast a frappe une cellule videe. Aucun item
+			# a nommer -- get_item_name(-1) rale.
+			_nom_item_actif = "(vide)"
+		else:
+			_nom_item_actif = cible.grille.mesh_library.get_item_name(item) if cible.grille.mesh_library != null else "?"
 
 	if _cellule_active == null:
 		_label.visible = false

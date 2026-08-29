@@ -5,8 +5,7 @@
 [ext_resource type="Script" uid="uid://n0vcmkgvpq5l" path="res://jeu/Proto/terrain_streame.gd" id="2_visible_mm"]
 [ext_resource type="Resource" path="res://jeu/Proto/proto_carte.tres" id="3_carte"]
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="4_personnage"]
-[ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="9_prod"]
-[ext_resource type="Script" path="res://jeu/terrain/murs_limite_boite.gd" id="12_murs"]
+[ext_resource type="Script" uid="uid://cc3ow046hewcb" path="res://jeu/terrain/murs_limite_boite.gd" id="12_murs"]
 [ext_resource type="PackedScene" uid="uid://cl4ka3hcjrm3y" path="res://jeu/Proto/arme.tscn" id="13_arme"]
 [ext_resource type="Script" uid="uid://bixhgftw3ffyi" path="res://jeu/Proto/arme_tir.gd" id="14_tir"]
 [ext_resource type="Script" uid="uid://brarnqvow1rlx" path="res://jeu/Proto/manager_proto.gd" id="15_mgr"]
@@ -63,18 +62,10 @@ directional_shadow_max_distance = 400.0
 [node name="Ambiance" type="WorldEnvironment" parent="." unique_id=958263169]
 environment = SubResource("Environment_ambiance")
 
-[node name="Producteur" parent="." unique_id=106170456 instance=ExtResource("9_prod")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 14.961149, 129.5379)
-
-[node name="Producteur2" parent="." unique_id=1159118802 instance=ExtResource("9_prod")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 10, 14.943811, 149.04399)
-
-[node name="Producteur3" parent="." unique_id=205883804 instance=ExtResource("9_prod")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 20, 14.731552, 123.30885)
-
 [node name="Limites" type="Node3D" parent="." unique_id=679171299]
 
 [node name="Murs" type="StaticBody3D" parent="Limites" unique_id=1443053294]
+collision_mask = 0
 script = ExtResource("12_murs")
 carte = ExtResource("3_carte")
 

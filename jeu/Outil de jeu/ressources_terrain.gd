@@ -24,6 +24,7 @@ extends Node
 # rend l'entier plancher pour l'affichage et la mecanique.
 
 const ProfilBloc = preload("res://jeu/Outil de jeu/profil_bloc.gd")
+const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 const INTERVALLE_TICK := 1.0  # 1 Hz
 
 @export var profils: Array[Resource] = []
@@ -45,14 +46,25 @@ func _ready() -> void:
 		push_error("ressources_terrain.gd : GridMap sans mesh_library")
 		return
 
+	# Scanner la CARTE DATA (source de verite non-streamee), pas le GridMap
+	# `_grille` (streame -- ne contient que les cellules autour du joueur au
+	# moment du scan). Sans ca, les blocs bleus places loin de la position
+	# initiale n'auraient jamais de reserve.
+	var carte: Resource = _grille.get("carte") as Resource
+	if carte == null:
+		push_error("ressources_terrain.gd : GridMap sans propriete carte, scan impossible")
+		return
+
 	var par_nom: Dictionary = {}
 	for p in profils:
 		if p == null:
 			continue
 		par_nom[String(p.nom_item)] = p
 
-	for cellule in _grille.get_used_cells():
-		var item: int = _grille.get_cell_item(cellule)
+	var particularites: Dictionary = carte.particularites
+	for cellule in particularites:
+		var code: int = int(particularites[cellule])
+		var item: int = CarteTerrain.item_du_code(code)
 		var nom := meshlib.get_item_name(item)
 		var profil = par_nom.get(nom, null)
 		if profil == null:

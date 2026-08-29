@@ -5,3 +5,5 @@
 [resource]
 script = ExtResource("1_profil")
 nom_item = "bloc_bleu"
+reserve = 100
+quantite_regen = 1

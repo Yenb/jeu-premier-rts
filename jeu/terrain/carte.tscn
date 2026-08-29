@@ -4,11 +4,7 @@
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="1_phflo"]
 [ext_resource type="Texture2D" uid="uid://cayacutr100j6" path="res://jeu/terrain/thumbnail.jpg" id="2_ithla"]
 [ext_resource type="Script" uid="uid://bbi6ytwr53gcr" path="res://jeu/terrain/outil_sculpture.gd" id="3_lon83"]
-[ext_resource type="PackedScene" path="res://jeu/plantes/arbre.tscn" id="4_hp2bx"]
 [ext_resource type="Script" uid="uid://colkh0daih7nc" path="res://jeu/terrain/outil_remplissage.gd" id="4_vepg6"]
-[ext_resource type="Script" uid="uid://bmypt23ew8xau" path="res://jeu/plantes/couvert.gd" id="5_couvert"]
-[ext_resource type="PackedScene" path="res://jeu/plantes/herbe.tscn" id="5_hp2bx"]
-[ext_resource type="Script" uid="uid://dljn3feguvcg" path="res://jeu/plantes/espece.gd" id="7_espece"]
 [ext_resource type="PackedScene" uid="uid://b8mm7aykyu1yv" path="res://jeu/Outil de jeu/le transporteur .glb" id="10_p4i2r"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_ithla"]
@@ -33,69 +29,6 @@ data = {
 }
 metadata/_editor_floor_ = Vector3(0, 5, 0)
 
-[node name="Couvert" type="Node3D" parent="Terrain" unique_id=1764854831]
-script = ExtResource("5_couvert")
-ticks_prechauffage = 500
-delta_prechauffage = 10.0
-pas_simulation = 6.25
-ticks_max_par_image = 10
-
-[node name="Arbre" type="Node" parent="Terrain/Couvert" unique_id=739125010]
-script = ExtResource("7_espece")
-nom = "arbre"
-modele_stade_1 = "res://jeu/plantes/jeune pousse.glb"
-modele_stade_2 = "res://jeu/plantes/mature.glb"
-modele_stade_3 = "res://jeu/plantes/epuisé.glb"
-rayon_dispersion_min = 2
-rayon_dispersion_max = 10
-max_voisins = 4
-intervalle_reproduction = 100.0
-max_produits_par_plante = 50
-ressource = "graine"
-modele_produit = "res://jeu/plantes/seve.glb"
-rayon_collision = 1.5
-couleur = Color(0.32, 0.55, 0.24, 1)
-
-[node name="Herbe" type="Node" parent="Terrain/Couvert" unique_id=27824478]
-script = ExtResource("7_espece")
-nom = "herbe"
-nom_stade_1 = "brin"
-duree_stade_1 = 25.0
-stature_stade_1 = 0.4
-nom_stade_2 = "touffe"
-duree_stade_2 = 35.0
-stature_stade_2 = 0.8
-nom_stade_3 = "montee"
-duree_stade_3 = 40.0
-stature_stade_3 = 1.0
-marge_couches = 6
-trouee_max_voisins = 13
-rayon_dispersion_min = 1
-rayon_dispersion_max = 2
-max_voisins = 40
-stade_reproduction_max = 3
-intervalle_reproduction = 30.0
-stade_production_min = 99
-max_produits_par_plante = 0
-ralentissement_dernier_stade = 1.0
-duree_vie_produit = 60.0
-ressource = "herbe"
-
-[node name="SemisArbre2" parent="Terrain/Couvert" unique_id=177304090 instance=ExtResource("4_hp2bx")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5.073414, 14.089966, 12.861382)
-
-[node name="SemisArbre" parent="Terrain/Couvert" unique_id=1006002471 instance=ExtResource("4_hp2bx")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 41.09968, 13.946219, 74.47587)
-
-[node name="SemisHerbe" parent="Terrain/Couvert" unique_id=1729264829 instance=ExtResource("5_hp2bx")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 16.017881, 94.707245)
-
-[node name="SemisHerbe2" parent="Terrain/Couvert" unique_id=1032153529 instance=ExtResource("5_hp2bx")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 32.035763, -83.09564)
-
-[node name="SemisHerbe3" parent="Terrain/Couvert" unique_id=452191354 instance=ExtResource("5_hp2bx")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 107.85072, 24.177172, 3.7963257)
-
 [node name="Camera" type="Camera3D" parent="." unique_id=1417738536]
 transform = Transform3D(1, 0, 0, 0, 0.3889238, 0.9212699, 0, -0.9212699, 0.3889238, 22.862053, 167.9878, 96.29242)
 
@@ -108,7 +41,7 @@ directional_shadow_max_distance = 400.0
 environment = SubResource("Environment_vepg6")
 
 [node name="Sprite3D" type="Sprite3D" parent="." unique_id=115367865]
-transform = Transform3D(68, 0, 0, 0, -2.9723744e-06, 68, 0, -68, -2.9723744e-06, 2.46978, 24.941154, 1.452796)
+transform = Transform3D(68, 0, 0, 0, -2.9723744e-06, 68, 0, -68, -2.9723744e-06, 2.46978, 37.516277, 1.452796)
 visible = false
 transparency = 0.82
 texture = ExtResource("2_ithla")

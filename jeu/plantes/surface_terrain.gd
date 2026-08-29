@@ -137,7 +137,7 @@ static func plancher_de_carte(carte: Resource) -> int:
 	var reference: int = carte.sommet_de_base()
 	var premier: bool = volumes.size() < carte.colonnes()
 	for colonne in volumes:
-		var haut: Variant = carte.sommet(colonne)
+		var haut: Variant = carte.sommet_max_colonne(colonne)
 		if haut == null:
 			continue
 		var couche: int = int(haut)
@@ -181,7 +181,7 @@ static func colonne_de(position: Vector3, releve: Dictionary) -> Vector2i:
 static func couche_de(colonne: Vector2i, releve: Dictionary) -> Variant:
 	var carte = releve.get("carte")
 	if carte != null:
-		return carte.sommet(colonne)
+		return carte.sommet_max_colonne(colonne)
 	var sommets: Dictionary = releve.sommets
 	if not sommets.has(colonne):
 		return null

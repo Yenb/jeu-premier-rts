@@ -181,7 +181,7 @@ func _carte_est_un_registre() -> void:
 
 	var relue: Resource = ResourceLoader.load(
 		CHEMIN_CARTE, "", ResourceLoader.CACHE_MODE_IGNORE)
-	_v.v(relue != null and relue.sommet(Vector2i(1, 1)) == relue.sommet_de_base() + 1,
+	_v.v(relue != null and relue.sommet_max_colonne(Vector2i(1, 1)) == relue.sommet_de_base() + 1,
 		"le relief n'est pas sur le disque apres l'ecriture de l'archiviste")
 
 	archiviste.queue_free()

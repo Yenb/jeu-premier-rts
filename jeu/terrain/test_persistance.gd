@@ -187,7 +187,7 @@ func _fenetre_sans_colonnes() -> void:
 	var vides := 0
 	for x in range(-8, 8):
 		for z in range(-8, 8):
-			if carte.sommet(Vector2i(x, z)) == null:
+			if carte.sommet_max_colonne(Vector2i(x, z)) == null:
 				vides += 1
 	_v.v(vides == 0,
 		"%d colonnes creusees par un enregistrement sans colonnes connues" % vides)
@@ -251,23 +251,23 @@ func _deplacer_n_efface_rien() -> void:
 	for y in range(base + 1, base + 5):
 		grille.set_cell_item(Vector3i(ici.x, y, ici.y), int(bloc))
 	Outil.enregistrer_ce_qui_est_pose(grille, carte)
-	_v.v(carte.sommet(ici) == base + 4, "la sculpture de depart n'est pas enregistree")
+	_v.v(carte.sommet_max_colonne(ici) == base + 4, "la sculpture de depart n'est pas enregistree")
 
 	# LE DEPLACEMENT, tres loin.
 	var ailleurs := Vector2i(120, 120)
 	var fait: bool = await outil.deplacer_vers(ailleurs)
 	_v.v(fait, "le deplacement n'a rien fait : le test ne prouve rien")
-	_v.v(carte.sommet(ici) == base + 4,
+	_v.v(carte.sommet_max_colonne(ici) == base + 4,
 		"deplacer le repere a efface ce qui etait sculpte ailleurs : sommet %s" % [
-			carte.sommet(ici)])
+			carte.sommet_max_colonne(ici)])
 
 	# On sculpte la-bas aussi, et les DEUX doivent tenir.
 	var la_bas := Vector2i(122, 122)
 	for y in range(base + 1, base + 3):
 		grille.set_cell_item(Vector3i(la_bas.x, y, la_bas.y), int(bloc))
 	Outil.enregistrer_ce_qui_est_pose(grille, carte)
-	_v.v(carte.sommet(la_bas) == base + 2, "la sculpture d'apres n'est pas enregistree")
-	_v.v(carte.sommet(ici) == base + 4, "sculpter ailleurs a efface la premiere")
+	_v.v(carte.sommet_max_colonne(la_bas) == base + 2, "la sculpture d'apres n'est pas enregistree")
+	_v.v(carte.sommet_max_colonne(ici) == base + 4, "sculpter ailleurs a efface la premiere")
 
 	# ET LE LANCEMENT ne doit rien perdre non plus.
 	var terrain: GridMap = TerrainVisible.new()
@@ -281,9 +281,9 @@ func _deplacer_n_efface_rien() -> void:
 	_racine.add_child(terrain)
 	await process_frame
 
-	_v.v(carte.sommet(ici) == base + 4,
-		"le lancement a efface ce qui etait loin du repere : sommet %s" % [carte.sommet(ici)])
-	_v.v(carte.sommet(la_bas) == base + 2, "le lancement a efface la seconde sculpture")
+	_v.v(carte.sommet_max_colonne(ici) == base + 4,
+		"le lancement a efface ce qui etait loin du repere : sommet %s" % [carte.sommet_max_colonne(ici)])
+	_v.v(carte.sommet_max_colonne(la_bas) == base + 2, "le lancement a efface la seconde sculpture")
 
 	terrain.queue_free()
 	coin.queue_free()
@@ -308,10 +308,10 @@ func _colonne_creusee() -> void:
 	# qui protege tout le reste : absente peut vouloir dire creusee, ou jamais
 	# chargee, et rien ne les distingue. On garde.
 	Outil.enregistrer_ce_qui_est_pose(grille, carte)
-	_v.v(carte.sommet(trou) != null,
+	_v.v(carte.sommet_max_colonne(trou) != null,
 		"une colonne absente de la grille a ete creusee : le travail d'ailleurs peut partir")
-	_v.v(carte.sommet(Vector2i(0, 0)) != null, "le terrain autour a ete creuse")
-	_v.v(carte.sommet(Vector2i(40, 40)) != null, "une colonne lointaine a ete creusee")
+	_v.v(carte.sommet_max_colonne(Vector2i(0, 0)) != null, "le terrain autour a ete creuse")
+	_v.v(carte.sommet_max_colonne(Vector2i(40, 40)) != null, "une colonne lointaine a ete creusee")
 
 	grille.queue_free()
 	_faites += 1
@@ -323,16 +323,16 @@ func _peindre_ne_vide_pas() -> void:
 	var grille := _grille()
 	var colonne := Vector2i(9, 9)
 
-	_v.v(carte.sommet(colonne) == base,
+	_v.v(carte.sommet_max_colonne(colonne) == base,
 		"la colonne de depart ne porte pas le terrain par defaut")
 
 	# LE GESTE : UNE cellule, tout en bas, sur une colonne que rien n'a chargee.
 	grille.set_cell_item(Vector3i(colonne.x, carte.couche_base, colonne.y), 0)
 	Outil.enregistrer_ce_qui_est_pose(grille, carte)
 
-	_v.v(carte.sommet(colonne) == base,
+	_v.v(carte.sommet_max_colonne(colonne) == base,
 		"peindre une cellule en bas a vide la colonne : sommet %s au lieu de %d" % [
-			carte.sommet(colonne), base])
+			carte.sommet_max_colonne(colonne), base])
 	for couche in range(carte.couche_base, base + 1):
 		if not carte.est_pleine(colonne, couche):
 			_v.v(false, "la couche %d a disparu sous la cellule peinte" % couche)

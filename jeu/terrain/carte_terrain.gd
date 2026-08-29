@@ -70,6 +70,23 @@ extends "res://jeu/monde/registre.gd"
 # ResourceSaver -- une donnee qui sait s'ecrire elle-meme est une donnee qu'on
 # oublie d'ecrire ailleurs.
 #
+# ELLE PUBLIE SES CHANGEMENTS COLONNE PAR COLONNE, pour qui veut suivre. Chaque
+# poser_masque qui modifie reellement une colonne l'inscrit dans UN ensemble PAR
+# CONSOMMATEUR NOMME que `drainer_modifications(nom)` rend et VIDE. Pas de
+# signal Godot : le framework est data pur (aucun `signal` dans `scripts/`), un
+# appelant DRAINE quand il veut au lieu qu'on lui pousse. UN dict par
+# consommateur, jamais un dict partage : deux appelants qui drainent le meme
+# ensemble se le voleraient au premier appel. Le premier drain d'un nom cree
+# son entree ; les modifications ANTERIEURES a cet enregistrement sont
+# perdues -- c'est acceptable car les appelants du jeu (rendu streame,
+# collision streame) font un rafraichissement complet a leur `_ready`.
+#
+# L'INSCRIPTION EST GATEE PAR `is_editor_hint()`. En editeur, l'outil de
+# sculpture appelle poser_masque des milliers de fois sans qu'aucun streamer ne
+# draine ; l'inscription y grossirait sans utilite. En jeu, le drain vide au fil
+# de l'eau. Cet etat n'est jamais persiste -- il ne vit que pour la duree d'une
+# session.
+#
 # Regles tenues : aucun hasard. Aucun texte visible par le joueur. Aucun nom de
 # contenu -- cette donnee ne sait pas ce qui pousse ni ce qui marche dessus.
 # Rien de scripts/, data/ ni documents/ n'est lu ni ecrit.
@@ -110,6 +127,12 @@ const ORIENTATIONS := 32
 # Combien de couches un masque peut porter. Le bit de signe reste libre : un
 # masque negatif se compare mal et se lit encore plus mal.
 const COUCHES_MAXIMALES := 63
+
+# nom_consommateur (String) -> Dictionary[colonne Vector2i -> true]. Chaque
+# consommateur a son propre ensemble de colonnes modifiees. Etat runtime, jamais
+# persiste. Voir en-tete section "ELLE PUBLIE SES CHANGEMENTS COLONNE PAR
+# COLONNE".
+var _drains: Dictionary = {}
 
 # Le masque du terrain plein par defaut, celui que rend toute colonne non
 # sculptee : les `couches_pleines` premieres couches, depuis la base.
@@ -167,11 +190,63 @@ func est_pleine(colonne: Vector2i, couche: int) -> bool:
 # LE SOMMET N'EST PLUS LE VOLUME, et c'est tout l'objet du changement : deux
 # colonnes de meme sommet peuvent etre creusees differemment. Ce qui DESSINE lit
 # le masque ; ce qui POSE quelque chose DESSUS lit le sommet.
-func sommet(colonne: Vector2i) -> Variant:
+#
+# `sommet_max_colonne` rend la COUCHE MAX (int) sans tenir compte des sous-cubes
+# entames. Utilite : rendu AABB, tests de sculpture (le bloc EST la, meme s'il
+# est cassé). Pour tout ce qui doit interagir physiquement avec le sol (chute,
+# snap Y, blocage, tir), utiliser `sommet(x_monde, z_monde)` qui rend la Y monde
+# precise au sous-cube pres.
+func sommet_max_colonne(colonne: Vector2i) -> Variant:
 	var bits := masque(colonne)
 	if bits == 0:
 		return null
 	return couche_base + rang_le_plus_haut(bits)
+
+# LA Y MONDE DU SOMMET REEL au point (x_monde, z_monde). Prend en compte les
+# sous-cubes cassés dans la couche du haut : si la cellule sommet a un sous-cube
+# du haut cassé pile sous (x, z), la Y descend d'1/3 de cote_cellule (ou plus si
+# la rangée sous est aussi cassée). Retourne null si vide/hors emprise.
+#
+# CE QU'ELLE EST : la vérité au sous-cube près, la source pour tout ce qui
+# doit tomber/reposer sur le sol. La doctrine data l'exige : un ennemi tombe
+# dans un trou d'un sous-cube parce que la carte le sait.
+func sommet(x_monde: float, z_monde: float) -> Variant:
+	var cote_f: float = cote
+	var cx: int = int(floor(x_monde / cote_f))
+	var cz: int = int(floor(z_monde / cote_f))
+	var col := Vector2i(cx, cz)
+	var couche_max: Variant = sommet_max_colonne(col)
+	if couche_max == null:
+		return null
+	var couche: int = int(couche_max)
+	# Position du point DANS la cellule, ramenee a [0, 3) sur chaque axe.
+	var x_local: float = x_monde - float(cx) * cote_f
+	var z_local: float = z_monde - float(cz) * cote_f
+	var ix: int = clampi(int(floor(x_local * 3.0 / cote_f)), 0, 2)
+	var iz: int = clampi(int(floor(z_local * 3.0 / cote_f)), 0, 2)
+	# Cherche le plus haut iy (dans la couche sommet) dont le sous-cube (ix, iy, iz)
+	# est plein. Si aucun, la cellule sommet est trouee sous ce point --
+	# descendre a la couche du dessous.
+	var cellule := Vector3i(cx, couche, cz)
+	var masque_sc: int = sous_cubes(cellule)
+	for iy in range(2, -1, -1):
+		var idx: int = ix + iy * 3 + iz * 9
+		if (masque_sc & (1 << idx)) != 0:
+			return float(couche) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
+	# Aucun sous-cube plein sous ce point dans la couche sommet.
+	# Descendre : cherche la premiere couche sous qui a un sous-cube plein a (ix, iz).
+	var c := couche - 1
+	while c >= couche_base:
+		if not est_pleine(col, c):
+			c -= 1
+			continue
+		var m: int = sous_cubes(Vector3i(cx, c, cz))
+		for iy in range(2, -1, -1):
+			var idx2: int = ix + iy * 3 + iz * 9
+			if (m & (1 << idx2)) != 0:
+				return float(c) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
+		c -= 1
+	return null
 
 # LE RANG DU BIT LE PLUS HAUT, par dichotomie : six comparaisons au lieu de
 # soixante-trois. Ce n'est pas de l'elegance -- `sommet` est appele une fois par
@@ -229,6 +304,13 @@ func poser_masque(colonne: Vector2i, bits: int) -> bool:
 	# VOIR L'EN-TETE : c'est ici, et nulle part ailleurs, que la carte dit
 	# qu'elle a change. L'archiviste fait le reste.
 	marquer_sale()
+	# ET C'EST ICI QU'ELLE PUBLIE. Gate sur `is_editor_hint()` : en editeur,
+	# personne ne draine, les dicts grossiraient pour rien. Inscription dans
+	# TOUS les drains connus -- un consommateur enregistre est un consommateur
+	# qui verra.
+	if not Engine.is_editor_hint():
+		for nom in _drains:
+			_drains[nom][colonne] = true
 	return true
 
 # Ecrit une colonne PLEINE de la base jusqu'a `couche`. Le geste du sculpteur
@@ -236,6 +318,19 @@ func poser_masque(colonne: Vector2i, bits: int) -> bool:
 # Une couche sous la base vide la colonne.
 func sculpter(colonne: Vector2i, couche: int) -> bool:
 	return poser_masque(colonne, masque_plein(couche - couche_base + 1))
+
+# REND LES COLONNES MODIFIEES DEPUIS LE DERNIER APPEL DU CONSOMMATEUR `nom`, ET
+# VIDE SON ENSEMBLE. Chaque consommateur a son propre dict, jamais partage. Un
+# consommateur qui ne draine pas voit son dict grossir sans limite -- charge a
+# lui de drainer regulierement. Le premier appel d'un nom cree son entree.
+func drainer_modifications(nom: String) -> Array:
+	if not _drains.has(nom):
+		_drains[nom] = {}
+		return []
+	var dict: Dictionary = _drains[nom]
+	var liste: Array = dict.keys()
+	dict.clear()
+	return liste
 
 # Le nombre de colonnes qui s'ecartent du defaut : ce que la carte pese
 # reellement, par opposition a ce qu'elle couvre.
@@ -252,7 +347,7 @@ func colonnes_sculptees() -> int:
 # cellules depuis la meme carte, aux memes couches. Deux sources donneraient un
 # objet enfonce ou flottant au moment ou il bascule de l'une a l'autre.
 func hauteur_du_sol(colonne: Vector2i) -> Variant:
-	var haut: Variant = sommet(colonne)
+	var haut: Variant = sommet_max_colonne(colonne)
 	if haut == null:
 		return null
 	return float(int(haut) + 1) * cote
@@ -344,6 +439,117 @@ func retirer_cellule(cellule: Vector3i) -> bool:
 # defaut. Le terrain ordinaire n'y figure pas.
 func cellules_particulieres() -> int:
 	return particularites.size()
+
+# ---- SUBDIVISION EN SOUS-CUBES (3x3x3 = 27) ----
+#
+# Chaque cellule peut etre entamée : le tir n'abat pas un bloc de 2 m³, il
+# retire un petit morceau. La resolution est 3x3x3 sous-cubes (chacun ~2/3 m
+# de cote). Un masque 32 bits code l'etat (27 bits utiles + 5 reserve),
+# bit `i = ix + iy*3 + iz*9`. Bit a 1 = plein, bit a 0 = detruit.
+#
+# UNE CELLULE PLEINE N'A PAS D'ENTREE : le dict `_masques_sous_cube` ne
+# stocke QUE les cellules entamees. Le defaut est gratuit. Meme principe que
+# `particularites` et `volumes`.
+#
+# UNE CELLULE ENTIEREMENT VIDEE (masque = 0) sort du dict ET declenche
+# `retirer_cellule` pour la coherence avec `sommet`, `particularites` et la
+# gestion streamer. Sans ca, la couche resterait "pleine" au masque colonne
+# alors qu'aucun sous-cube ne reste.
+const MASQUE_SOUS_CUBE_PLEIN := (1 << 27) - 1
+
+# Nombre de PV a atteindre sur un sous-cube pour qu'il casse. Meme cap partout,
+# quelle que soit la source (tir, pioche, autre) -- la difference se fait sur
+# la QUANTITE ajoutee par coup, pas sur le cap.
+const MAX_PV_SOUS_CUBE := 50
+
+var _masques_sous_cube: Dictionary = {}  # Vector3i cellule -> int masque
+# PV par sous-cube : cellule -> {idx -> pv}. Etat data, jamais persiste (idem
+# `_drains`). Publie dans les drains a chaque changement pour que le rendu
+# puisse foncer la couleur du mini-cube au fil des coups.
+var _pv_sous_cubes: Dictionary = {}
+
+# Le masque des sous-cubes d'une cellule. Une cellule dont la couche n'est
+# PAS pleine dans le masque colonne rend 0 : elle n'existe plus, aucun
+# sous-cube dedans. Sinon absent du dict = plein par defaut (gratuit),
+# present = son masque.
+func sous_cubes(cellule: Vector3i) -> int:
+	if not est_pleine(Vector2i(cellule.x, cellule.z), cellule.y):
+		return 0
+	return int(_masques_sous_cube.get(cellule, MASQUE_SOUS_CUBE_PLEIN))
+
+func est_sous_cube_plein(cellule: Vector3i, sous_index: int) -> bool:
+	if sous_index < 0 or sous_index >= 27:
+		return false
+	return (sous_cubes(cellule) & (1 << sous_index)) != 0
+
+# Retire un sous-cube. Rend true si l'etat a change (bit etait a 1).
+# Publie la colonne dans tous les drains connus -- meme mecanique que
+# `poser_masque`. Cellule entierement videe : erase du dict + retire la
+# couche via `retirer_cellule` (qui republie aussi la colonne, mais le
+# dict de drain a des cles uniques, pas de doublon effectif).
+func casser_sous_cube(cellule: Vector3i, sous_index: int) -> bool:
+	if sous_index < 0 or sous_index >= 27:
+		return false
+	if not est_pleine(Vector2i(cellule.x, cellule.z), cellule.y):
+		return false
+	var bit := 1 << sous_index
+	var actuel: int = int(_masques_sous_cube.get(cellule, MASQUE_SOUS_CUBE_PLEIN))
+	if (actuel & bit) == 0:
+		return false
+	var nouveau: int = actuel & ~bit
+	if nouveau == 0:
+		_masques_sous_cube.erase(cellule)
+		retirer_cellule(cellule)
+		return true
+	_masques_sous_cube[cellule] = nouveau
+	marquer_sale()
+	if not Engine.is_editor_hint():
+		var col := Vector2i(cellule.x, cellule.z)
+		for nom in _drains:
+			_drains[nom][col] = true
+	return true
+
+# PV D'UN SOUS-CUBE : accumule des degats sans casser tant que < MAX_PV.
+# Chaque appel ajoute `quantite` PV. Retourne true si le sous-cube A ETE
+# CASSE par cet appel (les PV atteignent MAX_PV et le sous-cube est retire
+# du dict). Publie dans les drains -- que les degats ou la cassure survienne.
+func ajouter_pv_sous_cube(cellule: Vector3i, sous_index: int, quantite: int) -> bool:
+	if sous_index < 0 or sous_index >= 27:
+		return false
+	if not est_pleine(Vector2i(cellule.x, cellule.z), cellule.y):
+		return false
+	if not est_sous_cube_plein(cellule, sous_index):
+		return false
+	var par_idx: Dictionary = _pv_sous_cubes.get(cellule, {})
+	var pv_actuel: int = int(par_idx.get(sous_index, 0))
+	var pv_neuf: int = pv_actuel + quantite
+	if pv_neuf >= MAX_PV_SOUS_CUBE:
+		par_idx.erase(sous_index)
+		if par_idx.is_empty():
+			_pv_sous_cubes.erase(cellule)
+		else:
+			_pv_sous_cubes[cellule] = par_idx
+		# casser_sous_cube publie deja dans les drains.
+		casser_sous_cube(cellule, sous_index)
+		return true
+	par_idx[sous_index] = pv_neuf
+	_pv_sous_cubes[cellule] = par_idx
+	if not Engine.is_editor_hint():
+		var col := Vector2i(cellule.x, cellule.z)
+		for nom in _drains:
+			_drains[nom][col] = true
+	return false
+
+# Rend les PV accumules sur ce sous-cube (0 si aucun degat, 0 si absent).
+func pv_sous_cube(cellule: Vector3i, sous_index: int) -> int:
+	if sous_index < 0 or sous_index >= 27:
+		return 0
+	var par_idx: Dictionary = _pv_sous_cubes.get(cellule, {})
+	return int(par_idx.get(sous_index, 0))
+
+# Le dict des PV pour cette cellule (idx -> pv). Vide si aucun degat.
+func pv_sous_cubes_cellule(cellule: Vector3i) -> Dictionary:
+	return _pv_sous_cubes.get(cellule, {})
 
 # Le masque que decrivent des couches donnees. Sert a ceux qui relevent un
 # GridMap : ils voient des cellules, la carte veut un masque.

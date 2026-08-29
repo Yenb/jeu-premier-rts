@@ -263,9 +263,48 @@ bonne échelle, qu'une pente se monte. Elle ne simule rien du monde.
   le corps pivote, verticale = les yeux seuls s'inclinent, sous le quart de tour
 - curseur pris au PREMIER CLIC, rendu par Échap
 - le calcul est en fonctions pures : `personnage.gd:vitesse_voulue`,
-  `rotation_voulue`, `pivot_souris`, `inclinaison_voulue`, `souris_pilote`
+  `rotation_voulue`, `pivot_souris`, `inclinaison_voulue`, `souris_pilote`,
+  `vitesse_effective`
 - il est dans le groupe `observateur` : c'est ce lien, et lui seul, qui fait que
   le terrain et les objets se dessinent autour de lui
+
+Le personnage porte quatre systèmes internes tenus par `personnage.gd` (`vitesse`,
+`vitesse_saut`, `gravite`, etc. réglables à l'inspecteur) et un cinquième porté
+par le manager :
+
+- **Saut** — ESPACE (action `ui_accept`) déclenche une IMPULSION verticale
+  (`vitesse_saut`) seulement `is_on_floor()` : la hauteur atteinte vaut
+  `vitesse_saut² / (2·gravite)`.
+- **Sprint + endurance** — SHIFT (physique) multiplie la vitesse par
+  `vitesse_sprint_facteur` ; l'endurance (barre HUD haut-droite) se vide en
+  `endurance_temps_vidage` s, remplit en `endurance_temps_remplissage` s.
+  `vitesse_effective` donne trois zones : au-dessus de `ENDURANCE_SEUIL_SPRINT_PLEIN`
+  vitesse pleine, entre les deux seuils lerp vers marche, sous `ENDURANCE_SEUIL_MARCHE`
+  lerp vers `vitesse_essouffle`.
+- **Faim** — barre `faim_max` (HUD haut-droite sous l'endurance). Vidage cumulé :
+  `faim_vidage_base` + `faim_vidage_bouge` si le joueur bouge + `faim_vidage_combat`
+  si un bouton souris est tenu, le total est multiplié par `faim_facteur_sprint` si
+  SPRINT tenu. On la remplit en cliquant gauche sur un bloc profilé : chaque unité
+  prélevée par `inspecteur_bloc._extraire_une_unite` appelle `personnage.nourrir(1.5)`.
+- **Inanition** — le compteur `_temps_sans_manger` ne monte QUE si `_faim <= 0`.
+  Trois seuils : `INANITION_SEUIL_LEGER/MOYEN/LOURD`. `INANITION_FACTEUR_*`
+  multiplie `vitesse_effective` (léger/moyen/lourd). Drains `INANITION_DRAIN_*` PV/s
+  accumulés en float, appliqués au manager via `retirer_pv_joueur`. `nourrir()` reset
+  le compteur et l'accumulateur. Barre HUD dédiée avec deux marqueurs noirs aux
+  paliers 60 s et 120 s.
+- **PV joueur** — `manager_proto.gd:_pv_joueur` (init `PV_JOUEUR_MAX`, barre HUD
+  bas-centre). Contact ennemi (test cylindrique `RAYON_CONTACT_CARRE_JOUEUR` × ±1.5 m)
+  draine `DEGAT_CARRE_PAR_S` PV/s. Drain inanition passe par `retirer_pv_joueur`.
+  À 0 PV : `get_tree().paused = true`.
+
+Deux armes coexistent sur `arme_tir.gd` (enfant du personnage) :
+
+- **CLIC DROIT** — tir (`_tirer` → `manager.spawn_balle`, projectile data).
+- **CLIC GAUCHE** — corps-à-corps (`_frapper` → `manager.frapper_melee`, segment
+  devant l'arme, portée `portee_melee`, dégât `degat_melee`, cadence `cadence_melee`)
+  ET collecte (l'inspecteur préleve 1 unité sur le bloc pointé si dans
+  `PORTEE_EXTRACTION_CASES` cases, appelle `nourrir(1.5)`). Les deux systèmes
+  tournent en parallèle sur le même clic.
 
 ---
 

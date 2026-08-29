@@ -13,6 +13,7 @@ config_version=5
 config/name="Premier jeu rst"
 run/main_scene="uid://dg7xc0kbdbc5d"
 config/features=PackedStringArray("4.7", "Mobile")
+run/max_fps=60
 config/icon="res://icon.svg"
 
 [debug]
@@ -27,6 +28,7 @@ window/size/window_width_override=2300
 window/size/window_height_override=1400
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+window/vsync/vsync_mode=0
 
 [physics]
 
@@ -36,6 +38,6 @@ common/physics_interpolation=true
 
 [rendering]
 
-renderer/rendering_method="mobile"
 rendering_device/driver.windows="d3d12"
+renderer/rendering_method="mobile"
 occlusion_culling/use_occlusion_culling=true

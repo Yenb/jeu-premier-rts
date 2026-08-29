@@ -228,9 +228,9 @@ func _aller_retour() -> void:
 	_v.v(carte.colonnes_sculptees() == avant,
 		"l'aller-retour laisse %d colonnes stockees contre %d avant" % [
 			carte.colonnes_sculptees(), avant])
-	_v.v(carte.sommet(Vector2i(1003, -703)) == base + 2,
+	_v.v(carte.sommet_max_colonne(Vector2i(1003, -703)) == base + 2,
 		"le sommet monte n'a pas survecu a l'aller-retour")
-	_v.v(carte.sommet(Vector2i(996, -696)) == carte.couche_base,
+	_v.v(carte.sommet_max_colonne(Vector2i(996, -696)) == carte.couche_base,
 		"le sommet creuse n'a pas survecu a l'aller-retour")
 	grille.queue_free()
 
@@ -258,13 +258,13 @@ func _sculpture_enregistree() -> void:
 		chargees[c] = true
 	var changees := OutilFenetre.enregistrer_fenetre(grille, carte, CENTRE, DEMI, chargees)
 	_v.v(changees == 2, "%d colonnes changees, 2 sculptees" % changees)
-	_v.v(carte.sommet(butte) == base + 3,
-		"la butte s'ecrit a %s dans la carte, %d attendu" % [carte.sommet(butte), base + 3])
+	_v.v(carte.sommet_max_colonne(butte) == base + 3,
+		"la butte s'ecrit a %s dans la carte, %d attendu" % [carte.sommet_max_colonne(butte), base + 3])
 	# LE CAS QUE « n'ecrire que ce qu'on voit » RATERAIT.
-	_v.v(carte.sommet(trou) == null,
-		"le trou creuse jusqu'au vide n'est pas ecrit comme vide : %s" % [carte.sommet(trou)])
+	_v.v(carte.sommet_max_colonne(trou) == null,
+		"le trou creuse jusqu'au vide n'est pas ecrit comme vide : %s" % [carte.sommet_max_colonne(trou)])
 	# Et rien n'a bouge la ou la fenetre n'est pas.
-	_v.v(carte.sommet(Vector2i.ZERO) == base,
+	_v.v(carte.sommet_max_colonne(Vector2i.ZERO) == base,
 		"une colonne hors de la fenetre a ete touchee")
 	grille.queue_free()
 
@@ -390,7 +390,7 @@ func _vidage() -> void:
 	_v.v(carte.colonnes_sculptees() == sculptees_avant,
 		"enregistrer apres un vidage a ecrit dans la carte (%d colonnes contre %d)" % [
 			carte.colonnes_sculptees(), sculptees_avant])
-	_v.v(carte.sommet(Vector2i(1001, -701)) == base + 4,
+	_v.v(carte.sommet_max_colonne(Vector2i(1001, -701)) == base + 4,
 		"le relief sculpte a ete efface par un enregistrement apres vidage")
 
 	racine.queue_free()
@@ -444,9 +444,9 @@ func _deplacement() -> void:
 	# outil qui sauvegarde lui-meme est un outil de plus a ne pas oublier
 	# d'appeler le jour ou une autre donnee du monde change.
 	var colonne := butte
-	_v.v(carte.sommet(colonne) == base + 3,
+	_v.v(carte.sommet_max_colonne(colonne) == base + 3,
 		"la butte n'a pas ete enregistree avant le deplacement : sommet %s" % [
-			carte.sommet(colonne)])
+			carte.sommet_max_colonne(colonne)])
 	_v.v(carte.est_sale(),
 		"la carte n'est pas marquee apres un deplacement : rien ne l'ecrira jamais")
 
@@ -458,7 +458,7 @@ func _deplacement() -> void:
 	racine.add_child(archiviste)
 	_v.v(archiviste.ecrire_les_sales() == 1, "l'archiviste n'a pas ecrit la carte marquee")
 	var relue: Resource = ResourceLoader.load(chemin, "", ResourceLoader.CACHE_MODE_IGNORE)
-	_v.v(relue != null and relue.sommet(colonne) == base + 3,
+	_v.v(relue != null and relue.sommet_max_colonne(colonne) == base + 3,
 		"la butte n'est pas sur le disque apres l'ecriture de l'archiviste")
 
 	# 2. LA NOUVELLE ZONE EST RENDUE, et l'ancienne DECHARGEE.
@@ -504,7 +504,7 @@ func _creusement_refuse() -> void:
 		"la carte a ete creusee : %d colonnes stockees contre %d avant" % [
 			carte.colonnes_sculptees(), sculptees_avant])
 	for colonne in OutilFenetre.colonnes_de(loin, DEMI):
-		if carte.sommet(colonne) == null:
+		if carte.sommet_max_colonne(colonne) == null:
 			_v.v(false, "la colonne %v a ete creusee jusqu'au vide" % colonne)
 			break
 
@@ -554,8 +554,8 @@ func _chargement_partiel_ne_creuse_pas() -> void:
 		grille, carte, CENTRE, DEMI, chargees)
 
 	# CE QUI A ETE SCULPTE EST ECRIT.
-	_v.v(carte.sommet(butte) == base + 3,
-		"la butte n'a pas ete enregistree : sommet %s" % [carte.sommet(butte)])
+	_v.v(carte.sommet_max_colonne(butte) == base + 3,
+		"la butte n'a pas ete enregistree : sommet %s" % [carte.sommet_max_colonne(butte)])
 	_v.v(changees == 1, "%d colonnes changees, 1 attendue" % changees)
 
 	# CE QUE LA GRILLE PORTE HORS DES COLONNES CHARGEES EST ECRIT QUAND MEME :
@@ -564,16 +564,16 @@ func _chargement_partiel_ne_creuse_pas() -> void:
 	for y in range(carte.couche_base, base + 5):
 		grille.set_cell_item(Vector3i(hors.x, y, hors.y), bloc)
 	OutilFenetre.enregistrer_fenetre(grille, carte, CENTRE, DEMI, chargees)
-	_v.v(carte.sommet(hors) == base + 4,
+	_v.v(carte.sommet_max_colonne(hors) == base + 4,
 		"ce qui est sculpte hors des colonnes chargees n'est pas enregistre : sommet %s" % [
-			carte.sommet(hors)])
+			carte.sommet_max_colonne(hors)])
 
 	# CE QUI N'A JAMAIS ETE CHARGE NI SCULPTE EST INTACT -- ni creuse, ni stocke.
 	var creusees := 0
 	for i in range(moitie, toutes.size()):
 		if toutes[i] == hors:
 			continue
-		if carte.sommet(toutes[i]) == null:
+		if carte.sommet_max_colonne(toutes[i]) == null:
 			creusees += 1
 	_v.v(creusees == 0,
 		"%d colonnes jamais chargees ont ete creusees dans la carte" % creusees)
@@ -660,8 +660,8 @@ func _sans_fenetre_chargee() -> void:
 	_v.v(carte.est_sale(), "la carte n'est pas marquee : rien ne l'ecrira")
 
 	# LES DEUX NIVEAUX ET LEUR VIDE.
-	_v.v(carte.sommet(colonne) == base + 4,
-		"le sommet est %s, %d attendu" % [carte.sommet(colonne), base + 4])
+	_v.v(carte.sommet_max_colonne(colonne) == base + 4,
+		"le sommet est %s, %d attendu" % [carte.sommet_max_colonne(colonne), base + 4])
 	_v.v(carte.est_pleine(colonne, base),
 		"le sol du premier niveau a disparu")
 	_v.v(not carte.est_pleine(colonne, base + 1),
@@ -676,7 +676,7 @@ func _sans_fenetre_chargee() -> void:
 	OutilFenetre.enregistrer_ce_qui_est_pose(grille, carte)
 	_v.v(carte.masque(ailleurs) == avant,
 		"une colonne absente de la grille a ete modifiee : sculpter sans charger creuserait")
-	_v.v(carte.sommet(ailleurs) != null,
+	_v.v(carte.sommet_max_colonne(ailleurs) != null,
 		"une colonne absente de la grille a ete creusee")
 
 	# ET RIEN NE CHANGE quand on repasse sans avoir touche a la grille.

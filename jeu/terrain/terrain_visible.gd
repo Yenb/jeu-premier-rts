@@ -50,6 +50,12 @@ extends GridMap
 # de la file d'effacement, une colonne qui ne l'est plus sort de la file de pose,
 # sans qu'un bloc bouge.
 #
+# IL DRAINE LA CARTE A CHAQUE `_process`. Une colonne modifiee en jeu (creusee
+# par une balle, par exemple) est publiee par `carte_terrain.drainer_modifications`
+# ; ce noeud efface puis re-pose la colonne si elle est deja posee dans son
+# disque. Une colonne hors disque est ignoree -- elle sera posee correctement
+# quand elle rentrera dans le disque, la carte est autoritative.
+#
 # Regles tenues : positions en Vector3, jamais Vector2 -- une COLONNE est un
 # Vector2i, un index et pas une position. Aucun hasard. Aucun texte visible par
 # le joueur. Aucun nom de contenu. Rien de scripts/, data/ ni documents/ n'est
@@ -90,6 +96,11 @@ var _amorce := false
 var _a_poser: Dictionary = {}
 var _a_effacer: Dictionary = {}
 var _bloc := GridMap.INVALID_CELL_ITEM
+# Cellules entamees : leur collision ne peut pas etre portee par le GridMap
+# (une case = un item, pas 27 sous-collisions). On pose un StaticBody3D
+# externe avec N BoxShape3D enfants. Ce dict garde la reference pour
+# pouvoir les detruire au rebuild de colonne.
+var _bodies_cellules_cassees: Dictionary = {}  # Vector3i cellule -> StaticBody3D
 
 func _ready() -> void:
 	# CE GRIDMAP NE DESSINE RIEN : sa bibliotheque finale est privee de
@@ -135,11 +146,37 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if carte == null or _bloc == GridMap.INVALID_CELL_ITEM:
 		return
+	_absorber_modifications_carte()
 	var centre := _centre_observateur()
 	if doit_rafraichir(_centre_pose, centre, pas_de_rafraichissement, _amorce):
 		_retargeter(centre)
 	if not _a_poser.is_empty() or not _a_effacer.is_empty():
 		_avancer_file()
+
+# Drain des colonnes modifiees. Une colonne posee dans le disque est effacee
+# puis re-posee depuis l'etat a jour de la carte. Une colonne hors disque est
+# ignoree : la carte est autoritative, elle sera posee correctement au retour.
+#
+# EFFACEMENT PAR BALAYAGE DES COUCHES, pas par `effacer_colonne` : cette
+# derniere lit `source.cellules_de(colonne)` qui rend les cellules PLEINES de
+# la carte a jour -- une cellule creusee vient d'en SORTIR, elle ne serait
+# jamais effacee du GridMap. On balaie donc TOUTES les couches representables
+# et on invalide chaque case posee, avant de re-poser depuis la carte a jour.
+func _absorber_modifications_carte() -> void:
+	var modifs: Array = carte.drainer_modifications("terrain_visible")
+	if modifs.is_empty():
+		return
+	var base: int = carte.couche_base
+	for colonne in modifs:
+		if not _pose.has(colonne):
+			continue
+		for rang in range(CarteTerrain.COUCHES_MAXIMALES):
+			var cellule := Vector3i(colonne.x, base + rang, colonne.y)
+			if get_cell_item(cellule) != GridMap.INVALID_CELL_ITEM:
+				set_cell_item(cellule, GridMap.INVALID_CELL_ITEM)
+		_effacer_bodies_sous_cubes(colonne)
+		poser_colonne(self, carte, colonne, _bloc)
+		_poser_bodies_sous_cubes(colonne)
 
 # AJUSTE LES DEUX FILES A LA NOUVELLE CIBLE, ne les vide ni ne les recree.
 # Voir l'en-tete.
@@ -178,6 +215,7 @@ func _avancer_file() -> void:
 		if restant <= 0:
 			break
 		effacer_colonne(self, carte, colonne)
+		_effacer_bodies_sous_cubes(colonne)
 		_a_effacer.erase(colonne)
 		_pose.erase(colonne)
 		restant -= 1
@@ -185,6 +223,7 @@ func _avancer_file() -> void:
 		if restant <= 0:
 			break
 		poser_colonne(self, carte, colonne, _bloc)
+		_poser_bodies_sous_cubes(colonne)
 		_a_poser.erase(colonne)
 		_pose[colonne] = true
 		restant -= 1
@@ -202,6 +241,10 @@ func _rafraichir_vers(centre: Vector2i) -> void:
 	_pose = bilan.pose
 	_centre_pose = centre
 	_amorce = true
+	# Ajoute les bodies externes pour les cellules entamees POSEES par
+	# rafraichir(). Le static ne peut pas les creer lui-meme, l'appelant le fait.
+	for colonne in _pose:
+		_poser_bodies_sous_cubes(colonne)
 
 # Les colonnes d'un disque de `rayon` cellules autour d'un centre, en ENSEMBLE
 # (colonne -> true).
@@ -262,6 +305,12 @@ static func cellules_des_colonnes(source: Resource, colonnes: Array[Vector2i]) -
 static func poser_colonne(grille: GridMap, source: Resource, colonne: Vector2i, bloc: int) -> int:
 	var posees := 0
 	for cellule in source.cellules_de(colonne):
+		# Cellule entamee (sous_cubes != PLEIN) : sa collision est portee par
+		# un StaticBody3D externe cree par _poser_bodies_sous_cubes -- ne rien
+		# poser dans le GridMap ici, sinon collision cube pleine + mini-cubes
+		# se cumulent.
+		if source.sous_cubes(cellule) != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN:
+			continue
 		var item: int = source.item_de(cellule)
 		if item == CarteTerrain.ITEM_DEFAUT:
 			item = bloc
@@ -327,3 +376,56 @@ static func rafraichir(grille: GridMap, source: Resource, pose: Dictionary,
 		"cellules_posees": posees,
 		"cellules_effacees": effacees,
 	}
+
+# COLLISION DES CELLULES ENTAMEES. Un StaticBody3D par cellule cassee, N
+# BoxShape3D enfants (un par sous-cube plein). Cree apres `poser_colonne`
+# (qui skip ces cellules dans le GridMap). Retire avant `effacer_colonne`
+# ou avant un rebuild du drain.
+func _poser_bodies_sous_cubes(colonne: Vector2i) -> void:
+	if carte == null:
+		return
+	var cote: float = carte.cote
+	var pas := cote / 3.0
+	for cellule in carte.cellules_de(colonne):
+		var masque: int = carte.sous_cubes(cellule)
+		if masque == CarteTerrain.MASQUE_SOUS_CUBE_PLEIN:
+			continue
+		if masque == 0:
+			continue
+		# Idempotent : si un body existe deja pour cette cellule, on le
+		# retire avant de recreer (etat a jour du masque).
+		if _bodies_cellules_cassees.has(cellule):
+			var ancien = _bodies_cellules_cassees[cellule]
+			if ancien != null and is_instance_valid(ancien):
+				ancien.queue_free()
+			_bodies_cellules_cassees.erase(cellule)
+		var body := StaticBody3D.new()
+		add_child(body)
+		body.global_position = to_global(map_to_local(cellule))
+		for i in range(27):
+			if (masque & (1 << i)) == 0:
+				continue
+			var ix := i % 3
+			var iy := (i / 3) % 3
+			var iz := i / 9
+			var shape := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			box.size = Vector3(pas, pas, pas)
+			shape.shape = box
+			shape.position = Vector3(
+				float(ix - 1) * pas,
+				float(iy - 1) * pas,
+				float(iz - 1) * pas)
+			body.add_child(shape)
+		_bodies_cellules_cassees[cellule] = body
+
+func _effacer_bodies_sous_cubes(colonne: Vector2i) -> void:
+	var a_retirer: Array = []
+	for cellule in _bodies_cellules_cassees.keys():
+		if cellule.x == colonne.x and cellule.z == colonne.y:
+			a_retirer.append(cellule)
+	for cellule in a_retirer:
+		var body = _bodies_cellules_cassees[cellule]
+		if body != null and is_instance_valid(body):
+			body.queue_free()
+		_bodies_cellules_cassees.erase(cellule)

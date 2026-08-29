@@ -189,7 +189,7 @@ static func echantillonner(source: Resource, pas: int) -> Dictionary:
 		# LE SOMMET SE DEMANDE A LA CARTE : ce qu'elle range est un MASQUE de
 		# couches, pas une hauteur. Le lire comme une couche donnerait des
 		# reliefs absurdes -- un masque de sept couches vaut 127.
-		var haut: Variant = source.sommet(colonne)
+		var haut: Variant = source.sommet_max_colonne(colonne)
 		var couche: int = int(haut) if haut != null else vide
 		var retenu: int = int(sommets[echantillon])
 		# Une colonne vide ne remonte jamais un echantillon, elle ne peut que le

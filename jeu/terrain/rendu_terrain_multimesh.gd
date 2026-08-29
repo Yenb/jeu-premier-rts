@@ -32,6 +32,14 @@
 # joueur, le terrain est de la donnee (la carte) plus ce rendu, sans corps
 # physique -- meme division rendu/donnee/collision que le reste du jeu.
 #
+# IL DRAINE LA CARTE A CHAQUE `_process`. Une colonne modifiee en jeu (creusee
+# par une balle, par exemple) est publiee par `carte_terrain.drainer_modifications`
+# ; ce noeud INVALIDE la tuile qui la contient, la supprime synchroniquement, et
+# la remet dans la file de creation pour rebuild etale a la meme cadence que
+# les entrees/sorties de disque. Une tuile hors disque est ignoree (rien a rendre).
+# Une tuile en attente de creation (pas encore batie) est ignoree aussi : elle
+# lira l'etat a jour de la carte quand elle sera batie.
+#
 # ENTREE : `carte`, `mesh_library` (la bibliotheque des formes), observateur par
 # groupe, rayon en cellules, taille de tuile. SORTIE : un sous-arbre de
 # MultiMeshInstance3D, groupes par tuile.
@@ -45,6 +53,7 @@ extends Node3D
 
 const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 const SolShader = preload("res://jeu/terrain/sol_minimal.gdshader")
+const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 
 @export var carte: Resource
 @export var mesh_library: MeshLibrary
@@ -80,6 +89,10 @@ var _pas_tuiles: int = 1
 # VIDE (batie -> Array de noeuds). Si elle sort du disque avant d'etre batie,
 # _supprimer_tuile la retire de `_tuiles` et le drain la saute.
 var _file_creation: Array = []
+# TUILES A SUPPRIMER, etalees dans _process au meme rythme que la creation.
+# Supprimer ~25 tuiles d'un coup force ~25 rebuilds du BVH d'occlusion en une
+# seule frame ; les etaler en reduit le pic a 1 par frame.
+var _a_supprimer: Dictionary = {}
 
 # GRIDMAP DE REFERENCE, jamais peuple ni rendu : sert UNIQUEMENT a convertir une
 # cellule en position par `map_to_local`, exactement comme le rendu GridMap le
@@ -97,6 +110,9 @@ var _faces: Array = []
 # forme non-cube (rampe, cylindre, sphere) n'y figure pas : elle garde son mesh
 # complet, instancie tel quel -- le face culling n'a de sens que pour un cube.
 var _quad_par_item: Dictionary = {}
+# item -> BoxMesh de cote/3, materiau du cube. Pose UN mini-cube par bit a 1
+# dans le masque `carte.sous_cubes(cellule)` -- resolution 3x3x3.
+var _mini_box_par_item: Dictionary = {}
 
 func _ready() -> void:
 	if carte == null:
@@ -126,6 +142,7 @@ func _ready() -> void:
 		{"n": Vector3(0, 0, -1), "b": Basis(Vector3(1, 0, 0), -PI / 2.0)},
 	]
 	_preparer_quads(cote)
+	_preparer_mini_cubes(cote)
 	_rafraichir_vers(_centre_tuile_observateur())
 
 # UN QUAD PAR FORME CUBIQUE. Chaque cube (BoxMesh) sera rendu face par face au
@@ -153,19 +170,55 @@ func _preparer_quads(cote: float) -> void:
 		quad.material = smat
 		_quad_par_item[item] = quad
 
+# UN MINI-BOX PAR FORME CUBIQUE. Cote = cote_cellule / 3 : la cellule contient
+# 27 mini-cubes (3x3x3). Materiau DEDIE avec `sol_mini_cube.gdshader` qui
+# multiplie ALBEDO par COLOR d'instance -- permet de foncer chaque mini-cube
+# selon ses PV (voir _mmi_mini_cubes).
+func _preparer_mini_cubes(cote: float) -> void:
+	var mini_cote := cote / 3.0
+	for item in _quad_par_item.keys():
+		var quad: PlaneMesh = _quad_par_item[item]
+		var mat_quad = quad.material
+		var couleur_item := Color(0.45, 0.36, 0.27, 1.0)
+		if mat_quad is ShaderMaterial:
+			var col_shader = (mat_quad as ShaderMaterial).get_shader_parameter("couleur")
+			if col_shader != null:
+				couleur_item = col_shader
+		elif mat_quad is BaseMaterial3D:
+			couleur_item = (mat_quad as BaseMaterial3D).albedo_color
+		var smat := ShaderMaterial.new()
+		smat.shader = SolMiniCubeShader
+		smat.set_shader_parameter("couleur", couleur_item)
+		var box := BoxMesh.new()
+		box.size = Vector3(mini_cote, mini_cote, mini_cote)
+		box.material = smat
+		_mini_box_par_item[item] = box
+
 func _process(_delta: float) -> void:
+	_absorber_modifications_carte()
 	var centre := _centre_tuile_observateur()
 	if _doit_rafraichir(centre):
 		_rafraichir_vers(centre)
-	# ETALEMENT : quelques tuiles par frame, jamais tout l'anneau d'un coup.
+	# ETALEMENT CREATION : quelques tuiles par frame, jamais tout l'anneau d'un coup.
 	var faits := 0
 	while faits < tuiles_par_frame and not _file_creation.is_empty():
 		var t: Vector2i = _file_creation.pop_back()
-		# Sautee si retiree du disque entre-temps (le joueur a bouge) : elle n'est
-		# plus dans _tuiles, ou elle a deja ete batie.
+		if _a_supprimer.has(t):
+			continue
 		if _tuiles.has(t) and (_tuiles[t] as Array).is_empty():
 			_creer_tuile(t)
 			faits += 1
+	# ETALEMENT SUPPRESSION : meme rythme que la creation. Avant ce drain, toutes
+	# les tuiles sortantes etaient detruites d'un coup dans _rafraichir_vers —
+	# ~25 OccluderInstance3D liberes en une frame, ~25 rebuilds du BVH d'occlusion.
+	var supprimes := 0
+	if not _a_supprimer.is_empty():
+		var cles := _a_supprimer.keys()
+		while supprimes < tuiles_par_frame and supprimes < cles.size():
+			var t: Vector2i = cles[supprimes]
+			_a_supprimer.erase(t)
+			_supprimer_tuile(t)
+			supprimes += 1
 
 func _centre_tuile_observateur() -> Vector2i:
 	var obs := get_tree().get_first_node_in_group(groupe_observateur) as Node3D
@@ -187,14 +240,14 @@ func _doit_rafraichir(centre: Vector2i) -> bool:
 func _rafraichir_vers(centre: Vector2i) -> void:
 	var vise := _tuiles_du_disque(centre)
 	for t in vise.keys():
+		# Une tuile marquee pour suppression mais revenue dans le disque : annuler.
+		_a_supprimer.erase(t)
 		if not _tuiles.has(t):
-			# MARQUEE EN FILE (Array vide) : _process la batira. La marquer tout de
-			# suite empeche un rafraichissement suivant de la re-mettre en file.
 			_tuiles[t] = []
 			_file_creation.append(t)
 	for t in _tuiles.keys():
-		if not vise.has(t):
-			_supprimer_tuile(t)
+		if not vise.has(t) and not _a_supprimer.has(t):
+			_a_supprimer[t] = true
 	_centre_pose_tuile = centre
 	_amorce = true
 
@@ -244,6 +297,10 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	# les ombres des objets poses dessus.
 	var par_forme: Dictionary = {}
 	var par_forme_sol: Dictionary = {}
+	# Cellules ENTAMEES : mini-cubes selon `carte.sous_cubes(cellule)`. Rendu
+	# comme un cube complet plutot que quad de face -- pas de face culling
+	# entre mini-cubes (proto, on optimisera si besoin).
+	var par_forme_mini: Dictionary = {}
 	# HAUTEUR REELLE DE LA TUILE, suivie au fil des poses : l'AABB s'y serre pour
 	# que le frustum culling ecarte les tuiles hors champ. Un AABB haut de toutes
 	# les couches possibles ne se ferait jamais culler.
@@ -293,22 +350,30 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				# cas -- seul le GROUPE change, donc le cast_shadow du MMi.
 				var cible: Dictionary = par_forme_sol if couche == sommet_base else par_forme
 				if _quad_par_item.has(item):
-					# CUBE : un quad par face exposee. Une face n'est CACHEE que si le
-					# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
-					# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
-					# cellule, laisse la face visible -- sinon un trou apparait.
-					if not _voisin_couvre(col, couche + 1, bits, rang + 1):
-						_ajouter_face(cible, item, pos, 0, cote)
-					if not _voisin_couvre(col, couche - 1, bits, rang - 1):
-						_ajouter_face(cible, item, pos, 1, cote)
-					if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
-						_ajouter_face(cible, item, pos, 2, cote)
-					if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
-						_ajouter_face(cible, item, pos, 3, cote)
-					if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
-						_ajouter_face(cible, item, pos, 4, cote)
-					if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
-						_ajouter_face(cible, item, pos, 5, cote)
+					# Cellule ENTAMEE (masque partiel) OU AVEC PV (traces
+					# accumulees mais aucun sous-cube casse) -> mini-cubes,
+					# avec teinte fonction du PV sur chaque sous-cube.
+					var masque_sous: int = carte.sous_cubes(cellule)
+					var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
+					if masque_sous != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN or not pv_map.is_empty():
+						_ajouter_mini_cubes(par_forme_mini, item, pos, cote, masque_sous, pv_map)
+					else:
+						# CUBE : un quad par face exposee. Une face n'est CACHEE que si le
+						# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
+						# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
+						# cellule, laisse la face visible -- sinon un trou apparait.
+						if not _voisin_couvre(col, couche + 1, bits, rang + 1):
+							_ajouter_face(cible, item, pos, 0, cote)
+						if not _voisin_couvre(col, couche - 1, bits, rang - 1):
+							_ajouter_face(cible, item, pos, 1, cote)
+						if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
+							_ajouter_face(cible, item, pos, 2, cote)
+						if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
+							_ajouter_face(cible, item, pos, 3, cote)
+						if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
+							_ajouter_face(cible, item, pos, 4, cote)
+						if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
+							_ajouter_face(cible, item, pos, 5, cote)
 				else:
 					# FORME NON-CUBE (rampe, cylindre, sphere) : mesh complet, orientee.
 					# Elle a du volume -> projette toujours (jamais dans par_forme_sol).
@@ -337,6 +402,12 @@ func _creer_tuile(tuile: Vector2i) -> void:
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			add_child(mmi)
 			noeuds.append(mmi)
+	# Mini-cubes des cellules entamees. Un MMi par item, mesh = _mini_box_par_item.
+	for item in par_forme_mini.keys():
+		var mmi := _mmi_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
+		if mmi != null:
+			add_child(mmi)
+			noeuds.append(mmi)
 	# L'OCCLUDEUR DU RELIEF, s'il y en a. Ce qui est derriere ces cubes -- autres
 	# cubes, arbres, unites -- n'est plus dessine par Godot.
 	if not positions_occl.is_empty():
@@ -355,7 +426,73 @@ func _voisin_couvre(col: Vector2i, couche: int, masque: int, rang: int) -> bool:
 		return false
 	if (masque & (1 << rang)) == 0:
 		return false
-	return _quad_par_item.has(carte.item_de(Vector3i(col.x, couche, col.y)))
+	var cellule := Vector3i(col.x, couche, col.y)
+	if not _quad_par_item.has(carte.item_de(cellule)):
+		return false
+	# Cellule entamee = ne couvre pas : la face du cube en face doit rester
+	# visible, le rendu classique du cube plein serait un mur solide sur la
+	# geometrie sous-jacente cassee.
+	return carte.sous_cubes(cellule) == CarteTerrain.MASQUE_SOUS_CUBE_PLEIN
+
+# Pose UN mini-cube (BoxMesh de cote/3) par bit a 1 dans le masque. Position
+# du centre : centre_cellule + (ix-1, iy-1, iz-1) * cote/3. Index : bit i =
+# ix + iy*3 + iz*9.
+func _ajouter_mini_cubes(par_forme_mini: Dictionary, item: int, centre: Vector3,
+		cote: float, masque: int, pv_map: Dictionary) -> void:
+	var pas := cote / 3.0
+	if not par_forme_mini.has(item):
+		par_forme_mini[item] = [] as Array
+	var liste: Array = par_forme_mini[item]
+	for i in range(27):
+		if (masque & (1 << i)) == 0:
+			continue
+		var ix := i % 3
+		var iy := (i / 3) % 3
+		var iz := i / 9
+		var offset := Vector3(
+			float(ix - 1) * pas,
+			float(iy - 1) * pas,
+			float(iz - 1) * pas)
+		# Teinte selon PV : blanc (COLOR=1) neuf, noir (COLOR=0) presque casse.
+		# `carte.MAX_PV_SOUS_CUBE` : 0 -> teinte 1, MAX -> teinte 0.
+		var pv: int = int(pv_map.get(i, 0))
+		var t: float = clampf(1.0 - float(pv) / float(CarteTerrain.MAX_PV_SOUS_CUBE), 0.0, 1.0)
+		liste.append({
+			"transform": Transform3D(Basis.IDENTITY, centre + offset),
+			"couleur": Color(t, t, t, 1.0),
+		})
+
+# MMi pour les mini-cubes d'un item. Mesh = _mini_box_par_item[item]. Meme
+# AABB serree que _mmi_de_forme -- reutilise la meme fonction si possible.
+func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
+		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
+	var mesh: Mesh = _mini_box_par_item.get(item, null)
+	if mesh == null:
+		return null
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	mm.instance_count = transforms.size()
+	for i in range(transforms.size()):
+		var t = transforms[i]
+		mm.set_instance_transform(i, t.transform)
+		mm.set_instance_color(i, t.couleur)
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	var hauteur_couches := couche_max - couche_min + 1
+	var pos_aabb := Vector3(
+		float(origine_col.x) * cote - cote,
+		float(couche_min) * cote - cote,
+		float(origine_col.y) * cote - cote)
+	var taille_aabb := Vector3(
+		float(taille) * cote + 2.0 * cote,
+		float(hauteur_couches) * cote + 2.0 * cote,
+		float(taille) * cote + 2.0 * cote)
+	mmi.custom_aabb = AABB(pos_aabb, taille_aabb)
+	if distance_rendu_metres > 0.0:
+		mmi.visibility_range_end = distance_rendu_metres
+	return mmi
 
 # Ajoute une instance de quad pour la face `i` d'un cube centre en `centre` :
 # translation vers le centre de la face (normale x demi-cote) et rotation qui
@@ -436,6 +573,36 @@ func _occludeur_de_cubes(positions: Array, cote: float) -> OccluderInstance3D:
 	var inst := OccluderInstance3D.new()
 	inst.occluder = occ
 	return inst
+
+# Drain des colonnes modifiees. Pour chacune : sa tuile est reconstruite
+# SYNCHRONEMENT dans la meme frame. Passer par `_file_creation` etalerait la
+# reconstruction sur 1+ frames pendant lesquelles le rendu ET l'occludeur
+# sont deja detruits -- resultat visible : le joueur regarde a travers un
+# trou creuse et voit le VIDE en dessous, puis le rendu revient. Un rebuild
+# de tuile isolee coute < 5ms, largement acceptable au rythme d'un tir.
+# La file etalee reste utilisee pour les entrees/sorties de disque
+# (anneau de ~25 tuiles d'un coup), la ou l'etalement gagne 120ms de pic.
+# Tuile hors disque ou en attente de creation : ignoree.
+func _absorber_modifications_carte() -> void:
+	var modifs: Array = carte.drainer_modifications("rendu_terrain_multimesh")
+	if modifs.is_empty():
+		return
+	for colonne in modifs:
+		var t: Vector2i = _tuile_de_colonne(colonne)
+		if not _tuiles.has(t):
+			continue
+		var noeuds = _tuiles[t] as Array
+		if noeuds.is_empty():
+			continue
+		_a_supprimer.erase(t)
+		_supprimer_tuile(t)
+		_tuiles[t] = []
+		_creer_tuile(t)
+
+func _tuile_de_colonne(colonne: Vector2i) -> Vector2i:
+	return Vector2i(
+		int(floor(float(colonne.x) / float(taille_tuile_cellules))),
+		int(floor(float(colonne.y) / float(taille_tuile_cellules))))
 
 func _supprimer_tuile(tuile: Vector2i) -> void:
 	if not _tuiles.has(tuile):

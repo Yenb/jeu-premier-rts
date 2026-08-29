@@ -348,9 +348,9 @@ func _scene_reprise(modele: GridMap) -> void:
 	racine.add_child(terrain)
 	await process_frame
 
-	_v.v(carte.sommet(colonne) == base + 3,
+	_v.v(carte.sommet_max_colonne(colonne) == base + 3,
 		"le relief de la scene n'est pas passe dans la carte : sommet %s" % [
-			carte.sommet(colonne)])
+			carte.sommet_max_colonne(colonne)])
 	_v.v(not carte.est_pleine(colonne, base + 1),
 		"le vide entre les deux niveaux a ete comble en reprenant la scene")
 	_v.v(carte.est_sale(), "la carte n'est pas marquee : la reprise ne serait jamais ecrite")
