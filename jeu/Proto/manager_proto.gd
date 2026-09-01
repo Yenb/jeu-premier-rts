@@ -51,6 +51,7 @@ const BarreVieShader = preload("res://jeu/Outil de jeu/barre_de_vie.gdshader")
 # glissé à la souris dans l'éditeur. Sa position 3D est le centre du carré,
 # sa taille visuelle est ajustée au _ready selon spawn_demi_cote.
 @export var spawn_demi_cote: float = 10.0 : set = _set_spawn_demi_cote
+@export var spawn_ennemis_actif: bool = true
 @export var intervalle_spawn_ennemi: float = 1.0
 @export var max_ennemis: int = 2500
 # Nombre d'ennemis crees a chaque intervalle de spawn (avant plafond max).
@@ -131,6 +132,16 @@ const PV_PELLE_PAR_COUP := 10
 # des refus incoherents visuellement (bloc atteint par le raycast, rejete
 # par sphere euclidienne).
 const PORTEE_PELLE_METRES := 5.0
+# Portee beche : meme regle que la pelle. La beche ne casse pas un sous-cube,
+# elle compte les coups sur la cellule de terre (10 coups -> transformation).
+const PORTEE_BECHE_METRES := 5.0
+# LAYER de collision dedie aux OBJETS RAMASSABLES (outils au sol : pelle,
+# beche, tout futur outil portable). Valeur 4 (bit 2) -- libre dans le projet
+# (seul le layer 1 sert : terrain, murs, plantes, joueur). Le StaticBody3D
+# pose sur le visuel d'un outil est sur ce layer, mask 0 (detecte, ne bloque
+# personne). Le raycast de `_objet_ramassable_sous_viseur` filtre sur ce layer,
+# donc ne touche QUE des outils -- jamais le terrain ni un cube libre (layer 1).
+const LAYER_RAMASSABLE := 4
 # SANDPILE : tick 1 Hz qui fait couler les sous-cubes libres empiles
 # quand l'ecart de hauteur entre colonnes voisines depasse l'angle de repos.
 const INTERVALLE_SANDPILE := 1.0
@@ -142,6 +153,9 @@ var _horloge_sandpile: float = 0.0
 # de travail : hache, marteau, etc. -- chacun appelle `depenser_pour_travail`
 # avec sa propre valeur.
 const COUT_CREUSER_PAR_COUP := 10.0
+# Cout de faim par coup de beche REUSSI (raycast touche une cellule de terre
+# plein). Meme flux generique que la pelle : `depenser_pour_travail`.
+const COUT_BECHER_PAR_COUP := 10.0
 # Ennemi creuseur : PV appliques par coup au sous-cube cible. Plus rapide
 # que la pelle joueur (10 PV) pour que la menace tienne dans le proto.
 # Cadence (secondes entre 2 coups) geree par la boucle IA au morceau 7.
@@ -156,6 +170,12 @@ const RAYON_ENNEMI_RAMASSE := 2.0
 # positionne chaque frame sur le sous-cube que le raycast va frapper. Visible
 # uniquement quand la pelle est portee. Sans ca, le joueur creuse a l'aveugle.
 var _halo_pelle: MeshInstance3D = null
+# Halo de visee pour la beche : meme role que le halo pelle, visible seulement
+# quand la beche est portee.
+var _halo_beche: MeshInstance3D = null
+# Index de l'item "bloc_beche" dans le MeshLibrary, resolu une fois au _ready
+# (le manager ne connait pas les noms d'items). -1 tant que non resolu.
+var _index_bloc_beche: int = -1
 # Halo de POSE : cube filaire vert positionne sur la cellule adjacente a la
 # face visee, visible SEULEMENT quand un sous-cube libre (non pelle) est
 # porte. Distinct du halo pelle : la pelle CREUSE (jaune), la pose EMPILE
@@ -249,7 +269,18 @@ func _ready() -> void:
 	if _grille == null:
 		push_warning("manager_proto : GridMap introuvable")
 	_creer_halo_pelle()
+	_creer_halo_beche()
 	_creer_halo_pose()
+	# Resoudre l'index de l'item "bloc_beche" une fois -- le manager ne
+	# hardcode pas le nombre, il lit le nom dans le MeshLibrary du terrain.
+	if _grille != null and _grille.mesh_library != null:
+		var meshlib: MeshLibrary = _grille.mesh_library
+		for id in meshlib.get_item_list():
+			if meshlib.get_item_name(id) == "bloc_beche":
+				_index_bloc_beche = id
+				break
+		if _index_bloc_beche < 0:
+			push_warning("manager_proto : item 'bloc_beche' introuvable dans le MeshLibrary")
 	# RAYON SAFE DYNAMIQUE : lu depuis _grille.rayon_cellules pour eviter
 	# dependance a une constante figee. Si rayon_cellules du terrain change
 	# un jour (config, biome), _rayon_safe s'ajuste automatiquement.
@@ -270,6 +301,7 @@ func _ready() -> void:
 	for w in _monde_tas.choses.values():
 		_index_ajouter(w.chose as Dictionary)
 	call_deferred("_spawn_pelle_initiale")
+	call_deferred("_spawn_beche_initiale")
 	# Mesh sous-cube libre "terre" par defaut. D'autres materiaux ajoutes a la
 	# volee via _mesh_pour_matiere() -- couleur = albedo du bloc d'origine.
 	_mesh_sous_cube_par_matiere["terre"] = _fabriquer_mesh_sous_cube(Color(0.35, 0.22, 0.12, 1.0))
@@ -310,6 +342,7 @@ func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
 	_maj_halo_pelle()
+	_maj_halo_beche()
 	_maj_halo_pose()
 	_horloge += delta
 	if _horloge >= intervalle_extraction:
@@ -1023,7 +1056,7 @@ func _ennemi_ramasser_sc_proche(pos_ennemi: Vector3, rayon_metres: float) -> Var
 	var meilleur_d2: float = INF
 	for e in proches:
 		var sc: Dictionary = e.chose
-		if sc.get("matiere", "") == "pelle":
+		if sc.get("matiere", "") == "pelle" or sc.get("matiere", "") == "beche":
 			continue
 		var d2: float = (sc.position as Vector3).distance_squared_to(pos_ennemi)
 		if d2 < meilleur_d2:
@@ -1160,7 +1193,7 @@ func _ennemi_a_obstacle_devant(pos_ennemi: Vector3, direction: Vector3, distance
 # Skip si matiere == "pelle" -- la pelle n'est jamais indexee. A appeler APRES
 # `_monde_tas.ajouter(sc, ...)`, quand `sc.position` est la position definitive.
 func _index_ajouter(sc: Dictionary) -> void:
-	if String(sc.get("matiere", "")) == "pelle":
+	if String(sc.get("matiere", "")) == "pelle" or String(sc.get("matiere", "")) == "beche":
 		return
 	var cote_sous: float = cote_cellule / 3.0
 	var pos: Vector3 = sc.position
@@ -1174,7 +1207,7 @@ func _index_ajouter(sc: Dictionary) -> void:
 # le sc peut etre invalide. Supprime la cle si la colonne devient vide, pour ne
 # pas laisser des Array vides polluer le dictionnaire.
 func _index_retirer(sc: Dictionary) -> void:
-	if String(sc.get("matiere", "")) == "pelle":
+	if String(sc.get("matiere", "")) == "pelle" or String(sc.get("matiere", "")) == "beche":
 		return
 	var cote_sous: float = cote_cellule / 3.0
 	var pos: Vector3 = sc.position
@@ -1311,7 +1344,7 @@ func _cases_pour_sandpile() -> Array:
 	var par_colonne: Dictionary = {}  # Vector2i -> Array de sc
 	for w in _monde_tas.choses.values():
 		var sc: Dictionary = w.chose
-		if sc.get("matiere", "") == "pelle":
+		if sc.get("matiere", "") == "pelle" or sc.get("matiere", "") == "beche":
 			continue
 		var pos: Vector3 = sc.position
 		var col := Vector2i(int(floor(pos.x / cote_sous)), int(floor(pos.z / cote_sous)))
@@ -1353,7 +1386,7 @@ func _appliquer_transferts_sandpile(transferts: Array) -> void:
 	var par_colonne: Dictionary = {}
 	for w in _monde_tas.choses.values():
 		var sc: Dictionary = w.chose
-		if sc.get("matiere", "") == "pelle":
+		if sc.get("matiere", "") == "pelle" or sc.get("matiere", "") == "beche":
 			continue
 		var pos: Vector3 = sc.position
 		var col := Vector2i(int(floor(pos.x / cote_sous)), int(floor(pos.z / cote_sous)))
@@ -1511,7 +1544,29 @@ func _fabriquer_visuel_pelle() -> Node3D:
 	lame.position = Vector3(0.0, -0.35, -0.08)
 	lame.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	racine.add_child(lame)
+	_ajouter_collision_ramassable(racine)
 	return racine
+
+# COLLIDER RAMASSABLE : StaticBody3D sur le LAYER_RAMASSABLE (mask 0), pose sur
+# le visuel composite d'un outil pour que le raycast de ramassage le detecte.
+# Nomme "StaticBody3D" pour que `_basculer_collision_cube_porte` le desactive
+# pendant le portage -- sans ca, le raycast de creusage/bechage toucherait
+# l'outil porte (1 m devant les yeux) au lieu du terrain.
+func _ajouter_collision_ramassable(visuel: Node3D) -> void:
+	if visuel == null:
+		return
+	if visuel.get_node_or_null("StaticBody3D") != null:
+		return
+	var body := StaticBody3D.new()
+	body.collision_layer = LAYER_RAMASSABLE
+	body.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(0.3, 0.8, 0.3)
+	shape.shape = box
+	shape.position = Vector3(0.0, -0.1, 0.0)
+	body.add_child(shape)
+	visuel.add_child(body)
 
 func _spawn_pelle_initiale() -> void:
 	# Graines : parse `jeu/Proto/pelles_initiales.json` (patron
@@ -1558,11 +1613,58 @@ func _spawn_pelle(pos: Vector3) -> void:
 	}
 	_monde_tas.ajouter(p, "pelle", pos)
 
-# Toggle E : si on porte deja la pelle -> pose devant le joueur. Sinon, cherche
-# la pelle la plus proche a portee et la prend. Rend true si l'action a eu lieu.
-func toggle_pelle_e(origine: Vector3, direction: Vector3) -> bool:
-	# Cas 1 : porte deja la pelle -> pose devant le joueur.
-	if not _cube_porte.is_empty() and _cube_porte.get("matiere", "") == "pelle":
+# RAYCAST RAMASSABLE : depuis la camera, centre ecran, filtre sur
+# LAYER_RAMASSABLE -- ne touche donc QUE des outils au sol (jamais terrain ni
+# cube libre, layer 1). Retrouve l'entree du `_monde_tas` dont le noeud est le
+# visuel composite touche (le collider est enfant de ce visuel). Rend le dict
+# du sous-cube, ou {} si rien. Calque de `_sous_cube_sous_viseur` pour
+# l'origine, la direction et l'exclusion du joueur.
+func _objet_ramassable_sous_viseur(portee: float) -> Dictionary:
+	var camera := get_viewport().get_camera_3d()
+	if camera == null:
+		return {}
+	var taille := get_viewport().get_visible_rect().size
+	var centre := taille * 0.5
+	var origine := camera.project_ray_origin(centre)
+	var direction := camera.project_ray_normal(centre)
+	var espace := get_viewport().get_world_3d().direct_space_state
+	var requete := PhysicsRayQueryParameters3D.create(origine, origine + direction * portee)
+	requete.collision_mask = LAYER_RAMASSABLE
+	if _observateur != null and _observateur is CollisionObject3D:
+		requete.exclude = [(_observateur as CollisionObject3D).get_rid()]
+	var frappe := espace.intersect_ray(requete)
+	if frappe.is_empty():
+		return {}
+	var collider = frappe.get("collider")
+	if collider == null or not (collider is Node):
+		return {}
+	# Le collider (StaticBody3D) est enfant du visuel composite = le noeud
+	# stocke dans l'entree du _monde_tas. Remonte au parent pour le comparer.
+	var racine := (collider as Node).get_parent()
+	if racine == null:
+		return {}
+	if _observateur == null:
+		return {}
+	var proches: Array = _monde_tas.choses_dans_rayon(_observateur.global_position, RAYON_PRENDRE_METRES * 2.0)
+	for e in proches:
+		var sc: Dictionary = e.chose
+		if sc.get("noeud", null) == racine:
+			return sc
+	return {}
+
+# Toggle E GENERIQUE : un seul geste, un seul raycast, pour tous les outils
+# portables (pelle, beche, futurs). Cas 1 : porte deja un OUTIL -> pose devant
+# le joueur (matiere lue sur _cube_porte, jamais hardcodee). Cas 2 : ne porte
+# rien -> raycast ramassable, prend l'outil vise. Rend true si l'action a eu
+# lieu.
+#
+# CHOIX : le cas pose ne concerne QUE les outils (pelle/beche). Un cube libre
+# porte garde son chemin dedie au clic gauche (avec _index_ajouter) -- E ne le
+# pose pas, exactement comme avant. Sans ca, l'index des cubes libres divergerait.
+func toggle_prendre_poser_e(origine: Vector3, direction: Vector3) -> bool:
+	# Cas 1 : porte deja un outil -> pose devant le joueur.
+	var mat_portee: String = String(_cube_porte.get("matiere", "")) if not _cube_porte.is_empty() else ""
+	if mat_portee == "pelle" or mat_portee == "beche":
 		if _observateur == null:
 			return false
 		var pos_pose: Vector3 = origine + direction.normalized() * 1.5
@@ -1570,30 +1672,28 @@ func toggle_pelle_e(origine: Vector3, direction: Vector3) -> bool:
 			var y_sol: Variant = _carte.sommet(pos_pose.x, pos_pose.z)
 			if y_sol != null:
 				pos_pose.y = float(y_sol) + 0.5
+		# Reactive le collider ramassable avant de reposer au sol (il etait
+		# desactive pendant le portage pour ne pas polluer le raycast creuser).
+		_basculer_collision_cube_porte(true)
 		_cube_porte.position = pos_pose
-		_monde_tas.ajouter(_cube_porte, "pelle", pos_pose)
+		_monde_tas.ajouter(_cube_porte, mat_portee, pos_pose)
 		if _cube_porte.noeud != null and is_instance_valid(_cube_porte.noeud):
 			(_cube_porte.noeud as Node3D).global_position = pos_pose
 		_cube_porte = {}
 		return true
-	# Cas 2 : on ne porte rien -> cherche la pelle a portee.
+	# On porte autre chose (cube libre) : E ne fait rien.
 	if not _cube_porte.is_empty():
-		return false  # on porte autre chose (cube libre), pas la peine
-	var proches: Array = _monde_tas.choses_dans_rayon(origine, RAYON_PRENDRE_METRES)
-	for e in proches:
-		var sc: Dictionary = e.chose
-		if sc.get("matiere", "") != "pelle":
-			continue
-		_monde_tas.retirer(sc.id)
-		_cube_porte = sc
-		if _cube_porte.noeud == null or not is_instance_valid(_cube_porte.noeud):
-			var parent := get_parent()
-			if parent != null:
-				var n := _fabriquer_visuel_pelle()
-				parent.add_child(n)
-				_cube_porte.noeud = n
-		return true
-	return false
+		return false
+	# Cas 2 : ne porte rien -> raycast ramassable.
+	var cible := _objet_ramassable_sous_viseur(RAYON_PRENDRE_METRES)
+	if cible.is_empty():
+		return false
+	_monde_tas.retirer(cible.id)
+	_cube_porte = cible
+	# Le noeud existe deja (c'est son collider qu'on vient de toucher). Desactive
+	# son collider pendant le portage.
+	_basculer_collision_cube_porte(false)
+	return true
 
 # Creuser avec la pelle : 10 PV sur le sous-cube pointe. 5 coups pour casser.
 # Raycast physique depuis la camera, centre ecran, contre la GridMap streamee.
@@ -1781,6 +1881,184 @@ func porteur_a_cube() -> bool:
 func porte_pelle() -> bool:
 	return not _cube_porte.is_empty() and _cube_porte.get("matiere", "") == "pelle"
 
+# ================= BECHE (calque du bloc pelle) =================
+# Meme organisation, meme emplacement, memes signatures que la pelle. La
+# logique interne differe : la beche ne casse pas un sous-cube coup par coup,
+# elle compte les coups sur la cellule de terre (carte_terrain.ajouter_coups_
+# beche). Au dixieme coup, la cellule devient "bloc_beche" (terre fertile) et
+# sa couche superieure de sous-cubes est retiree pour la rendre plus basse.
+
+# BECHE : outil dans le monde. Composite Node3D (manche + lame large). Se
+# ramasse et se pose avec la touche dediee. Quand portee, le geste BECHE :
+# compte un coup sur la cellule de terre pointee (10 coups pour transformer).
+func _fabriquer_visuel_beche() -> Node3D:
+	var racine := Node3D.new()
+	# Manche : BoxMesh vertical, bois marron (identique a la pelle).
+	var manche := MeshInstance3D.new()
+	var mesh_manche := BoxMesh.new()
+	mesh_manche.size = Vector3(0.05, 0.7, 0.05)
+	var mat_manche := StandardMaterial3D.new()
+	mat_manche.albedo_color = Color(0.4, 0.25, 0.12, 1.0)
+	mat_manche.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mesh_manche.material = mat_manche
+	manche.mesh = mesh_manche
+	manche.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	racine.add_child(manche)
+	# Lame : BoxMesh en bas, plus LARGE en X et plus ETROITE en Z que la pelle,
+	# fer gris plus sombre (distingue la beche de la pelle en main).
+	var lame := MeshInstance3D.new()
+	var mesh_lame := BoxMesh.new()
+	mesh_lame.size = Vector3(0.35, 0.05, 0.10)
+	var mat_lame := StandardMaterial3D.new()
+	mat_lame.albedo_color = Color(0.4, 0.4, 0.45, 1.0)
+	mat_lame.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mesh_lame.material = mat_lame
+	lame.mesh = mesh_lame
+	lame.position = Vector3(0.0, -0.35, -0.08)
+	lame.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	racine.add_child(lame)
+	_ajouter_collision_ramassable(racine)
+	return racine
+
+func _spawn_beche_initiale() -> void:
+	# Graines : parse `jeu/Proto/beches_initiales.json` (meme organisation que
+	# `pelles_initiales.json`). N=1000 beches ne passent JAMAIS ici :
+	# population = mecanique de jeu qui appelle `_spawn_beche(pos)`. Ce fichier
+	# n'est que la graine de proto. Y du JSON ignoree : snap au sol.
+	var chemin := "res://jeu/Proto/beches_initiales.json"
+	var fichier := FileAccess.open(chemin, FileAccess.READ)
+	if fichier == null:
+		return
+	var texte := fichier.get_as_text()
+	fichier.close()
+	var parse: Variant = JSON.parse_string(texte)
+	if not (parse is Dictionary):
+		push_warning("beches_initiales.json : racine attendue Dictionary")
+		return
+	var liste: Variant = (parse as Dictionary).get("beches", [])
+	if not (liste is Array):
+		return
+	for entree in (liste as Array):
+		if not (entree is Dictionary):
+			continue
+		var arr: Variant = (entree as Dictionary).get("position", null)
+		if not (arr is Array) or (arr as Array).size() < 3:
+			continue
+		var pos := Vector3(float(arr[0]), float(arr[1]), float(arr[2]))
+		if _carte != null:
+			var y_sol: Variant = _carte.sommet(pos.x, pos.z)
+			if y_sol != null:
+				pos.y = float(y_sol) + 0.5
+		_spawn_beche(pos)
+
+func _spawn_beche(pos: Vector3) -> void:
+	var id_neuf: String = "beche_%d" % _prochain_id_tas
+	_prochain_id_tas += 1
+	var b := {
+		"id": id_neuf,
+		"position": pos,
+		"vitesse_y": 0.0,
+		"noeud": null,
+		"matiere": "beche",
+	}
+	_monde_tas.ajouter(b, "beche", pos)
+
+# Becher : compte un coup sur la cellule de terre pointee. Gates identiques a
+# creuser_avec_pelle. Au coup qui atteint le seuil (ajouter_coups_beche rend
+# true) : transforme la cellule en bloc_beche et retire les 9 sous-cubes de la
+# couche superieure (iy=2) pour la rendre plus basse que ses voisines.
+#
+# ORDRE poser_cellule PUIS casser_sous_cube : poser_cellule ecrit l'item dans
+# particularites et remet la couche pleine (poser_masque), sans toucher
+# _masques_sous_cube -- les 9 casser_sous_cube qui suivent operent donc sur le
+# masque sous-cube courant de la cellule. CELLULE PRE-ENTAMEE : si un tir avait
+# deja casse un sous-cube du haut, casser_sous_cube rend false en silence sur
+# celui-la (deja absent) ; la representation "plus basse" est alors partielle.
+# Tolere en proto.
+func becher_avec_beche(_origine: Vector3, _direction: Vector3) -> bool:
+	if _cube_porte.is_empty() or _cube_porte.get("matiere", "") != "beche":
+		return false
+	if _carte == null:
+		return false
+	var cible := _sous_cube_sous_viseur(PORTEE_BECHE_METRES)
+	if cible.is_empty():
+		return false
+	var cellule: Vector3i = cible["cellule"]
+	if not _carte.est_pleine(Vector2i(cellule.x, cellule.z), cellule.y):
+		return false
+	if _carte.item_de(cellule) != _carte.ITEM_DEFAUT:
+		return false
+	if cellule.y <= _carte.couche_base:
+		return false
+	var seuil_atteint: bool = _carte.ajouter_coups_beche(cellule, 1)
+	if seuil_atteint:
+		# Transformation : la cellule devient marqueur "bloc_beche" (fertile).
+		if _index_bloc_beche >= 0:
+			_carte.poser_cellule(cellule, _index_bloc_beche, 0)
+		# Retire la couche superieure de sous-cubes (iy=2) : la cellule
+		# descend d'un tiers, legerement plus basse que ses voisines.
+		for ix in range(3):
+			for iz in range(3):
+				_carte.casser_sous_cube(cellule, ix + 2 * 3 + iz * 9)
+	# Cout de faim au coup REUSSI (cellule de terre plein touchee), jamais au
+	# clic dans le vide. Meme flux generique que la pelle.
+	if _observateur != null and _observateur.has_method("depenser_pour_travail"):
+		_observateur.call("depenser_pour_travail", COUT_BECHER_PAR_COUP)
+	return true
+
+# Halo de visee pour la beche. Cube filaire de taille sous-cube, marron
+# emissif (distinct du jaune pelle et du vert pose), top-level.
+func _creer_halo_beche() -> void:
+	if _halo_beche != null:
+		return
+	var cote_sous: float = cote_cellule / 3.0
+	var box := BoxMesh.new()
+	box.size = Vector3(cote_sous, cote_sous, cote_sous) * 1.02
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.6, 0.4, 0.15, 0.35)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	box.material = mat
+	_halo_beche = MeshInstance3D.new()
+	_halo_beche.mesh = box
+	_halo_beche.top_level = true
+	_halo_beche.visible = false
+	_halo_beche.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_halo_beche)
+
+func _maj_halo_beche() -> void:
+	if _halo_beche == null:
+		return
+	if not porte_beche():
+		if _halo_beche.visible:
+			_halo_beche.visible = false
+		return
+	var cible := _sous_cube_sous_viseur(PORTEE_BECHE_METRES)
+	if cible.is_empty():
+		if _halo_beche.visible:
+			_halo_beche.visible = false
+		return
+	var cellule: Vector3i = cible["cellule"]
+	var idx: int = cible["idx"]
+	var ix: int = idx % 3
+	@warning_ignore("integer_division")
+	var iy: int = (idx / 3) % 3
+	@warning_ignore("integer_division")
+	var iz: int = idx / 9
+	var cote_sous: float = cote_cellule / 3.0
+	var centre := Vector3(
+		float(cellule.x) * cote_cellule + (float(ix) + 0.5) * cote_sous,
+		float(cellule.y) * cote_cellule + (float(iy) + 0.5) * cote_sous,
+		float(cellule.z) * cote_cellule + (float(iz) + 0.5) * cote_sous)
+	_halo_beche.global_position = centre
+	if not _halo_beche.visible:
+		_halo_beche.visible = true
+
+# Vrai si l'objet porte est la beche (par opposition a la pelle ou un sc libre).
+func porte_beche() -> bool:
+	return not _cube_porte.is_empty() and _cube_porte.get("matiere", "") == "beche"
+
 # Cherche le sous-cube libre le plus proche du joueur devant lui, dans un cone
 # etroit et un rayon court. Si trouve : retire du monde (mais garde son noeud
 # visuel) et le met en portage. Rend true si un cube a ete pris.
@@ -1800,7 +2078,7 @@ func porteur_prendre_si_proche(_origine: Vector3, _direction: Vector3) -> bool:
 	var meilleur_d2: float = tolerance2
 	for w in _monde_tas.choses.values():
 		var sc: Dictionary = w.chose
-		if sc.get("matiere", "") == "pelle":
+		if sc.get("matiere", "") == "pelle" or sc.get("matiere", "") == "beche":
 			continue
 		var d2: float = (sc.position as Vector3).distance_squared_to(point)
 		if d2 < meilleur_d2:
@@ -1957,7 +2235,7 @@ func _ticker_tas(delta: float) -> void:
 	var par_colonne: Dictionary = {}  # Vector2i -> Array de sc (mobiles)
 	for w in _monde_tas.choses.values():
 		var t: Dictionary = w.chose
-		if t.get("matiere", "") == "pelle":
+		if t.get("matiere", "") == "pelle" or t.get("matiere", "") == "beche":
 			continue
 		var pos: Vector3 = t.position
 		var col := Vector2i(int(floor(pos.x / cote_sous)), int(floor(pos.z / cote_sous)))
@@ -2050,6 +2328,8 @@ func _bascule_rendu_tas() -> void:
 			var n: Node3D
 			if t.get("matiere", "") == "pelle":
 				n = _fabriquer_visuel_pelle()
+			elif t.get("matiere", "") == "beche":
+				n = _fabriquer_visuel_beche()
 			else:
 				var mi := MeshInstance3D.new()
 				mi.mesh = _mesh_pour_matiere(t.get("matiere", "terre"))
@@ -2168,6 +2448,8 @@ func _rafraichir_zone_spawn() -> void:
 	(mi.mesh as BoxMesh).size = Vector3(spawn_demi_cote * 2.0, 0.4, spawn_demi_cote * 2.0)
 
 func _tick_spawn_ennemis(delta: float) -> void:
+	if not spawn_ennemis_actif:
+		return
 	if _zone_spawn == null:
 		return
 	_horloge_spawn += delta

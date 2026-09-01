@@ -515,6 +515,13 @@ fois si personne ne l'a écrit. Symptôme, cause, règle. Jamais l'histoire.
 
 ## PIÈGES DÉJÀ PAYÉS
 
+- AUCUN ENNEMI NE SPAWN, LE CODE N'A RIEN BOUSILLÉ. Symptôme : le jeu tourne,
+  aucun ennemi n'apparaît à la zone de spawn. Cause : case `Spawn Ennemis Actif`
+  décochée dans l'inspecteur du nœud manager (celui qui porte `manager_proto.gd`),
+  groupe **Ennemis**, juste au-dessus de `Intervalle Spawn Ennemi`. Décochée =
+  `_tick_spawn_ennemis` early-return, aucun spawn. Règle : ouvrir l'inspecteur,
+  recocher la case. Les ennemis déjà présents ne sont pas purgés par la case —
+  décocher stoppe l'apparition, pas ce qui est là.
 - LE GÉNÉRATEUR POUSSE LE GÉNITEUR AU CONTACT. Symptôme : les 4 générateurs
   s'enfoncent dans le collider du géniteur, le géniteur dérive lentement au
   lieu de rester posé. Cause : RigidBody masse 5 vs RigidBody masse 30
