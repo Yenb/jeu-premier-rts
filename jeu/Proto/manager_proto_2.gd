@@ -119,6 +119,12 @@ func _ready() -> void:
 		var hauteur_capsule := _lire_reglage("hauteur_capsule", 1.8)
 		var rayon_capsule := _lire_reglage("rayon_capsule", 0.4)
 		var gravite := _lire_reglage("gravite", 18.0)
+		# CONTRAINTE CAPSULE : le rayon ne peut pas depasser la demi-hauteur (une
+		# capsule plus courte que son diametre n'existe pas). Le CapsuleMesh de Godot
+		# reduit tout seul son rayon dans ce cas ; on fait PAREIL pour la collision,
+		# sinon reduire la hauteur laisserait une collision spherique du rayon plein
+		# -- petit a l'ecran, gros en collision.
+		rayon_capsule = minf(rayon_capsule, hauteur_capsule * 0.5)
 		_entite_joueur = {
 			"id": "joueur",
 			"position": _observateur.global_position,
