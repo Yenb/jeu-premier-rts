@@ -48,6 +48,10 @@ const Collision = preload("res://jeu/Proto/collision.gd")
 const INTERVALLE_PERCEPTION := 0.1
 # Trace de debug : une ligne par seconde (pos / vel / au_sol du joueur).
 const INTERVALLE_TRACE := 1.0
+# Marche franchissable du joueur : QUASI NULLE -- aucun step-up. Tout obstacle
+# qui dépasse les pieds arrête le joueur (il doit sauter). 0.05 m est une simple
+# tolérance flottante contre le bruit du snap au sol, pas une marche gravissable.
+const MARCHE_JOUEUR := 0.05
 
 @export_group("Rendu")
 @export var rayon_rendu: float = 60.0
@@ -264,7 +268,10 @@ func _tick_errance(delta: float) -> void:
 			_nouveau_cap(cube)
 		var pos: Vector3 = cube.position
 		var dep: Vector3 = (cube.direction as Vector3) * vitesse_errance * delta
-		var r: Dictionary = _deplacement_horizontal_valide(pos, dep)
+		# hauteur_ref = sommet actuel du cube (il colle au sol) ; marche d'une cellule.
+		var sol_a_v: Variant = _carte.sommet(pos.x, pos.z)
+		var sol_a: float = float(sol_a_v) if sol_a_v != null else pos.y
+		var r: Dictionary = _deplacement_horizontal_valide(pos, dep, sol_a, _cote_cellule)
 		if r.bloque:
 			_nouveau_cap(cube)  # bord de carte ou pente trop raide
 			continue
@@ -274,18 +281,23 @@ func _tick_errance(delta: float) -> void:
 			_monde.deplacer(cube)
 
 # TERRAIN COMMUN CUBES + JOUEUR. Etant donne une position et un deplacement
-# horizontal candidat, dit si le pas est bloque (bord de carte ou marche plus
-# haute que cote_cellule) et rend la position horizontale retenue et le sommet du
-# sol a cet endroit. AUCUNE verticale ici (chute/snap) : l'appelant en decide
-# (le cube colle, le joueur tombe). Rend { bloque: bool, xz: Vector3, sol: float }.
-func _deplacement_horizontal_valide(pos: Vector3, dep_horizontal: Vector3) -> Dictionary:
+# horizontal candidat, dit si le pas est bloque et rend la position horizontale
+# retenue et le sommet du sol a cet endroit. Bloque si bord de carte, ou si le
+# sol devant depasse `hauteur_ref` de plus que `marche_max` :
+#   - cube : hauteur_ref = son sommet actuel (il colle au sol), marche_max =
+#     cote_cellule (il franchit une marche d'une cellule, garde son errance) ;
+#   - joueur : hauteur_ref = ses PIEDS (pos.y), marche_max = MARCHE_JOUEUR (~0) --
+#     tout obstacle qui depasse les pieds arrete, et en l'air au-dessus d'un cube
+#     les pieds sont hauts, donc il passe et retombe dessus.
+# AUCUNE verticale ici (chute/snap) : l'appelant en decide (le cube colle, le
+# joueur tombe). Rend { bloque: bool, xz: Vector3, sol: float }.
+func _deplacement_horizontal_valide(pos: Vector3, dep_horizontal: Vector3, hauteur_ref: float, marche_max: float) -> Dictionary:
 	var candidat: Vector3 = pos + Vector3(dep_horizontal.x, 0.0, dep_horizontal.z)
 	var y_sol_c: Variant = _carte.sommet(candidat.x, candidat.z)
 	if y_sol_c == null:
 		return {"bloque": true, "xz": pos, "sol": pos.y}  # bord de carte
-	var y_sol_a: Variant = _carte.sommet(pos.x, pos.z)
-	if y_sol_a != null and float(y_sol_c) - float(y_sol_a) > _cote_cellule:
-		return {"bloque": true, "xz": pos, "sol": float(y_sol_a)}  # pente trop raide
+	if float(y_sol_c) - hauteur_ref > marche_max:
+		return {"bloque": true, "xz": pos, "sol": hauteur_ref}  # obstacle trop haut
 	return {"bloque": false, "xz": candidat, "sol": float(y_sol_c)}
 
 # Cap horizontal au hasard (RNG seede) + horloge avant le prochain changement.
@@ -312,7 +324,10 @@ func _pas_joueur(delta: float) -> void:
 	# HORIZONTALE : deplacement candidat resolu contre le terrain (bord, pente).
 	var pos: Vector3 = _entite_joueur.position
 	var dep := Vector3(horiz.x, 0.0, horiz.z) * delta
-	var r: Dictionary = _deplacement_horizontal_valide(pos, dep)
+	# hauteur_ref = les PIEDS du joueur (pos.y) : aucun step-up, tout obstacle qui
+	# dépasse les pieds arrête ; en l'air au-dessus d'un cube, les pieds sont hauts
+	# donc le pas passe et le joueur retombe sur le dessus.
+	var r: Dictionary = _deplacement_horizontal_valide(pos, dep, pos.y, MARCHE_JOUEUR)
 	if not r.bloque:
 		pos.x = r.xz.x
 		pos.z = r.xz.z
