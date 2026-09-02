@@ -40,14 +40,14 @@ extends Node3D
 # lit le lacet, que le tangage ne touche pas. Le curseur se prend au premier clic
 # ou au demarrage, ECHAP le rend.
 #
-# ---- LA GEOMETRIE VIENT DES DONNEES ----
-# Les dimensions (rayon/hauteur de capsule, hauteur des yeux) et les vitesses
-# (marche, saut) sont portees par l'entite joueur dans le Monde (voir
-# manager_proto_2). Le manager les injecte ici par configurer_depuis_donnees des
-# que l'entite existe : le mesh capsule est dimensionne, la camera posee a
-# hauteur des yeux, les visibilites du corps et du marqueur reglees. A defaut
-# d'entite (scene sans manager), les valeurs par defaut ci-dessous servent, et
-# elles valent celles de la donnee.
+# ---- LA TAILLE EST UN REGLAGE UNIQUE ----
+# Les dimensions (rayon/hauteur de capsule, hauteur des yeux) et les vitesses sont
+# des @export de CE nœud -- une seule source, editable a l'inspecteur. Au _ready,
+# `_appliquer_dimensions` dimensionne le mesh capsule, pose la camera a hauteur des
+# yeux et regle les visibilites. Le manager (manager_proto_2) LIT ces memes @export
+# pour fabriquer la forme de COLLISION data : regler la taille ici regle le visuel
+# ET la collision d'un coup. Le SCALE du nœud ne toucherait QUE le visuel -- la
+# collision data vit hors du nœud et l'ignore.
 #
 # Entree : les quatre fleches, la souris, ECHAP, le clic. Sortie : une intention
 # de mouvement (rendue au manager), sa rotation et l'inclinaison de ses yeux.
@@ -98,12 +98,19 @@ const INANITION_FACTEUR_LOURD := 0.40
 const INANITION_DRAIN_MOYEN := 1.0
 const INANITION_DRAIN_LOURD := 2.0
 
-# ---- DEFAUTS DES DONNEES (surcharges par configurer_depuis_donnees) ----
-var _rayon_capsule: float = 0.4
-var _hauteur_capsule: float = 1.8
-var _hauteur_yeux: float = 1.7
-var _vitesse_marche: float = 4.0
-var _vitesse_saut: float = 8.5
+# ---- REGLAGES DU PERSONNAGE (source unique, editables a l'inspecteur) ----
+# La taille pilote A LA FOIS le visuel (mesh capsule + camera) ET la collision :
+# le manager (manager_proto_2) LIT ces @export pour fabriquer la forme de collision
+# data du joueur. Regler ici regle les deux d'un coup. Le SCALE du nœud, lui, ne
+# toucherait QUE le visuel -- la collision data vit hors du nœud, elle l'ignore.
+@export var rayon_capsule: float = 0.4
+@export var hauteur_capsule: float = 1.8
+@export var hauteur_yeux: float = 1.7
+@export var vitesse_marche: float = 4.0
+@export var vitesse_saut: float = 8.5
+@export var gravite: float = 18.0
+@export var afficher_corps: bool = true
+@export var afficher_marqueur_debug: bool = true
 
 # ---- ETAT ----
 var _lacet: float = 0.0     # rotation Y du corps, accumulee (souris + clavier)
@@ -178,33 +185,30 @@ static func vitesse_effective(sprint: bool, endurance: float,
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_appliquer_dimensions()
 	_preparer_hud_endurance()
 	_preparer_hud_faim()
 	_preparer_hud_inanition()
 
-# INJECTION DES DONNEES, appelee par le manager des que l'entite joueur existe
-# (appel direct, pas de course d'ordre au _ready). Dimensionne le mesh capsule,
-# pose la camera a hauteur des yeux, regle les visibilites. Les valeurs absentes
-# gardent les defauts (identiques a la donnee).
-func configurer_depuis_donnees(entite: Dictionary) -> void:
-	var p: Dictionary = entite.get("proprietes", {})
-	_rayon_capsule = float(p.get("rayon_capsule", _rayon_capsule))
-	_hauteur_capsule = float(p.get("hauteur_capsule", _hauteur_capsule))
-	_hauteur_yeux = float(p.get("hauteur_yeux", _hauteur_yeux))
-	_vitesse_marche = float(p.get("vitesse_marche", _vitesse_marche))
-	_vitesse_saut = float(p.get("vitesse_saut", _vitesse_saut))
+# DIMENSIONNE LE NŒUD depuis ses reglages (@export) : mesh capsule, offset au sol,
+# camera a hauteur des yeux, visibilites. Appele au _ready. La MEME taille sert au
+# manager pour la collision data -- une seule source, un seul reglage.
+func _appliquer_dimensions() -> void:
 	if _corps_visible != null and _corps_visible.mesh is CapsuleMesh:
-		var m: CapsuleMesh = _corps_visible.mesh
-		m.radius = _rayon_capsule
-		m.height = _hauteur_capsule
+		# Le mesh du .tscn peut etre partage entre instances : on le duplique pour
+		# que redimensionner ce personnage ne touche pas un autre.
+		var m: CapsuleMesh = _corps_visible.mesh.duplicate()
+		m.radius = rayon_capsule
+		m.height = hauteur_capsule
+		_corps_visible.mesh = m
 		# Origine du nœud aux PIEDS : le centre de la capsule remonte d'une
 		# demi-hauteur pour que le corps repose sur le sol.
-		_corps_visible.position = Vector3(0.0, _hauteur_capsule * 0.5, 0.0)
-		_corps_visible.visible = bool(p.get("corps_visible", true))
+		_corps_visible.position = Vector3(0.0, hauteur_capsule * 0.5, 0.0)
+		_corps_visible.visible = afficher_corps
 	if _marqueur_debug != null:
-		_marqueur_debug.visible = bool(p.get("marqueur_debug_visible", true))
+		_marqueur_debug.visible = afficher_marqueur_debug
 	if _yeux != null:
-		_yeux.position = Vector3(0.0, _hauteur_yeux, 0.0)
+		_yeux.position = Vector3(0.0, hauteur_yeux, 0.0)
 
 # L'INTENTION DE MOUVEMENT, lue A L'INSTANT par le manager qui l'appelle. Rend la
 # vitesse horizontale voulue (repere monde, deduite du lacet courant), si le saut
@@ -216,12 +220,12 @@ func intention_mouvement(delta: float) -> Dictionary:
 		Input.get_axis("ui_left", "ui_right"), vitesse_rotation, delta)
 	var sprint: bool = Input.is_physical_key_pressed(KEY_SHIFT)
 	var v_eff: float = vitesse_effective(sprint, _endurance,
-		_vitesse_marche, _vitesse_marche * vitesse_sprint_facteur, vitesse_essouffle) \
+		vitesse_marche, vitesse_marche * vitesse_sprint_facteur, vitesse_essouffle) \
 		* _facteur_inanition
 	var base := Basis(Vector3.UP, _lacet)
 	var horizontale := vitesse_voulue(base, Input.get_axis("ui_down", "ui_up"), v_eff)
 	var saut: bool = Input.is_action_just_pressed("ui_accept")
-	return {"horizontale": horizontale, "saut": saut, "vitesse_saut": _vitesse_saut}
+	return {"horizontale": horizontale, "saut": saut, "vitesse_saut": vitesse_saut}
 
 func _unhandled_input(evenement: InputEvent) -> void:
 	if evenement.is_action_pressed("ui_cancel"):

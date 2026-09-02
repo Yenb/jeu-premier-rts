@@ -113,8 +113,12 @@ func _ready() -> void:
 	# Monde de perception/collision + entite joueur.
 	_monde = Monde.new()
 	if _observateur != null:
-		var hauteur_capsule := 1.8
-		var rayon_capsule := 0.4
+		# SOURCE UNIQUE : la taille et la gravite du joueur sont des @export du
+		# Personnage. Le manager les LIT pour fabriquer la forme de collision data --
+		# ainsi collision et visuel suivent le MEME reglage (voir personnage.gd).
+		var hauteur_capsule := _lire_reglage("hauteur_capsule", 1.8)
+		var rayon_capsule := _lire_reglage("rayon_capsule", 0.4)
+		var gravite := _lire_reglage("gravite", 18.0)
 		_entite_joueur = {
 			"id": "joueur",
 			"position": _observateur.global_position,
@@ -135,27 +139,27 @@ func _ready() -> void:
 				"reponse": "bloque",
 				"velocite": Vector3.ZERO,
 				"orientation": Basis.IDENTITY,
-				# Dimensions et vitesses, lues par personnage.gd (injectees plus bas).
+				# Copies lues du Personnage : la collision porte la taille reglee, et
+				# _pas_joueur lit la gravite ici.
 				"rayon_capsule": rayon_capsule,
 				"hauteur_capsule": hauteur_capsule,
-				"hauteur_yeux": 1.7,
-				"vitesse_marche": 4.0,
-				"vitesse_saut": 8.5,
-				"gravite": 18.0,
+				"gravite": gravite,
 				"au_sol": false,
-				# Visibilites du rendu du joueur (corps + marqueur de debug).
-				"corps_visible": true,
-				"marqueur_debug_visible": true,
 			},
 		}
 		_entite_joueur.proprietes["aabb_cache"] = Collision.aabb_forme(
 			_entite_joueur.proprietes.formes[0],
 			Transform3D(Basis.IDENTITY, _entite_joueur.position))
 		_monde.ajouter(_entite_joueur, "joueur", _entite_joueur.position)
-		# Injection directe des donnees dans le nœud (dimensions, camera,
-		# visibilites) -- appel, pas de course d'ordre au _ready.
-		if _observateur.has_method("configurer_depuis_donnees"):
-			_observateur.configurer_depuis_donnees(_entite_joueur)
+		# Le Personnage se dimensionne lui-meme (mesh, camera) depuis ses @export au
+		# _ready : rien a injecter ici.
+
+# Lit un reglage @export sur l'observateur (le Personnage), ou un defaut s'il est
+# absent -- la taille et la gravite du joueur ont leur source sur ce nœud.
+func _lire_reglage(cle: String, defaut: float) -> float:
+	if _observateur != null and cle in _observateur:
+		return float(_observateur.get(cle))
+	return defaut
 
 # TICK EN _physics_process : l'interpolation physique est active (project.godot),
 # donc tout transform (position joueur, nœuds cubes) doit etre pose dans le pas
