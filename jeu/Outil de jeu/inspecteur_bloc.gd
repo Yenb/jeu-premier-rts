@@ -39,6 +39,10 @@ const PORTEE_EXTRACTION_CASES := 3
 var _extract_maintenu: bool = false
 var _extract_accumule: float = 0.0
 
+# TOGGLE INSPECTEUR : touche I active/desactive tout. Inactif = halo et
+# label caches, aucun raycast, aucune extraction. Actif par defaut.
+var _actif: bool = true
+
 func _ready() -> void:
 	_label.visible = false
 	_halo.visible = false
@@ -52,10 +56,23 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_I:
+			# Toggle actif/inactif.
+			_actif = not _actif
+			if not _actif:
+				_label.visible = false
+				_halo.visible = false
+				_verrouille = false
+				_extract_maintenu = false
+			return
+		if not _actif:
+			return
+		if event.keycode == KEY_L:
 			_verrouille = true
 		elif event.keycode == KEY_ESCAPE and _verrouille:
 			_verrouille = false
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if not _actif:
+			return
 		if event.pressed:
 			_extract_maintenu = true
 			_extract_accumule = 0.0
@@ -86,15 +103,16 @@ func _extraire_une_unite() -> void:
 	if _stock_joueur != null:
 		_stock_joueur.ajouter(pris)
 	# NOURRIR LE PERSONNAGE : chaque unite prelevee sur un bloc profile
-	# donne 1.5 point de faim au joueur (et reset son compteur inanition).
+	# donne un forfait de faim au joueur (et reset son compteur inanition).
+	# Ce bloc couvre TOUS les profils, bloc_bleu compris -- pas de branche
+	# specifique par nom d'item (voir doctrine ADN : le moteur ne connait
+	# aucune categorie du monde).
 	if observateur.has_method("nourrir"):
-		observateur.call("nourrir", 1.5)
-	# Bloc bleu = nourriture : +1.5 a la faim du joueur si l'item pointe est
-	# un bloc_bleu et que l'observateur expose la methode nourrir().
-	if _nom_item_actif == "bloc_bleu" and observateur.has_method("nourrir"):
-		observateur.nourrir(1.5)
+		observateur.call("nourrir", 15.0)
 
 func _process(delta: float) -> void:
+	if not _actif:
+		return
 	# MAINTIEN DU CLIC GAUCHE : 1 unite par seconde apres le clic initial.
 	if _extract_maintenu:
 		_extract_accumule += delta

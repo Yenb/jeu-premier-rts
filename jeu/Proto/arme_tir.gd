@@ -23,6 +23,11 @@ extends Node3D
 @export var cadence_melee: float = 0.4  # secondes entre deux coups
 var _cooldown_melee: float = 0.0
 
+# MANGER EN CONTINU : tant que le clic gauche est maintenu, une bouchee
+# toutes les CADENCE_MANGER secondes -- pas besoin de cliquer 30 fois.
+const CADENCE_MANGER := 1.0
+var _cooldown_manger: float = 0.0
+
 # LE PREMIER CLIC POSE mouse_mode=CAPTURED (voir personnage.gd) et
 # personnage.gd ne consomme PAS l'evenement -- l'ordre d'appel de
 # _unhandled_input entre noeuds n'est pas garanti. Sans ce flag, si
@@ -46,6 +51,23 @@ func _process(delta: float) -> void:
 	# relache, sinon un ECHAP prolongerait le cooldown au retour.
 	if _cooldown_melee > 0.0:
 		_cooldown_melee = max(0.0, _cooldown_melee - delta)
+	if _cooldown_manger > 0.0:
+		_cooldown_manger = max(0.0, _cooldown_manger - delta)
+	# Clic gauche maintenu + pas d'action de portage/creuser en cours -> tick
+	# manger. Le premier clic passe par _frapper (event pressed) qui pose le
+	# cooldown ; ici on relaie tant que le bouton reste enfonce.
+	if _prete and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
+			and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) \
+			and _cooldown_manger <= 0.0:
+		var manager := get_tree().get_first_node_in_group(&"manager_proto")
+		if manager != null:
+			var porte_pelle: bool = manager.has_method("porte_pelle") and manager.call("porte_pelle")
+			var porte_cube: bool = manager.has_method("porteur_a_cube") and manager.call("porteur_a_cube")
+			if not porte_pelle and not porte_cube and manager.has_method("manger_si_bloc_bleu_proche"):
+				var dir := -global_transform.basis.z
+				var org := to_global(Vector3(0, 0, -decalage_avant))
+				if manager.call("manger_si_bloc_bleu_proche", org, dir):
+					_cooldown_manger = CADENCE_MANGER
 	# RECOPIE TANGAGE YEUX : l'arme est enfant direct de Personnage (pas de
 	# Personnage/Yeux) pour eviter la purge silencieuse de Godot 4 sur les
 	# enfants ajoutes a des noeuds internes d'instances sans editable_children
@@ -60,6 +82,17 @@ func _process(delta: float) -> void:
 			rotation.x = yeux.rotation.x
 
 func _unhandled_input(evenement: InputEvent) -> void:
+	# Touche E : toggle prendre/poser un outil portable (pelle, beche, futurs),
+	# geste generique pilote par la visee (independant du clic gauche).
+	if evenement is InputEventKey and evenement.pressed and not evenement.echo \
+			and (evenement as InputEventKey).keycode == KEY_E:
+		if _prete and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+			var manager := get_tree().get_first_node_in_group(&"manager_proto")
+			if manager != null and manager.has_method("toggle_prendre_poser_e"):
+				var direction := -global_transform.basis.z
+				var origine := to_global(Vector3(0, 0, -decalage_avant))
+				manager.call("toggle_prendre_poser_e", origine, direction)
+		return
 	if not (evenement is InputEventMouseButton):
 		return
 	if not evenement.pressed:
@@ -82,6 +115,39 @@ func _frapper() -> void:
 		return
 	var direction := -global_transform.basis.z
 	var origine := to_global(Vector3(0, 0, -decalage_avant))
+	# PRIORITE PORTAGE :
+	# 1. porte pelle -> creuser (10 PV, 5 coups pour un sous-cube). Rater le
+	#    raycast (viseur pas sur sol) ne doit RIEN faire d'autre -- surtout
+	#    pas poser la pelle (elle occupe le meme slot _cube_porte qu'un
+	#    sous-cube libre). Retour immediat quel que soit le resultat.
+	# 1 bis. porte beche -> becher (10 coups -> transformation). Meme regle
+	#    que la pelle : outil unique dans _cube_porte, retour immediat.
+	# 2. porte cube libre -> pose (jamais la pelle, gardee au dessus).
+	# 3. cube libre proche -> prend
+	# 4. bloc bleu proche -> mange
+	# 5. melee (comportement de base)
+	if manager.has_method("porte_pelle") and manager.call("porte_pelle"):
+		manager.call("creuser_avec_pelle", origine, direction)
+		_cooldown_melee = cadence_melee
+		return
+	if manager.has_method("porte_beche") and manager.call("porte_beche"):
+		manager.call("becher_avec_beche", origine, direction)
+		_cooldown_melee = cadence_melee
+		return
+	if manager.has_method("porteur_a_cube") and manager.call("porteur_a_cube"):
+		manager.call("porteur_poser")
+		_cooldown_melee = cadence_melee
+		return
+	if manager.has_method("porteur_prendre_si_proche") \
+			and manager.call("porteur_prendre_si_proche", origine, direction):
+		_cooldown_melee = cadence_melee
+		return
+	# Bloc bleu pointe -> manger direct (independant de l'inspecteur).
+	if manager.has_method("manger_si_bloc_bleu_proche") \
+			and manager.call("manger_si_bloc_bleu_proche", origine, direction):
+		_cooldown_melee = cadence_melee
+		_cooldown_manger = CADENCE_MANGER
+		return
 	manager.call("frapper_melee", origine, direction, portee_melee, degat_melee)
 	_cooldown_melee = cadence_melee
 

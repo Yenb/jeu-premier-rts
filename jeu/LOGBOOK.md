@@ -143,6 +143,40 @@ donnée), composé (reproduction + gisement riche + absence du joueur),
 conséquent (change complètement la difficulté de la fin de partie),
 nommable (un chiffre, une zone).
 
+### Le joueur scellé vivant
+
+Playtest : le joueur tombe dans un trou près du bord de la zone jouable.
+Sa pelle, portée jusqu'ici, est restée AU-DESSUS du trou -- perdre l'outil
+par sa position matérielle, pas par sa destruction. Impossible de creuser
+pour sortir. Les tirs balles ne cassent pas assez vite. Pendant la tentative
+de fuite, un ennemi rouge en mode grimpe (IA qui empile des sous-cubes pour
+franchir un obstacle vertical) POSE UN SOUS-CUBE AU-DESSUS DU JOUEUR au lieu
+d'à côté. Le trou devient un cercueil : la pelle inaccessible en haut, le
+plafond qui se referme, les ennemis qui continuent à sauter dessus.
+
+Émergence PURE : rien n'a été codé pour "ensevelir le joueur". C'est le
+couplage sandpile (les grains posés tiennent où on les pose) + IA grimpe
+(l'ennemi cherche à monter et pose des sous-cubes) + géométrie du trou
+(le joueur au fond est vu comme "l'obstacle vertical à franchir") qui
+produit le comportement. Aucun designer n'aurait osé programmer ça
+frontalement -- c'est le monde qui l'a fait.
+
+Rare (nécessite un trou près du bord, une chute non intentionnelle, un
+ennemi grimpeur à portée), composé (chute + perte pelle + IA grimpe +
+sandpile), conséquent (mort inévitable, blocage total), nommable (le
+cercueil de terre creusé par les ennemis eux-mêmes).
+
+Forme d'entrée que l'écriveur devra pondre le jour où ça arrive :
+`[tick 3140] Enseveli vivant au fond du trou N-2 par un ennemi rouge
+qui a scellé le plafond. La pelle est restée sur la margelle.` Une
+histoire que le joueur racontera à un ami. Le système vient de produire
+un piège que personne n'a scripté.
+
+Conséquence de design : à trancher. Bug (interdire la pose ennemi sur
+une cellule occupée par le joueur) ou feature (accepter la menace
+émergente, ajuster le level design pour que les trous près du bord
+soient rares ou signalés). Décision de gameplay, pas de code.
+
 ## Ce qui est écarté
 
 - **Une IA qui commente en temps réel.** Trop cher à faire tourner

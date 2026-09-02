@@ -1,10 +1,10 @@
-[gd_resource type="Resource" format=3 uid="uid://uq0ktdc4tvhc"]
+[gd_resource type="Resource" format=3 uid="uid://lh5rq8g6qnm8"]
 
 [ext_resource type="Script" uid="uid://drl8br2fktprw" path="res://jeu/Outil de jeu/profil_bloc.gd" id="1_profil"]
 
 [resource]
 script = ExtResource("1_profil")
-nom_item = "bloc_bleu"
-reserve = 100
-quantite_regen = 1
+nom_item = "bloc"
 type_effondrement = "meuble"
+angle_repos = 3.0
+hauteur_max_sous_cubes = 60

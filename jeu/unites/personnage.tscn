@@ -1,30 +1,32 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://jeu/unites/personnage.gd" id="1_personnage"]
 
-[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_personnage"]
-radius = 0.25
-height = 1.0
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_personnage"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_corps"]
 albedo_color = Color(0.85, 0.35, 0.25, 1)
 
-[sub_resource type="CapsuleMesh" id="CapsuleMesh_personnage"]
-material = SubResource("StandardMaterial3D_personnage")
-radius = 0.25
-height = 1.0
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_corps"]
+material = SubResource("StandardMaterial3D_corps")
+radius = 0.4
+height = 1.8
 
-[node name="Personnage" type="CharacterBody3D"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_marqueur"]
+albedo_color = Color(1, 0, 0, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_marqueur"]
+material = SubResource("StandardMaterial3D_marqueur")
+size = Vector3(0.1, 0.1, 0.1)
+
+[node name="Personnage" type="Node3D"]
 script = ExtResource("1_personnage")
 
-[node name="Hitbox" type="CollisionShape3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
-shape = SubResource("CapsuleShape3D_personnage")
+[node name="corps_visible" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+mesh = SubResource("CapsuleMesh_corps")
 
-[node name="Corps" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
-mesh = SubResource("CapsuleMesh_personnage")
+[node name="marqueur_debug" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_marqueur")
 
 [node name="Yeux" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.85, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
 current = true

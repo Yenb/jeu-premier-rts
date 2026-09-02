@@ -259,6 +259,21 @@ Une capsule d'un mètre — une demi-cellule — vue à la première personne. E
 à vérifier à hauteur d'homme qu'un tronc barre le passage, qu'une touffe est à la
 bonne échelle, qu'une pente se monte. Elle ne simule rien du monde.
 
+**Commandes** — tableau de référence, à garder à jour :
+
+| Touche | Action |
+|---|---|
+| flèches / WASD | avancer, reculer, tourner |
+| souris | viser (horiz = corps, vert = yeux) |
+| ÉCHAP | libère le curseur, déverrouille l'inspecteur |
+| ESPACE / ENTRÉE | sauter (`ui_accept`) |
+| SHIFT | sprint tenu (consomme l'endurance) |
+| CLIC GAUCHE | creuser (si pelle portée) / poser (si cube porté) / prendre cube libre / manger bloc bleu / corps-à-corps |
+| CLIC DROIT | tir |
+| E | prendre / poser la pelle |
+| I | toggle inspecteur bloc actif / inactif |
+| L | lock inspecteur sur la cellule pointée |
+
 - flèches : haut/bas avancent, gauche/droite TOURNENT ; souris : horizontale =
   le corps pivote, verticale = les yeux seuls s'inclinent, sous le quart de tour
 - curseur pris au PREMIER CLIC, rendu par Échap

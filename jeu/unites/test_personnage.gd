@@ -5,9 +5,12 @@ extends SceneTree
 #
 # Verrouille le personnage arpenteur SANS CLAVIER, SANS SOURIS ET SANS MOTEUR
 # PHYSIQUE : la marche, la rotation et la visee vivent dans des fonctions
-# statiques et pures, ce qui rend le jugement possible headless. Ce qui reste
-# dans _physics_process et _unhandled_input ne fait que declencher -- lire
-# l'entree, appeler, poser le resultat.
+# statiques et pures, ce qui rend le jugement possible headless. Le personnage
+# n'est PLUS un CharacterBody3D : c'est un Node3D dont la position est mue en
+# donnee (voir manager_proto_2). Ce test verrouille le calcul pur et la geometrie
+# de la scene ; l'appartenance au groupe "observateur" (posee sur l'INSTANCE dans
+# chaque scene, pas sur la source) est verrouillee par test_scene_carte et
+# test_carte_prototype, et l'entite data joueur par les tests de manager_proto_2.
 #
 # Ce qui est tenu :
 # - AVANCER, C'EST ALLER OU L'ON REGARDE : la direction de marche suit
@@ -22,8 +25,8 @@ extends SceneTree
 #   vue se retourne et la direction de marche perd son sens ;
 # - le curseur relache NE PILOTE PLUS : la souris qui va cliquer ailleurs ne
 #   fait pas pivoter le personnage ;
-# - la geometrie de la scene : capsule de 1 m posee sur ses pieds, yeux dedans,
-#   sur une carte dont la cellule fait 2 m ;
+# - la geometrie de la scene : capsule d'adulte (1,8 m) posee sur ses pieds, yeux
+#   dedans, marqueur de debug a l'origine = position data exacte ;
 # - relacher les touches immobilise, et la vitesse est exactement celle demandee.
 #
 # Regles tenues : positions en Vector3. Aucun hasard. Rien de scripts/, data/ ni
@@ -35,7 +38,7 @@ const PersonnageScene = preload("res://jeu/unites/personnage.tscn")
 
 # Le cote d'une cellule du terrain, en metres -- jeu/terrain/bloc.tres.
 const CELLULE := 2.0
-const TAILLE_VOULUE := 1.0
+const TAILLE_VOULUE := 1.8
 
 # Largeur d'ecran servant d'etalon a la sensibilite. Le reglage est arbitraire,
 # la GRANDEUR ne l'est pas : viser demande de pouvoir se retourner d'un geste
@@ -220,33 +223,51 @@ func _juger_les_reglages() -> void:
 
 func _juger_la_geometrie() -> void:
 	var noeud := PersonnageScene.instantiate()
-	_v.v(noeud is CharacterBody3D, "la scene du personnage n'est pas un CharacterBody3D")
 
-	var hitbox := noeud.get_node_or_null("Hitbox") as CollisionShape3D
-	_v.v(hitbox != null, "le personnage n'a pas de hitbox : il traverserait tout")
+	# L'EXCEPTION PHYSIQUE EST RETIREE : le personnage est un Node3D, plus un
+	# CharacterBody3D. Sa position est mue en donnee par le manager, pas par
+	# move_and_slide. Tout Node3D expose global_position, ce dont le rendu et les
+	# lecteurs du groupe "observateur" ont besoin.
+	_v.v(noeud is Node3D, "la scene du personnage n'est pas un Node3D")
+	_v.v(not (noeud is CharacterBody3D),
+		"le personnage est encore un CharacterBody3D : l'exception physique n'est pas retiree")
+
+	# PLUS DE HITBOX : un CollisionShape3D est inerte sur un Node3D. La collision du
+	# joueur vit dans la donnee (forme capsule de l'entite du Monde), pas ici.
+	_v.v(noeud.get_node_or_null("Hitbox") == null,
+		"le personnage porte encore un CollisionShape3D Hitbox, inerte sur un Node3D")
+
+	var corps := noeud.get_node_or_null("corps_visible") as MeshInstance3D
+	_v.v(corps != null, "le personnage n'a pas de corps visible")
+	var marqueur := noeud.get_node_or_null("marqueur_debug") as MeshInstance3D
+	_v.v(marqueur != null, "le personnage n'a pas de marqueur de debug")
 	var yeux := noeud.get_node_or_null("Yeux") as Camera3D
 	_v.v(yeux != null, "le personnage n'a pas de camera")
 
 	# LA CAMERA EST UN ENFANT, ET C'EST CE QUI PERMET D'INCLINER LE REGARD SANS
-	# PENCHER LE CORPS. Remontee sur le CharacterBody3D, le tangage inclinerait
-	# la capsule, qui glisserait sur le terrain au lieu de s'y tenir.
+	# PENCHER LE CORPS : le tangage va sur les yeux seuls, jamais sur le corps.
 	if yeux != null:
 		_v.v(yeux.get_parent() == noeud,
-			"les yeux ne sont pas un enfant direct du corps : les incliner pencherait la capsule")
+			"les yeux ne sont pas un enfant direct du corps : les incliner pencherait le corps")
 
-	if hitbox != null and hitbox.shape is CapsuleShape3D:
-		var capsule: CapsuleShape3D = hitbox.shape
+	# LE MARQUEUR DE DEBUG EST A L'ORIGINE DU NŒUD = la position data exacte (les
+	# pieds). C'est ce qui permet de voir a l'ecran ou entite_joueur.position est.
+	if marqueur != null:
+		_v.v(marqueur.position.is_zero_approx(),
+			"le marqueur de debug n'est pas a l'origine (position data) : %s" % marqueur.position)
+
+	if corps != null and corps.mesh is CapsuleMesh:
+		var capsule: CapsuleMesh = corps.mesh
 		_v.v(is_equal_approx(capsule.height, TAILLE_VOULUE),
-			"le personnage mesure %.2f m au lieu de %.2f" % [capsule.height, TAILLE_VOULUE])
-		_v.v(is_equal_approx(capsule.height, CELLULE / 2.0),
-			"le personnage ne fait pas une demi-cellule : l'echelle de la carte est perdue")
+			"le personnage mesure %.2f m au lieu de %.2f (adulte)" % [capsule.height, TAILLE_VOULUE])
 
-		# POSE SUR SES PIEDS : l'origine du noeud doit etre au SOL, donc la capsule
-		# remontee d'une demi-hauteur. Sans ce decalage on l'enterre a mi-corps en
-		# le posant a la hauteur du terrain, et personne ne comprend pourquoi.
-		_v.v(is_equal_approx(hitbox.position.y, capsule.height / 2.0),
-			"la hitbox n'est pas posee sur les pieds (y = %.2f, attendu %.2f)" % [
-				hitbox.position.y, capsule.height / 2.0])
+		# POSE SUR SES PIEDS : l'origine du noeud est au SOL, donc le corps remonte
+		# d'une demi-hauteur. Sans ce decalage on l'enterre a mi-corps en le posant
+		# a la hauteur du terrain. Le meme decalage vaut sur la forme capsule de la
+		# donnee (transform_locale), voir manager_proto_2.
+		_v.v(is_equal_approx(corps.position.y, capsule.height / 2.0),
+			"le corps n'est pas pose sur les pieds (y = %.2f, attendu %.2f)" % [
+				corps.position.y, capsule.height / 2.0])
 
 		if yeux != null:
 			_v.v(yeux.position.y > 0.0 and yeux.position.y <= capsule.height,
@@ -255,7 +276,7 @@ func _juger_la_geometrie() -> void:
 			print("geometrie : capsule de %.2f m posee sur ses pieds, yeux a %.2f m, cellule de %.1f m" % [
 				capsule.height, yeux.position.y, CELLULE])
 	else:
-		_v.v(false, "la hitbox n'est pas une capsule")
+		_v.v(false, "le corps visible n'est pas une capsule")
 
 	noeud.free()
 
@@ -264,8 +285,8 @@ func _conclure() -> void:
 		print("ECHEC: %d assertion(s) ratee(s)" % _v.echecs())
 		quit(1)
 		return
-	print("OK: personnage -- avancer suit l'orientation et reste a plat, droite tourne a droite " +
-		"a la touche comme a la souris, souris vers le haut leve le regard, l'inclinaison " +
-		"s'accumule et reste bornee, le curseur relache ne pilote plus, capsule d'un metre " +
-		"posee sur ses pieds avec ses yeux dedans")
+	print("OK: personnage -- Node3D (plus un CharacterBody3D), avancer suit l'orientation et reste " +
+		"a plat, droite tourne a droite a la touche comme a la souris, souris vers le haut leve le " +
+		"regard, l'inclinaison s'accumule et reste bornee, le curseur relache ne pilote plus, " +
+		"capsule d'adulte posee sur ses pieds avec ses yeux dedans, marqueur de debug a la position data")
 	quit()

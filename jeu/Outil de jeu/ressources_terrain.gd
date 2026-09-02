@@ -33,6 +33,7 @@ var _quantites: Dictionary = {}          # Vector3i -> int (stock courant)
 var _profil_par_cellule: Dictionary = {} # Vector3i -> ProfilBloc
 var _a_regenerer: Dictionary = {}        # Vector3i -> bool (cellules non pleines)
 var _temps_regen: Dictionary = {}        # Vector3i -> float (secondes accumulees depuis dernier tick regen reussi)
+var _profils_par_nom: Dictionary = {}    # nom_item -> ProfilBloc (garde du scan pour l'inscription runtime)
 var _grille: GridMap = null
 var _horloge: float = 0.0
 
@@ -60,6 +61,8 @@ func _ready() -> void:
 		if p == null:
 			continue
 		par_nom[String(p.nom_item)] = p
+	# Garde pour l'inscription runtime (cellules creees en jeu, ex. bloc bêché).
+	_profils_par_nom = par_nom
 
 	var particularites: Dictionary = carte.particularites
 	for cellule in particularites:
@@ -181,6 +184,11 @@ func _trouver_grille() -> GridMap:
 			return f
 	return null
 
+# API publique -- rend le profil (Resource) d'une cellule ou null si aucun.
+# Sert aux consommateurs a interroger type_effondrement, reserve, etc.
+func profil_de_cellule(cellule: Vector3i) -> Resource:
+	return _profil_par_cellule.get(cellule, null)
+
 # API publique -- lecture. Rend l'entier stock.
 func quantite_a(cellule: Vector3i) -> int:
 	return int(_quantites.get(cellule, 0))
@@ -195,6 +203,13 @@ func compte_reserves() -> int:
 func preleve(cellule: Vector3i, quantite: float) -> float:
 	if not _profil_par_cellule.has(cellule):
 		return 0.0
+	# Reserve NON PRELEVABLE (fertilite du sol) : lue, jamais retiree au clic.
+	# Gate par propriete du profil, aucune categorie nommee (doctrine ADN).
+	# Champ absent (vieux profil) -> defaut true, comportement inchange.
+	var profil = _profil_par_cellule[cellule]
+	var prelevable = profil.get("prelevable")
+	if prelevable != null and not bool(prelevable):
+		return 0.0
 	var stock := int(_quantites.get(cellule, 0))
 	var pris: int = mini(int(quantite), stock)
 	_quantites[cellule] = stock - pris
@@ -203,3 +218,34 @@ func preleve(cellule: Vector3i, quantite: float) -> float:
 		if not _temps_regen.has(cellule):
 			_temps_regen[cellule] = 0.0
 	return float(pris)
+
+# API publique -- inscrire une cellule creee EN JEU (ex. un bloc bêché) dans la
+# table des reserves. Le scan de `_ready` ne voit que ce qui existait au
+# chargement ; une cellule dont l'item change pendant le jeu passe par ici. Lit
+# l'item courant de la cellule sur la carte data, trouve son profil par nom
+# (garde `_profils_par_nom`), pose la reserve initiale du profil. Rend true si
+# une reserve a ete posee. false si aucun profil ne correspond (item non
+# profile, ou profil absent de `profils` a l'inspecteur) -- sans effet, sans
+# erreur.
+func inscrire_cellule(cellule: Vector3i) -> bool:
+	if _grille == null:
+		return false
+	var meshlib: MeshLibrary = _grille.mesh_library
+	if meshlib == null:
+		return false
+	var carte: Resource = _grille.get("carte") as Resource
+	if carte == null:
+		return false
+	var code: int = int(carte.particularites.get(cellule, -1))
+	if code < 0:
+		return false
+	var item: int = CarteTerrain.item_du_code(code)
+	var nom := meshlib.get_item_name(item)
+	var profil = _profils_par_nom.get(nom, null)
+	if profil == null:
+		return false
+	if int(profil.reserve) <= 0:
+		return false
+	_quantites[cellule] = int(profil.reserve)
+	_profil_par_cellule[cellule] = profil
+	return true

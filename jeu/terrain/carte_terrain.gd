@@ -551,6 +551,37 @@ func pv_sous_cube(cellule: Vector3i, sous_index: int) -> int:
 func pv_sous_cubes_cellule(cellule: Vector3i) -> Dictionary:
 	return _pv_sous_cubes.get(cellule, {})
 
+# COUPS DE BECHE : accumule les coups d'outil sur une cellule de terre plein
+# sans la transformer tant que < COUPS_BECHE_SEUIL. Meme structure que
+# `ajouter_pv_sous_cube` : dict transitoire cellule -> compte, publie dans les
+# drains, retourne true UNIQUEMENT au coup qui atteint le seuil. Le caller
+# (manager) agit alors -- transformation par `poser_cellule`. Gate item_de ==
+# ITEM_DEFAUT : seul le bloc de terre par defaut se beche.
+const COUPS_BECHE_SEUIL := 10
+
+var _coups_beche_par_cellule: Dictionary = {}
+
+func ajouter_coups_beche(cellule: Vector3i, quantite: int) -> bool:
+	if not est_pleine(Vector2i(cellule.x, cellule.z), cellule.y):
+		return false
+	if item_de(cellule) != ITEM_DEFAUT:
+		return false
+	var actuel: int = int(_coups_beche_par_cellule.get(cellule, 0))
+	var neuf: int = actuel + quantite
+	if neuf >= COUPS_BECHE_SEUIL:
+		_coups_beche_par_cellule.erase(cellule)
+		if not Engine.is_editor_hint():
+			var col := Vector2i(cellule.x, cellule.z)
+			for nom in _drains:
+				_drains[nom][col] = true
+		return true
+	_coups_beche_par_cellule[cellule] = neuf
+	if not Engine.is_editor_hint():
+		var col := Vector2i(cellule.x, cellule.z)
+		for nom in _drains:
+			_drains[nom][col] = true
+	return false
+
 # Le masque que decrivent des couches donnees. Sert a ceux qui relevent un
 # GridMap : ils voient des cellules, la carte veut un masque.
 static func masque_depuis(couches: Array, base: int) -> int:

@@ -1046,9 +1046,17 @@ func _lot(cle: String, entree: Dictionary) -> Dictionary:
 	var instances: Array = []
 	for i in range(pieces.size()):
 		var piece: Dictionary = pieces[i]
+		# GARDE : un maillage null ou sans surface ne va JAMAIS a un MultiMesh.
+		# Le renderer RD appelle mesh_get_surface_count sur son RID
+		# (mesh_storage.cpp:691, ERR_FAIL_NULL) et crache "Parameter mesh is null"
+		# a CHAQUE frame tant qu'un tel MultiMesh est dessine. Un stade de stature
+		# nulle produit un maillage vide -- il reste invisible, sans le spam.
+		var maillage = piece.get("maillage")
+		if maillage == null or not (maillage is Mesh) or (maillage as Mesh).get_surface_count() == 0:
+			continue
 		var multi := MultiMesh.new()
 		multi.transform_format = MultiMesh.TRANSFORM_3D
-		multi.mesh = piece.maillage
+		multi.mesh = maillage
 		multi.instance_count = 0
 		var noeud := MultiMeshInstance3D.new()
 		# Nomme par son RANG, jamais par l'espece : le nom d'un noeud de scene n'a
@@ -1079,6 +1087,10 @@ func _lot(cle: String, entree: Dictionary) -> Dictionary:
 		poser_distance_rendu(noeud, float(entree.get("distance_rendu", 0.0)))
 		add_child(noeud)
 		instances.append({"noeud": noeud, "pose": piece.pose})
+	# Tous les maillages sautes (stade sans surface) : aucun noeud de rendu, le
+	# lot n'existe pas -- _inscrire retourne tot, la plante reste invisible.
+	if instances.is_empty():
+		return {}
 	var lot := {"instances": instances, "ids": [], "poses": [], "index": {}, "capacite": 0}
 	_lots[cle] = lot
 	return lot

@@ -110,6 +110,23 @@ var _faces: Array = []
 # forme non-cube (rampe, cylindre, sphere) n'y figure pas : elle garde son mesh
 # complet, instancie tel quel -- le face culling n'a de sens que pour un cube.
 var _quad_par_item: Dictionary = {}
+# item -> hauteur reelle du BoxMesh (size.y). Un item plus court que la cellule
+# (ex. bloc_beche a 15/16) est dessine ABAISSE : face du dessus descendue,
+# faces laterales mises a l'echelle verticale. Un cube pleine hauteur y vaut
+# `cote` et passe par le meme code sans difference visible. Lu dans _ajouter_face.
+var _hauteur_par_item: Dictionary = {}
+# INDEX DE TEINTE PAR RESERVE. Tuile -> Dict { cellule -> Array[{mmi, idx}] }.
+# Rempli au streaming pour chaque cellule qui a un profil de reserve (via
+# ressources_terrain). Le tick lit `quantite_a(cellule) / profil.reserve`,
+# calcule un gain [0.4..1.0] et pose la couleur d'instance. Vide si aucun
+# bloc profilé n'est visible -- pas de balayage global.
+var _teinte_par_tuile: Dictionary = {}
+var _ressources: Node = null
+var _horloge_teinte: float = 0.0
+const TEINTE_INTERVALLE := 1.0  # 1 Hz, aligne sur le tick regen
+const TEINTE_GAIN_VIDE := 0.2
+# Cache derniere teinte posee par cellule pour eviter les re-poses inutiles.
+var _teinte_precedente: Dictionary = {}
 # item -> BoxMesh de cote/3, materiau du cube. Pose UN mini-cube par bit a 1
 # dans le masque `carte.sous_cubes(cellule)` -- resolution 3x3x3.
 var _mini_box_par_item: Dictionary = {}
@@ -153,12 +170,19 @@ func _preparer_quads(cote: float) -> void:
 		var mesh := mesh_library.get_item_mesh(item)
 		if not (mesh is BoxMesh):
 			continue
+		# Hauteur reelle du bloc : sert a abaisser les items plus courts que la
+		# cellule (bloc_beche). Un cube plein a size.y == cote.
+		_hauteur_par_item[item] = (mesh as BoxMesh).size.y
 		var quad := PlaneMesh.new()
 		quad.size = Vector2(cote, cote)
 		var mat := (mesh as BoxMesh).material
 		# SHADER CUSTOM MINIMAL : couleur unie + ombre, zero PBR.
 		var smat := ShaderMaterial.new()
-		smat.shader = SolShader
+		# Shader "teintable par instance" (sol_mini_cube) : ALBEDO = couleur *
+		# COLOR. COLOR par defaut = blanc -> aspect identique tant qu'aucune
+		# teinte per-instance n'est posee. Sert au tick de teinte (feedback
+		# reserve) pour tout bloc profile, generique.
+		smat.shader = SolMiniCubeShader
 		var c := Color(0.45, 0.36, 0.27, 1.0)
 		if mat is BaseMaterial3D:
 			c = (mat as BaseMaterial3D).albedo_color
@@ -196,6 +220,12 @@ func _preparer_mini_cubes(cote: float) -> void:
 
 func _process(_delta: float) -> void:
 	_absorber_modifications_carte()
+	# Tick teinte a 1 Hz (aligne sur regen). Cache anti-repose evite les
+	# set_instance_color inutiles tant qu'aucune reserve ne change.
+	_horloge_teinte += _delta
+	if _horloge_teinte >= TEINTE_INTERVALLE:
+		_horloge_teinte = 0.0
+		_tick_teinte()
 	var centre := _centre_tuile_observateur()
 	if _doit_rafraichir(centre):
 		_rafraichir_vers(centre)
@@ -301,6 +331,13 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	# comme un cube complet plutot que quad de face -- pas de face culling
 	# entre mini-cubes (proto, on optimisera si besoin).
 	var par_forme_mini: Dictionary = {}
+	# TEINTE : side-collector pour les cellules avec profil de reserve.
+	# item -> Array of {cellule, idx}. Deux buckets separes selon la cible
+	# (par_forme vs par_forme_sol) car chacun donne un MMi distinct.
+	var teinte_normal: Dictionary = {}
+	var teinte_sol: Dictionary = {}
+	if _ressources == null:
+		_ressources = get_tree().get_first_node_in_group(&"ressources_terrain")
 	# HAUTEUR REELLE DE LA TUILE, suivie au fil des poses : l'AABB s'y serre pour
 	# que le frustum culling ecarte les tuiles hors champ. Un AABB haut de toutes
 	# les couches possibles ne se ferait jamais culler.
@@ -362,18 +399,34 @@ func _creer_tuile(tuile: Vector2i) -> void:
 						# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
 						# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
 						# cellule, laisse la face visible -- sinon un trou apparait.
+						var teintable: bool = _ressources != null \
+							and _ressources.has_method("profil_de_cellule") \
+							and _ressources.call("profil_de_cellule", cellule) != null
+						var bucket_teinte: Dictionary = teinte_sol if cible == par_forme_sol else teinte_normal
 						if not _voisin_couvre(col, couche + 1, bits, rang + 1):
-							_ajouter_face(cible, item, pos, 0, cote)
+							var i0 := _ajouter_face(cible, item, pos, 0, cote)
+							if teintable:
+								_pousser_teinte(bucket_teinte, item, cellule, i0)
 						if not _voisin_couvre(col, couche - 1, bits, rang - 1):
-							_ajouter_face(cible, item, pos, 1, cote)
+							var i1 := _ajouter_face(cible, item, pos, 1, cote)
+							if teintable:
+								_pousser_teinte(bucket_teinte, item, cellule, i1)
 						if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
-							_ajouter_face(cible, item, pos, 2, cote)
+							var i2 := _ajouter_face(cible, item, pos, 2, cote)
+							if teintable:
+								_pousser_teinte(bucket_teinte, item, cellule, i2)
 						if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
-							_ajouter_face(cible, item, pos, 3, cote)
+							var i3 := _ajouter_face(cible, item, pos, 3, cote)
+							if teintable:
+								_pousser_teinte(bucket_teinte, item, cellule, i3)
 						if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
-							_ajouter_face(cible, item, pos, 4, cote)
+							var i4 := _ajouter_face(cible, item, pos, 4, cote)
+							if teintable:
+								_pousser_teinte(bucket_teinte, item, cellule, i4)
 						if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
-							_ajouter_face(cible, item, pos, 5, cote)
+							var i5 := _ajouter_face(cible, item, pos, 5, cote)
+							if teintable:
+								_pousser_teinte(bucket_teinte, item, cellule, i5)
 				else:
 					# FORME NON-CUBE (rampe, cylindre, sphere) : mesh complet, orientee.
 					# Elle a du volume -> projette toujours (jamais dans par_forme_sol).
@@ -388,11 +441,15 @@ func _creer_tuile(tuile: Vector2i) -> void:
 					positions_occl.append(pos)
 
 	var noeuds: Array = []
+	# Map temporaire item -> mmi pour mapper les entries teinte apres creation.
+	var mmi_par_item_normal: Dictionary = {}
+	var mmi_par_item_sol: Dictionary = {}
 	for item in par_forme.keys():
 		var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote)
 		if mmi != null:
 			add_child(mmi)
 			noeuds.append(mmi)
+			mmi_par_item_normal[item] = mmi
 	# LE SOL DE BASE NE PROJETTE PAS : il quitte les passes d'ombre. Il RECOIT
 	# toujours les ombres des objets poses dessus -- `cast_shadow` ne touche que la
 	# projection, jamais la reception.
@@ -402,6 +459,13 @@ func _creer_tuile(tuile: Vector2i) -> void:
 			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			add_child(mmi)
 			noeuds.append(mmi)
+			mmi_par_item_sol[item] = mmi
+	# Construire l'index de teinte pour cette tuile : cellule -> [{mmi, idx}].
+	var index_tuile: Dictionary = {}
+	_agreger_teinte(index_tuile, teinte_normal, mmi_par_item_normal)
+	_agreger_teinte(index_tuile, teinte_sol, mmi_par_item_sol)
+	if not index_tuile.is_empty():
+		_teinte_par_tuile[tuile] = index_tuile
 	# Mini-cubes des cellules entamees. Un MMi par item, mesh = _mini_box_par_item.
 	for item in par_forme_mini.keys():
 		var mmi := _mmi_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
@@ -447,7 +511,9 @@ func _ajouter_mini_cubes(par_forme_mini: Dictionary, item: int, centre: Vector3,
 		if (masque & (1 << i)) == 0:
 			continue
 		var ix := i % 3
+		@warning_ignore("integer_division")
 		var iy := (i / 3) % 3
+		@warning_ignore("integer_division")
 		var iz := i / 9
 		var offset := Vector3(
 			float(ix - 1) * pas,
@@ -497,12 +563,35 @@ func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
 # Ajoute une instance de quad pour la face `i` d'un cube centre en `centre` :
 # translation vers le centre de la face (normale x demi-cote) et rotation qui
 # oriente le quad vers le vide.
-func _ajouter_face(par_forme: Dictionary, item: int, centre: Vector3, i: int, cote: float) -> void:
+func _ajouter_face(par_forme: Dictionary, item: int, centre: Vector3, i: int, cote: float) -> int:
 	var f: Dictionary = _faces[i]
-	var t := Transform3D(f.b, centre + (f.n as Vector3) * (cote * 0.5))
+	# Hauteur reelle du bloc (defaut = cote pour un cube plein). Un item plus
+	# court est dessine abaisse : bas de la cellule inchange, dessus descendu.
+	var h: float = float(_hauteur_par_item.get(item, cote))
+	var base: Basis = f.b
+	var origine: Vector3
+	if i == 0:
+		# Dessus : descend au sommet reel du bloc (sol de cellule + h).
+		origine = centre + Vector3(0.0, h - cote * 0.5, 0.0)
+	elif i == 1:
+		# Dessous : inchange, au sol de la cellule.
+		origine = centre + (f.n as Vector3) * (cote * 0.5)
+	else:
+		# Cotes : le quad partage (cote x cote) est mis a l'echelle verticale en
+		# MONDE par ratio = h/cote -- base = diag(1, ratio, 1) * f.b, construite
+		# colonne par colonne (Y de chaque colonne x ratio). Recentre a mi-hauteur
+		# du slab pour que son bas reste au sol de la cellule.
+		var ratio: float = h / cote
+		base = Basis(
+			Vector3(f.b.x.x, f.b.x.y * ratio, f.b.x.z),
+			Vector3(f.b.y.x, f.b.y.y * ratio, f.b.y.z),
+			Vector3(f.b.z.x, f.b.z.y * ratio, f.b.z.z))
+		origine = centre + (f.n as Vector3) * (cote * 0.5) + Vector3(0.0, (h - cote) * 0.5, 0.0)
+	var t := Transform3D(base, origine)
 	if not par_forme.has(item):
 		par_forme[item] = [] as Array
 	par_forme[item].append(t)
+	return (par_forme[item] as Array).size() - 1
 
 # UN MultiMeshInstance3D pour une forme. Le mesh est le QUAD de la forme si elle
 # est cubique (rendu face par face), sinon le mesh complet de la bibliotheque.
@@ -517,10 +606,14 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		return null
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
+	# Teinte per-instance (feedback reserve). Blanc par defaut = ne modifie
+	# rien tant qu'aucune teinte n'est posee.
+	mm.use_colors = true
 	mm.mesh = mesh
 	mm.instance_count = transforms.size()
 	for i in range(transforms.size()):
 		mm.set_instance_transform(i, transforms[i])
+		mm.set_instance_color(i, Color(1, 1, 1))
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = mm
 	# BOITE SERREE A LA TUILE, en coordonnees monde (ce noeud est a l'origine).
@@ -613,3 +706,63 @@ func _supprimer_tuile(tuile: Vector2i) -> void:
 			if is_instance_valid(mmi):
 				mmi.queue_free()
 	_tuiles.erase(tuile)
+	# Nettoyage index teinte : les cellules de cette tuile disparaissent aussi
+	# de _teinte_precedente pour re-teinter proprement si la tuile revient.
+	if _teinte_par_tuile.has(tuile):
+		var idx: Dictionary = _teinte_par_tuile[tuile]
+		for cellule in idx:
+			_teinte_precedente.erase(cellule)
+		_teinte_par_tuile.erase(tuile)
+
+# Helper : memorise (cellule, idx) dans un bucket item -> Array. Appele au
+# streaming pour chaque face teintable.
+func _pousser_teinte(bucket: Dictionary, item: int, cellule: Vector3i, idx: int) -> void:
+	if not bucket.has(item):
+		bucket[item] = [] as Array
+	(bucket[item] as Array).append({"cellule": cellule, "idx": idx})
+
+# Helper : agrege un bucket (item -> [{cellule, idx}]) dans l'index de tuile
+# (cellule -> [{mmi, idx}]) en resolvant l'item vers son mmi.
+func _agreger_teinte(index_tuile: Dictionary, bucket: Dictionary, mmi_par_item: Dictionary) -> void:
+	for item in bucket:
+		var mmi = mmi_par_item.get(item, null)
+		if mmi == null:
+			continue
+		for entree in (bucket[item] as Array):
+			var cellule: Vector3i = entree["cellule"]
+			if not index_tuile.has(cellule):
+				index_tuile[cellule] = [] as Array
+			(index_tuile[cellule] as Array).append({"mmi": mmi, "idx": int(entree["idx"])})
+
+# Tick de teinte : parcourt les cellules teintables de toutes les tuiles
+# chargees, calcule un gain [0.4..1.0] selon la reserve courante, pose la
+# couleur d'instance. Cache la derniere teinte par cellule pour eviter les
+# set_instance_color inutiles (aucune reserve n'a change).
+func _tick_teinte() -> void:
+	if _teinte_par_tuile.is_empty():
+		return
+	if _ressources == null:
+		_ressources = get_tree().get_first_node_in_group(&"ressources_terrain")
+		if _ressources == null:
+			return
+	for tuile in _teinte_par_tuile:
+		var index: Dictionary = _teinte_par_tuile[tuile]
+		for cellule in index:
+			var profil: Resource = _ressources.call("profil_de_cellule", cellule) as Resource
+			if profil == null:
+				continue
+			var cap: int = int(profil.get("reserve"))
+			if cap <= 0:
+				continue
+			var q: int = int(_ressources.call("quantite_a", cellule))
+			var ratio: float = clampf(float(q) / float(cap), 0.0, 1.0)
+			var gain: float = TEINTE_GAIN_VIDE + (1.0 - TEINTE_GAIN_VIDE) * ratio
+			var prec: float = float(_teinte_precedente.get(cellule, -1.0))
+			if absf(gain - prec) < 0.005:
+				continue
+			_teinte_precedente[cellule] = gain
+			var couleur := Color(gain, gain, gain)
+			for face in (index[cellule] as Array):
+				var mmi: MultiMeshInstance3D = face["mmi"]
+				if is_instance_valid(mmi):
+					mmi.multimesh.set_instance_color(int(face["idx"]), couleur)

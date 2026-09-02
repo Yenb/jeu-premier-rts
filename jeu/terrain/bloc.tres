@@ -95,6 +95,13 @@ height = 2.0
 [sub_resource type="SphereShape3D" id="SphereShape3D_sph"]
 radius = 1.0
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_beche"]
+albedo_color = Color(0.28, 0.2, 0.13, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_beche"]
+material = SubResource("StandardMaterial3D_beche")
+size = Vector3(2, 1.875, 2)
+
 [resource]
 item/0/name = "bloc"
 item/0/mesh = SubResource("BoxMesh_ms801")
@@ -160,3 +167,10 @@ item/8/mesh_cast_shadow = 1
 item/8/shapes = [SubResource("SphereShape3D_sph"), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
 item/8/navigation_mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
 item/8/navigation_layers = 1
+item/9/name = "bloc_beche"
+item/9/mesh = SubResource("BoxMesh_beche")
+item/9/mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+item/9/mesh_cast_shadow = 0
+item/9/shapes = [SubResource("BoxShape3D_c0l1s"), Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)]
+item/9/navigation_mesh_transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+item/9/navigation_layers = 1
