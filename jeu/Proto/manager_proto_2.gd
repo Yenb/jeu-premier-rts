@@ -117,14 +117,13 @@ func _ready() -> void:
 		# Personnage. Le manager les LIT pour fabriquer la forme de collision data --
 		# ainsi collision et visuel suivent le MEME reglage (voir personnage.gd).
 		var hauteur_capsule := _lire_reglage("hauteur_capsule", 1.8)
-		var rayon_capsule := _lire_reglage("rayon_capsule", 0.4)
 		var gravite := _lire_reglage("gravite", 18.0)
-		# CONTRAINTE CAPSULE : le rayon ne peut pas depasser la demi-hauteur (une
-		# capsule plus courte que son diametre n'existe pas). Le CapsuleMesh de Godot
-		# reduit tout seul son rayon dans ce cas ; on fait PAREIL pour la collision,
-		# sinon reduire la hauteur laisserait une collision spherique du rayon plein
-		# -- petit a l'ecran, gros en collision.
-		rayon_capsule = minf(rayon_capsule, hauteur_capsule * 0.5)
+		# RAYON EFFECTIF lu du Personnage (rayon = ratio * hauteur, deja borne a
+		# hauteur/2). Collision et visuel partagent la meme source, donc la meme
+		# taille : reduire la hauteur rapetisse les deux ensemble.
+		var rayon_capsule := hauteur_capsule * 0.5
+		if _observateur.has_method("rayon_effectif"):
+			rayon_capsule = float(_observateur.rayon_effectif())
 		_entite_joueur = {
 			"id": "joueur",
 			"position": _observateur.global_position,

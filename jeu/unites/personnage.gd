@@ -103,14 +103,26 @@ const INANITION_DRAIN_LOURD := 2.0
 # le manager (manager_proto_2) LIT ces @export pour fabriquer la forme de collision
 # data du joueur. Regler ici regle les deux d'un coup. Le SCALE du nœud, lui, ne
 # toucherait QUE le visuel -- la collision data vit hors du nœud, elle l'ignore.
-@export var rayon_capsule: float = 0.4
+# La HAUTEUR est le parametre MAITRE. Le rayon et la hauteur des yeux en decoulent
+# par un RATIO : changer la taille fait suivre la largeur et la camera d'un coup.
 @export var hauteur_capsule: float = 1.8
-@export var hauteur_yeux: float = 1.7
+@export var ratio_rayon: float = 0.22   # rayon = ratio * hauteur (borne a hauteur/2)
+@export var ratio_yeux: float = 0.94    # yeux  = ratio * hauteur
 @export var vitesse_marche: float = 4.0
 @export var vitesse_saut: float = 8.5
 @export var gravite: float = 18.0
 @export var afficher_corps: bool = true
 @export var afficher_marqueur_debug: bool = true
+
+# Dimensions EFFECTIVES derivees de la hauteur (source unique). Le rayon suit la
+# hauteur par un ratio, BORNE a la demi-hauteur (une capsule n'est jamais plus
+# courte que son diametre) ; les yeux suivent par un autre ratio. Le manager lit
+# rayon_effectif() pour la collision -- collision et visuel restent d'accord.
+func rayon_effectif() -> float:
+	return minf(ratio_rayon * hauteur_capsule, hauteur_capsule * 0.5)
+
+func hauteur_yeux_effective() -> float:
+	return ratio_yeux * hauteur_capsule
 
 # ---- ETAT ----
 var _lacet: float = 0.0     # rotation Y du corps, accumulee (souris + clavier)
@@ -198,7 +210,7 @@ func _appliquer_dimensions() -> void:
 		# Le mesh du .tscn peut etre partage entre instances : on le duplique pour
 		# que redimensionner ce personnage ne touche pas un autre.
 		var m: CapsuleMesh = _corps_visible.mesh.duplicate()
-		m.radius = rayon_capsule
+		m.radius = rayon_effectif()
 		m.height = hauteur_capsule
 		_corps_visible.mesh = m
 		# Origine du nœud aux PIEDS : le centre de la capsule remonte d'une
@@ -208,7 +220,7 @@ func _appliquer_dimensions() -> void:
 	if _marqueur_debug != null:
 		_marqueur_debug.visible = afficher_marqueur_debug
 	if _yeux != null:
-		_yeux.position = Vector3(0.0, hauteur_yeux, 0.0)
+		_yeux.position = Vector3(0.0, hauteur_yeux_effective(), 0.0)
 
 # L'INTENTION DE MOUVEMENT, lue A L'INSTANT par le manager qui l'appelle. Rend la
 # vitesse horizontale voulue (repere monde, deduite du lacet courant), si le saut
