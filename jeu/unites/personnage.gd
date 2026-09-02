@@ -237,16 +237,17 @@ func _unhandled_input(evenement: InputEvent) -> void:
 	_lacet += pivot_souris(evenement.relative.x, sensibilite_souris)
 	_tangage = inclinaison_voulue(_tangage, evenement.relative.y, sensibilite_souris, inclinaison_max)
 
-# LE RENDU SUIT SES ENTREES : le lacet oriente le corps, le tangage les yeux. La
-# POSITION n'est PAS ecrite ici -- c'est le manager qui la pose depuis la donnee.
-func _process(_delta: float) -> void:
+# RENDU + BARRES EN _physics_process. L'interpolation physique est active
+# (project.godot) : les transforms (rotation du corps, tangage de la camera Yeux)
+# doivent etre poses dans le PAS PHYSIQUE, sinon Godot avertit qu'une Camera3D
+# interpolee est bougee depuis l'idle. La POSITION n'est PAS ecrite ici -- le
+# manager la pose depuis la donnee. Le lacet oriente le corps, le tangage les yeux
+# seuls. Le mouvement, lui, est tire par le manager via intention_mouvement.
+func _physics_process(delta: float) -> void:
 	rotation = Vector3(0.0, _lacet, 0.0)
 	if _yeux != null:
 		_yeux.rotation.x = _tangage
 
-# ENDURANCE, FAIM, INANITION -- aucune physique CharacterBody3D. Le mouvement,
-# lui, est tire par le manager via intention_mouvement.
-func _physics_process(delta: float) -> void:
 	var sprint: bool = Input.is_physical_key_pressed(KEY_SHIFT)
 	if sprint:
 		_endurance = maxf(0.0, _endurance - (endurance_max / endurance_temps_vidage) * delta)

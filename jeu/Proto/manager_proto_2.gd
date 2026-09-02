@@ -19,8 +19,8 @@ extends Node
 # (appel direct, sans course d'ordre), compose la velocite (horizontale + saut si
 # au sol + gravite), avance la position, et resout le TERRAIN par le MEME chemin
 # que les cubes (_deplacement_horizontal_valide + snap carte.sommet). La collision
-# JOUEUR-CONTRE-CUBES passe par collision.gd (GJK/EPA). En fin de _process, la
-# position data est recopiee dans le nœud (le rendu suit la donnee, seule
+# JOUEUR-CONTRE-CUBES passe par collision.gd (GJK/EPA). En fin de _physics_process,
+# la position data est recopiee dans le nœud (le rendu suit la donnee, seule
 # autorite). Symetrie totale entite/joueur, comme le veut CLAUDE.md § Liste
 # exhaustive des interactions physiques a coder en data pure.
 #
@@ -145,7 +145,11 @@ func _ready() -> void:
 		if _observateur.has_method("configurer_depuis_donnees"):
 			_observateur.configurer_depuis_donnees(_entite_joueur)
 
-func _process(delta: float) -> void:
+# TICK EN _physics_process : l'interpolation physique est active (project.godot),
+# donc tout transform (position joueur, nœuds cubes) doit etre pose dans le pas
+# physique -- sinon Godot interpole depuis une source idle et avertit. Le rendu
+# est alors LISSE entre deux pas physiques, gratuitement.
+func _physics_process(delta: float) -> void:
 	_tick_spawn(delta)
 	_tick_errance(delta)
 	_pas_joueur(delta)
