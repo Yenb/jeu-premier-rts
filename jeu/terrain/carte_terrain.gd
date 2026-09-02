@@ -114,6 +114,16 @@ extends "res://jeu/monde/registre.gd"
 # masque nul designe une colonne entierement vide.
 @export var volumes: Dictionary[Vector2i, int] = {}
 
+# PROFIL DE HAUTEUR PAR ITEM. Catalogue item -> 4 hauteurs de coin (fractions
+# 0..1 de la hauteur de cellule, interpolees bilineairement puis orientees par
+# l'orthogonal_index). Un item absent = plein (surface plate au plafond). C'est
+# ce qui fait qu'une forme non-remplissante (une rampe) porte un sol incline sans
+# nommer aucune categorie ici : le profil est une DONNEE, pas du code. Charge
+# paresseusement depuis `chemin_profils_hauteur`.
+@export var chemin_profils_hauteur: String = "res://jeu/terrain/profils_hauteur.json"
+var _profils_hauteur: Dictionary = {}
+var _profils_charges: bool = false
+
 # CE QUI N'A PAS BESOIN D'ETRE DIT. Une cellule posee sans rien de particulier
 # est le premier bloc de la bibliotheque, droit : c'est le cas de l'immense
 # majorite du terrain, et il ne coute aucune entree.
@@ -229,6 +239,12 @@ func sommet(x_monde: float, z_monde: float) -> Variant:
 	# descendre a la couche du dessous.
 	var cellule := Vector3i(cx, couche, cz)
 	var masque_sc: int = sous_cubes(cellule)
+	# PROFIL DE HAUTEUR : cellule sommet PLEINE portant un item a profil non-plein
+	# (rampe...) -> sa surface suit le profil interpole, pas le plafond plat.
+	# Cellule creusee (sous-cubes manquants) -> on garde la logique sous-cubes.
+	var h_profil: Variant = _hauteur_profil(cellule, x_local, z_local, masque_sc)
+	if h_profil != null:
+		return float(h_profil)
 	for iy in range(2, -1, -1):
 		var idx: int = ix + iy * 3 + iz * 9
 		if (masque_sc & (1 << idx)) != 0:
@@ -391,6 +407,71 @@ func orientation_de(cellule: Vector3i) -> int:
 	if not particularites.has(cellule):
 		return ORIENTATION_DEFAUT
 	return orientation_du_code(int(particularites[cellule]))
+
+# LA HAUTEUR DU SOL PAR LE PROFIL de l'item, ou null si aucun profil ne
+# s'applique (cellule creusee, item par defaut, ou item plein). La cellule doit
+# etre PLEINE : un profil incline n'a de sens que sur une surface entiere. La
+# position locale (x_local, z_local ∈ [0, cote)) est centree en [-1, +1], ramenee
+# au repere de l'item par l'orientation (rotations Y : index 16=90°, 10=180°,
+# 22=270°), puis les 4 coins sont interpoles bilineairement. Rend la Y monde.
+func _hauteur_profil(cellule: Vector3i, x_local: float, z_local: float, masque_sc: int) -> Variant:
+	if masque_sc != MASQUE_SOUS_CUBE_PLEIN:
+		return null  # cellule creusee : la logique sous-cubes tranche
+	var item := item_de(cellule)
+	if item == ITEM_DEFAUT:
+		return null
+	_charger_profils_hauteur()
+	if not _profils_hauteur.has(item):
+		return null
+	var coins: PackedFloat32Array = _profils_hauteur[item]
+	var xc := x_local / cote * 2.0 - 1.0
+	var zc := z_local / cote * 2.0 - 1.0
+	var xi := xc
+	var zi := zc
+	match orientation_de(cellule):
+		16:
+			xi = -zc
+			zi = xc
+		10:
+			xi = -xc
+			zi = -zc
+		22:
+			xi = zc
+			zi = -xc
+	var u := clampf((xi + 1.0) * 0.5, 0.0, 1.0)
+	var v := clampf((zi + 1.0) * 0.5, 0.0, 1.0)
+	return float(cellule.y) * cote + _bilerp(coins, u, v) * cote
+
+# Interpolation bilineaire des 4 coins [u0v0, u0v1, u1v0, u1v1] a (u, v) ∈ [0,1].
+static func _bilerp(c: PackedFloat32Array, u: float, v: float) -> float:
+	if c.size() < 4:
+		return 1.0
+	return c[0] * (1.0 - u) * (1.0 - v) + c[1] * (1.0 - u) * v \
+		+ c[2] * u * (1.0 - v) + c[3] * u * v
+
+# Charge le catalogue de profils une fois. Fichier absent ou illisible -> aucun
+# profil (tout item reste plein), comportement d'avant ce mecanisme.
+func _charger_profils_hauteur() -> void:
+	if _profils_charges:
+		return
+	_profils_charges = true
+	if not FileAccess.file_exists(chemin_profils_hauteur):
+		return
+	var donnees = JSON.parse_string(FileAccess.get_file_as_string(chemin_profils_hauteur))
+	if not (donnees is Dictionary):
+		return
+	for cle in donnees:
+		if not String(cle).is_valid_int():
+			continue
+		var arr = donnees[cle]
+		if arr is Array and arr.size() >= 4:
+			_profils_hauteur[int(cle)] = PackedFloat32Array(
+				[float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3])])
+
+# Injecte un profil sans passer par le fichier (tests, ou catalogue fabrique).
+func poser_profil_hauteur(item: int, coins: PackedFloat32Array) -> void:
+	_profils_hauteur[item] = coins
+	_profils_charges = true
 
 # POSE UNE CELLULE TELLE QU'ELLE EST : sa couche devient pleine, et son item
 # comme son orientation sont gardes s'ils s'ecartent du defaut.

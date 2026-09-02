@@ -48,10 +48,18 @@ const Collision = preload("res://jeu/Proto/collision.gd")
 const INTERVALLE_PERCEPTION := 0.1
 # Trace de debug : une ligne par seconde (pos / vel / au_sol du joueur).
 const INTERVALLE_TRACE := 1.0
-# Marche franchissable du joueur : QUASI NULLE -- aucun step-up. Tout obstacle
-# qui dépasse les pieds arrête le joueur (il doit sauter). 0.05 m est une simple
-# tolérance flottante contre le bruit du snap au sol, pas une marche gravissable.
+# BLOCAGE DU JOUEUR PAR LA PENTE, jamais par une marche absolue. Un MUR (pente
+# raide) arrete, une PENTE douce (rampe) se monte a pied. La pente se lit sur une
+# DISTANCE DE SONDE FIXE devant les pieds, independante de la vitesse (sans quoi
+# un meme obstacle bloquerait ou non selon qu'on marche ou qu'on sprinte).
+#   MARCHE_JOUEUR : le sol devant doit depasser les pieds de plus que ca pour
+#     compter comme obstacle (tolerance de niveau contre le bruit du snap).
+#   SONDE_PENTE   : distance fixe devant les pieds ou l'on lit le sol.
+#   PENTE_MAX     : au-dela, c'est un mur (bloque, il faut sauter). Une rampe a
+#     45° vaut 1 ; 1.5 laisse monter jusqu'a ~56° et arrete tout mur vertical.
 const MARCHE_JOUEUR := 0.05
+const SONDE_PENTE := 0.2
+const PENTE_MAX := 1.5
 
 @export_group("Rendu")
 @export var rayon_rendu: float = 60.0
@@ -321,16 +329,29 @@ func _pas_joueur(delta: float) -> void:
 	var horiz: Vector3 = intent.get("horizontale", Vector3.ZERO)
 	var ve: Vector3 = p.get("velocite", Vector3.ZERO)
 
-	# HORIZONTALE : deplacement candidat resolu contre le terrain (bord, pente).
+	# HORIZONTALE : bloque par un MUR (pente raide devant), jamais par une pente
+	# douce -- c'est ce qui laisse monter une rampe sans sauter et arrete un cube.
+	# La pente se lit sur SONDE_PENTE (distance fixe), pas sur le pas.
 	var pos: Vector3 = _entite_joueur.position
 	var dep := Vector3(horiz.x, 0.0, horiz.z) * delta
-	# hauteur_ref = les PIEDS du joueur (pos.y) : aucun step-up, tout obstacle qui
-	# dépasse les pieds arrête ; en l'air au-dessus d'un cube, les pieds sont hauts
-	# donc le pas passe et le joueur retombe sur le dessus.
-	var r: Dictionary = _deplacement_horizontal_valide(pos, dep, pos.y, MARCHE_JOUEUR)
-	if not r.bloque:
-		pos.x = r.xz.x
-		pos.z = r.xz.z
+	var dir_h := Vector3(horiz.x, 0.0, horiz.z)
+	if dir_h.length() > 0.0001:
+		var dir_n := dir_h.normalized()
+		var sonde: Vector3 = pos + dir_n * SONDE_PENTE
+		var sol_sonde: Variant = _carte.sommet(sonde.x, sonde.z)
+		var passe := true
+		if sol_sonde == null:
+			passe = false  # bord de carte
+		elif float(sol_sonde) > pos.y + MARCHE_JOUEUR:
+			# obstacle devant : montable seulement si la pente est douce.
+			var sol_pieds: Variant = _carte.sommet(pos.x, pos.z)
+			var ref: float = float(sol_pieds) if sol_pieds != null else pos.y
+			var pente: float = (float(sol_sonde) - ref) / SONDE_PENTE
+			if pente > PENTE_MAX:
+				passe = false  # mur : il faut sauter
+		if passe:
+			pos.x += dep.x
+			pos.z += dep.z
 
 	# VERTICALE : saut (si au sol au tick precedent) puis gravite cumulee.
 	var gravite: float = float(p.get("gravite", 18.0))
