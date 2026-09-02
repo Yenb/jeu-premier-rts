@@ -60,6 +60,10 @@ const INTERVALLE_TRACE := 1.0
 const MARCHE_JOUEUR := 0.05
 const SONDE_PENTE := 0.2
 const PENTE_MAX := 1.5
+# cos(45°) : un contact de collision qui pousse le joueur vers le haut au-dela de
+# ce seuil est un SOL sous ses pieds (une entite sur laquelle il repose). Voir
+# _tick_collision -- ca complete carte.sommet, qui ignore les entites.
+const COS_SOL_MARCHABLE := 0.707
 
 @export_group("Rendu")
 @export var rayon_rendu: float = 60.0
@@ -430,6 +434,30 @@ func _tick_collision(delta: float) -> void:
 		return
 	var contacts: Array = Collision.tick(_monde, entites, delta)
 	Collision.resoudre(contacts, entites)
+	# REEVALUER au_sol du joueur A PARTIR DES CONTACTS. carte.sommet (dans
+	# _pas_joueur) ne voit QUE le terrain ; debout sur une entite (cube), le joueur
+	# se croirait en l'air -> gravite + EPA le font vibrer sans avancer. Un contact
+	# qui POUSSE le joueur vers le haut (>= cos 45°) est un sol sous ses pieds.
+	# Direction de poussee du joueur : -normale s'il est A, +normale s'il est B
+	# (resoudre : A s'ecarte en -normale). Le joueur est en tete de `entites`, donc
+	# A ; un cube sous lui a une normale A->B vers le bas -- d'ou l'inversion.
+	if not _entite_joueur.is_empty():
+		var sol_entite := false
+		for c in contacts:
+			var a = c.get("a")
+			var b = c.get("b")
+			var n_sep: Vector3
+			if (a is Dictionary) and a.get("id") == "joueur":
+				n_sep = -(c.get("normale") as Vector3)
+			elif (b is Dictionary) and b.get("id") == "joueur":
+				n_sep = c.get("normale") as Vector3
+			else:
+				continue
+			if n_sep.y >= COS_SOL_MARCHABLE:
+				sol_entite = true
+				break
+		if sol_entite:
+			_entite_joueur.proprietes["au_sol"] = true
 	if not _entite_joueur.is_empty():
 		_monde.deplacer(_entite_joueur)
 	for cube in _ennemis:
