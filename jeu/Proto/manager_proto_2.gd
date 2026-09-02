@@ -319,10 +319,11 @@ func _nouveau_cap(cube: Dictionary) -> void:
 	cube.cap_horloge = _rng.randf_range(2.0, 4.0)
 
 # UN PAS DE JOUEUR, EN DONNEE PURE, CHAQUE FRAME. Demande l'intention au nœud
-# Personnage (appel direct), compose la velocite (horizontale pilotee + saut si
-# au sol + gravite cumulee), resout le terrain par le meme chemin que les cubes,
-# snappe au sol via carte.sommet et en derive au_sol. La collision contre les
-# cubes est faite ensuite par _tick_collision.
+# Personnage (appel direct). DEUX REGIMES : AU SOL, le pas suit la surface (le
+# deplacement se consomme LE LONG du sol, montee comprise, a vitesse constante) ;
+# EN L'AIR (saut, chute), balistique (gravite + snap a l'atterrissage). Un blocage
+# MUR commun (pente raide devant les pieds) arrete un cube et laisse monter une
+# rampe. La collision contre les cubes est faite ensuite par _tick_collision.
 func _pas_joueur(delta: float) -> void:
 	if _entite_joueur.is_empty() or _observateur == null or _carte == null:
 		return
@@ -333,48 +334,65 @@ func _pas_joueur(delta: float) -> void:
 	var horiz: Vector3 = intent.get("horizontale", Vector3.ZERO)
 	var ve: Vector3 = p.get("velocite", Vector3.ZERO)
 
-	# HORIZONTALE : bloque par un MUR (pente raide devant), jamais par une pente
-	# douce -- c'est ce qui laisse monter une rampe sans sauter et arrete un cube.
-	# La pente se lit sur SONDE_PENTE (distance fixe), pas sur le pas.
 	var pos: Vector3 = _entite_joueur.position
-	var dep := Vector3(horiz.x, 0.0, horiz.z) * delta
+	var au_sol_prec: bool = bool(p.get("au_sol", false))
+	var saute: bool = bool(intent.get("saut", false)) and au_sol_prec
 	var dir_h := Vector3(horiz.x, 0.0, horiz.z)
-	if dir_h.length() > 0.0001:
-		var dir_n := dir_h.normalized()
-		var sonde: Vector3 = pos + dir_n * SONDE_PENTE
-		var sol_sonde: Variant = _carte.sommet(sonde.x, sonde.z)
-		var passe := true
+	var vitesse_h: float = dir_h.length()
+
+	# BLOCAGE MUR, commun au sol et en l'air : le sol devant (a distance de sonde
+	# FIXE, pas le pas) depasse-t-il les pieds avec une pente raide ? Une pente douce
+	# (rampe) passe ; un mur/cube arrete ; en l'air au-dessus d'un cube les pieds
+	# sont hauts, rien ne depasse, le pas passe (on retombe sur le dessus).
+	var dir_n := Vector3.ZERO
+	var pente_devant: float = 0.0
+	var peut_avancer: bool = true
+	if vitesse_h > 0.0001:
+		dir_n = dir_h / vitesse_h
+		var sol_sonde: Variant = _carte.sommet(pos.x + dir_n.x * SONDE_PENTE, pos.z + dir_n.z * SONDE_PENTE)
 		if sol_sonde == null:
-			passe = false  # bord de carte
-		elif float(sol_sonde) > pos.y + MARCHE_JOUEUR:
-			# obstacle devant : montable seulement si la pente est douce.
+			peut_avancer = false  # bord de carte
+		else:
 			var sol_pieds: Variant = _carte.sommet(pos.x, pos.z)
 			var ref: float = float(sol_pieds) if sol_pieds != null else pos.y
-			var pente: float = (float(sol_sonde) - ref) / SONDE_PENTE
-			if pente > PENTE_MAX:
-				passe = false  # mur : il faut sauter
-		if passe:
-			pos.x += dep.x
-			pos.z += dep.z
+			pente_devant = (float(sol_sonde) - ref) / SONDE_PENTE
+			if float(sol_sonde) > pos.y + MARCHE_JOUEUR and pente_devant > PENTE_MAX:
+				peut_avancer = false  # mur au-dessus des pieds : il faut sauter
 
-	# VERTICALE : saut (si au sol au tick precedent) puis gravite cumulee.
-	var gravite: float = float(p.get("gravite", 18.0))
-	if bool(intent.get("saut", false)) and bool(p.get("au_sol", false)):
-		ve.y = float(intent.get("vitesse_saut", 8.5))
-	ve.y -= gravite * delta
-	pos.y += ve.y * delta
-
-	# SOL sous la position finale : snap et au_sol (comme les cubes lisent le sol).
-	var y_sol: Variant = _carte.sommet(pos.x, pos.z)
 	var au_sol := false
-	if y_sol != null and pos.y <= float(y_sol):
-		pos.y = float(y_sol)
-		ve.y = 0.0
+	if au_sol_prec and not saute:
+		# AU SOL : le pas suit la SURFACE. La distance parcourue vaut vitesse * delta
+		# LE LONG du sol (technique standard : direction projetee sur le plan de la
+		# pente, renormalisee a la vitesse constante). Plus de hauteur "gratuite" --
+		# monter une rampe ne fait plus aller plus vite qu'a plat.
+		if vitesse_h > 0.0001 and peut_avancer:
+			var dir_surface := Vector3(dir_n.x, pente_devant, dir_n.z).normalized()
+			pos += dir_surface * vitesse_h * delta
+		# Colle a la surface (corrige l'ecart de l'estimation de pente).
+		var sol_v: Variant = _carte.sommet(pos.x, pos.z)
+		if sol_v != null:
+			pos.y = float(sol_v)
+		ve = Vector3(horiz.x, 0.0, horiz.z)
 		au_sol = true
+	else:
+		# EN L'AIR : balistique. Saut puis gravite cumulee ; l'horizontal avance
+		# librement (sauf mur) ; snap a l'atterrissage.
+		var gravite: float = float(p.get("gravite", 18.0))
+		if saute:
+			ve.y = float(intent.get("vitesse_saut", 8.5))
+		ve.y -= gravite * delta
+		if peut_avancer:
+			pos.x += horiz.x * delta
+			pos.z += horiz.z * delta
+		pos.y += ve.y * delta
+		var sol_v: Variant = _carte.sommet(pos.x, pos.z)
+		if sol_v != null and pos.y <= float(sol_v):
+			pos.y = float(sol_v)
+			ve.y = 0.0
+			au_sol = true
+		ve.x = horiz.x
+		ve.z = horiz.z
 
-	# La velocite horizontale est enregistree (swept collision + resume d'etat).
-	ve.x = horiz.x
-	ve.z = horiz.z
 	p["velocite"] = ve
 	p["au_sol"] = au_sol
 	_entite_joueur.position = pos
