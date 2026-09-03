@@ -96,10 +96,11 @@ const MULTIPASS_N := 4
 #   micro-relief plus que sur les notres. Au-dessus, on retombe sur le test de
 #   pente (PENTE_MAX_MARCHABLE) pour decider si c'est une rampe ou un mur.
 const HAUTEUR_MICRO_RELIEF := 0.05
-# PENTE_MAX_MARCHABLE : pente maximale marchable, en tan(angle). 1.0 = 45°, la
-#   pente d'une rampe voxel classique (rise 2m / run 2m). Au-dela : mur ou pente
-#   trop raide, il faut sauter ou trouver un autre chemin.
-const PENTE_MAX_MARCHABLE := 1.0
+# PENTE_MAX_MARCHABLE : pente maximale marchable, en tan(angle). 1.73 = 60°,
+#   calibre sur la rampe normale de la bibliotheque de contenu (rise ~3.46m /
+#   run 2m). Au-dela : mur ou pente trop raide, il faut sauter ou trouver un
+#   autre chemin.
+const PENTE_MAX_MARCHABLE := 1.73
 
 # AVANCE UNE ENTITE D'UN PAS. Dispatch par profil vers l'implementation de la
 # richesse voulue. Le corps des trois _pas_* est VIDE en phase 1 : cette phase
@@ -364,8 +365,8 @@ static func _pas_complet_atomique(entite: Dictionary, dt: float, monde, carte) -
 # a la tete pour ignorer un bloc suspendu au-dessus) et compare :
 #   null (bord de carte / trou)              -> mur (on ne franchit pas un vide)
 #   rise = sol_devant - sol_ici <= 5cm       -> micro-relief -> passe
-#   rise > 5cm ET rise / d > 1.0 (>45°)      -> mur ou pente trop raide -> bloque
-#   rise > 5cm ET rise / d <= 1.0 (<=45°)    -> rampe walkable -> passe
+#   rise > 5cm ET rise / d > 1.73 (>60°)     -> mur ou pente trop raide -> bloque
+#   rise > 5cm ET rise / d <= 1.73 (<=60°)   -> rampe walkable -> passe
 # sol_ici est calcule UNE FOIS hors boucle : c'est la reference verticale contre
 # laquelle on mesure le denivele de chaque sonde. Fonctionne a toute echelle (perso
 # normal, petit, geant, creature) sans constante scale-dependante.
