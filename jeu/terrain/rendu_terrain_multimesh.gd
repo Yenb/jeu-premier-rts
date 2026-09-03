@@ -127,6 +127,17 @@ const TEINTE_INTERVALLE := 1.0  # 1 Hz, aligne sur le tick regen
 const TEINTE_GAIN_VIDE := 0.2
 # Cache derniere teinte posee par cellule pour eviter les re-poses inutiles.
 var _teinte_precedente: Dictionary = {}
+# CACHES DE TEINTE PAR CELLULE. Alimentes au streaming (dans _creer_tuile pour
+# chaque cellule declaree teintable), purges au dechargement de tuile
+# (_supprimer_tuile). Modification de carte : _absorber_modifications_carte
+# passe par _supprimer_tuile puis _creer_tuile, donc les caches sont purges et
+# re-alimentes en un seul cycle -- pas d'invalidation explicite ici.
+# Le tick de teinte lit ces caches, plus aucun _ressources.call() par cellule.
+var _cache_profil_cellule: Dictionary = {}    # Vector3i cellule -> Resource
+var _cache_quantite_cellule: Dictionary = {}  # Vector3i cellule -> int
+# COMPTEUR DEBUG/PERF, incremente en tete de _creer_tuile. Sert au test S2 a
+# prouver qu'une salve de modifs dans une meme tuile collapse en UN rebuild.
+var _creations_tuile_compte: int = 0
 # item -> BoxMesh de cote/3, materiau du cube. Pose UN mini-cube par bit a 1
 # dans le masque `carte.sous_cubes(cellule)` -- resolution 3x3x3.
 var _mini_box_par_item: Dictionary = {}
@@ -294,11 +305,19 @@ func _tuiles_du_disque(centre: Vector2i) -> Dictionary:
 				ens[Vector2i(centre.x + dx, centre.y + dz)] = true
 	return ens
 
-# CALCUL BITWISE DES RANGS VISIBLES DANS UNE COLONNE, identique au rendu
-# precedent : un rang est scelle ssi plein ici ET plein en +Y ET plein dans les
-# 4 voisins lateraux. Statique -> testable en headless.
-static func visible_bits_col(bits: int, nxp: int, nxm: int, nzp: int, nzm: int) -> int:
-	var sealed_bits := (bits >> 1) & nxp & nxm & nzp & nzm
+# CALCUL BITWISE DES RANGS VISIBLES DANS UNE COLONNE : un rang est scelle ssi
+# le plafond de MA colonne couvre + les 4 voisins lateraux COUVRENT au meme rang.
+# `mon_couvrant`, `nxp_couvrant` etc. sont les masques COUVRANTS : bit a 1 seulement
+# si la cellule est un cube pleinement plein (item cubique + sous-cubes intacts).
+# Une rampe ou une forme non-cube compte comme PLEINE dans le masque volumes brut
+# (elle occupe sa cellule), mais elle ne COUVRE PAS la face carree du cube adjacent
+# -- il reste toujours un triangle vide sur le cote de la pente. La faire compter
+# comme couvrante ferait disparaitre le cube voisin et laisserait voir a travers
+# la rampe (bug S2.7 : capture d'ecran, etages sombres a travers un mur).
+static func visible_bits_col(bits: int, mon_couvrant: int,
+		nxp_couvrant: int, nxm_couvrant: int,
+		nzp_couvrant: int, nzm_couvrant: int) -> int:
+	var sealed_bits := (mon_couvrant >> 1) & nxp_couvrant & nxm_couvrant & nzp_couvrant & nzm_couvrant
 	return bits & ~sealed_bits
 
 # Masque bitwise complet d'une colonne, memoize par tuile.
@@ -307,16 +326,53 @@ func _masque_col(col: Vector2i, memo: Dictionary) -> int:
 		memo[col] = carte.masque(col)
 	return memo[col]
 
+# MASQUE COUVRANT d'une colonne : `_masque_col` filtre des rangs qui ne
+# couvrent pas la face carree de la cellule voisine :
+# - cellule dont l'item n'est PAS cubique (rampe, cylindre, sphere : pente ou
+#   arrondi -> laisse toujours un vide sur le cote) ;
+# - cellule cassee (sous_cubes != PLEIN : troue).
+# Memoize separement de _masque_col : les deux valeurs sont utilisees ensemble
+# et lues plusieurs fois par tuile (chaque colonne teste ses 4 voisins).
+func _masque_couvrant_col(col: Vector2i, memo: Dictionary) -> int:
+	if memo.has(col):
+		return memo[col]
+	var bits: int = carte.masque(col)
+	if bits == 0:
+		memo[col] = 0
+		return 0
+	var particularites: Dictionary = carte.particularites
+	var base: int = int(carte.couche_base)
+	var couvrant := bits
+	for rang in range(CarteTerrain.COUCHES_MAXIMALES):
+		if (bits & (1 << rang)) == 0:
+			continue
+		var cellule := Vector3i(col.x, base + rang, col.y)
+		var code: int = int(particularites.get(cellule, -1))
+		var item: int
+		if code == -1:
+			item = CarteTerrain.ITEM_DEFAUT
+		else:
+			item = CarteTerrain.item_du_code(code)
+		if not _quad_par_item.has(item):
+			couvrant &= ~(1 << rang)  # non-cube : ne couvre pas
+			continue
+		if carte.sous_cubes(cellule) != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN:
+			couvrant &= ~(1 << rang)  # cube casse : ne couvre pas
+	memo[col] = couvrant
+	return couvrant
+
 # CREE UNE TUILE : parcourt ses colonnes, groupe les transforms des cellules
 # visibles PAR FORME, puis pose un MultiMeshInstance3D par forme presente. Tout
 # d'un bloc -- la tuile est monolithique.
 func _creer_tuile(tuile: Vector2i) -> void:
+	_creations_tuile_compte += 1
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var particularites: Dictionary = carte.particularites
 	var taille := taille_tuile_cellules
 	var origine_col := Vector2i(tuile.x * taille, tuile.y * taille)
 	var memo_bits: Dictionary = {}
+	var memo_couvrant: Dictionary = {}
 
 	# forme (item) -> Array[Transform3D]. Deux groupes pour l'OMBRE, selon le NIVEAU
 	# du cube. `par_forme` : tout ce qui EMERGE (relief, murs, batiments) et les
@@ -360,7 +416,13 @@ func _creer_tuile(tuile: Vector2i) -> void:
 			var nxm := _masque_col(Vector2i(col.x - 1, col.y), memo_bits)
 			var nzp := _masque_col(Vector2i(col.x, col.y + 1), memo_bits)
 			var nzm := _masque_col(Vector2i(col.x, col.y - 1), memo_bits)
-			var visible_bits := visible_bits_col(bits, nxp, nxm, nzp, nzm)
+			# COUVRANTS pour le scellement, voir visible_bits_col.
+			var mon_couvrant := _masque_couvrant_col(col, memo_couvrant)
+			var nxp_c := _masque_couvrant_col(Vector2i(col.x + 1, col.y), memo_couvrant)
+			var nxm_c := _masque_couvrant_col(Vector2i(col.x - 1, col.y), memo_couvrant)
+			var nzp_c := _masque_couvrant_col(Vector2i(col.x, col.y + 1), memo_couvrant)
+			var nzm_c := _masque_couvrant_col(Vector2i(col.x, col.y - 1), memo_couvrant)
+			var visible_bits := visible_bits_col(bits, mon_couvrant, nxp_c, nxm_c, nzp_c, nzm_c)
 			if visible_bits == 0:
 				continue
 			var r_top := CarteTerrain.rang_le_plus_haut(bits)
@@ -399,9 +461,15 @@ func _creer_tuile(tuile: Vector2i) -> void:
 						# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
 						# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
 						# cellule, laisse la face visible -- sinon un trou apparait.
-						var teintable: bool = _ressources != null \
-							and _ressources.has_method("profil_de_cellule") \
-							and _ressources.call("profil_de_cellule", cellule) != null
+						# CACHE ALIMENTE ICI, LU DANS _tick_teinte : un seul call() par
+						# cellule teintable, au streaming, plus jamais au tick.
+						var profil_cell: Resource = null
+						if _ressources != null and _ressources.has_method("profil_de_cellule"):
+							profil_cell = _ressources.call("profil_de_cellule", cellule) as Resource
+						var teintable: bool = profil_cell != null
+						if teintable:
+							_cache_profil_cellule[cellule] = profil_cell
+							_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
 						var bucket_teinte: Dictionary = teinte_sol if cible == par_forme_sol else teinte_normal
 						if not _voisin_couvre(col, couche + 1, bits, rang + 1):
 							var i0 := _ajouter_face(cible, item, pos, 0, cote)
@@ -437,7 +505,16 @@ func _creer_tuile(tuile: Vector2i) -> void:
 					par_forme[item].append(t)
 				couche_min = mini(couche_min, couche)
 				couche_max = maxi(couche_max, couche)
-				if couche > sommet_base:
+				# OCCLUDEUR : CUBES SEULEMENT. Une rampe (ou toute forme non-cube)
+				# est visuellement une pente, mais _occludeur_de_cubes la traitait
+				# comme un CUBE PLEIN autour de sa cellule -- la camera qui monte
+				# la rampe passe visuellement A L'INTERIEUR de ce cube d'occludeur
+				# boite pleine, ce qui casse le culling Vulkan (le terrain lointain
+				# disparait). Diagnostic S2.6 : bug specifique aux rampes, pas a la
+				# hauteur en general. Correction : les non-cubes ne portent plus
+				# d'occludeur. Une rampe n'occlude rien de serieux de toute facon,
+				# le regard passe naturellement au-dessus ou a travers la pente.
+				if couche > sommet_base and _quad_par_item.has(item):
 					positions_occl.append(pos)
 
 	var noeuds: Array = []
@@ -637,17 +714,26 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 	return mmi
 
 # UN OccluderInstance3D pour une liste de cubes (leurs centres). Chaque cube est
-# une boite fermee de cote `cote` ; Godot rasterise cette geometrie et n'affiche
-# plus ce qui tombe entierement derriere. Les sommets sont en coordonnees monde
-# (ce noeud est a l'origine), comme les MultiMesh.
+# une boite OUVERTE EN HAUT (5 faces : bas + 4 laterales) ; Godot rasterise cette
+# geometrie et n'affiche plus ce qui tombe entierement derriere. Les sommets sont
+# en coordonnees monde (ce noeud est a l'origine), comme les MultiMesh.
+#
+# PAS DE FACE Y+ (le "toit"). Avec elle, la vue plongeante (camera au-dessus du
+# relief) faisait rasteriser un plein masque de profondeur horizontal qui
+# cachait les tuiles valides en contrebas -- le sol lointain disparaissait des
+# qu'on montait. ArrayOccluder3D accepte un mesh non-manifold : il rasterise
+# des triangles, pas un volume ferme. Les faces laterales (X±, Z±) et la face
+# Y- restent, donc l'occlusion rasante fonctionne a l'identique. Bonus : les
+# toits internes des cubes empiles etaient de toute facon caches par le cube
+# au-dessus -- les retirer allege l'occludeur.
 func _occludeur_de_cubes(positions: Array, cote: float) -> OccluderInstance3D:
 	var h := cote * 0.5
 	var coins := [
 		Vector3(-h, -h, -h), Vector3(h, -h, -h), Vector3(h, -h, h), Vector3(-h, -h, h),
 		Vector3(-h, h, -h), Vector3(h, h, -h), Vector3(h, h, h), Vector3(-h, h, h)]
+	# Face Y+ (indices 4,5,6,4,6,7) VOLONTAIREMENT ABSENTE. Voir en-tete.
 	var faces := [
 		0, 2, 1, 0, 3, 2,
-		4, 5, 6, 4, 6, 7,
 		0, 1, 5, 0, 5, 4,
 		1, 2, 6, 1, 6, 5,
 		2, 3, 7, 2, 7, 6,
@@ -680,6 +766,11 @@ func _absorber_modifications_carte() -> void:
 	var modifs: Array = carte.drainer_modifications("rendu_terrain_multimesh")
 	if modifs.is_empty():
 		return
+	# COLLECTE. Une tuile touchee par N colonnes modifiees ne se rebuild qu'UNE
+	# fois : le Set dedoublonne. Avant, N colonnes -> N _supprimer_tuile + N
+	# _creer_tuile + N rebuilds du BVH d'occludeur -- une salve de tir dans le
+	# meme carre coutait 10 rebuilds pour 10 sous-cubes.
+	var tuiles_a_reconstruire: Dictionary = {}
 	for colonne in modifs:
 		var t: Vector2i = _tuile_de_colonne(colonne)
 		if not _tuiles.has(t):
@@ -687,6 +778,9 @@ func _absorber_modifications_carte() -> void:
 		var noeuds = _tuiles[t] as Array
 		if noeuds.is_empty():
 			continue
+		tuiles_a_reconstruire[t] = true
+	# REBUILD. Une passe, une par tuile.
+	for t in tuiles_a_reconstruire:
 		_a_supprimer.erase(t)
 		_supprimer_tuile(t)
 		_tuiles[t] = []
@@ -712,6 +806,8 @@ func _supprimer_tuile(tuile: Vector2i) -> void:
 		var idx: Dictionary = _teinte_par_tuile[tuile]
 		for cellule in idx:
 			_teinte_precedente.erase(cellule)
+			_cache_profil_cellule.erase(cellule)
+			_cache_quantite_cellule.erase(cellule)
 		_teinte_par_tuile.erase(tuile)
 
 # Helper : memorise (cellule, idx) dans un bucket item -> Array. Appele au
@@ -748,13 +844,13 @@ func _tick_teinte() -> void:
 	for tuile in _teinte_par_tuile:
 		var index: Dictionary = _teinte_par_tuile[tuile]
 		for cellule in index:
-			var profil: Resource = _ressources.call("profil_de_cellule", cellule) as Resource
+			var profil: Resource = _cache_profil_cellule.get(cellule) as Resource
 			if profil == null:
 				continue
 			var cap: int = int(profil.get("reserve"))
 			if cap <= 0:
 				continue
-			var q: int = int(_ressources.call("quantite_a", cellule))
+			var q: int = int(_cache_quantite_cellule.get(cellule, 0))
 			var ratio: float = clampf(float(q) / float(cap), 0.0, 1.0)
 			var gain: float = TEINTE_GAIN_VIDE + (1.0 - TEINTE_GAIN_VIDE) * ratio
 			var prec: float = float(_teinte_precedente.get(cellule, -1.0))
