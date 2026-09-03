@@ -89,12 +89,17 @@ const COS_SOL_MARCHABLE := 0.707
 # Nombre d'iterations tick+separation par pas atomique : resout les empilements
 #   et les penetrations profondes en plusieurs passes bornees.
 const MULTIPASS_N := 4
-# PENTE_MAX : pente maximale franchissable en marche (tan de l'angle). 1.5 = ~56°.
-#   Au-dela, l'obstacle devant est traite comme un mur (bloque). En deca, c'est une
-#   rampe / marche haute que le joueur monte. Le seuil scale avec le rayon de la
-#   capsule via `rayon * PENTE_MAX` -- un gros perso franchit des marches plus
-#   hautes qu'un petit.
-const PENTE_MAX := 1.5
+# HAUTEUR_MICRO_RELIEF : sous ce seuil, un obstacle est un micro-relief (sous-cube,
+#   bruit de terrain, petite bosse) qu'on marche par-dessus sans y penser -- meme
+#   mecanique que la swing-phase du pas humain (~5cm de garde au sol). ABSOLU,
+#   aucun scaling par taille : un geant ne devrait pas trebucher sur ses propres
+#   micro-relief plus que sur les notres. Au-dessus, on retombe sur le test de
+#   pente (PENTE_MAX_MARCHABLE) pour decider si c'est une rampe ou un mur.
+const HAUTEUR_MICRO_RELIEF := 0.05
+# PENTE_MAX_MARCHABLE : pente maximale marchable, en tan(angle). 1.0 = 45°, la
+#   pente d'une rampe voxel classique (rise 2m / run 2m). Au-dela : mur ou pente
+#   trop raide, il faut sauter ou trouver un autre chemin.
+const PENTE_MAX_MARCHABLE := 1.0
 
 # AVANCE UNE ENTITE D'UN PAS. Dispatch par profil vers l'implementation de la
 # richesse voulue. Le corps des trois _pas_* est VIDE en phase 1 : cette phase
@@ -190,8 +195,13 @@ static func _pas_complet_atomique(entite: Dictionary, dt: float, monde, carte) -
 	if bool(p.get("au_sol", false)):
 		var dh: float = sqrt(dep.x * dep.x + dep.z * dep.z)
 		if dh > 0.0001:
-			var rayon_b6bis: float = float(p.get("rayon_capsule", 0.4))
-			var plafond_pente: float = entite.position.y + rayon_b6bis * PENTE_MAX
+			var hauteur_b6bis: float = float(p.get("hauteur_capsule", 1.8))
+			# Plafond = hauteur pleine du corps : on veut savoir si on va monter une
+			# pente, quelle que soit sa hauteur. Le facteur dh/sqrt(dh^2+dv^2) est la
+			# physique reelle du mouvement -- elle ne depend d'aucune constante de
+			# gameplay. Le test de franchissement (rampe vs mur) est deja tranche en
+			# B.6 : si on entre ici, la pente est marchable.
+			var plafond_pente: float = entite.position.y + hauteur_b6bis
 			var sol_ici_v = carte.sommet_sous(entite.position.x, entite.position.z, plafond_pente)
 			var sol_devant_v = carte.sommet_sous(entite.position.x + dep.x, entite.position.z + dep.z, plafond_pente)
 			if sol_ici_v != null and sol_devant_v != null:
@@ -351,13 +361,25 @@ static func _pas_complet_atomique(entite: Dictionary, dt: float, monde, carte) -
 # pas <= cote sur les deux axes, pour qu'aucune colonne de voxel dans la largeur
 # du corps ni entre le centre et le bord ne puisse etre survolee. Chaque sonde
 # lit la hauteur REELLE du sol via sommet_sous (profil de rampe compris, plafonne
-# a la tete pour ignorer un bloc suspendu au-dessus) et la compare a rayon *
-# PENTE_MAX :
+# a la tete pour ignorer un bloc suspendu au-dessus) et compare :
 #   null (bord de carte / trou)              -> mur (on ne franchit pas un vide)
-#   sol_devant > pos.y + rayon * PENTE_MAX   -> mur / marche trop haute -> bloque
-#   sol_devant <= pos.y + rayon * PENTE_MAX  -> rampe / marche basse / plat -> passe
+#   rise = sol_devant - sol_ici <= 5cm       -> micro-relief -> passe
+#   rise > 5cm ET rise / d > 1.0 (>45°)      -> mur ou pente trop raide -> bloque
+#   rise > 5cm ET rise / d <= 1.0 (<=45°)    -> rampe walkable -> passe
+# sol_ici est calcule UNE FOIS hors boucle : c'est la reference verticale contre
+# laquelle on mesure le denivele de chaque sonde. Fonctionne a toute echelle (perso
+# normal, petit, geant, creature) sans constante scale-dependante.
+#
+# CAS AMBIGU INTRINSEQUE : un obstacle plus court que la distance sonde (par ex.
+# un mur de 40cm devant un perso a d = 44cm : pente 40/44 = 0.91 < 1.0) est
+# indissociable d'une rampe et sera traite comme walkable. Acceptable par doctrine :
+# a cette echelle (obstacle << taille du perso), c'est bien une marche de trottoir
+# qu'un perso enjambe. Le cas devient franchement bloque des que l'obstacle depasse
+# la distance sonde -- ce qui est le cas de tout mur voxel plein hauteur.
+#
 # est_pleine est ECARTE pour le test de sol (il rendrait vrai pour une rampe) mais
-# CONSERVE pour le test de plafond (colonne de voxels devant, entre pieds et tete).
+# CONSERVE pour le test de plafond (colonne de voxels devant, entre pieds et tete),
+# qui gere la clearance verticale du corps, orthogonal au test de pente.
 #
 # ECART FRAMEWORK (local a ce depot) : deux versions precedentes ecartees --
 # (1) sonde unique au bord (pos + dir*rayon) : survolait un mur voxel des que
@@ -376,6 +398,13 @@ static func _obstacle_hauteur_corps(entite: Dictionary, dir: Vector3, carte) -> 
 	if "cote" in carte:
 		cote = float(carte.cote)
 	var tangent := Vector3(-dir.z, 0.0, dir.x)
+	# Reference verticale : sol reel SOUS LES PIEDS, calcule une fois. Chaque sonde
+	# mesurera son denivele contre cette reference. Bord de carte sous les pieds :
+	# aucune reference possible, on refuse d'avancer.
+	var sol_ici_var = carte.sommet_sous(pos.x, pos.z, pos.y + hauteur)
+	if sol_ici_var == null:
+		return -dir
+	var solf_ici: float = float(sol_ici_var)
 	# Grille : n_radial pas de 0 (exclu) a rayon (inclu) le long de dir, n_lateral
 	# + 1 sondes de -rayon a +rayon perpendiculairement. Pas <= cote sur les deux
 	# axes pour qu'un mur d'epaisseur cote ne puisse jamais passer entre.
@@ -391,8 +420,11 @@ static func _obstacle_hauteur_corps(entite: Dictionary, dir: Vector3, carte) -> 
 			if sol_devant == null:
 				return -dir
 			var solf: float = float(sol_devant)
-			if solf > pos.y + rayon * PENTE_MAX:
-				return -dir
+			var rise: float = solf - solf_ici
+			if rise > HAUTEUR_MICRO_RELIEF:
+				var pente: float = rise / d
+				if pente > PENTE_MAX_MARCHABLE:
+					return -dir
 			# Test espace vertical devant : un plafond trop bas arrete l'AVANCEE.
 			# Couches PIEDS (juste au-dessus du sol) a TETE. Epsilon pour ne pas
 			# retomber dans la couche du sol sur une frontiere de voxel, et pour ne

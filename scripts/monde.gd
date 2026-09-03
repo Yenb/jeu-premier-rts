@@ -51,6 +51,16 @@ extends RefCounted
 # ECART AVEC LE DEPOT FRAMEWORK : sa version n'a pas ce geste (voir
 # CLAUDE.md § Frontiere pour la raison d'etre de l'ecart et sa portee).
 #
+# ECART AVEC LE DEPOT FRAMEWORK : SUBDIVISION ADAPTATIVE des buckets. Une case
+# terminale au-dela de SEUIL_SPLIT (20) se subdivise en 8 sous-cases, jusqu'a
+# PROFONDEUR_MAX (3). Une case subdivisee dont le total descend sous
+# SEUIL_MERGE (5) se reaplatit. L'ecart 5/20 evite l'oscillation. Le depot
+# orion ne le porte pas encore. Necessaire quand un gameplay empile des mobs au
+# meme point (siege, tas de ressources, foule d'IA) : sans subdivision, une
+# requete degenere en O(k^2) local sur la case saturee et bloque le manager.
+# Ne peut pas attendre le depot framework : les tests de charge en phase 8
+# franchissent le seuil. Meme geste doctrinal que retirer() ci-dessus.
+#
 # choses : Dictionary indexe PAR ID (id -> { chose, type }), pas un Array --
 # permet par_id() ci-dessous. L'ordre d'insertion est preserve ; un appelant qui
 # veut les choses nues itere `choses.values()`.
@@ -126,8 +136,36 @@ func resolutions_ouvertes() -> Array:
 	aretes.sort()
 	return aretes
 
-# exposant -> { "cases": { Vector3i -> Array d'ids }, "case_de": { id -> Vector3i } }
+# exposant -> { "cases": { Vector3i -> Array d'ids OU Dictionary de sous-cases },
+#               "case_de": { id -> Array[Vector3i] (chemin globale + sub_keys) } }
+#
+# CASE POLYMORPHIQUE : le contenu de cases[Vector3i] est soit un Array d'ids
+# (terminal), soit un Dictionary { Vector3i(0..1, 0..1, 0..1) -> contenu }
+# (subdivise, recursif). `contenu is Array` distingue les deux. La subdivision
+# se declenche quand une case terminale depasse SEUIL_SPLIT et fusionne quand
+# une case subdivisee descend sous SEUIL_MERGE (voir ECART FRAMEWORK).
+#
+# CHEMIN COMPLET : case_de[id] est un Array[Vector3i] representant le chemin
+# depuis la racine jusqu'a la feuille : [case_globale] pour un terminal a la
+# racine, [case_globale, sub_0] pour un niveau de subdivision, jusqu'a
+# [case_globale, sub_0, sub_1, sub_2] a PROFONDEUR_MAX. Longueur min 1, max
+# 1 + PROFONDEUR_MAX. Necessaire pour que _deranger retrouve la feuille sans
+# depender de la position vivante, qui peut avoir bouge sans que deplacer()
+# ait ete appele (contrat historique du monde).
 var _niveaux: Dictionary = {}
+
+# SUBDIVISION ADAPTATIVE : voir ECART FRAMEWORK en tete de fichier.
+# Une case terminale au-dela de SEUIL_SPLIT bascule en 8 sous-cases. Une case
+# subdivisee dont le TOTAL descend sous SEUIL_MERGE se reaplatit. L'ecart 5/20
+# evite le ping-pong split/merge d'un id qui entre et sort au seuil.
+# PROFONDEUR_MAX borne la recursion : au-dela, la case reste terminale meme si
+# elle depasse SEUIL_SPLIT -- c'est le cas plancher de N ids a la MEME position,
+# ou la subdivision ne peut fondamentalement pas aider. Ce n'est pas un bug,
+# c'est le contrat : subdivision aide quand les positions differencient, pas
+# quand elles convergent au meme point.
+const SEUIL_SPLIT := 20
+const SEUIL_MERGE := 5
+const PROFONDEUR_MAX := 3
 # id -> rang d'insertion, pour rendre les resultats dans l'ordre d'ajout.
 var _rang: Dictionary = {}
 var _prochain_rang: int = 0
@@ -158,7 +196,12 @@ func deplacer(chose) -> void:
 	for exposant in _niveaux:
 		var niveau: Dictionary = _niveaux[exposant]
 		var visee := _case_pour(chose.position, int(exposant))
-		if niveau.case_de.get(chose.id, null) == visee:
+		var chemin_actuel: Array = niveau.case_de.get(chose.id, [])
+		# Optim conservee UNIQUEMENT quand la case globale n'a pas change ET que la
+		# case n'est pas subdivisee (chemin de longueur 1). Sur une case subdivisee,
+		# meme si la case globale est identique la sub_key peut avoir change, donc
+		# on doit re-ranger.
+		if chemin_actuel.size() == 1 and chemin_actuel[0] == visee:
 			continue
 		_deranger(niveau, chose.id)
 		_ranger(niveau, int(exposant), chose.id, chose.position)
@@ -195,29 +238,57 @@ func choses_dans_rayon(position: Vector3, rayon: float) -> Array:
 	var basse := _case_pour(position - Vector3(rayon, rayon, rayon), exposant)
 	var haute := _case_pour(position + Vector3(rayon, rayon, rayon), exposant)
 	var carre := rayon * rayon
+	var arete := _arete(exposant)
 	requetes += 1
 	for cx in range(basse.x, haute.x + 1):
 		for cy in range(basse.y, haute.y + 1):
 			for cz in range(basse.z, haute.z + 1):
 				cases_lues += 1
-				var occupants = cases.get(Vector3i(cx, cy, cz), null)
-				if occupants == null:
+				var cle := Vector3i(cx, cy, cz)
+				var contenu = cases.get(cle, null)
+				if contenu == null:
 					continue
-				for id in occupants:
-					var entree: Dictionary = choses[id]
-					var pos_vivante: Vector3 = entree.chose.position
-					candidats_mesures += 1
-					# LE CARRE DE LA DISTANCE, jamais la distance : meme verdict,
-					# une racine de moins par candidat. Seul endroit du fichier ou
-					# la geometrie n'est pas ecrite naivement, et il ne change
-					# aucun resultat.
-					if position.distance_squared_to(pos_vivante) <= carre:
-						resultat.append({"chose": entree.chose, "type": entree.type, "position": pos_vivante})
+				var origine := Vector3(cle) * arete
+				_collecter(contenu, origine, arete, position, carre, resultat)
 	if trier_par_insertion:
 		resultat.sort_custom(_avant)
 	if verifier_index:
 		_verifier(position, rayon, resultat)
 	return resultat
+
+# COLLECTE RECURSIVE : sur une case terminale (Array), teste chaque id.
+# Sur une case subdivisee (Dictionary), itere les 8 sous-cases mais ne descend
+# que dans celles dont l'AABB intersecte la sphere de la query. Chaque descente
+# incremente `cases_lues`, pour que le cout reste visible depuis les tests.
+func _collecter(contenu, origine: Vector3, arete: float, centre: Vector3, carre_r: float, out: Array) -> void:
+	if contenu is Array:
+		for id in contenu:
+			var entree: Dictionary = choses[id]
+			var pos_vivante: Vector3 = entree.chose.position
+			candidats_mesures += 1
+			# LE CARRE DE LA DISTANCE, jamais la distance : meme verdict, une
+			# racine de moins par candidat.
+			if centre.distance_squared_to(pos_vivante) <= carre_r:
+				out.append({"chose": entree.chose, "type": entree.type, "position": pos_vivante})
+		return
+	if contenu is Dictionary:
+		var demi := arete * 0.5
+		for sub_key in contenu:
+			var sub_origine: Vector3 = origine + Vector3(sub_key) * demi
+			if not _sphere_touche_boite(centre, carre_r, sub_origine, demi):
+				continue
+			cases_lues += 1
+			_collecter(contenu[sub_key], sub_origine, demi, centre, carre_r, out)
+
+# Sphere de rayon^2 = carre_r centree sur centre, contre boite AABB
+# [origine, origine + taille * Vector3.ONE]. Test standard : distance carree du
+# centre au point le plus proche de la boite (chaque axe clampe dans [min, max]).
+func _sphere_touche_boite(centre: Vector3, carre_r: float, origine: Vector3, taille: float) -> bool:
+	var proche := Vector3(
+		clampf(centre.x, origine.x, origine.x + taille),
+		clampf(centre.y, origine.y, origine.y + taille),
+		clampf(centre.z, origine.z, origine.z + taille))
+	return centre.distance_squared_to(proche) <= carre_r
 
 func _avant(a: Dictionary, b: Dictionary) -> bool:
 	return int(_rang[a.chose.id]) < int(_rang[b.chose.id])
@@ -258,22 +329,136 @@ func _batir(exposant: int) -> Dictionary:
 	return niveau
 
 func _ranger(niveau: Dictionary, exposant: int, id, position: Vector3) -> void:
-	var case := _case_pour(position, exposant)
 	var cases: Dictionary = niveau.cases
-	if not cases.has(case):
-		cases[case] = []
-	(cases[case] as Array).append(id)
-	niveau.case_de[id] = case
+	var case_globale := _case_pour(position, exposant)
+	if not cases.has(case_globale):
+		cases[case_globale] = []
+	# Chemin initial = juste la racine. _inserer l'etend au fil de la descente
+	# dans les Dictionary de subdivision, et _splitter l'etend aussi pour l'id
+	# courant s'il declenche un split de la case terminale.
+	niveau.case_de[id] = [case_globale]
+	var origine_racine := Vector3(case_globale) * _arete(exposant)
+	_inserer(cases, case_globale, id, position, origine_racine, _arete(exposant), 0, niveau)
+
+# Descend dans le contenu de parent[cle] et insere id a la bonne place.
+# - Contenu terminal (Array) : append + split si depasse SEUIL_SPLIT et
+#   profondeur < MAX (au plancher, on garde le pile terminal).
+# - Contenu subdivise (Dictionary) : trouve la sous-case correspondant a la
+#   position, etend le chemin, recurse.
+func _inserer(parent: Dictionary, cle, id, position: Vector3, origine: Vector3,
+		arete: float, profondeur: int, niveau: Dictionary) -> void:
+	var contenu = parent[cle]
+	if contenu is Dictionary:
+		var sub_key := _sous_case(position, origine, arete)
+		if not contenu.has(sub_key):
+			contenu[sub_key] = []
+		(niveau.case_de[id] as Array).append(sub_key)
+		var sub_origine: Vector3 = origine + Vector3(sub_key) * (arete * 0.5)
+		_inserer(contenu, sub_key, id, position, sub_origine, arete * 0.5, profondeur + 1, niveau)
+		return
+	# Contenu terminal.
+	(contenu as Array).append(id)
+	if profondeur < PROFONDEUR_MAX and (contenu as Array).size() > SEUIL_SPLIT:
+		_splitter(parent, cle, contenu, origine, arete, profondeur, niveau)
+
+# Convertit une case terminale en 8 sous-cases. Chaque id (y compris celui
+# qu'on vient d'ajouter) est reparti selon sa position vivante, et son chemin
+# dans case_de est etendu de la sub_key. Recurse si une sous-case elle-meme
+# depasse SEUIL_SPLIT et qu'on n'a pas atteint PROFONDEUR_MAX.
+func _splitter(parent: Dictionary, cle, contenu: Array, origine: Vector3,
+		arete: float, profondeur: int, niveau: Dictionary) -> void:
+	var subdivise: Dictionary = {}
+	for autre_id in contenu:
+		var pos_autre: Vector3 = choses[autre_id].chose.position
+		var sub_key := _sous_case(pos_autre, origine, arete)
+		if not subdivise.has(sub_key):
+			subdivise[sub_key] = []
+		(subdivise[sub_key] as Array).append(autre_id)
+		(niveau.case_de[autre_id] as Array).append(sub_key)
+	parent[cle] = subdivise
+	if profondeur + 1 < PROFONDEUR_MAX:
+		var demi := arete * 0.5
+		for sub_key in subdivise:
+			var sub_contenu = subdivise[sub_key]
+			if (sub_contenu as Array).size() > SEUIL_SPLIT:
+				var sub_origine: Vector3 = origine + Vector3(sub_key) * demi
+				_splitter(subdivise, sub_key, sub_contenu, sub_origine, demi, profondeur + 1, niveau)
 
 func _deranger(niveau: Dictionary, id) -> void:
 	if not niveau.case_de.has(id):
 		return
-	var case: Vector3i = niveau.case_de[id]
-	var occupants: Array = niveau.cases.get(case, [])
-	occupants.erase(id)
-	if occupants.is_empty():
-		niveau.cases.erase(case)
+	var chemin: Array = niveau.case_de[id]
 	niveau.case_de.erase(id)
+	if chemin.is_empty():
+		return
+	var cases: Dictionary = niveau.cases
+	_retirer_par_chemin(cases, chemin, 0, id)
+	# Merge : si la racine de cette colonne est un Dictionary dont le total est
+	# passe sous SEUIL_MERGE, on la reaplatit en Array terminal. Un seul niveau
+	# de merge par retrait : hysteresis 5/20 rend le merge en cascade inutile.
+	var cle_globale = chemin[0]
+	if cases.has(cle_globale) and cases[cle_globale] is Dictionary:
+		if _totaliser(cases[cle_globale]) < SEUIL_MERGE:
+			_merger(cases, cle_globale, niveau)
+
+# Descend par le chemin, retire l'id de la feuille Array. Rend true si le
+# noeud courant est devenu vide -- le parent le supprime alors de son Dictionary
+# (purge en remontant, evite les containers fantomes).
+func _retirer_par_chemin(parent: Dictionary, chemin: Array, profondeur: int, id) -> bool:
+	var cle = chemin[profondeur]
+	if not parent.has(cle):
+		return false
+	var contenu = parent[cle]
+	if contenu is Array:
+		(contenu as Array).erase(id)
+		if (contenu as Array).is_empty():
+			parent.erase(cle)
+			return true
+		return false
+	# Dictionary : recurse.
+	var sous_vide := _retirer_par_chemin(contenu, chemin, profondeur + 1, id)
+	if sous_vide and (contenu as Dictionary).is_empty():
+		parent.erase(cle)
+		return true
+	return false
+
+# Aplatit un contenu subdivise (Dictionary) en Array terminal. Met a jour le
+# chemin de tous les ids concernes : [globale] (longueur 1, terminal a la racine).
+func _merger(cases: Dictionary, cle_globale, niveau: Dictionary) -> void:
+	var contenu = cases[cle_globale]
+	var aplati: Array = []
+	_aplatir(contenu, aplati)
+	cases[cle_globale] = aplati
+	for id in aplati:
+		niveau.case_de[id] = [cle_globale]
+
+func _aplatir(contenu, out: Array) -> void:
+	if contenu is Array:
+		for id in contenu:
+			out.append(id)
+		return
+	if contenu is Dictionary:
+		for cle in contenu:
+			_aplatir(contenu[cle], out)
+
+func _totaliser(contenu) -> int:
+	if contenu is Array:
+		return (contenu as Array).size()
+	if contenu is Dictionary:
+		var total := 0
+		for cle in contenu:
+			total += _totaliser(contenu[cle])
+		return total
+	return 0
+
+# Sous-cle 0/1 par axe : 0 si la position est dans la moitie basse, 1 dans la
+# haute. Compatible frontiere exacte (>=), coherent avec _sphere_touche_boite.
+func _sous_case(pos: Vector3, origine: Vector3, arete: float) -> Vector3i:
+	var demi := arete * 0.5
+	return Vector3i(
+		1 if pos.x >= origine.x + demi else 0,
+		1 if pos.y >= origine.y + demi else 0,
+		1 if pos.z >= origine.z + demi else 0)
 
 # Rejoue la recherche exhaustive et alarme sur tout ecart. La cause en
 # pratique est toujours la meme : une chose a bouge sans que deplacer() ni
