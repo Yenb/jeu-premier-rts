@@ -14,21 +14,26 @@ extends Node
 #
 # LE JOUEUR EST UNE ENTITE DATA COMME LES CUBES. Il n'y a plus de CharacterBody3D
 # ni de fantome qui recopie une position Godot : le nœud Personnage (Node3D) rend
-# une INTENTION de mouvement, et c'est CE MANAGER qui deplace l'entite joueur, en
-# donnee pure. Chaque frame, _pas_joueur : demande l'intention au Personnage
-# (appel direct, sans course d'ordre), compose la velocite (horizontale + saut si
-# au sol + gravite), avance la position, et resout le TERRAIN par le MEME chemin
-# que les cubes (_deplacement_horizontal_valide + snap carte.sommet). La collision
-# JOUEUR-CONTRE-CUBES passe par collision.gd (GJK/EPA). En fin de _physics_process,
-# la position data est recopiee dans le nœud (le rendu suit la donnee, seule
-# autorite). Symetrie totale entite/joueur, comme le veut CLAUDE.md § Liste
-# exhaustive des interactions physiques a coder en data pure.
+# une INTENTION de mouvement, et c'est CE MANAGER qui la transmet a l'entite
+# joueur, en donnee pure. Le manager NE CALCULE PLUS le mouvement lui-meme :
+# _pas_joueur demande l'intention au Personnage (appel direct, sans course
+# d'ordre), la POSE sur l'entite (velocite_desiree_horizontale, saut_demande,
+# vitesse_saut), puis DELEGUE le pas au framework partage via
+# Tick.tick_entite(..., politique_intrinseque, ...). Le pas lui-meme -- gravite,
+# blocage terrain au rayon de la capsule, snap-sol borne, collision joueur-cubes
+# (GJK/EPA) et calcul du dessus du cube porteur -- vit UNE SEULE FOIS dans
+# scripts/mouvement_kinematic.gd (profil "complet"), partage avec tout mobile.
+# profil "complet" + cadence_tick 1 : la simulation ne depend pas de l'observateur
+# (temps du monde uniforme). En fin de _physics_process, la position data est
+# recopiee dans le nœud (le rendu suit la donnee, seule autorite).
 #
 # COLLISION GENERALISTE EN DONNEE PURE (modele Orion, a reutiliser pour tout
 # futur objet interactif) : la collision inter-entites ne passe PAS par des nœuds
 # Godot (StaticBody3D / CollisionShape3D / PhysicsServer3D) mais par
 # jeu/Proto/collision.gd applique sur des Dictionary d'entites portant leurs
-# `formes`. Collision.tick(_monde, entites, dt) puis Collision.resoudre(...).
+# `formes`. Pour le joueur, cette collision est faite DANS le pas partage
+# (mouvement_kinematic.gd, profil "complet") -- le manager ne la declenche plus a
+# part.
 #
 # ECHAFAUDAGE PERCEPTION (pose, PAS ENCORE BRANCHE) : chaque cube est une entite
 # conforme au contrat de scripts/perception.gd (proprietes.canaux +
@@ -44,26 +49,12 @@ extends Node
 
 const Monde = preload("res://scripts/monde.gd")
 const Collision = preload("res://jeu/Proto/collision.gd")
+# Framework de tick + mouvement partage : le joueur delegue son pas (gravite,
+# blocage, snap, collision) a Tick, qui appelle mouvement_kinematic.gd. Le manager
+# ne calcule plus le mouvement.
+const Tick = preload("res://scripts/tick.gd")
 
 const INTERVALLE_PERCEPTION := 0.1
-# Trace de debug : une ligne par seconde (pos / vel / au_sol du joueur).
-const INTERVALLE_TRACE := 1.0
-# BLOCAGE DU JOUEUR PAR LA PENTE, jamais par une marche absolue. Un MUR (pente
-# raide) arrete, une PENTE douce (rampe) se monte a pied. La pente se lit sur une
-# DISTANCE DE SONDE FIXE devant les pieds, independante de la vitesse (sans quoi
-# un meme obstacle bloquerait ou non selon qu'on marche ou qu'on sprinte).
-#   MARCHE_JOUEUR : le sol devant doit depasser les pieds de plus que ca pour
-#     compter comme obstacle (tolerance de niveau contre le bruit du snap).
-#   SONDE_PENTE   : distance fixe devant les pieds ou l'on lit le sol.
-#   PENTE_MAX     : au-dela, c'est un mur (bloque, il faut sauter). Une rampe a
-#     45° vaut 1 ; 1.5 laisse monter jusqu'a ~56° et arrete tout mur vertical.
-const MARCHE_JOUEUR := 0.05
-const SONDE_PENTE := 0.2
-const PENTE_MAX := 1.5
-# cos(45°) : un contact de collision qui pousse le joueur vers le haut au-dela de
-# ce seuil est un SOL sous ses pieds (une entite sur laquelle il repose). Voir
-# _tick_collision -- ca complete carte.sommet, qui ignore les entites.
-const COS_SOL_MARCHABLE := 0.707
 
 @export_group("Rendu")
 @export var rayon_rendu: float = 60.0
@@ -93,9 +84,12 @@ var _entite_joueur: Dictionary = {}
 var _catalogue_canaux: Dictionary = {}
 var _catalogue_profils_saillance: Dictionary = {}
 var _horloge_perception: float = 0.0
-var _horloge_trace: float = 0.0
 
 func _ready() -> void:
+	# GROUPE "manager_proto" : le Personnage retrouve CE manager (il expose
+	# entite_joueur()) pour propager sa taille a la collision data. Le groupe peut
+	# contenir plusieurs managers -- le consommateur itere et teste has_method.
+	add_to_group(&"manager_proto")
 	_observateur = get_tree().get_first_node_in_group(&"observateur")
 	var parent := get_parent()
 	if parent != null:
@@ -149,11 +143,21 @@ func _ready() -> void:
 				"velocite": Vector3.ZERO,
 				"orientation": Basis.IDENTITY,
 				# Copies lues du Personnage : la collision porte la taille reglee, et
-				# _pas_joueur lit la gravite ici.
+				# le pas partage lit la gravite ici.
 				"rayon_capsule": rayon_capsule,
 				"hauteur_capsule": hauteur_capsule,
 				"gravite": gravite,
 				"au_sol": false,
+				# Contrat Mouvement + Tick (framework partage). profil "complet" +
+				# cadence 1 : tick chaque frame, simulation independante de l'observateur.
+				# L'intention (horizontale, saut) est POSEE chaque frame par _pas_joueur ;
+				# y_appui_entite est calcule par le pas partage (dessus du cube porteur).
+				"profil": "complet",
+				"cadence_tick": 1,
+				"saut_demande": false,
+				"vitesse_saut": 8.5,
+				"velocite_desiree_horizontale": Vector3.ZERO,
+				"y_appui_entite": -INF,
 			},
 		}
 		_entite_joueur.proprietes["aabb_cache"] = Collision.aabb_forme(
@@ -179,10 +183,6 @@ func _physics_process(delta: float) -> void:
 	_tick_errance(delta)
 	_pas_joueur(delta)
 	_bascule_rendu()
-	# Collision inter-entites (joueur vs cubes) CHAQUE frame : a ~11 entites le
-	# cout GJK/EPA est negligeable et le contact ne tremble pas. A re-mesurer si
-	# la population d'entites en collision explose (remettre une horloge).
-	_tick_collision(delta)
 	_horloge_perception += delta
 	if _horloge_perception >= INTERVALLE_PERCEPTION:
 		_horloge_perception = 0.0
@@ -192,7 +192,6 @@ func _physics_process(delta: float) -> void:
 	# rotation et sa camera.
 	if not _entite_joueur.is_empty() and _observateur != null:
 		_observateur.global_position = _entite_joueur.position
-	_tracer_joueur(delta)
 
 func _preparer_mesh() -> void:
 	_mesh_ennemi = BoxMesh.new()
@@ -327,105 +326,23 @@ func _nouveau_cap(cube: Dictionary) -> void:
 	cube.direction = Vector3(cos(a), 0.0, sin(a))
 	cube.cap_horloge = _rng.randf_range(2.0, 4.0)
 
-# UN PAS DE JOUEUR, EN DONNEE PURE, CHAQUE FRAME. Demande l'intention au nœud
-# Personnage (appel direct). DEUX REGIMES : AU SOL, le pas suit la surface (le
-# deplacement se consomme LE LONG du sol, montee comprise, a vitesse constante) ;
-# EN L'AIR (saut, chute), balistique (gravite + snap a l'atterrissage). Un blocage
-# MUR commun (pente raide devant les pieds) arrete un cube et laisse monter une
-# rampe. La collision contre les cubes est faite ensuite par _tick_collision.
+# UN PAS DE JOUEUR : POSE L'INTENTION, DELEGUE LE PAS AU FRAMEWORK. Le manager ne
+# calcule plus le mouvement -- il demande l'intention au Personnage (horizontale +
+# saut), la depose sur l'entite joueur, et laisse Tick + Mouvement (profil
+# "complet") faire gravite, blocage, snap-sol et collision joueur-cubes. Le pas
+# vit UNE SEULE FOIS dans scripts/mouvement_kinematic.gd, partage avec tout mobile.
 func _pas_joueur(delta: float) -> void:
-	if _entite_joueur.is_empty() or _observateur == null or _carte == null:
+	if _entite_joueur.is_empty() or _observateur == null:
 		return
-	var p: Dictionary = _entite_joueur.proprietes
 	var intent: Dictionary = {}
 	if _observateur.has_method("intention_mouvement"):
 		intent = _observateur.intention_mouvement(delta)
 	var horiz: Vector3 = intent.get("horizontale", Vector3.ZERO)
-	var ve: Vector3 = p.get("velocite", Vector3.ZERO)
-
-	var pos: Vector3 = _entite_joueur.position
-	var au_sol_prec: bool = bool(p.get("au_sol", false))
-	var saute: bool = bool(intent.get("saut", false)) and au_sol_prec
-	var dir_h := Vector3(horiz.x, 0.0, horiz.z)
-	var vitesse_h: float = dir_h.length()
-	var hauteur_capsule: float = float(p.get("hauteur_capsule", 1.8))
-
-	# BLOCAGE MUR, commun au sol et en l'air : le sol devant (a distance de sonde
-	# FIXE, pas le pas) depasse-t-il les pieds avec une pente raide ? Une pente douce
-	# (rampe) passe ; un mur/cube arrete ; en l'air au-dessus d'un cube les pieds
-	# sont hauts, rien ne depasse, le pas passe (on retombe sur le dessus).
-	var dir_n := Vector3.ZERO
-	var pente_devant: float = 0.0
-	var peut_avancer: bool = true
-	if vitesse_h > 0.0001:
-		dir_n = dir_h / vitesse_h
-		var sol_sonde: Variant = _carte.sommet(pos.x + dir_n.x * SONDE_PENTE, pos.z + dir_n.z * SONDE_PENTE)
-		if sol_sonde == null:
-			peut_avancer = false  # bord de carte
-		else:
-			var sol_pieds: Variant = _carte.sommet(pos.x, pos.z)
-			var ref: float = float(sol_pieds) if sol_pieds != null else pos.y
-			pente_devant = (float(sol_sonde) - ref) / SONDE_PENTE
-			# Ne bloque que si l'obstacle est ENTRE les pieds et la TETE. Plus haut,
-			# c'est un PLAFOND (bloc suspendu) : carte.sommet rend son dessus, mais on
-			# passe DESSOUS. hauteur_capsule borne la tete.
-			if float(sol_sonde) > pos.y + MARCHE_JOUEUR \
-					and float(sol_sonde) < pos.y + hauteur_capsule \
-					and pente_devant > PENTE_MAX:
-				peut_avancer = false  # mur a hauteur de corps : il faut sauter
-
-	var au_sol := false
-	if au_sol_prec and not saute:
-		# AU SOL : le pas suit la SURFACE. La distance parcourue vaut vitesse * delta
-		# LE LONG du sol (technique standard : direction projetee sur le plan de la
-		# pente, renormalisee a la vitesse constante). Plus de hauteur "gratuite" --
-		# monter une rampe ne fait plus aller plus vite qu'a plat.
-		if vitesse_h > 0.0001 and peut_avancer:
-			var dir_surface := Vector3(dir_n.x, pente_devant, dir_n.z).normalized()
-			pos += dir_surface * vitesse_h * delta
-		# SNAP AU SOL = le PLUS HAUT entre le terrain (hors plafond) et le dessus de
-		# l'ENTITE sous les pieds (cube). Patron ground-snap kinematic qui accepte
-		# statique ET dynamique : le perso doit pouvoir se tenir sur un corps, pas
-		# seulement sur la geometrie (Rapier character_controller ; Godot moving
-		# platforms ; Kinematic Character Controller). Sans le dessus d'entite, le
-		# snap terrain arrache le joueur du cube -> vibration ; sans le test plafond
-		# (<= hauteur_capsule), un bloc suspendu le teleporterait sur son toit.
-		var sol_choisi: Variant = null
-		var sol_v: Variant = _carte.sommet(pos.x, pos.z)
-		if sol_v != null and float(sol_v) - pos.y <= hauteur_capsule:
-			sol_choisi = float(sol_v)
-		var y_appui: float = float(p.get("y_appui_entite", -INF))
-		if y_appui > -1e19 and y_appui - pos.y <= hauteur_capsule:
-			if sol_choisi == null or y_appui > float(sol_choisi):
-				sol_choisi = y_appui
-		if sol_choisi != null:
-			pos.y = float(sol_choisi)
-		ve = Vector3(horiz.x, 0.0, horiz.z)
-		au_sol = true
-	else:
-		# EN L'AIR : balistique. Saut puis gravite cumulee ; l'horizontal avance
-		# librement (sauf mur) ; snap a l'atterrissage.
-		var gravite: float = float(p.get("gravite", 18.0))
-		if saute:
-			ve.y = float(intent.get("vitesse_saut", 8.5))
-		ve.y -= gravite * delta
-		if peut_avancer:
-			pos.x += horiz.x * delta
-			pos.z += horiz.z * delta
-		pos.y += ve.y * delta
-		var sol_v: Variant = _carte.sommet(pos.x, pos.z)
-		if sol_v != null and pos.y <= float(sol_v):
-			pos.y = float(sol_v)
-			ve.y = 0.0
-			au_sol = true
-		ve.x = horiz.x
-		ve.z = horiz.z
-
-	p["velocite"] = ve
-	p["au_sol"] = au_sol
-	_entite_joueur.position = pos
-	if _monde != null:
-		_monde.deplacer(_entite_joueur)
+	var p: Dictionary = _entite_joueur.proprietes
+	p["velocite_desiree_horizontale"] = Vector3(horiz.x, 0.0, horiz.z)
+	p["saut_demande"] = bool(intent.get("saut", false))
+	p["vitesse_saut"] = float(intent.get("vitesse_saut", 8.5))
+	Tick.tick_entite(_entite_joueur, Callable(Tick, "politique_intrinseque"), delta, _monde, _carte)
 
 # Getter de l'entite joueur (lue par personnage.gd a l'injection, et par de
 # futurs tests). Rend le Dictionary vivant, pas une copie.
@@ -435,71 +352,6 @@ func entite_joueur() -> Dictionary:
 # Horloge de perception POSEE, corps VIDE : la perception n'est pas branchee.
 func _tick_perception(_delta: float) -> void:
 	pass
-
-# COLLISION generaliste joueur-vs-cubes en donnee pure. Liste des entites (joueur
-# + cubes), Collision.tick puis Collision.resoudre (qui mute les positions des
-# entites en contact), puis re-sync du Monde pour ce qui a bouge. Le joueur est
-# le seul mobile (velocite != 0) : il encaisse la separation, les cubes-ancres ne
-# bougent pas.
-func _tick_collision(delta: float) -> void:
-	if _monde == null or delta <= 0.0:
-		return
-	var entites: Array = []
-	if not _entite_joueur.is_empty():
-		entites.append(_entite_joueur)
-	for cube in _ennemis:
-		entites.append(cube)
-	if entites.size() < 2:
-		return
-	var contacts: Array = Collision.tick(_monde, entites, delta)
-	Collision.resoudre(contacts, entites)
-	# REEVALUER au_sol du joueur A PARTIR DES CONTACTS. carte.sommet (dans
-	# _pas_joueur) ne voit QUE le terrain ; debout sur une entite (cube), le joueur
-	# se croirait en l'air -> gravite + EPA le font vibrer sans avancer. Un contact
-	# qui POUSSE le joueur vers le haut (>= cos 45°) est un sol sous ses pieds.
-	# Direction de poussee du joueur : -normale s'il est A, +normale s'il est B
-	# (resoudre : A s'ecarte en -normale). Le joueur est en tete de `entites`, donc
-	# A ; un cube sous lui a une normale A->B vers le bas -- d'ou l'inversion.
-	if not _entite_joueur.is_empty():
-		var sol_entite := false
-		for c in contacts:
-			var a = c.get("a")
-			var b = c.get("b")
-			var n_sep: Vector3
-			if (a is Dictionary) and a.get("id") == "joueur":
-				n_sep = -(c.get("normale") as Vector3)
-			elif (b is Dictionary) and b.get("id") == "joueur":
-				n_sep = c.get("normale") as Vector3
-			else:
-				continue
-			if n_sep.y >= COS_SOL_MARCHABLE:
-				sol_entite = true
-				break
-		if sol_entite:
-			_entite_joueur.proprietes["au_sol"] = true
-			# Hauteur d'appui = ou la collision vient de poser le joueur (le dessus du
-			# cube). _pas_joueur en fait un candidat-sol au prochain snap : le joueur
-			# reste dessus au lieu d'etre rappele au terrain.
-			_entite_joueur.proprietes["y_appui_entite"] = _entite_joueur.position.y
-		else:
-			_entite_joueur.proprietes["y_appui_entite"] = -INF
-	if not _entite_joueur.is_empty():
-		_monde.deplacer(_entite_joueur)
-	for cube in _ennemis:
-		_monde.deplacer(cube)
-
-# Trace de debug : une ligne par seconde prouvant que la position vient bien de la
-# donnee (pos/vel/au_sol de l'entite joueur).
-func _tracer_joueur(delta: float) -> void:
-	if _entite_joueur.is_empty():
-		return
-	_horloge_trace += delta
-	if _horloge_trace < INTERVALLE_TRACE:
-		return
-	_horloge_trace = 0.0
-	var p: Dictionary = _entite_joueur.proprietes
-	print("joueur pos=%s vel=%s au_sol=%s" % [
-		_entite_joueur.position, p.get("velocite", Vector3.ZERO), p.get("au_sol", false)])
 
 # Chargement direct d'un catalogue JSON. push_warning + Dictionary vide sur toute
 # erreur (fichier absent, illisible, JSON non-objet).

@@ -264,6 +264,46 @@ func sommet(x_monde: float, z_monde: float) -> Variant:
 		c -= 1
 	return null
 
+# COMME `sommet`, MAIS PLAFONNE A `y_max` : rend le sommet de la surface pleine la
+# plus haute dont le HAUT ne depasse pas y_max. `sommet` rend le point le plus haut
+# de la colonne, donc le dessus d'un bloc SUSPENDU (pont, plafond) -- et ne permet
+# pas de distinguer un MUR (plein depuis le sol) d'un SURPLOMB (vide en bas). En
+# lisant le sol SOUS une hauteur de reference, ce plafonnement rend le sol reel
+# sous les pieds : un mur y montre son debut (juste au-dessus des pieds -> pente
+# raide, bloque), un surplomb y montre le sol bas (le bloc en haut est ignore ->
+# on passe dessous). Null si rien sous y_max (colonne vide, hors emprise).
+func sommet_sous(x_monde: float, z_monde: float, y_max: float) -> Variant:
+	var cote_f: float = cote
+	var cx: int = int(floor(x_monde / cote_f))
+	var cz: int = int(floor(z_monde / cote_f))
+	var col := Vector2i(cx, cz)
+	var couche_max: Variant = sommet_max_colonne(col)
+	if couche_max == null:
+		return null
+	var x_local: float = x_monde - float(cx) * cote_f
+	var z_local: float = z_monde - float(cz) * cote_f
+	var ix: int = clampi(int(floor(x_local * 3.0 / cote_f)), 0, 2)
+	var iz: int = clampi(int(floor(z_local * 3.0 / cote_f)), 0, 2)
+	# Depart : jamais au-dessus de y_max -- la couche du plafond le fixe.
+	var c: int = mini(int(couche_max), int(floor(y_max / cote_f)))
+	while c >= couche_base:
+		if est_pleine(col, c):
+			var cellule := Vector3i(cx, c, cz)
+			var masque_sc: int = sous_cubes(cellule)
+			var h_profil: Variant = _hauteur_profil(cellule, x_local, z_local, masque_sc)
+			if h_profil != null:
+				if float(h_profil) <= y_max:
+					return h_profil
+			else:
+				for iy in range(2, -1, -1):
+					var idx: int = ix + iy * 3 + iz * 9
+					if (masque_sc & (1 << idx)) != 0:
+						var y_sc: float = float(c) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
+						if y_sc <= y_max:
+							return y_sc
+		c -= 1
+	return null
+
 # LE RANG DU BIT LE PLUS HAUT, par dichotomie : six comparaisons au lieu de
 # soixante-trois. Ce n'est pas de l'elegance -- `sommet` est appele une fois par
 # colonne sculptee par la maquette, et la version naive coutait 5 us par colonne

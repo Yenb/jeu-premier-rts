@@ -55,6 +55,11 @@ extends Node3D
 # Regles tenues : positions en Vector3. Aucun hasard. Aucun texte joueur. Aucune
 # categorie du monde nommee. Rien de scripts/, data/ ni documents/ n'est ecrit.
 
+# Le pas partage : sert a propager la taille reglee ici a la collision data du
+# joueur (redimensionner_entite). La taille est une source unique -- voir
+# _appliquer_dimensions.
+const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
+
 # Radians par seconde. Un demi-tour en une seconde et demie environ.
 @export var vitesse_rotation: float = 2.2
 
@@ -198,6 +203,10 @@ static func vitesse_effective(sprint: bool, endurance: float,
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_appliquer_dimensions()
+	# La propagation a l'entite data est DIFFEREE : le manager cree l'entite et
+	# rejoint le groupe a son propre _ready, qui tourne apres celui du personnage.
+	# call_deferred rattrape la fin de la frame, quand tous les _ready ont tourne.
+	call_deferred(&"_propager_dimensions_data")
 	_preparer_hud_endurance()
 	_preparer_hud_faim()
 	_preparer_hud_inanition()
@@ -221,6 +230,24 @@ func _appliquer_dimensions() -> void:
 		_marqueur_debug.visible = afficher_marqueur_debug
 	if _yeux != null:
 		_yeux.position = Vector3(0.0, hauteur_yeux_effective(), 0.0)
+		_yeux.near = 0.01
+	_propager_dimensions_data()
+
+# PROPAGE LES DIMENSIONS A L'ENTITE DATA (la collision suit le reglage). Le manager
+# du joueur expose entite_joueur(). Le groupe "manager_proto" peut contenir
+# plusieurs managers (arme_tir, ce manager) : on itere et on prend le premier qui
+# porte entite_joueur, jamais get_first (ordre d'arbre non garanti). Appelee en
+# DIFFERE au _ready : le manager cree l'entite et rejoint le groupe a SON _ready,
+# qui tourne apres celui du personnage (ordre de l'arbre) -- un appel direct au
+# _ready ne trouverait rien. Rappelable a chaud pour tout changement runtime.
+func _propager_dimensions_data() -> void:
+	for manager in get_tree().get_nodes_in_group(&"manager_proto"):
+		if manager.has_method("entite_joueur"):
+			var entite: Dictionary = manager.call("entite_joueur")
+			if not entite.is_empty():
+				Mouvement.redimensionner_entite(entite, hauteur_capsule, rayon_effectif())
+				print("[personnage] dimensions propagees : hauteur=%s rayon=%s" % [hauteur_capsule, rayon_effectif()])
+			break
 
 # L'INTENTION DE MOUVEMENT, lue A L'INSTANT par le manager qui l'appelle. Rend la
 # vitesse horizontale voulue (repere monde, deduite du lacet courant), si le saut
