@@ -57,7 +57,12 @@ const Tick = preload("res://scripts/tick.gd")
 const INTERVALLE_PERCEPTION := 0.1
 
 @export_group("Rendu")
-@export var rayon_rendu: float = 60.0
+# Hysteresis : une entite instancie son noeud quand elle passe SOUS
+# rayon_rendu_entrer, et le libere quand elle passe AU-DESSUS de
+# rayon_rendu_sortir. L'ecart evite le flip-flop au bord (entite qui oscille
+# entre les deux etats sans parcourir la difference entre les deux rayons).
+@export var rayon_rendu_entrer: float = 60.0
+@export var rayon_rendu_sortir: float = 65.0
 
 @export_group("Spawn")
 @export var spawn_actif: bool = true
@@ -383,21 +388,21 @@ func _bascule_rendu() -> void:
 	var parent := get_parent()
 	if parent == null:
 		return
-	var r2 := rayon_rendu * rayon_rendu
+	var r2_entrer := rayon_rendu_entrer * rayon_rendu_entrer
+	var r2_sortir := rayon_rendu_sortir * rayon_rendu_sortir
 	for e in _ennemis:
 		var d2: float = ((e.position as Vector3) - pos_obs).length_squared()
-		if d2 < r2:
-			if e.noeud == null or not is_instance_valid(e.noeud):
-				var n := _creer_visuel()
-				parent.add_child(n)
-				n.global_position = e.position
-				e.noeud = n
-			else:
-				(e.noeud as Node3D).global_position = e.position
-		else:
-			if e.noeud != null and is_instance_valid(e.noeud):
-				e.noeud.queue_free()
-				e.noeud = null
+		var a_noeud: bool = e.noeud != null and is_instance_valid(e.noeud)
+		if a_noeud and d2 > r2_sortir:
+			e.noeud.queue_free()
+			e.noeud = null
+		elif not a_noeud and d2 < r2_entrer:
+			var n := _creer_visuel()
+			parent.add_child(n)
+			n.global_position = e.position
+			e.noeud = n
+		elif a_noeud:
+			(e.noeud as Node3D).global_position = e.position
 
 func _creer_visuel() -> MeshInstance3D:
 	var cube := MeshInstance3D.new()

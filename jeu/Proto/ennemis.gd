@@ -173,6 +173,44 @@ func _spawner_un_ennemi() -> void:
 	}
 	_ennemis.append(e)
 
+# Ajoute un ennemi IMMOBILE a une position donnee. Sert de MARQUEUR pour tester
+# le pipeline de rendu / hysteresis / streaming sans que l'IA le fasse bouger.
+# Meme contrat que _spawner_un_ennemi (visuel, gravite, snap sol via Mouvement
+# profil "simple"), plus flag `statique = true` qui court-circuite le match d'IA
+# dans _tick_ia_ennemis. Public : appele par manager_proto._ready sur les
+# marqueurs du groupe "ennemi_test_statique" de la scene.
+func ajouter_statique(pos: Vector3) -> void:
+	var e := {
+		"position": pos,
+		"vie": _vie_ennemi,
+		"noeud": null,
+		"est_mort": false,
+		"nourriture": NOURRITURE_MAX_ENNEMI,
+		"famine": 0.0,
+		"etat": "chasse",
+		"cible_cellule": null,
+		"derniere_cible_creusee": null,
+		"sc_porte": null,
+		"cooldown_creusage": 0.0,
+		"cooldown_grimpe": 0.0,
+		"derniere_direction_chasse": Vector3(1.0, 0.0, 0.0),
+		"statique": true,
+		"proprietes": {
+			"profil": "simple",
+			"cadence_tick": 1,
+			"velocite": Vector3.ZERO,
+			"velocite_desiree_horizontale": Vector3.ZERO,
+			"saut_demande": false,
+			"vitesse_saut": 0.0,
+			"rayon_capsule": 0.4,
+			"hauteur_capsule": 0.8,
+			"gravite": GRAVITE_ENNEMI,
+			"au_sol": false,
+			"y_appui_entite": -INF,
+		},
+	}
+	_ennemis.append(e)
+
 func _tick_ia_ennemis(delta: float) -> void:
 	if not _percepteur.is_valid():
 		return
@@ -194,6 +232,14 @@ func _tick_ia_ennemis(delta: float) -> void:
 			if e.noeud != null and is_instance_valid(e.noeud):
 				e.noeud.queue_free()
 			_ennemis.remove_at(i)
+			continue
+		# Ennemi statique (marqueur de test streaming) : intention a zero, gravite
+		# et snap sol via Tick + Mouvement profil "simple", mais AUCUNE IA. Cout
+		# nourriture skippe (il ne bouge pas), pas de mort par famine.
+		if bool(e.get("statique", false)):
+			e.proprietes["velocite_desiree_horizontale"] = Vector3.ZERO
+			Tick.tick_entite(e, Callable(Tick, "politique_intrinseque"), delta, null, _carte)
+			i += 1
 			continue
 		var pos: Vector3 = e.position
 		if float(e.get("cooldown_creusage", 0.0)) > 0.0:

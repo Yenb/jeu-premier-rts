@@ -13,7 +13,14 @@ const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
 const Tick = preload("res://scripts/tick.gd")
 
 @export_group("Rendu")
-@export var rayon_rendu: float = 60.0
+# Hysteresis : instancier sous *_entrer, liberer au-dela de *_sortir. L'ecart
+# evite le flip-flop au bord. Producteurs / carres / ennemis / tas partagent le
+# meme couple. Balles ont le leur, plus serre (projectiles rapides, on ne veut
+# pas les garder visibles apres leur sortie effective).
+@export var rayon_rendu_entrer: float = 60.0
+@export var rayon_rendu_sortir: float = 65.0
+@export var rayon_rendu_balles_entrer: float = 60.0
+@export var rayon_rendu_balles_sortir: float = 61.0
 @export var groupe_observateur: StringName = &"observateur"
 
 @export_group("Producteurs")
@@ -153,6 +160,20 @@ func _ready() -> void:
 	else:
 		_ennemis.zone_spawn_set(zone)
 		_rafraichir_zone_spawn()
+	# Capture des marqueurs "ennemi_test_statique" de la scene (patron A) : chaque
+	# noeud du groupe cree un ennemi immobile a sa position, puis le noeud marqueur
+	# est retire (il ne sert qu'a porter la position). Deferre : le groupe se
+	# remplit au _ready des noeuds, apres celui-ci.
+	call_deferred("_capturer_ennemis_statiques_test")
+
+func _capturer_ennemis_statiques_test() -> void:
+	if _ennemis == null:
+		return
+	for marqueur in get_tree().get_nodes_in_group(&"ennemi_test_statique"):
+		if not (marqueur is Node3D):
+			continue
+		_ennemis.ajouter_statique((marqueur as Node3D).global_position)
+		marqueur.queue_free()
 
 # Percepteur passe au module ennemis (Callable) : rend la position du joueur,
 # ou null s'il n'y a pas de joueur -- le module ne connait pas _observateur.
@@ -172,6 +193,16 @@ func _convertir_producteurs_initiaux() -> void:
 			continue
 		if enfant.has_method("set_passif"):
 			enfant.call("set_passif", true)
+		# Harmonisation avec l'instantiation runtime de _bascule_rendu_producteurs :
+		# tout producteur passe en FREEZE KINEMATIC des la capture, sinon un
+		# producteur pre-place dans la scene tourne en physique active
+		# (freeze=false), _avancer_donnees fait continue sur lui (branche
+		# physique_active), Tick n'est jamais appele -- il echappe au pipeline
+		# data-pure + streaming. Doctrine 5c : producteurs toujours frozen.
+		if enfant is RigidBody3D:
+			var rb: RigidBody3D = enfant
+			rb.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+			rb.freeze = true
 		_producteurs.append({
 			"position": (enfant as Node3D).global_position,
 			"stock": 0.0,
@@ -383,21 +414,28 @@ func _bascule_rendu_producteurs() -> void:
 	var parent := get_parent()
 	if parent == null:
 		return
-	var r2 := rayon_rendu * rayon_rendu
+	var r2_entrer := rayon_rendu_entrer * rayon_rendu_entrer
+	var r2_sortir := rayon_rendu_sortir * rayon_rendu_sortir
 	for prod in _producteurs:
 		var d2: float = (prod.position - pos_obs).length_squared()
-		if d2 < r2:
-			if prod.noeud == null or not is_instance_valid(prod.noeud):
-				var n := ProducteurScene.instantiate() as Node3D
-				if n.has_method("set_passif"):
-					n.set_passif(true)
-				if n is RigidBody3D:
-					var rb_new: RigidBody3D = n
-					rb_new.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
-					rb_new.freeze = true
-				parent.add_child(n)
-				n.global_position = prod.position
-				prod.noeud = n
+		var a_noeud: bool = prod.noeud != null and is_instance_valid(prod.noeud)
+		if a_noeud and d2 > r2_sortir:
+			prod.noeud.queue_free()
+			prod.noeud = null
+		elif not a_noeud and d2 < r2_entrer:
+			var n := ProducteurScene.instantiate() as Node3D
+			if n.has_method("set_passif"):
+				n.set_passif(true)
+			if n is RigidBody3D:
+				var rb_new: RigidBody3D = n
+				rb_new.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+				rb_new.freeze = true
+			parent.add_child(n)
+			n.global_position = prod.position
+			prod.noeud = n
+			if prod.noeud.has_method("set_stock_visuel"):
+				prod.noeud.set_stock_visuel(prod.stock)
+		elif a_noeud:
 			# Producteurs bascules sur Tick + Mouvement (profil "simple") : le
 			# vertical est desormais exclusivement Mouvement.pas, jamais un snap
 			# legacy. On n'appelle plus _gerer_freeze_kinematic ici -- le RB reste
@@ -421,10 +459,6 @@ func _bascule_rendu_producteurs() -> void:
 					rb.global_position = prod.position
 			if prod.noeud.has_method("set_stock_visuel"):
 				prod.noeud.set_stock_visuel(prod.stock)
-		else:
-			if prod.noeud != null and is_instance_valid(prod.noeud):
-				prod.noeud.queue_free()
-				prod.noeud = null
 
 func _bascule_rendu_carres() -> void:
 	if _observateur == null:
@@ -433,42 +467,45 @@ func _bascule_rendu_carres() -> void:
 	var parent := get_parent()
 	if parent == null:
 		return
-	var r2 := rayon_rendu * rayon_rendu
+	var r2_entrer := rayon_rendu_entrer * rayon_rendu_entrer
+	var r2_sortir := rayon_rendu_sortir * rayon_rendu_sortir
 	for cr in _carres:
 		var d2: float = ((cr.position as Vector3) - pos_obs).length_squared()
-		if d2 < r2:
-			if cr.noeud == null or not is_instance_valid(cr.noeud):
-				var n := CarreVisuelScene.instantiate() as Node3D
-				if "passif" in n:
-					n.set("passif", true)
-				parent.add_child(n)
-				n.global_position = cr.position
-				var cr_ref: Dictionary = cr
-				if n.has_signal("detruit"):
-					n.detruit.connect(func(): cr_ref["est_detruit"] = true)
-				# Sans exception collision avec producteurs, les carres pondus
-				# tout autour du producteur RigidBody3D le ceinturent et le
-				# bloquent physiquement (constate a l'ecran).
-				if n is CollisionObject3D:
-					for prod in _producteurs:
-						if prod.noeud != null and is_instance_valid(prod.noeud) and prod.noeud is CollisionObject3D:
-							(prod.noeud as CollisionObject3D).add_collision_exception_with(n)
-				# FREEZE_MODE_KINEMATIC (pas STATIC) : sans quoi Area3D ne
-				# detecte pas les collisions -- forum.godotengine.org thread
-				# 79351. Les balles violettes (Area3D) doivent pouvoir toucher.
-				if n is RigidBody3D:
-					var rb_new: RigidBody3D = n
-					rb_new.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
-					rb_new.freeze = true
-				cr.noeud = n
+		var a_noeud: bool = cr.noeud != null and is_instance_valid(cr.noeud)
+		if a_noeud and d2 > r2_sortir:
+			cr.noeud.queue_free()
+			cr.noeud = null
+		elif not a_noeud and d2 < r2_entrer:
+			var n := CarreVisuelScene.instantiate() as Node3D
+			if "passif" in n:
+				n.set("passif", true)
+			parent.add_child(n)
+			n.global_position = cr.position
+			var cr_ref: Dictionary = cr
+			if n.has_signal("detruit"):
+				n.detruit.connect(func(): cr_ref["est_detruit"] = true)
+			# Sans exception collision avec producteurs, les carres pondus
+			# tout autour du producteur RigidBody3D le ceinturent et le
+			# bloquent physiquement (constate a l'ecran).
+			if n is CollisionObject3D:
+				for prod in _producteurs:
+					if prod.noeud != null and is_instance_valid(prod.noeud) and prod.noeud is CollisionObject3D:
+						(prod.noeud as CollisionObject3D).add_collision_exception_with(n)
+			# FREEZE_MODE_KINEMATIC (pas STATIC) : sans quoi Area3D ne
+			# detecte pas les collisions -- forum.godotengine.org thread
+			# 79351. Les balles violettes (Area3D) doivent pouvoir toucher.
+			if n is RigidBody3D:
+				var rb_new: RigidBody3D = n
+				rb_new.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+				rb_new.freeze = true
+			cr.noeud = n
+			if cr.noeud is RigidBody3D:
+				_gerer_freeze_kinematic(cr.noeud, cr, d2 < _rayon_safe2)
+		elif a_noeud:
 			if cr.noeud is RigidBody3D:
 				_gerer_freeze_kinematic(cr.noeud, cr, d2 < _rayon_safe2)
 			if cr.noeud is RigidBody3D and not (cr.noeud as RigidBody3D).freeze:
 				cr.position = cr.noeud.global_position
-		else:
-			if cr.noeud != null and is_instance_valid(cr.noeud):
-				cr.noeud.queue_free()
-				cr.noeud = null
 
 # Au degel : reset velocity obligatoire -- issue godotengine/godot#92891.
 func _gerer_freeze_kinematic(rb: RigidBody3D, data: Dictionary, en_zone_safe: bool) -> void:
@@ -1340,7 +1377,11 @@ func _bascule_rendu_tas() -> void:
 	var parent := get_parent()
 	if parent == null:
 		return
-	var proches: Array = _tas.monde().choses_dans_rayon(pos_obs, rayon_rendu)
+	# Hysteresis : premiere passe sur rayon_rendu_entrer -> creer et mettre a jour
+	# les proches ; deuxieme passe sur toutes les choses -> liberer ce qui a un
+	# noeud mais distance carree > r2_sortir. L'ecart evite le flip-flop.
+	var r2_sortir := rayon_rendu_sortir * rayon_rendu_sortir
+	var proches: Array = _tas.monde().choses_dans_rayon(pos_obs, rayon_rendu_entrer)
 	var ids_proches: Dictionary = {}
 	for entree in proches:
 		var t: Dictionary = entree.chose
@@ -1366,7 +1407,12 @@ func _bascule_rendu_tas() -> void:
 		var tas: Dictionary = w.chose
 		if ids_proches.has(tas.id):
 			continue
-		if tas.noeud != null and is_instance_valid(tas.noeud):
+		if tas.noeud == null or not is_instance_valid(tas.noeud):
+			continue
+		# Deja hors du rayon_entrer (sinon serait dans ids_proches) : ne liberer que
+		# si aussi au-dela du rayon_sortir. Sinon on garde le noeud (bande morte).
+		var d2: float = ((tas.position as Vector3) - pos_obs).length_squared()
+		if d2 > r2_sortir:
 			tas.noeud.queue_free()
 			tas.noeud = null
 
@@ -1417,22 +1463,26 @@ func _bascule_rendu_balles() -> void:
 	var parent := get_parent()
 	if parent == null:
 		return
-	var r2 := rayon_rendu * rayon_rendu
+	# Balles : hysteresis serree (1m) -- projectiles rapides, on ne veut pas garder
+	# le visuel apres leur sortie effective.
+	var r2_entrer := rayon_rendu_balles_entrer * rayon_rendu_balles_entrer
+	var r2_sortir := rayon_rendu_balles_sortir * rayon_rendu_balles_sortir
 	for b in _balles:
 		var d2: float = ((b.position as Vector3) - pos_obs).length_squared()
-		if d2 < r2:
-			if b.noeud == null or not is_instance_valid(b.noeud):
-				var n := BalleScene.instantiate() as Node3D
-				# Neutralise le script projectile.gd embarque dans le tscn --
-				# la balle devient une coque visuelle pilotee par le manager.
-				n.set_script(null)
-				parent.add_child(n)
-				b.noeud = n
+		var a_noeud: bool = b.noeud != null and is_instance_valid(b.noeud)
+		if a_noeud and d2 > r2_sortir:
+			b.noeud.queue_free()
+			b.noeud = null
+		elif not a_noeud and d2 < r2_entrer:
+			var n := BalleScene.instantiate() as Node3D
+			# Neutralise le script projectile.gd embarque dans le tscn --
+			# la balle devient une coque visuelle pilotee par le manager.
+			n.set_script(null)
+			parent.add_child(n)
+			b.noeud = n
 			b.noeud.global_position = b.position
-		else:
-			if b.noeud != null and is_instance_valid(b.noeud):
-				b.noeud.queue_free()
-				b.noeud = null
+		elif a_noeud:
+			b.noeud.global_position = b.position
 
 # --- ENNEMIS ---
 
@@ -1444,6 +1494,13 @@ func _preparer_meshes_ennemis() -> void:
 	_mesh_ennemi.material = mat
 	_mesh_barre = PlaneMesh.new()
 	_mesh_barre.size = Vector2(0.6, 0.08)
+	# Orientation FACE_Z : vertices dans le plan XY (normal +Z), pas XZ (defaut
+	# FACE_Y). Le shader BarreVieShader billboarde en remplacant MODELVIEW par
+	# VIEW * (right, up, back, pos). Un PlaneMesh horizontal (FACE_Y) donne apres
+	# billboarding un plan (right, back) qui contient l'axe camera_back --> vu en
+	# tranche, 0 pixel, shimmer et AABB degenere. FACE_Z donne un plan (right, up)
+	# perpendiculaire a la camera, face a face.
+	_mesh_barre.orientation = PlaneMesh.FACE_Z
 
 func _set_spawn_demi_cote(v: float) -> void:
 	spawn_demi_cote = v
@@ -1466,27 +1523,33 @@ func _bascule_rendu_ennemis() -> void:
 	var parent := get_parent()
 	if parent == null:
 		return
-	var r2 := rayon_rendu * rayon_rendu
+	var r2_entrer := rayon_rendu_entrer * rayon_rendu_entrer
+	var r2_sortir := rayon_rendu_sortir * rayon_rendu_sortir
 	for e in _ennemis.ennemis():
 		if e.est_mort:
 			if e.noeud != null and is_instance_valid(e.noeud):
 				(e.noeud as Node3D).global_position = e.position
 			continue
 		var d2: float = ((e.position as Vector3) - pos_obs).length_squared()
-		if d2 < r2:
-			if e.noeud == null or not is_instance_valid(e.noeud):
-				var n := _creer_visuel_ennemi(
-					float(e.vie) / float(vie_ennemi),
-					float(e.nourriture) / Ennemis.NOURRITURE_MAX_ENNEMI)
-				parent.add_child(n)
-				n.global_position = e.position
-				e.noeud = n
-			else:
-				(e.noeud as Node3D).global_position = e.position
-		else:
-			if e.noeud != null and is_instance_valid(e.noeud):
-				e.noeud.queue_free()
-				e.noeud = null
+		var a_noeud: bool = e.noeud != null and is_instance_valid(e.noeud)
+		if a_noeud and d2 > r2_sortir:
+			print("[ENNEMI SORT] id=%s d=%.2f entrer=%.2f sortir=%.2f pos_e=%s pos_obs=%s" % [
+				e.get("id", "?"), sqrt(d2), rayon_rendu_entrer, rayon_rendu_sortir,
+				e.position, pos_obs])
+			e.noeud.queue_free()
+			e.noeud = null
+		elif not a_noeud and d2 < r2_entrer:
+			var n := _creer_visuel_ennemi(
+				float(e.vie) / float(vie_ennemi),
+				float(e.nourriture) / Ennemis.NOURRITURE_MAX_ENNEMI)
+			print("[ENNEMI ENTRE] id=%s d=%.2f entrer=%.2f sortir=%.2f pos_e=%s pos_obs=%s" % [
+				e.get("id", "?"), sqrt(d2), rayon_rendu_entrer, rayon_rendu_sortir,
+				e.position, pos_obs])
+			parent.add_child(n)
+			n.global_position = e.position
+			e.noeud = n
+		elif a_noeud:
+			(e.noeud as Node3D).global_position = e.position
 
 func _creer_visuel_ennemi(fraction_vie: float, fraction_nourriture: float) -> StaticBody3D:
 	var racine := StaticBody3D.new()
