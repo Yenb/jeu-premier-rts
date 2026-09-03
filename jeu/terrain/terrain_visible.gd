@@ -101,6 +101,12 @@ var _bloc := GridMap.INVALID_CELL_ITEM
 # externe avec N BoxShape3D enfants. Ce dict garde la reference pour
 # pouvoir les detruire au rebuild de colonne.
 var _bodies_cellules_cassees: Dictionary = {}  # Vector3i cellule -> StaticBody3D
+# INDEX SECONDAIRE : colonne -> Array[Vector3i]. Tenu strictement en parallele
+# de _bodies_cellules_cassees : toute ecriture/suppression dans le dict primaire
+# passe par _inscrire_body / _retirer_body, jamais directement. Sans cet index,
+# _effacer_bodies_sous_cubes balayait toutes les cles du dict primaire et
+# filtrait sur x/z -- cout O(N) par colonne alors que k cellules sont concernees.
+var _bodies_par_colonne: Dictionary = {}  # Vector2i colonne -> Array[Vector3i]
 
 func _ready() -> void:
 	# CE GRIDMAP NE DESSINE RIEN : sa bibliotheque finale est privee de
@@ -398,7 +404,7 @@ func _poser_bodies_sous_cubes(colonne: Vector2i) -> void:
 			var ancien = _bodies_cellules_cassees[cellule]
 			if ancien != null and is_instance_valid(ancien):
 				ancien.queue_free()
-			_bodies_cellules_cassees.erase(cellule)
+			_retirer_body(cellule)
 		var body := StaticBody3D.new()
 		add_child(body)
 		body.global_position = to_global(map_to_local(cellule))
@@ -417,15 +423,39 @@ func _poser_bodies_sous_cubes(colonne: Vector2i) -> void:
 				float(iy - 1) * pas,
 				float(iz - 1) * pas)
 			body.add_child(shape)
-		_bodies_cellules_cassees[cellule] = body
+		_inscrire_body(cellule, body)
 
 func _effacer_bodies_sous_cubes(colonne: Vector2i) -> void:
-	var a_retirer: Array = []
-	for cellule in _bodies_cellules_cassees.keys():
-		if cellule.x == colonne.x and cellule.z == colonne.y:
-			a_retirer.append(cellule)
-	for cellule in a_retirer:
-		var body = _bodies_cellules_cassees[cellule]
+	# Lit l'index secondaire : seules les cellules reellement cassees de cette
+	# colonne sont touchees. Aucune iteration sur toute la population.
+	if not _bodies_par_colonne.has(colonne):
+		return
+	# COPIE : _retirer_body edite _bodies_par_colonne[colonne], iterer dessus
+	# directement sauterait des elements.
+	var cellules: Array = (_bodies_par_colonne[colonne] as Array).duplicate()
+	for cellule in cellules:
+		var body = _bodies_cellules_cassees.get(cellule)
 		if body != null and is_instance_valid(body):
 			body.queue_free()
-		_bodies_cellules_cassees.erase(cellule)
+		_retirer_body(cellule)
+
+# LES DEUX SEULS ECRIVAINS de _bodies_cellules_cassees : ils tiennent l'index
+# secondaire _bodies_par_colonne en parallele. Toucher au dict primaire sans
+# passer par eux desynchronise l'index et _effacer_bodies_sous_cubes rate des
+# cellules.
+func _inscrire_body(cellule: Vector3i, body: StaticBody3D) -> void:
+	_bodies_cellules_cassees[cellule] = body
+	var colonne := Vector2i(cellule.x, cellule.z)
+	if not _bodies_par_colonne.has(colonne):
+		_bodies_par_colonne[colonne] = []
+	(_bodies_par_colonne[colonne] as Array).append(cellule)
+
+func _retirer_body(cellule: Vector3i) -> void:
+	_bodies_cellules_cassees.erase(cellule)
+	var colonne := Vector2i(cellule.x, cellule.z)
+	if not _bodies_par_colonne.has(colonne):
+		return
+	var liste: Array = _bodies_par_colonne[colonne]
+	liste.erase(cellule)
+	if liste.is_empty():
+		_bodies_par_colonne.erase(colonne)

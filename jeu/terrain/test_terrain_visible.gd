@@ -67,6 +67,7 @@ func _init() -> void:
 	_traversee()
 	_bord_emprise()
 	_colonne_sculptee()
+	_perf_index_bodies_par_colonne()
 	# DIFFERE : un noeud ajoute ici n'entrerait pas encore dans l'arbre, et son
 	# _ready ne partirait jamais. Meme raison que test_maquette.gd.
 	_etalement.call_deferred()
@@ -340,6 +341,66 @@ func _etalement() -> void:
 
 	terrain.queue_free()
 	_conclure()
+
+# _effacer_bodies_sous_cubes ne doit pas suivre la population totale des
+# cellules cassees : le cout d'effacement d'une colonne doit suivre le nombre
+# de cellules cassees DE CETTE colonne, pas de tout l'historique de destruction
+# de la carte. Sans index par colonne, la boucle sur .keys() donnait un ratio
+# d'environ 100x entre 5000 et 50 bodies au total ; avec l'index, les deux
+# mesures tiennent dans le meme ordre de grandeur.
+func _perf_index_bodies_par_colonne() -> void:
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 200
+	var terrain: GridMap = TerrainVisible.new()
+	terrain.mesh_library = _grille.mesh_library
+	terrain.carte = carte
+	terrain.rayon_cellules = 1
+	terrain.groupe_observateur = &"aucun_pour_ce_test"
+	get_root().add_child(terrain)
+
+	var cible := Vector2i(-150, -150)
+	var durees: Array = []
+	for total in [5000, 50]:
+		terrain._bodies_cellules_cassees.clear()
+		terrain._bodies_par_colonne.clear()
+		var cote := int(ceil(sqrt(float(total - 3)))) + 1
+		var poses := 0
+		for dx in range(cote):
+			for dz in range(cote):
+				if poses >= total - 3:
+					break
+				var cellule := Vector3i(dx * 2 + 1, carte.couche_base, dz * 2 + 1)
+				var body := StaticBody3D.new(); terrain.add_child(body); terrain._inscrire_body(cellule, body)
+				poses += 1
+			if poses >= total - 3:
+				break
+		# La colonne cible : trois cellules empilees.
+		for y in range(3):
+			var body_cible := StaticBody3D.new()
+			terrain.add_child(body_cible)
+			terrain._inscrire_body(Vector3i(cible.x, carte.couche_base + y, cible.y),
+				body_cible)
+
+		var avant: int = terrain._bodies_cellules_cassees.size()
+		var debut := Time.get_ticks_usec()
+		terrain._effacer_bodies_sous_cubes(cible)
+		durees.append(Time.get_ticks_usec() - debut)
+		_v.v(terrain._bodies_cellules_cassees.size() == avant - 3,
+			"apres effacement de la colonne cible, %d bodies restent sur %d, 3 attendus retires"
+				% [terrain._bodies_cellules_cassees.size(), avant])
+		_v.v(not terrain._bodies_par_colonne.has(cible),
+			"la colonne cible reste dans l'index apres effacement complet")
+
+	print("_effacer_bodies_sous_cubes : 3 cellules cibles, %d us avec 5003 bodies au total, %d us avec 53" % durees)
+	# Avec l'index, la mesure a 5000 doit rester dans le meme ordre que celle
+	# a 50. Ancien code : rapport ~100. Seuil large pour absorber le bruit de
+	# mesure a des durees minuscules.
+	var seuil := maxi(durees[1] * 20, 300)
+	_v.v(durees[0] <= seuil,
+		"le cout d'effacement suit la population totale : %d us pour 5003 bodies, %d us pour 53 (seuil %d)"
+			% [durees[0], durees[1], seuil])
+
+	terrain.queue_free()
 
 func _conclure() -> void:
 	if _grille != null:
