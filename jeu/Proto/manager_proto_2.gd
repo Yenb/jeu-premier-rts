@@ -348,6 +348,7 @@ func _pas_joueur(delta: float) -> void:
 	var saute: bool = bool(intent.get("saut", false)) and au_sol_prec
 	var dir_h := Vector3(horiz.x, 0.0, horiz.z)
 	var vitesse_h: float = dir_h.length()
+	var hauteur_capsule: float = float(p.get("hauteur_capsule", 1.8))
 
 	# BLOCAGE MUR, commun au sol et en l'air : le sol devant (a distance de sonde
 	# FIXE, pas le pas) depasse-t-il les pieds avec une pente raide ? Une pente douce
@@ -365,8 +366,13 @@ func _pas_joueur(delta: float) -> void:
 			var sol_pieds: Variant = _carte.sommet(pos.x, pos.z)
 			var ref: float = float(sol_pieds) if sol_pieds != null else pos.y
 			pente_devant = (float(sol_sonde) - ref) / SONDE_PENTE
-			if float(sol_sonde) > pos.y + MARCHE_JOUEUR and pente_devant > PENTE_MAX:
-				peut_avancer = false  # mur au-dessus des pieds : il faut sauter
+			# Ne bloque que si l'obstacle est ENTRE les pieds et la TETE. Plus haut,
+			# c'est un PLAFOND (bloc suspendu) : carte.sommet rend son dessus, mais on
+			# passe DESSOUS. hauteur_capsule borne la tete.
+			if float(sol_sonde) > pos.y + MARCHE_JOUEUR \
+					and float(sol_sonde) < pos.y + hauteur_capsule \
+					and pente_devant > PENTE_MAX:
+				peut_avancer = false  # mur a hauteur de corps : il faut sauter
 
 	var au_sol := false
 	if au_sol_prec and not saute:
@@ -377,10 +383,23 @@ func _pas_joueur(delta: float) -> void:
 		if vitesse_h > 0.0001 and peut_avancer:
 			var dir_surface := Vector3(dir_n.x, pente_devant, dir_n.z).normalized()
 			pos += dir_surface * vitesse_h * delta
-		# Colle a la surface (corrige l'ecart de l'estimation de pente).
+		# SNAP AU SOL = le PLUS HAUT entre le terrain (hors plafond) et le dessus de
+		# l'ENTITE sous les pieds (cube). Patron ground-snap kinematic qui accepte
+		# statique ET dynamique : le perso doit pouvoir se tenir sur un corps, pas
+		# seulement sur la geometrie (Rapier character_controller ; Godot moving
+		# platforms ; Kinematic Character Controller). Sans le dessus d'entite, le
+		# snap terrain arrache le joueur du cube -> vibration ; sans le test plafond
+		# (<= hauteur_capsule), un bloc suspendu le teleporterait sur son toit.
+		var sol_choisi: Variant = null
 		var sol_v: Variant = _carte.sommet(pos.x, pos.z)
-		if sol_v != null:
-			pos.y = float(sol_v)
+		if sol_v != null and float(sol_v) - pos.y <= hauteur_capsule:
+			sol_choisi = float(sol_v)
+		var y_appui: float = float(p.get("y_appui_entite", -INF))
+		if y_appui > -1e19 and y_appui - pos.y <= hauteur_capsule:
+			if sol_choisi == null or y_appui > float(sol_choisi):
+				sol_choisi = y_appui
+		if sol_choisi != null:
+			pos.y = float(sol_choisi)
 		ve = Vector3(horiz.x, 0.0, horiz.z)
 		au_sol = true
 	else:
@@ -458,6 +477,12 @@ func _tick_collision(delta: float) -> void:
 				break
 		if sol_entite:
 			_entite_joueur.proprietes["au_sol"] = true
+			# Hauteur d'appui = ou la collision vient de poser le joueur (le dessus du
+			# cube). _pas_joueur en fait un candidat-sol au prochain snap : le joueur
+			# reste dessus au lieu d'etre rappele au terrain.
+			_entite_joueur.proprietes["y_appui_entite"] = _entite_joueur.position.y
+		else:
+			_entite_joueur.proprietes["y_appui_entite"] = -INF
 	if not _entite_joueur.is_empty():
 		_monde.deplacer(_entite_joueur)
 	for cube in _ennemis:
