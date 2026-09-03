@@ -54,6 +54,7 @@ size = Vector3(20, 0.4, 20)
 [node name="RepereVisuel" type="MeshInstance3D" parent="." unique_id=2028792952]
 process_mode = 4
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 13.945268, 0)
+visible = false
 mesh = SubResource("PlaneMesh_repere")
 
 [node name="Node" type="Node" parent="." unique_id=590634036]
@@ -118,8 +119,9 @@ carte = ExtResource("3_g2etm")
 mesh_library = ExtResource("1_csflq")
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 220.29274, 13.791603, 248.89328)
-hauteur_capsule = 4.5
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 224.34608, 13.791603, 235.05884)
+hauteur_capsule = 10.0
+afficher_corps = false
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)

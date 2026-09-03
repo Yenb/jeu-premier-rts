@@ -284,29 +284,56 @@ static func _pas_complet_atomique(entite: Dictionary, dt: float, monde, carte) -
 		y_appui_nouveau = maxf(y_appui_nouveau, _top_aabb(autre))
 	p["y_appui_entite"] = y_appui_nouveau
 
-# NORMALE D'UN MUR BLOQUANT DEVANT L'ENTITE, Vector3.ZERO si rien. Sonde a
-# pos + dir*rayon (le BORD de la capsule, pas son centre -- c'est ce qui arrete la
-# tete/camera avant qu'elle ne traverse). Lit la hauteur REELLE du sol devant via
-# sommet_sous (profil de rampe compris, plafonne a la tete pour ignorer un bloc
-# suspendu au-dessus) et la compare a rayon * PENTE_MAX :
+# NORMALE D'UN MUR BLOQUANT DEVANT L'ENTITE, Vector3.ZERO si rien. Echantillonne
+# la FACE AVANT du corps (segment de longueur 2*rayon, tangent a dir, centre sur
+# pos + dir*rayon), avec un pas <= cote pour qu'aucune colonne de voxel dans la
+# largeur du corps ne puisse etre survolee. Chaque sonde lit la hauteur REELLE du
+# sol via sommet_sous (profil de rampe compris, plafonne a la tete pour ignorer
+# un bloc suspendu au-dessus) et la compare a rayon * PENTE_MAX :
 #   null (bord de carte / trou)              -> mur (on ne franchit pas un vide)
 #   sol_devant > pos.y + rayon * PENTE_MAX   -> mur / marche trop haute -> bloque
 #   sol_devant <= pos.y + rayon * PENTE_MAX  -> rampe / marche basse / plat -> passe
-# est_pleine est ECARTE ici : il rend vrai pour une rampe (cellule pleine a profil)
-# et la traiterait comme un mur.
+# est_pleine est ECARTE pour le test de sol (il rendrait vrai pour une rampe) mais
+# CONSERVE pour le test de plafond (colonne de voxels devant, entre pieds et tete).
+#
+# ECART FRAMEWORK (local a ce depot) : la version d'origine sondait uniquement
+# pos + dir*rayon (une sonde unique au bord). Insuffisant des que rayon > cote --
+# la sonde atterrit au-dela du mur, dans le vide, et un grand personnage traverse
+# les murs voxel. Reference : voxel-aabb-sweep (Fenomas) -- balayer la face avant
+# de l'AABB, pas juste le coin. Le sub-stepping temporel reste porte par
+# _pas_complet_atomique.
 static func _obstacle_hauteur_corps(entite: Dictionary, dir: Vector3, carte) -> Vector3:
 	var p: Dictionary = entite.proprietes
 	var rayon: float = float(p.get("rayon_capsule", 0.4))
 	var hauteur: float = float(p.get("hauteur_capsule", 1.8))
 	var pos: Vector3 = entite.position
-	var x_devant: float = pos.x + dir.x * rayon
-	var z_devant: float = pos.z + dir.z * rayon
-	var sol_devant = carte.sommet_sous(x_devant, z_devant, pos.y + hauteur)
-	if sol_devant == null:
-		return -dir
-	var solf: float = float(sol_devant)
-	if solf > pos.y + rayon * PENTE_MAX:
-		return -dir
+	var cote: float = 2.0
+	if "cote" in carte:
+		cote = float(carte.cote)
+	var tangent := Vector3(-dir.z, 0.0, dir.x)
+	var n_lateral: int = max(1, int(ceil(2.0 * rayon / cote)))
+	for i in range(n_lateral + 1):
+		var t: float = -rayon + (float(i) / float(n_lateral)) * 2.0 * rayon
+		var x_sonde: float = pos.x + dir.x * rayon + tangent.x * t
+		var z_sonde: float = pos.z + dir.z * rayon + tangent.z * t
+		var sol_devant = carte.sommet_sous(x_sonde, z_sonde, pos.y + hauteur)
+		if sol_devant == null:
+			return -dir
+		var solf: float = float(sol_devant)
+		if solf > pos.y + rayon * PENTE_MAX:
+			return -dir
+		# Test espace vertical devant : un plafond trop bas arrete l'AVANCEE.
+		# Couches PIEDS (juste au-dessus du sol) a TETE. Epsilon pour ne pas
+		# retomber dans la couche du sol sur une frontiere de voxel, et pour ne pas
+		# viser la couche au-dessus de la tete quand elle tombe pile dessus --
+		# sinon range peut etre vide et rater le bloc traversant le corps.
+		var epsilon := 0.001
+		var colonne := Vector2i(int(floor(x_sonde / cote)), int(floor(z_sonde / cote)))
+		var couche_pieds: int = int(floor((solf + epsilon) / cote))
+		var couche_tete: int = int(floor((solf + hauteur - epsilon) / cote))
+		for couche in range(couche_pieds, couche_tete + 1):
+			if carte.est_pleine(colonne, couche):
+				return -dir
 	return Vector3.ZERO
 
 # DESSUS (Y MAX) DE L'AABB MONDE D'UNE ENTITE, le plus haut de ses formes. Sert a

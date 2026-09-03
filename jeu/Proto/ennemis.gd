@@ -33,6 +33,12 @@ extends RefCounted
 # rendu des ennemis (noeud, barres) reste au manager ; ennemis ne fait que lire
 # e.noeud pour rafraichir les barres, jamais le fabriquer.
 
+# Framework de tick + mouvement partage : les cubes delèguent gravite, snap sol et
+# blocage terrain a Mouvement (profil "simple") via Tick. L'IA (etats, faim,
+# creusage, pose) reste ici ; ce module ne calcule plus le mouvement lui-meme.
+const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
+const Tick = preload("res://scripts/tick.gd")
+
 const CADENCE_ENNEMI_CREUSAGE := 0.5
 const RAYON_ENNEMI_CHERCHE_BLOC := 3
 const RAYON_ENNEMI_RAMASSE := 2.0
@@ -136,7 +142,6 @@ func _spawner_un_ennemi() -> void:
 		return
 	var e := {
 		"position": Vector3(x, y, z),
-		"vitesse_y": 0.0,
 		"vie": _vie_ennemi,
 		"noeud": null,
 		"est_mort": false,
@@ -149,6 +154,22 @@ func _spawner_un_ennemi() -> void:
 		"cooldown_creusage": 0.0,
 		"cooldown_grimpe": 0.0,
 		"derniere_direction_chasse": Vector3(1.0, 0.0, 0.0),
+		# Contrat Mouvement + Tick (profil "simple"). L'IA ne touche PAS ce sous-dict ;
+		# elle y depose seulement velocite_desiree_horizontale a chaque tour. La
+		# position reste au top-level (Mouvement la lit la).
+		"proprietes": {
+			"profil": "simple",
+			"cadence_tick": 1,
+			"velocite": Vector3.ZERO,
+			"velocite_desiree_horizontale": Vector3.ZERO,
+			"saut_demande": false,
+			"vitesse_saut": 0.0,
+			"rayon_capsule": 0.4,
+			"hauteur_capsule": 0.8,
+			"gravite": GRAVITE_ENNEMI,
+			"au_sol": false,
+			"y_appui_entite": -INF,
+		},
 	}
 	_ennemis.append(e)
 
@@ -184,6 +205,9 @@ func _tick_ia_ennemis(delta: float) -> void:
 		vers.y = 0.0
 		if vers.length() > 0.1:
 			e.derniere_direction_chasse = vers.normalized()
+		# Intention de mouvement remise a zero chaque tour : seul l'etat chasse (else)
+		# la fixe. Bloque, creuse, cherche_sc, pose -> immobiles horizontalement.
+		e.proprietes["velocite_desiree_horizontale"] = Vector3.ZERO
 		match etat:
 			"chasse":
 				if vers.length() > 0.5:
@@ -219,7 +243,7 @@ func _tick_ia_ennemis(delta: float) -> void:
 							else:
 								e.cooldown_grimpe = 3.0
 					else:
-						pos = candidat
+						e.proprietes["velocite_desiree_horizontale"] = direction * _vitesse_ennemi
 			"creuse":
 				if e.get("cible_cellule", null) == null:
 					e.etat = "chasse"
@@ -260,23 +284,16 @@ func _tick_ia_ennemis(delta: float) -> void:
 					if pose_ok:
 						e.sc_porte = null
 				e.etat = "chasse"
-		if _carte != null:
-			var y_haut: Variant = _tas.sommet_effectif(pos.x, pos.z, pos.y + _cote_cellule / 3.0 * 0.5)
-			if y_haut != null:
-				var sol_y: float = float(y_haut) + 0.4
-				if pos.y > sol_y:
-					e.vitesse_y -= GRAVITE_ENNEMI * delta
-					pos.y += e.vitesse_y * delta
-					if pos.y < sol_y:
-						pos.y = sol_y
-						e.vitesse_y = 0.0
-				else:
-					pos.y = sol_y
-					e.vitesse_y = 0.0
-		var pos_avant: Vector3 = e.position
-		var deplacement := Vector3(pos.x - pos_avant.x, 0.0, pos.z - pos_avant.z)
+		# Mouvement delegue au framework (profil "simple") : gravite continue, snap
+		# sol borne, blocage terrain -- calcule sur l'intention posee ci-dessus. monde
+		# = null : les cubes ne sont pas dans l'index spatial _monde (ils vivent dans
+		# _ennemis), donc pas de deplacer() ni de collision inter-entites ici.
+		var pos_avant_tick: Vector3 = e.position
+		Tick.tick_entite(e, Callable(Tick, "politique_intrinseque"), delta, null, _carte)
+		var pos_apres_tick: Vector3 = e.position
+		var deplacement := Vector3(pos_apres_tick.x - pos_avant_tick.x, 0.0, pos_apres_tick.z - pos_avant_tick.z)
 		var dist := deplacement.length()
-		var dy: float = pos.y - pos_avant.y
+		var dy: float = pos_apres_tick.y - pos_avant_tick.y
 		var cout: float = COUT_NOURRITURE_PAR_M * dist
 		if dy > 0.0:
 			cout += COUT_NOURRITURE_PAR_M_MONTEE * dy
@@ -293,7 +310,6 @@ func _tick_ia_ennemis(delta: float) -> void:
 				_rafraichir_barre_ennemi(e)
 		else:
 			e.famine = 0.0
-		e.position = pos
 		i += 1
 
 func _repousser_ennemis(_delta: float) -> void:

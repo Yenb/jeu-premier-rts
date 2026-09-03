@@ -7,6 +7,10 @@ const BalleScene = preload("res://jeu/Proto/balle_violette.tscn")
 const BarreVieShader = preload("res://jeu/Outil de jeu/barre_de_vie.gdshader")
 const Tas = preload("res://jeu/Proto/tas.gd")
 const Ennemis = preload("res://jeu/Proto/ennemis.gd")
+# Framework de tick + mouvement partage : les producteurs delèguent leur pas
+# horizontal + gravite + snap sol a Mouvement (profil "simple") via Tick.
+const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
+const Tick = preload("res://scripts/tick.gd")
 
 @export_group("Rendu")
 @export var rayon_rendu: float = 60.0
@@ -177,6 +181,21 @@ func _convertir_producteurs_initiaux() -> void:
 			"angle_ponte": 0.0,
 			"noeud": enfant as Node3D,
 			"frames_sans_sol": 0,
+			# Contrat Mouvement + Tick (profil "simple"). L'IA n'ecrit PAS ce sous-dict
+			# a part velocite_desiree_horizontale, posee chaque tour par _avancer_donnees.
+			"proprietes": {
+				"profil": "simple",
+				"cadence_tick": 1,
+				"velocite": Vector3.ZERO,
+				"velocite_desiree_horizontale": Vector3.ZERO,
+				"saut_demande": false,
+				"vitesse_saut": 0.0,
+				"rayon_capsule": 0.4,
+				"hauteur_capsule": 0.8,
+				"gravite": 18.0,
+				"au_sol": false,
+				"y_appui_entite": -INF,
+			},
 		})
 
 func _process(delta: float) -> void:
@@ -217,9 +236,11 @@ func _avancer_donnees(delta: float) -> void:
 		vers.y = 0.0
 		if vers.length() <= 1.0:
 			prod.cible = null
+			prod.proprietes["velocite_desiree_horizontale"] = Vector3.ZERO
 			continue
 		var direction := vers.normalized()
-		prod.position += direction * vitesse_sol * delta
+		prod.proprietes["velocite_desiree_horizontale"] = direction * vitesse_sol
+		Tick.tick_entite(prod, Callable(Tick, "politique_intrinseque"), delta, null, _carte)
 
 func _tick_extraction() -> void:
 	if _carte == null:
@@ -377,8 +398,11 @@ func _bascule_rendu_producteurs() -> void:
 				parent.add_child(n)
 				n.global_position = prod.position
 				prod.noeud = n
-			if prod.noeud is RigidBody3D:
-				_gerer_freeze_kinematic(prod.noeud, prod, d2 < _rayon_safe2)
+			# Producteurs bascules sur Tick + Mouvement (profil "simple") : le
+			# vertical est desormais exclusivement Mouvement.pas, jamais un snap
+			# legacy. On n'appelle plus _gerer_freeze_kinematic ici -- le RB reste
+			# frozen tel qu'a la creation (kinematic pur), la branche unfrozen
+			# ci-dessous devient morte pour prod (surface de diff minimale).
 			if prod.noeud is RigidBody3D:
 				var rb: RigidBody3D = prod.noeud
 				if not rb.freeze:

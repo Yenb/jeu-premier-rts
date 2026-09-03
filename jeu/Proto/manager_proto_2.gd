@@ -164,8 +164,13 @@ func _ready() -> void:
 			_entite_joueur.proprietes.formes[0],
 			Transform3D(Basis.IDENTITY, _entite_joueur.position))
 		_monde.ajouter(_entite_joueur, "joueur", _entite_joueur.position)
-		# Le Personnage se dimensionne lui-meme (mesh, camera) depuis ses @export au
-		# _ready : rien a injecter ici.
+		# Force la propagation initiale des dimensions : _appliquer_dimensions du
+		# personnage lit _entite_joueur via get_nodes_in_group. Si son propre _ready a
+		# tourne AVANT ce point, _entite_joueur etait vide et la propagation a ete
+		# skippee. On la redemande maintenant que le Dictionary existe -- appel
+		# synchrone, sans dependre du call_deferred du personnage.
+		if _observateur.has_method("_appliquer_dimensions"):
+			_observateur.call("_appliquer_dimensions")
 
 # Lit un reglage @export sur l'observateur (le Personnage), ou un defaut s'il est
 # absent -- la taille et la gravite du joueur ont leur source sur ce nœud.
