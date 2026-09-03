@@ -119,9 +119,8 @@ carte = ExtResource("3_g2etm")
 mesh_library = ExtResource("1_csflq")
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 224.34608, 13.791603, 235.05884)
-hauteur_capsule = 10.0
-afficher_corps = false
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 233.57031, 22.990662, 230.52374)
+hauteur_capsule = 4.5
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
