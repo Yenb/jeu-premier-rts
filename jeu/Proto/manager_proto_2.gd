@@ -160,7 +160,6 @@ func _ready() -> void:
 				"profil": "complet",
 				"cadence_tick": 1,
 				"saut_demande": false,
-				"vitesse_saut": 8.5,
 				"velocite_desiree_horizontale": Vector3.ZERO,
 				"y_appui_entite": -INF,
 			},
@@ -351,7 +350,7 @@ func _pas_joueur(delta: float) -> void:
 	var p: Dictionary = _entite_joueur.proprietes
 	p["velocite_desiree_horizontale"] = Vector3(horiz.x, 0.0, horiz.z)
 	p["saut_demande"] = bool(intent.get("saut", false))
-	p["vitesse_saut"] = float(intent.get("vitesse_saut", 8.5))
+	p["vitesse_saut"] = float(intent["vitesse_saut"])
 	Tick.tick_entite(_entite_joueur, Callable(Tick, "politique_intrinseque"), delta, _monde, _carte)
 
 # Getter de l'entite joueur (lue par personnage.gd a l'injection, et par de

@@ -114,7 +114,7 @@ const INANITION_DRAIN_LOURD := 2.0
 @export var ratio_rayon: float = 0.22   # rayon = ratio * hauteur (borne a hauteur/2)
 @export var ratio_yeux: float = 0.94    # yeux  = ratio * hauteur
 @export var vitesse_marche: float = 4.0
-@export var vitesse_saut: float = 8.5
+@export var vitesse_saut: float = 14.85
 @export var gravite: float = 18.0
 @export var afficher_corps: bool = true
 @export var afficher_marqueur_debug: bool = true

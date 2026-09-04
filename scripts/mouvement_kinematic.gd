@@ -365,8 +365,11 @@ static func _pas_complet_atomique(entite: Dictionary, dt: float, monde, carte) -
 # a la tete pour ignorer un bloc suspendu au-dessus) et compare :
 #   null (bord de carte / trou)              -> mur (on ne franchit pas un vide)
 #   rise = sol_devant - sol_ici <= 5cm       -> micro-relief -> passe
-#   rise > 5cm ET rise / d > 1.73 (>60°)     -> mur ou pente trop raide -> bloque
-#   rise > 5cm ET rise / d <= 1.73 (<=60°)   -> rampe walkable -> passe
+#   AU SOL, rise > 5cm ET rise / d > 1.73    -> mur ou pente trop raide -> bloque
+#   AU SOL, rise > 5cm ET rise / d <= 1.73   -> rampe walkable -> passe
+#   EN L'AIR, quel que soit rise             -> garde de pente levee : le corps ne
+#                                                monte pas, il survole. Seule la
+#                                                garde plafond ci-dessous decide.
 # sol_ici est calcule UNE FOIS hors boucle : c'est la reference verticale contre
 # laquelle on mesure le denivele de chaque sonde. Fonctionne a toute echelle (perso
 # normal, petit, geant, creature) sans constante scale-dependante.
@@ -406,6 +409,10 @@ static func _obstacle_hauteur_corps(entite: Dictionary, dir: Vector3, carte) -> 
 	if sol_ici_var == null:
 		return -dir
 	var solf_ici: float = float(sol_ici_var)
+	# au_sol lu UNE FOIS pour toute la boucle : il ne change pas pendant les sondes,
+	# et il branche a la fois la garde de pente (ci-dessous) et la garde plafond
+	# (plus bas dans le bloc).
+	var au_sol: bool = bool(p.get("au_sol", false))
 	# Grille : n_radial pas de 0 (exclu) a rayon (inclu) le long de dir, n_lateral
 	# + 1 sondes de -rayon a +rayon perpendiculairement. Pas <= cote sur les deux
 	# axes pour qu'un mur d'epaisseur cote ne puisse jamais passer entre.
@@ -422,7 +429,12 @@ static func _obstacle_hauteur_corps(entite: Dictionary, dir: Vector3, carte) -> 
 				return -dir
 			var solf: float = float(sol_devant)
 			var rise: float = solf - solf_ici
-			if rise > HAUTEUR_MICRO_RELIEF:
+			# Garde de pente = STEP-UP MARCHANT uniquement. On la leve en l'air :
+			# le sauteur/chuteur ne "monte" pas une pente, il la SURVOLE. La decision
+			# de franchissement revient alors a la seule garde plafond ci-dessous,
+			# qui teste les couches reellement occupees par le corps a pos.y : tete
+			# au-dessus du cube -> on passe ; corps encore dans le cube -> bloque.
+			if au_sol and rise > HAUTEUR_MICRO_RELIEF:
 				var pente: float = rise / d
 				if pente > PENTE_MAX_MARCHABLE:
 					return -dir
@@ -440,7 +452,6 @@ static func _obstacle_hauteur_corps(entite: Dictionary, dir: Vector3, carte) -> 
 			# - en l'air (saut, chute) : on teste les couches OCCUPEES par le
 			#   CORPS a pos.y -- sans skip, pour qu'un mur au niveau des pieds
 			#   bloque bien (cas : pieds dans le mur en mi-saut).
-			var au_sol: bool = bool(p.get("au_sol", false))
 			var couche_pieds: int
 			var couche_tete: int
 			if au_sol:
