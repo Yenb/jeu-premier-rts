@@ -56,6 +56,11 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 @export var mesh_ref: String = "boite_simple"
 @export var demi_zone_spawn: float = 40.0
 @export var graine_rng: int = 20260904
+# Toggle diagnostic : bascule les ombres du MultiMesh du pool pour mesurer
+# le poids du rendu shadow sur le plafond FPS a N eleve. Ce n'est PAS une
+# proposition de couper les ombres en production -- juste un outil pour
+# identifier ou vit le plafond quand N grimpe.
+@export var ombres_actives: bool = true
 
 var _pool: Dictionary = {}
 var _monde = null
@@ -98,6 +103,8 @@ func _charger_reglages_locaux() -> void:
 		demi_zone_spawn = float(donnees.demi_zone_spawn)
 	if donnees.has("graine_rng"):
 		graine_rng = int(donnees.graine_rng)
+	if donnees.has("ombres_actives"):
+		ombres_actives = bool(donnees.ombres_actives)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -145,6 +152,10 @@ func _monter_pool() -> void:
 	# pourront spawn/kill dynamiquement sans re-allouer.
 	# Node (pas Node3D) : pas de get_world_3d() direct. Passer par le Viewport.
 	_pool = Peuplement.creer_pool(nombre_individus * 2, mesh, get_viewport().get_world_3d().scenario)
+	# Toggle diagnostic ombres : applique la valeur @export une seule fois, apres
+	# la creation du pool. Runtime toggle : rappeler Peuplement.set_cast_shadow
+	# manuellement (aucun watcher branche sur ombres_actives par doctrine).
+	Peuplement.set_cast_shadow(_pool, ombres_actives)
 
 func _fabriquer_lot() -> void:
 	if _pool.is_empty():
