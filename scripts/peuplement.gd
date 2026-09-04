@@ -78,6 +78,13 @@ extends RefCounted
 #   Depuis individu.position courante, pose mm.set_instance_transform sur le
 #   slot de l'individu. Silencieux sur id absent.
 #
+# static ecrire_transform_index(pool, index) -> void
+#   Meme geste que ecrire_transform, mais recoit l'INDEX de l'individu dans
+#   pool.individus au lieu de son id String -- saute le lookup id_to_index.
+#   Utile a un consommateur qui itere deja pool.individus par index (banc de
+#   population homogene ou la boucle _physics_process n'a pas besoin du hash).
+#   Silencieux sur index hors bornes.
+#
 # static detruire_pool(pool) -> void
 #   Free la RID (sinon fuite : le SceneTree ne nettoie pas les instances RS
 #   directes), vide toutes les structures. mm et sa ref forte tombent
@@ -224,20 +231,17 @@ static func ecrire_transform(pool: Dictionary, id: String) -> void:
 		return
 	(pool.mm as MultiMesh).set_instance_transform(slot, Transform3D(Basis.IDENTITY, individu.position))
 
-# Bascule les ombres du MultiMesh pour TOUT le pool en un appel. A utiliser
-# par un banc ou l'appelant pour tester le poids du rendu shadow (diagnostic
-# de plafond CPU vs GPU). Le drapeau porte sur l'instance RS unique, donc UN
-# seul appel change le comportement des N slots simultanement. Refus
-# silencieux sur pool null / rid invalide -- meme discipline que retirer /
-# ecrire_transform.
-static func set_cast_shadow(pool: Dictionary, actif: bool) -> void:
+static func ecrire_transform_index(pool: Dictionary, index: int) -> void:
 	if pool.is_empty():
 		return
-	var rid: RID = pool.get("rid", RID())
-	if not rid.is_valid():
+	var individus: Array = pool.individus
+	if index < 0 or index >= individus.size():
 		return
-	var mode: int = RenderingServer.SHADOW_CASTING_SETTING_ON if actif else RenderingServer.SHADOW_CASTING_SETTING_OFF
-	RenderingServer.instance_geometry_set_cast_shadows_setting(rid, mode)
+	var individu: Dictionary = individus[index]
+	var slot: int = int((individu.proprietes as Dictionary).get("_slot", -1))
+	if slot < 0:
+		return
+	(pool.mm as MultiMesh).set_instance_transform(slot, Transform3D(Basis.IDENTITY, individu.position))
 
 static func detruire_pool(pool: Dictionary) -> void:
 	if pool.is_empty():

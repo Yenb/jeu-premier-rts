@@ -98,7 +98,26 @@ extends "res://jeu/monde/registre.gd"
 # Couche de la premiere cellule pleine, et nombre de couches pleines du defaut.
 # Le sommet par defaut est donc `couche_base + couches_pleines - 1`.
 @export var couche_base: int = 0
-@export var couches_pleines: int = 7
+# Setter : recalcule _masque_base (cache pour masque()). Un @export desserialise
+# passe par le setter, ce qui garantit que _masque_base reflete la valeur du
+# disque -- _init ne le peut pas, il tourne AVANT la desserialisation des @export.
+@export var couches_pleines: int = 7:
+	set(valeur):
+		couches_pleines = valeur
+		_masque_base = masque_plein(valeur)
+
+# Cache du masque du terrain plein par defaut. Lu par masque() dans le hot path
+# (evite d'appeler masque_de_base() a chaque lecture -- GDScript evalue les
+# arguments par defaut de Dictionary.get avant l'appel, meme quand la cle est
+# presente). Recalcule uniquement quand couches_pleines change, via son setter.
+var _masque_base: int = masque_plein(7)
+
+
+# Surcharge : le cache _cache_sommet est un derive du terrain, il tombe des que
+# le terrain est marque sale. Toute mutation qui passe par marquer_sale l'invalide.
+func marquer_sale() -> void:
+	super.marquer_sale()
+	_cache_sommet.clear()
 
 # Arete de la cellule, en metres. Portee par la carte pour la meme raison que
 # l'emprise : c'est elle qui convertit une emprise en superficie.
@@ -178,10 +197,15 @@ func dans_emprise(colonne: Vector2i) -> bool:
 # LE MASQUE des couches pleines d'une colonne. Zero hors emprise comme pour une
 # colonne entierement creusee : dans les deux cas il n'y a rien a poser, et
 # aucun appelant n'a besoin de les distinguer.
+#
+# HOT PATH : dans_emprise() est inlinee et masque_de_base() remplacee par le
+# cache _masque_base -- zero appel de fonction interne ici. Les deux fonctions
+# restent publiques pour les autres appelants.
 func masque(colonne: Vector2i) -> int:
-	if not dans_emprise(colonne):
+	if colonne.x < -demi_cote or colonne.x >= demi_cote \
+			or colonne.y < -demi_cote or colonne.y >= demi_cote:
 		return 0
-	return volumes.get(colonne, masque_de_base())
+	return volumes.get(colonne, _masque_base)
 
 # Une couche donnee est-elle pleine ? Le seul geste qui interroge le VOLUME.
 func est_pleine(colonne: Vector2i, couche: int) -> bool:
@@ -225,42 +249,100 @@ func sommet(x_monde: float, z_monde: float) -> Variant:
 	var cx: int = int(floor(x_monde / cote_f))
 	var cz: int = int(floor(z_monde / cote_f))
 	var col := Vector2i(cx, cz)
-	var couche_max: Variant = sommet_max_colonne(col)
-	if couche_max == null:
-		return null
-	var couche: int = int(couche_max)
-	# Position du point DANS la cellule, ramenee a [0, 3) sur chaque axe.
+	# Position du point DANS la cellule, calculee en tete pour construire la
+	# cle du cache (sous-index ix+iz*3 dans la sous-cellule).
 	var x_local: float = x_monde - float(cx) * cote_f
 	var z_local: float = z_monde - float(cz) * cote_f
 	var ix: int = clampi(int(floor(x_local * 3.0 / cote_f)), 0, 2)
 	var iz: int = clampi(int(floor(z_local * 3.0 / cote_f)), 0, 2)
-	# Cherche le plus haut iy (dans la couche sommet) dont le sous-cube (ix, iy, iz)
-	# est plein. Si aucun, la cellule sommet est trouee sous ce point --
-	# descendre a la couche du dessous.
+	# CACHE PARTAGE : sommet renvoie TOUJOURS le sommet reel de la sous-cellule.
+	# Si le cache le porte, on a la reponse (invalidation par marquer_sale sur
+	# toute mutation du terrain -- volumes / _masques_sous_cube / particularites).
+	var cache_key := Vector3i(cx, cz, ix + iz * 3)
+	if _cache_sommet.has(cache_key):
+		return float(_cache_sommet[cache_key])
+	# HOT PATH : masque(col) INLINE (test d'emprise + volumes.get). Aucun
+	# appel de fonction interne dans le corps de sommet() pour lire la carte.
+	var bits: int
+	if cx < -demi_cote or cx >= demi_cote or cz < -demi_cote or cz >= demi_cote:
+		bits = 0
+	else:
+		bits = int(volumes.get(col, _masque_base))
+	if bits == 0:
+		return null
+	# HOT PATH : rang_le_plus_haut(bits) INLINE (dichotomie a 6 shifts).
+	var rang_haut: int = 0
+	var reste: int = bits
+	if reste >= (1 << 32):
+		rang_haut += 32
+		reste >>= 32
+	if reste >= (1 << 16):
+		rang_haut += 16
+		reste >>= 16
+	if reste >= (1 << 8):
+		rang_haut += 8
+		reste >>= 8
+	if reste >= (1 << 4):
+		rang_haut += 4
+		reste >>= 4
+	if reste >= (1 << 2):
+		rang_haut += 2
+		reste >>= 2
+	if reste >= 2:
+		rang_haut += 1
+	var couche: int = couche_base + rang_haut
+	# La couche sommet est pleine par construction (bit du max) : lecture directe
+	# du dict, sans repasser par sous_cubes() (qui reteste est_pleine).
+	# HOT PATH : fast-path _masques_sous_cube vide -> masque_sc plein sans
+	# construire de Vector3i intermediaire ni appeler get().
+	var sc_vide: bool = _masques_sous_cube.is_empty()
 	var cellule := Vector3i(cx, couche, cz)
-	var masque_sc: int = sous_cubes(cellule)
+	var masque_sc: int
+	if sc_vide:
+		masque_sc = MASQUE_SOUS_CUBE_PLEIN
+	else:
+		masque_sc = int(_masques_sous_cube.get(cellule, MASQUE_SOUS_CUBE_PLEIN))
 	# PROFIL DE HAUTEUR : cellule sommet PLEINE portant un item a profil non-plein
 	# (rampe...) -> sa surface suit le profil interpole, pas le plafond plat.
 	# Cellule creusee (sous-cubes manquants) -> on garde la logique sous-cubes.
-	var h_profil: Variant = _hauteur_profil(cellule, x_local, z_local, masque_sc)
+	# HOT PATH : _hauteur_profil ressort null des que masque_sc != PLEIN ou que
+	# la cellule n'est pas dans particularites -- on garde en INLINE, l'appel
+	# n'a lieu que quand un profil PEUT s'appliquer.
+	var h_profil: Variant = null
+	if masque_sc == MASQUE_SOUS_CUBE_PLEIN and particularites.has(cellule):
+		h_profil = _hauteur_profil(cellule, x_local, z_local, masque_sc)
 	if h_profil != null:
 		return float(h_profil)
-	for iy in range(2, -1, -1):
+	# HOT PATH : while decroissant, evite d'allouer un range().
+	var iy: int = 2
+	while iy >= 0:
 		var idx: int = ix + iy * 3 + iz * 9
 		if (masque_sc & (1 << idx)) != 0:
-			return float(couche) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
+			var top: float = float(couche) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
+			_cache_sommet[cache_key] = top
+			return top
+		iy -= 1
 	# Aucun sous-cube plein sous ce point dans la couche sommet.
 	# Descendre : cherche la premiere couche sous qui a un sous-cube plein a (ix, iz).
 	var c := couche - 1
 	while c >= couche_base:
-		if not est_pleine(col, c):
+		var rang := c - couche_base
+		if (bits & (1 << rang)) == 0:
 			c -= 1
 			continue
-		var m: int = sous_cubes(Vector3i(cx, c, cz))
-		for iy in range(2, -1, -1):
-			var idx2: int = ix + iy * 3 + iz * 9
+		var m: int
+		if sc_vide:
+			m = MASQUE_SOUS_CUBE_PLEIN
+		else:
+			m = int(_masques_sous_cube.get(Vector3i(cx, c, cz), MASQUE_SOUS_CUBE_PLEIN))
+		var iy2: int = 2
+		while iy2 >= 0:
+			var idx2: int = ix + iy2 * 3 + iz * 9
 			if (m & (1 << idx2)) != 0:
-				return float(c) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
+				var top2: float = float(c) * cote_f + (float(iy2) + 1.0) * (cote_f / 3.0)
+				_cache_sommet[cache_key] = top2
+				return top2
+			iy2 -= 1
 		c -= 1
 	return null
 
@@ -277,30 +359,103 @@ func sommet_sous(x_monde: float, z_monde: float, y_max: float) -> Variant:
 	var cx: int = int(floor(x_monde / cote_f))
 	var cz: int = int(floor(z_monde / cote_f))
 	var col := Vector2i(cx, cz)
-	var couche_max: Variant = sommet_max_colonne(col)
-	if couche_max == null:
-		return null
 	var x_local: float = x_monde - float(cx) * cote_f
 	var z_local: float = z_monde - float(cz) * cote_f
 	var ix: int = clampi(int(floor(x_local * 3.0 / cote_f)), 0, 2)
 	var iz: int = clampi(int(floor(z_local * 3.0 / cote_f)), 0, 2)
+	# CACHE PARTAGE : lit le sommet reel de la sous-cellule si connu.
+	# top <= y_max -> reponse (c'est la surface la plus haute et elle rentre).
+	# top > y_max  -> scan complet (on cherche plus bas), sans REECRIRE le cache
+	#                 (l'entree existante reste le vrai sommet).
+	var cache_key := Vector3i(cx, cz, ix + iz * 3)
+	var scan_avec_ecriture: bool = true
+	if _cache_sommet.has(cache_key):
+		var cached: float = float(_cache_sommet[cache_key])
+		if cached <= y_max:
+			return cached
+		scan_avec_ecriture = false
+	# HOT PATH : masque(col) INLINE (test d'emprise + volumes.get). Aucun
+	# appel de fonction interne dans le corps de sommet_sous().
+	var bits: int
+	if cx < -demi_cote or cx >= demi_cote or cz < -demi_cote or cz >= demi_cote:
+		bits = 0
+	else:
+		bits = int(volumes.get(col, _masque_base))
+	if bits == 0:
+		return null
+	# HOT PATH : rang_le_plus_haut(bits) INLINE (dichotomie a 6 shifts).
+	var rang_haut: int = 0
+	var reste: int = bits
+	if reste >= (1 << 32):
+		rang_haut += 32
+		reste >>= 32
+	if reste >= (1 << 16):
+		rang_haut += 16
+		reste >>= 16
+	if reste >= (1 << 8):
+		rang_haut += 8
+		reste >>= 8
+	if reste >= (1 << 4):
+		rang_haut += 4
+		reste >>= 4
+	if reste >= (1 << 2):
+		rang_haut += 2
+		reste >>= 2
+	if reste >= 2:
+		rang_haut += 1
+	var couche_max: int = couche_base + rang_haut
+	# HOT PATH : fast-path _masques_sous_cube vide (aucune cellule entamee)
+	# -> masque_sc plein sans dict.get par couche visitee.
+	var sc_vide: bool = _masques_sous_cube.is_empty()
 	# Depart : jamais au-dessus de y_max -- la couche du plafond le fixe.
-	var c: int = mini(int(couche_max), int(floor(y_max / cote_f)))
+	var c_plafond: int = int(floor(y_max / cote_f))
+	var c: int = mini(couche_max, c_plafond)
+	# Cache-eligible = on ne peut ecrire le cache que si la surface qu'on
+	# renverra est le VRAI sommet de la sous-cellule. Vrai ssi :
+	#   - la cle n'est pas deja occupee (scan_avec_ecriture),
+	#   - le scan n'est pas plafonne sous couche_max (c_plafond >= couche_max),
+	#   - aucun sous-cube plein n'a ete skippe pour cause y_max (invalide en
+	#     cours de scan sinon).
+	var cache_eligible: bool = scan_avec_ecriture and c_plafond >= couche_max
 	while c >= couche_base:
-		if est_pleine(col, c):
+		var rang := c - couche_base
+		if (bits & (1 << rang)) != 0:
 			var cellule := Vector3i(cx, c, cz)
-			var masque_sc: int = sous_cubes(cellule)
-			var h_profil: Variant = _hauteur_profil(cellule, x_local, z_local, masque_sc)
+			var masque_sc: int
+			if sc_vide:
+				masque_sc = MASQUE_SOUS_CUBE_PLEIN
+			else:
+				masque_sc = int(_masques_sous_cube.get(cellule, MASQUE_SOUS_CUBE_PLEIN))
+			# HOT PATH : garde inline avant _hauteur_profil (ressort null sans
+			# particularite ou avec cellule creusee -- pas la peine d'appeler).
+			var h_profil: Variant = null
+			if masque_sc == MASQUE_SOUS_CUBE_PLEIN and particularites.has(cellule):
+				h_profil = _hauteur_profil(cellule, x_local, z_local, masque_sc)
 			if h_profil != null:
 				if float(h_profil) <= y_max:
-					return h_profil
+					return h_profil  # surface continue -- exclue du cache par doctrine
+				# Profil couvre la couche mais > y_max : on continue plus bas ;
+				# on ne cachera plus (le sommet reel est ce profil, pas ce qu'on
+				# renverra ci-dessous).
+				cache_eligible = false
 			else:
-				for iy in range(2, -1, -1):
+				# HOT PATH : while decroissant, evite d'allouer un range().
+				var iy: int = 2
+				while iy >= 0:
 					var idx: int = ix + iy * 3 + iz * 9
 					if (masque_sc & (1 << idx)) != 0:
 						var y_sc: float = float(c) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
 						if y_sc <= y_max:
+							if cache_eligible:
+								_cache_sommet[cache_key] = y_sc
 							return y_sc
+						# Ce sous-cube etait le sommet reel mais y_max le coupe :
+						# on va renvoyer une surface plus basse, invalider le cache.
+						cache_eligible = false
+					iy -= 1
+		# Descendre : la couche suivante n'est plus le sommet reel, aucun cache
+		# possible ensuite.
+		cache_eligible = false
 		c -= 1
 	return null
 
@@ -457,7 +612,13 @@ func orientation_de(cellule: Vector3i) -> int:
 func _hauteur_profil(cellule: Vector3i, x_local: float, z_local: float, masque_sc: int) -> Variant:
 	if masque_sc != MASQUE_SOUS_CUBE_PLEIN:
 		return null  # cellule creusee : la logique sous-cubes tranche
-	var item := item_de(cellule)
+	# HOT PATH : item_de(cellule) INLINE. Chemin rapide : pas de particularite
+	# = item par defaut = pas de profil (retour null). Sinon on decode le code.
+	if not particularites.has(cellule):
+		return null
+	var code_pack: int = int(particularites[cellule])
+	@warning_ignore("integer_division")
+	var item: int = code_pack / ORIENTATIONS
 	if item == ITEM_DEFAUT:
 		return null
 	_charger_profils_hauteur()
@@ -584,6 +745,27 @@ const MASQUE_SOUS_CUBE_PLEIN := (1 << 27) - 1
 const MAX_PV_SOUS_CUBE := 50
 
 var _masques_sous_cube: Dictionary = {}  # Vector3i cellule -> int masque
+
+# CACHE PARTAGE DE LA HAUTEUR DE SURFACE, par sous-cellule. Cle :
+# Vector3i(cx, cz, ix + iz * 3) -- (cx, cz) est la colonne, ix+iz*3 est le
+# sous-index (0..8) de la sous-cellule dans la colonne. Valeur : la hauteur
+# reelle du sommet de cette sous-cellule. Utilise par sommet() et sommet_sous()
+# : deux agents au meme (x, z) qui redemandent la meme frame, ou une frame
+# apres, lisent le cache au lieu de rescanner les couches.
+#
+# INVALIDATION : marquer_sale() vide le cache. Tout mutateur des trois sources
+# de verite (volumes, _masques_sous_cube, particularites) passe par
+# marquer_sale -- verifie a l'introduction du cache.
+#
+# EXCLUSION : une cellule sommet resolue par _hauteur_profil (rampe) n'entre
+# JAMAIS dans le cache. Sa surface est continue dans la cellule (interpolation
+# bilineaire) ; la cacher par sous-cellule quantifierait la rampe en 9 marches.
+#
+# EXCLUSION cote sommet_sous : quand y_max plafonne SOUS le sommet reel, la
+# surface renvoyee n'est PAS le sommet -- on ne l'ecrit pas dans le cache. On
+# lit le cache en garde y_max si l'entree existe : cache <= y_max -> retour ;
+# cache > y_max -> scan complet.
+var _cache_sommet: Dictionary = {}
 # PV par sous-cube : cellule -> {idx -> pv}. Etat data, jamais persiste (idem
 # `_drains`). Publie dans les drains a chaque changement pour que le rendu
 # puisse foncer la couleur du mini-cube au fil des coups.

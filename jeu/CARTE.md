@@ -1111,9 +1111,12 @@ ni « mur » — ne lit que des propriétés. Le profil (`complet`/`simple`/`min
 choisit la RICHESSE de la simulation, jamais l'identité du mobile.
 `pas(entite, delta, monde, carte, profil)` avance UNE entité en donnée pure ;
 l'appelant POSE l'intention (velocité horizontale désirée, saut demandé) dans
-l'entité avant l'appel. Aucun `Input` lu ici. Contrat, contrat d'entité, pièges
-et frontières : en-tête du fichier. ÉCART FRAMEWORK : présent dans cette copie
-locale de `scripts/`, ABSENT du dépôt orion.
+l'entité avant l'appel. Aucun `Input` lu ici. `pas_simple` et `pas_minimal`
+sont PUBLIQUES : un banc qui connaît déjà son profil (constant pour toute sa
+population) les appelle en direct, sans passer par le `match` de `pas()` ni
+par l'indirection `Callable` de `Tick.tick_entite`. Contrat, contrat d'entité,
+pièges et frontières : en-tête du fichier. ÉCART FRAMEWORK : présent dans
+cette copie locale de `scripts/`, ABSENT du dépôt orion.
 
 ### `scripts/mesh_catalogue.gd` — résolveur de meshes déclarés en donnée
 Lit `data/mesh.json` et rend un `Mesh` Godot depuis une fiche { `type`, +
@@ -1135,19 +1138,20 @@ type = UN MultiMesh (`type_id` figé à la première fabrication) ; un banc qui
 veut plusieurs meshes instancie plusieurs peuplements. Pool de slots fixe, LIFO,
 slots inactifs à échelle NULLE (jamais `Transform3D()` identité qui rendrait
 un mesh à l'origine). Ne connaît aucun nom de contenu — `type_id` et `mesh_ref`
-opaques, résolus via `objet.gd:fabriquer` et `mesh_catalogue.gd`. Contrat,
-pièges et frontières : en-tête du fichier. ÉCART FRAMEWORK : présent dans cette
-copie locale de `scripts/`, ABSENT du dépôt orion. `set_cast_shadow(pool, actif)`
-bascule les ombres du MultiMesh entier en un seul appel `RenderingServer.instance_geometry_set_cast_shadows_setting` — outil DIAGNOSTIC pour
-mesurer le poids du rendu shadow sur le plafond FPS à N élevé, pas une
-proposition d'optimisation. Profil scaling du pipeline
-(phases A/B/C par individu à N ∈ {100, 500, 1000, 2000, 5000}) :
-`scripts/test_profil_peuplement.gd`. Micro-profil de la Phase B décomposée
-en B1 (dispatch Tick), B2 (`Mouvement._pas_simple`), B3 (`monde.deplacer`),
-à N ∈ {1000, 5000} : `scripts/test_profil_phase_b.gd`. Sous-profil de B2
-décomposé en B2.1 (gravité + composition), B2.2 (les 2 `sommet_sous` de S.6),
-B2.3 (comparaison de blocage), B2.4 (application + snap sol + écriture),
-à N ∈ {1000, 5000} : `scripts/test_profil_pas_simple.gd`.
+opaques, résolus via `objet.gd:fabriquer` et `mesh_catalogue.gd`. API :
+`creer_pool` / `spawn` / `retirer` / `ecrire_transform(pool, id)` /
+`ecrire_transform_index(pool, index)` (écriture rendu par index direct dans
+`pool.individus`, saute le lookup `id_to_index` pour un banc qui itère par
+index) / `detruire_pool`. Contrat, pièges et frontières : en-tête du fichier.
+ÉCART FRAMEWORK : présent dans cette copie locale de `scripts/`, ABSENT du
+dépôt orion. Profil scaling du pipeline (phases A/B/C par individu à
+N ∈ {100, 500, 1000, 2000, 5000}) : `scripts/test_profil_peuplement.gd`.
+Micro-profil de la Phase B décomposée en B1 (dispatch Tick), B2
+(`Mouvement.pas_simple`), B3 (`monde.deplacer`), à N ∈ {1000, 5000} :
+`scripts/test_profil_phase_b.gd`. Sous-profil de B2 décomposé en B2.1
+(gravité + composition), B2.2 (les 2 `sommet_sous` de S.6), B2.3 (comparaison
+de blocage), B2.4 (application + snap sol + écriture), à N ∈ {1000, 5000} :
+`scripts/test_profil_pas_simple.gd`.
 
 ### `jeu/Proto/collision.gd` — système de collision généraliste, donnée pure (prototype)
 Tout statique, aucun état interne. Aucune physique Godot

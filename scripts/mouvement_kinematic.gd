@@ -21,8 +21,14 @@ extends RefCounted
 # ---- CE QU'IL FAIT ----
 # static pas(entite, delta, monde, carte, profil) : avance UNE entite d'un pas de
 # `delta` seconde, en donnee pure. Dispatch par `profil` vers _pas_complet /
-# _pas_simple / _pas_minimal. Profil inconnu : push_error + return, l'entite ne
+# pas_simple / pas_minimal. Profil inconnu : push_error + return, l'entite ne
 # bouge pas.
+#
+# static pas_simple(entite, delta, monde, carte) et
+# static pas_minimal(entite, delta, monde, carte) sont PUBLIQUES : un banc qui
+# connait deja son profil (constant pour toute sa population) les appelle en
+# direct, evitant le match String de pas() et l'indirection Callable de
+# Tick.tick_entite. Meme code que ce que pas() dispatche.
 #
 # ---- CE QU'IL RECOIT (contrat d'entite, Dictionary) ----
 # L'appelant fournit une entite conforme, et POSE l'intention avant l'appel (le
@@ -103,18 +109,17 @@ const HAUTEUR_MICRO_RELIEF := 0.05
 const PENTE_MAX_MARCHABLE := 1.73
 
 # AVANCE UNE ENTITE D'UN PAS. Dispatch par profil vers l'implementation de la
-# richesse voulue. Le corps des trois _pas_* est VIDE en phase 1 : cette phase
-# n'etablit que le squelette et le contrat ; la logique de mouvement (gravite,
-# blocage, snap, collision) arrive en phase 2 (_pas_complet) puis phase 3
-# (_pas_simple, _pas_minimal).
+# richesse voulue. Un appelant qui connait deja son profil (constant pour sa
+# population) peut sauter ce match et appeler pas_simple / pas_minimal en
+# direct.
 static func pas(entite: Dictionary, delta: float, monde, carte, profil: String) -> void:
 	match profil:
 		"complet":
 			_pas_complet(entite, delta, monde, carte)
 		"simple":
-			_pas_simple(entite, delta, monde, carte)
+			pas_simple(entite, delta, monde, carte)
 		"minimal":
-			_pas_minimal(entite, delta, monde, carte)
+			pas_minimal(entite, delta, monde, carte)
 		_:
 			push_error("Mouvement.pas : profil inconnu : %s" % profil)
 
@@ -513,7 +518,7 @@ static func redimensionner_entite(entite: Dictionary, nouvelle_hauteur: float, n
 # (comparaison de sommets), portee dans le module partage.
 # UN seul pas, UNE seule passe. PAS de sub-stepping, PAS de GJK/multipass, PAS de
 # saut, PAS de y_appui_entite (le profil simple ne monte pas sur les autres).
-static func _pas_simple(entite: Dictionary, delta: float, monde, carte) -> void:
+static func pas_simple(entite: Dictionary, delta: float, monde, carte) -> void:
 	# S.0 -- Gardes.
 	if delta <= 0.0 or carte == null:
 		return
@@ -575,7 +580,7 @@ static func _pas_simple(entite: Dictionary, delta: float, monde, carte) -> void:
 # balistique : on colle directement au sol le plus haut. Pas de blocage, pas de
 # collision (personne ne regarde de pres, un mob qui rase un mur ne derange
 # personne). PAS de saut.
-static func _pas_minimal(entite: Dictionary, delta: float, monde, carte) -> void:
+static func pas_minimal(entite: Dictionary, delta: float, monde, carte) -> void:
 	# M.0 -- Gardes.
 	if delta <= 0.0 or carte == null:
 		return

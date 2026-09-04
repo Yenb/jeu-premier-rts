@@ -26,15 +26,18 @@ extends Node
 # un type_id, un mesh_ref -- rien d'autre. Le banc lit ce fichier au _ready
 # pour surcharger ses defauts @export.
 #
-# ERRANCE. Chaque tick physique, pour chaque individu du pool :
+# ERRANCE. Chaque tick physique, pour chaque individu du pool (for-in sur
+# individus, aucun index construit) :
 # 1. cap_horloge -= delta ; a <= 0, tirer une nouvelle direction et nouvelle
 #    horloge dans [3, 8] s.
 # 2. Poser velocite_desiree_horizontale = direction * proprietes.vitesse
 #    (vitesse vient du type mobile_test, lue via proprietes).
-# 3. Tick.tick_entite(individu, politique_intrinseque, delta, monde, carte) --
-#    delegue au pas partage (gravite, snap sol, blocage marche).
-# 4. Peuplement.ecrire_transform(_pool, id) -- reflete la nouvelle position sur
-#    l'instance RS du slot.
+# 3. Mouvement.pas_simple(individu, delta, null, carte) -- appel DIRECT au
+#    pas partage. monde = null : ce banc n'interroge jamais l'index spatial
+#    (aucun choses_dans_rayon), donc pas_simple saute monde.deplacer. Un
+#    futur chantier de perception devra rebrancher _monde ici.
+# 4. mm.set_instance_transform(slot, ...) INLINE : slot lu directement dans
+#    individu.proprietes._slot, plus d'appel a Peuplement.ecrire_transform*.
 #
 # Camera plongeante, lumiere directionnelle sans ombre, sol visuel decoratif.
 # Groupe "observateur" pose sur la camera par convention du framework.
@@ -46,7 +49,7 @@ const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 const Monde = preload("res://scripts/monde.gd")
 const Peuplement = preload("res://scripts/peuplement.gd")
 const MeshCatalogue = preload("res://scripts/mesh_catalogue.gd")
-const Tick = preload("res://scripts/tick.gd")
+const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 
@@ -56,27 +59,20 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 @export var mesh_ref: String = "boite_simple"
 @export var demi_zone_spawn: float = 40.0
 @export var graine_rng: int = 20260904
-# Toggle diagnostic : bascule les ombres du MultiMesh du pool pour mesurer
-# le poids du rendu shadow sur le plafond FPS a N eleve. Ce n'est PAS une
-# proposition de couper les ombres en production -- juste un outil pour
-# identifier ou vit le plafond quand N grimpe.
-@export var ombres_actives: bool = true
 
 var _pool: Dictionary = {}
 var _monde = null
 var _carte: Resource = null
 var _catalogue: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
-# Etat d'errance par individu, index par id (le pool ne le porte pas -- c'est
-# du comportement, pas de la structure). direction est horizontale (y = 0),
-# cap_horloge est en secondes.
-var _errance: Dictionary = {}
-var _politique: Callable
+# L'ETAT D'ERRANCE VIT DANS individu.proprietes (cles errance_direction,
+# errance_cap_horloge) : la boucle _physics_process les lit direct depuis le
+# proprietes qu'elle tient deja, sans hash de id String ni dict separe --
+# supprime aussi la fuite latente d'un dict membre non nettoye au retrait.
 
 func _ready() -> void:
 	_charger_reglages_locaux()
 	_rng.seed = graine_rng
-	_politique = Callable(Tick, "politique_intrinseque")
 	_monter_scene()
 	_monter_pool()
 	_fabriquer_lot()
@@ -103,8 +99,6 @@ func _charger_reglages_locaux() -> void:
 		demi_zone_spawn = float(donnees.demi_zone_spawn)
 	if donnees.has("graine_rng"):
 		graine_rng = int(donnees.graine_rng)
-	if donnees.has("ombres_actives"):
-		ombres_actives = bool(donnees.ombres_actives)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -152,10 +146,6 @@ func _monter_pool() -> void:
 	# pourront spawn/kill dynamiquement sans re-allouer.
 	# Node (pas Node3D) : pas de get_world_3d() direct. Passer par le Viewport.
 	_pool = Peuplement.creer_pool(nombre_individus * 2, mesh, get_viewport().get_world_3d().scenario)
-	# Toggle diagnostic ombres : applique la valeur @export une seule fois, apres
-	# la creation du pool. Runtime toggle : rappeler Peuplement.set_cast_shadow
-	# manuellement (aucun watcher branche sur ombres_actives par doctrine).
-	Peuplement.set_cast_shadow(_pool, ombres_actives)
 
 func _fabriquer_lot() -> void:
 	if _pool.is_empty():
@@ -186,11 +176,11 @@ func _fabriquer_lot() -> void:
 		p["velocite_desiree_horizontale"] = Vector3.ZERO
 		p["au_sol"] = false
 		p["gravite"] = 18.0
-		# Etat d'errance : direction horizontale + horloge de cap.
-		_errance[id] = {
-			"direction": _nouvelle_direction(),
-			"cap_horloge": _rng.randf_range(3.0, 8.0),
-		}
+		# Etat d'errance dans proprietes : direction horizontale + horloge de cap.
+		# Meme ordre de tirage RNG que l'ancien code (direction puis horloge) --
+		# le determinisme de la graine est preserve.
+		p["errance_direction"] = _nouvelle_direction()
+		p["errance_cap_horloge"] = _rng.randf_range(3.0, 8.0)
 		poses += 1
 	if poses < nombre_individus:
 		push_error("banc_peuplement : seulement %d/%d individus poses (%d tentatives)" % [poses, nombre_individus, tentatives])
@@ -198,20 +188,31 @@ func _fabriquer_lot() -> void:
 func _physics_process(delta: float) -> void:
 	if _pool.is_empty():
 		return
-	for individu in _pool.individus:
-		var id: String = String(individu.id)
-		if not _errance.has(id):
-			continue
-		var etat: Dictionary = _errance[id]
-		etat["cap_horloge"] = float(etat.cap_horloge) - delta
-		if float(etat.cap_horloge) <= 0.0:
-			etat["direction"] = _nouvelle_direction()
-			etat["cap_horloge"] = _rng.randf_range(3.0, 8.0)
+	var individus: Array = _pool.individus
+	var carte = _carte
+	# HOT PATH : mm cache une fois hors boucle -- l'ecriture de la transform
+	# est INLINEE en set_instance_transform direct, plus d'appel a
+	# Peuplement.ecrire_transform_index par individu.
+	var mm: MultiMesh = _pool.mm
+	# monde = null a pas_simple : ce banc n'interroge pas l'index spatial, on
+	# ne l'entretient donc pas (evite un monde.deplacer par individu et par
+	# frame). _monde reste utilise pour spawn/retirer (les seuls gestes qui
+	# publient dans l'index a naissance et mort d'un individu).
+	for individu in individus:
 		var p: Dictionary = individu.proprietes
+		var horloge: float = float(p.errance_cap_horloge) - delta
+		var direction: Vector3 = p.errance_direction
+		if horloge <= 0.0:
+			direction = _nouvelle_direction()
+			p["errance_direction"] = direction
+			horloge = _rng.randf_range(3.0, 8.0)
+		p["errance_cap_horloge"] = horloge
 		var vitesse: float = float(p.get("vitesse", 1.0))
-		p["velocite_desiree_horizontale"] = (etat.direction as Vector3) * vitesse
-		Tick.tick_entite(individu, _politique, delta, _monde, _carte)
-		Peuplement.ecrire_transform(_pool, id)
+		p["velocite_desiree_horizontale"] = direction * vitesse
+		Mouvement.pas_simple(individu, delta, null, carte)
+		var slot: int = int(p.get("_slot", -1))
+		if slot >= 0:
+			mm.set_instance_transform(slot, Transform3D(Basis.IDENTITY, individu.position))
 
 func _nouvelle_direction() -> Vector3:
 	var angle: float = _rng.randf() * TAU
