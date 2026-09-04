@@ -404,7 +404,11 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	# entrent dans l'occludeur. Le sol plat streame en permanence ; l'en exclure
 	# evite une recomputation d'occlusion a chaque pas.
 	var sommet_base := int(carte.sommet_de_base())
-	var positions_occl: Array[Vector3] = []
+	# CELLULES OCCLUDANTES : un SET de Vector3i (couche > sommet_base, cube
+	# cubique). Le set est indispensable au greedy meshing (S5) : chaque tranche
+	# a besoin de tester si une cellule voisine est occludante. Une liste de
+	# positions perdrait la structure grille.
+	var cellules_occl: Dictionary = {}
 
 	for lx in range(taille):
 		for lz in range(taille):
@@ -515,7 +519,7 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				# d'occludeur. Une rampe n'occlude rien de serieux de toute facon,
 				# le regard passe naturellement au-dessus ou a travers la pente.
 				if couche > sommet_base and _quad_par_item.has(item):
-					positions_occl.append(pos)
+					cellules_occl[cellule] = true
 
 	var noeuds: Array = []
 	# Map temporaire item -> mmi pour mapper les entries teinte apres creation.
@@ -551,10 +555,11 @@ func _creer_tuile(tuile: Vector2i) -> void:
 			noeuds.append(mmi)
 	# L'OCCLUDEUR DU RELIEF, s'il y en a. Ce qui est derriere ces cubes -- autres
 	# cubes, arbres, unites -- n'est plus dessine par Godot.
-	if not positions_occl.is_empty():
-		var occl := _occludeur_de_cubes(positions_occl, cote)
-		add_child(occl)
-		noeuds.append(occl)
+	if not cellules_occl.is_empty():
+		var occl := _occludeur_de_cubes(cellules_occl, cote)
+		if occl != null:
+			add_child(occl)
+			noeuds.append(occl)
 	_tuiles[tuile] = noeuds
 
 # LE VOISIN COUVRE-T-IL LA FACE ? Vrai seulement s'il est PLEIN a cette couche ET
@@ -713,45 +718,188 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		mmi.visibility_range_end = distance_rendu_metres
 	return mmi
 
-# UN OccluderInstance3D pour une liste de cubes (leurs centres). Chaque cube est
-# une boite OUVERTE EN HAUT (5 faces : bas + 4 laterales) ; Godot rasterise cette
-# geometrie et n'affiche plus ce qui tombe entierement derriere. Les sommets sont
-# en coordonnees monde (ce noeud est a l'origine), comme les MultiMesh.
+# UN OccluderInstance3D pour un SET de cellules (Vector3i -> true), bakée en
+# greedy meshing par direction de face. Godot rasterise cette geometrie et
+# n'affiche plus ce qui tombe entierement derriere. Les sommets sont en
+# coordonnees monde (ce noeud est a l'origine), comme les MultiMesh.
 #
-# PAS DE FACE Y+ (le "toit"). Avec elle, la vue plongeante (camera au-dessus du
-# relief) faisait rasteriser un plein masque de profondeur horizontal qui
-# cachait les tuiles valides en contrebas -- le sol lointain disparaissait des
-# qu'on montait. ArrayOccluder3D accepte un mesh non-manifold : il rasterise
-# des triangles, pas un volume ferme. Les faces laterales (X±, Z±) et la face
-# Y- restent, donc l'occlusion rasante fonctionne a l'identique. Bonus : les
-# toits internes des cubes empiles etaient de toute facon caches par le cube
-# au-dessus -- les retirer allege l'occludeur.
-func _occludeur_de_cubes(positions: Array, cote: float) -> OccluderInstance3D:
-	var h := cote * 0.5
-	var coins := [
-		Vector3(-h, -h, -h), Vector3(h, -h, -h), Vector3(h, -h, h), Vector3(-h, -h, h),
-		Vector3(-h, h, -h), Vector3(h, h, -h), Vector3(h, h, h), Vector3(-h, h, h)]
-	# Face Y+ (indices 4,5,6,4,6,7) VOLONTAIREMENT ABSENTE. Voir en-tete.
-	var faces := [
-		0, 2, 1, 0, 3, 2,
-		0, 1, 5, 0, 5, 4,
-		1, 2, 6, 1, 6, 5,
-		2, 3, 7, 2, 7, 6,
-		3, 0, 4, 3, 4, 7]
+# GREEDY MESHING (S5) : au lieu de baker N cubes = 5*N quads = 10*N triangles,
+# on fusionne les faces coplanaires contigues en rectangles maximaux (patron
+# Minecraft, https://0fps.net/2012/06/30/meshing-in-a-minecraft-game/). Un mur
+# de 10x10x5 cubes pleins passe de 300 quads a 5 quads (un par direction). La
+# resolution CELLULE est preservee : un rectangle se casse des qu'une cellule
+# intermediaire manque -- un tunnel creuse au milieu d'un mur reste visible
+# pour le culler, la topologie du trou est conservee.
+#
+# EXCLUSIONS CONSERVEES :
+# - Y+ jamais (S2.5) : la boucle n'itere pas cette direction.
+# - Rampes/cylindres jamais (S2.6) : l'appelant _creer_tuile filtre deja.
+# - Cellules cassees (sous_cubes != PLEIN) : l'appelant les envoie en mini-
+#   cubes visuels, jamais dans cellules_occl.
+#
+# ArrayOccluder3D est DOUBLE-FACE : winding order n'importe pas.
+func _occludeur_de_cubes(cellules: Dictionary, cote: float) -> OccluderInstance3D:
+	if cellules.is_empty():
+		return null
+	# Bornes du volume englobant.
+	var premiere: Vector3i = cellules.keys()[0]
+	var min_c := premiere
+	var max_c := premiere
+	for c in cellules:
+		if c.x < min_c.x: min_c.x = c.x
+		if c.y < min_c.y: min_c.y = c.y
+		if c.z < min_c.z: min_c.z = c.z
+		if c.x > max_c.x: max_c.x = c.x
+		if c.y > max_c.y: max_c.y = c.y
+		if c.z > max_c.z: max_c.z = c.z
+
 	var sommets := PackedVector3Array()
 	var indices := PackedInt32Array()
-	var base := 0
-	for c in positions:
-		for coin in coins:
-			sommets.append(c + coin)
-		for idx in faces:
-			indices.append(base + idx)
-		base += 8
+
+	# 5 directions. axe_t = l'axe perpendiculaire a la face (parcouru par
+	# tranches). axe_u / axe_v = les axes du plan de la face. sens = +1 (face
+	# regarde vers +axe_t) ou -1. La direction Y+ (axe_t=1, sens=+1) est
+	# ABSENTE volontairement.
+	_greedy_direction(cellules, sommets, indices, cote, min_c, max_c, 0,  1, 2, 1, Vector3( 1,  0,  0))  # X+
+	_greedy_direction(cellules, sommets, indices, cote, min_c, max_c, 0, -1, 2, 1, Vector3(-1,  0,  0))  # X-
+	_greedy_direction(cellules, sommets, indices, cote, min_c, max_c, 1, -1, 0, 2, Vector3( 0, -1,  0))  # Y-
+	_greedy_direction(cellules, sommets, indices, cote, min_c, max_c, 2,  1, 0, 1, Vector3( 0,  0,  1))  # Z+
+	_greedy_direction(cellules, sommets, indices, cote, min_c, max_c, 2, -1, 0, 1, Vector3( 0,  0, -1))  # Z-
+
+	if indices.is_empty():
+		return null
 	var occ := ArrayOccluder3D.new()
 	occ.set_arrays(sommets, indices)
 	var inst := OccluderInstance3D.new()
 	inst.occluder = occ
 	return inst
+
+# GREEDY MESHING pour UNE direction de face. Pour chaque tranche perpendiculaire
+# a axe_t, construit un masque 2D des faces actives (cellule occludante ET
+# voisine dans la direction non occludante), puis fusionne en rectangles
+# maximaux -- extension en largeur (axe_u) puis en hauteur (axe_v).
+func _greedy_direction(cellules: Dictionary, sommets: PackedVector3Array,
+		indices: PackedInt32Array, cote: float, min_c: Vector3i, max_c: Vector3i,
+		axe_t: int, sens: int, axe_u: int, axe_v: int, normale: Vector3) -> void:
+	var t_min: int = _val(min_c, axe_t)
+	var t_max: int = _val(max_c, axe_t)
+	var u_min: int = _val(min_c, axe_u)
+	var u_max: int = _val(max_c, axe_u)
+	var v_min: int = _val(min_c, axe_v)
+	var v_max: int = _val(max_c, axe_v)
+	var large_u: int = u_max - u_min + 1
+	var large_v: int = v_max - v_min + 1
+
+	for t in range(t_min, t_max + 1):
+		# Masque 2D des faces actives dans cette tranche. Array plat de
+		# [large_u * large_v] booleens -- une seule allocation par tranche.
+		var masque: PackedByteArray = PackedByteArray()
+		masque.resize(large_u * large_v)
+		var toutes_a_zero := true
+		for iu in range(large_u):
+			for iv in range(large_v):
+				var cellule := _make_cell(t, u_min + iu, v_min + iv, axe_t, axe_u, axe_v)
+				if not cellules.has(cellule):
+					continue
+				var voisin := _make_cell(t + sens, u_min + iu, v_min + iv, axe_t, axe_u, axe_v)
+				if cellules.has(voisin):
+					continue  # face interne, ne pas emettre
+				masque[iu * large_v + iv] = 1
+				toutes_a_zero = false
+		if toutes_a_zero:
+			continue
+
+		# Greedy : parcourir les cellules non traitees, etendre.
+		var traite: PackedByteArray = PackedByteArray()
+		traite.resize(large_u * large_v)
+		for iu in range(large_u):
+			for iv in range(large_v):
+				var idx0 := iu * large_v + iv
+				if traite[idx0] != 0 or masque[idx0] == 0:
+					continue
+				# Extension en u.
+				var u_fin := iu
+				while u_fin + 1 < large_u:
+					var i_test := (u_fin + 1) * large_v + iv
+					if masque[i_test] == 0 or traite[i_test] != 0:
+						break
+					u_fin += 1
+				# Extension en v : toute la bande [iu..u_fin] a v+1 doit etre libre.
+				var v_fin := iv
+				while v_fin + 1 < large_v:
+					var ok := true
+					for uu in range(iu, u_fin + 1):
+						var i_test2 := uu * large_v + (v_fin + 1)
+						if masque[i_test2] == 0 or traite[i_test2] != 0:
+							ok = false
+							break
+					if not ok:
+						break
+					v_fin += 1
+				# Marquer le rectangle comme traite.
+				for uu in range(iu, u_fin + 1):
+					for vv in range(iv, v_fin + 1):
+						traite[uu * large_v + vv] = 1
+				# Emettre le quad (2 triangles).
+				_emettre_quad_greedy(sommets, indices, cote, t, sens,
+					u_min + iu, u_min + u_fin, v_min + iv, v_min + v_fin,
+					axe_t, axe_u, axe_v, normale)
+
+func _emettre_quad_greedy(sommets: PackedVector3Array, indices: PackedInt32Array,
+		cote: float, t: int, sens: int,
+		u_debut: int, u_fin: int, v_debut: int, v_fin: int,
+		axe_t: int, axe_u: int, axe_v: int, normale: Vector3) -> void:
+	var h := cote * 0.5
+	var offs_t: Vector3 = normale * h
+	var u_dir: Vector3 = _axe_vec(axe_u)
+	var v_dir: Vector3 = _axe_vec(axe_v)
+	# 4 coins, chacun ancre a la cellule qui porte ce coin du rectangle :
+	# _regle.map_to_local rend le centre de la cellule ; on ajoute le decalage
+	# vers le coin (offs_t + demi-cote sur u et v).
+	var c_bl := _make_cell(t, u_debut, v_debut, axe_t, axe_u, axe_v)
+	var c_br := _make_cell(t, u_fin,   v_debut, axe_t, axe_u, axe_v)
+	var c_tr := _make_cell(t, u_fin,   v_fin,   axe_t, axe_u, axe_v)
+	var c_tl := _make_cell(t, u_debut, v_fin,   axe_t, axe_u, axe_v)
+	var p_bl: Vector3 = _regle.map_to_local(c_bl) + offs_t + u_dir * (-h) + v_dir * (-h)
+	var p_br: Vector3 = _regle.map_to_local(c_br) + offs_t + u_dir * ( h) + v_dir * (-h)
+	var p_tr: Vector3 = _regle.map_to_local(c_tr) + offs_t + u_dir * ( h) + v_dir * ( h)
+	var p_tl: Vector3 = _regle.map_to_local(c_tl) + offs_t + u_dir * (-h) + v_dir * ( h)
+	var base := sommets.size()
+	sommets.append(p_bl)
+	sommets.append(p_br)
+	sommets.append(p_tr)
+	sommets.append(p_tl)
+	# Double-face (ArrayOccluder3D), l'ordre n'importe pas pour l'occlusion.
+	indices.append(base)
+	indices.append(base + 1)
+	indices.append(base + 2)
+	indices.append(base)
+	indices.append(base + 2)
+	indices.append(base + 3)
+
+# Utilitaires d'axe (Vector3i n'accepte pas d'acces par indice).
+func _val(v: Vector3i, axe: int) -> int:
+	if axe == 0: return v.x
+	if axe == 1: return v.y
+	return v.z
+
+func _make_cell(t: int, u: int, v: int, axe_t: int, axe_u: int, axe_v: int) -> Vector3i:
+	var c := Vector3i(0, 0, 0)
+	if axe_t == 0: c.x = t
+	elif axe_t == 1: c.y = t
+	else: c.z = t
+	if axe_u == 0: c.x = u
+	elif axe_u == 1: c.y = u
+	else: c.z = u
+	if axe_v == 0: c.x = v
+	elif axe_v == 1: c.y = v
+	else: c.z = v
+	return c
+
+func _axe_vec(axe: int) -> Vector3:
+	if axe == 0: return Vector3(1, 0, 0)
+	if axe == 1: return Vector3(0, 1, 0)
+	return Vector3(0, 0, 1)
 
 # Drain des colonnes modifiees. Pour chacune : sa tuile est reconstruite
 # SYNCHRONEMENT dans la meme frame. Passer par `_file_creation` etalerait la

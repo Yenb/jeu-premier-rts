@@ -23,7 +23,7 @@ const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 const Rendu = preload("res://jeu/terrain/rendu_terrain_multimesh.gd")
 
 const CHEMIN_BIBLIOTHEQUE := "res://jeu/terrain/bloc.tres"
-const SECTIONS := 4  # S2, S3, S2.6 (rampes sans occludeur), S2.7 (face du cube adj. rampe)
+const SECTIONS := 5  # S2, S3, S2.6, S2.7, S5 (greedy occludeur)
 
 var _v
 var _biblio: MeshLibrary
@@ -47,6 +47,7 @@ func _tout() -> void:
 	_s3_tick_teinte_sans_call()
 	_s2_6_rampes_sans_occludeur()
 	_s2_7_face_cube_contre_rampe()
+	_s5_greedy_occludeur()
 
 	_conclure()
 
@@ -253,16 +254,14 @@ func _s2_6_rampes_sans_occludeur() -> void:
 		"la tuile de cubes %v n'a pas d'occludeur, un attendu (non-regression)"
 			% [tuile_cubes])
 
-	# NON-REGRESSION : la tuile de cubes a un occludeur avec le bon nombre de
-	# cubes. Chaque cube => 8 sommets. Un ArrayOccluder3D expose .vertices.
+	# NON-REGRESSION : la tuile de cubes a un occludeur avec au moins un
+	# triangle. Le comptage exact cube-par-cube n'a plus de sens depuis le
+	# greedy meshing (S5) qui fusionne les faces coplanaires.
 	if occ_par_tuile.has(tuile_cubes):
 		var occ: OccluderInstance3D = occ_par_tuile[tuile_cubes]
 		var arr: ArrayOccluder3D = occ.occluder as ArrayOccluder3D
-		if arr != null:
-			var nb_cubes: int = arr.vertices.size() / 8
-			_v.v(nb_cubes == colonnes_cubes.size(),
-				"tuile cubes : %d cubes dans l'occludeur, %d attendus"
-					% [nb_cubes, colonnes_cubes.size()])
+		_v.v(arr != null and arr.indices.size() > 0,
+			"tuile cubes : occludeur present mais vide (indices = 0)")
 
 	print("rampes sans occludeur : tuile rampes %v -> pas d'occludeur, tuile cubes %v -> occludeur avec %d cubes" \
 		% [tuile_rampes, tuile_cubes, colonnes_cubes.size()])
@@ -350,6 +349,78 @@ func _s2_7_face_cube_contre_rampe() -> void:
 		"aucun MultiMeshInstance3D dans la tuile du cube central : le cube est cache")
 
 	print("face cube contre rampe : visible_bits_col ouvre la face cote rampe (bit=1), garde scellement 4-couvrants (bit=0), tuile bakee avec MMi")
+
+	rendu.queue_free()
+	_faites += 1
+
+# S5 : le bake d'occludeur applique un greedy meshing par direction. Un mur
+# plat 10x10 emergent sur une couche => 1 rectangle Y- fusionne. Creuser une
+# cellule au milieu casse ce rectangle en plusieurs (topologie preservee).
+func _s5_greedy_occludeur() -> void:
+	var carte: Resource = CarteTerrain.new()
+	carte.demi_cote = 40
+	var sommet_base: int = int(carte.sommet_de_base())
+	# Mur PLAT 10x10 emergent : une seule couche au-dessus du sol de base.
+	var origine := Vector2i(0, 0)
+	for dx in range(10):
+		for dz in range(10):
+			carte.sculpter(origine + Vector2i(dx, dz), sommet_base + 1)
+
+	var rendu: Node3D = Rendu.new()
+	rendu.carte = carte
+	rendu.mesh_library = _biblio
+	rendu.rayon_cellules = 15
+	rendu.taille_tuile_cellules = 10
+	rendu.groupe_observateur = &"aucun_pour_ce_test"
+	rendu.tuiles_par_frame = 1000
+	_racine.add_child(rendu)
+	rendu._process(0.0)
+
+	var tuile: Vector2i = rendu._tuile_de_colonne(origine)
+	var occ_plein: OccluderInstance3D = null
+	if rendu._tuiles.has(tuile):
+		for n in (rendu._tuiles[tuile] as Array):
+			if n is OccluderInstance3D:
+				occ_plein = n
+				break
+	if occ_plein == null:
+		_v.v(false, "S5 : mur plat 10x10, pas d'occludeur bake")
+		rendu.queue_free()
+		_faites += 1
+		return
+	var arr_plein: ArrayOccluder3D = occ_plein.occluder as ArrayOccluder3D
+	var tri_plein: int = arr_plein.indices.size() / 3
+	# Un mur plat 10x10 sur 1 couche : 100 cellules emergentes.
+	# Avant greedy : (Y- 100 quads) + (X- 10) + (X+ 10) + (Z- 10) + (Z+ 10) = 140 quads = 280 triangles.
+	# Apres greedy : Y- (1x 10x10) + X- (1x 10x1) + X+ + Z- + Z+ = 5 quads = 10 triangles.
+	_v.v(tri_plein <= 30,
+		"S5 : mur plat greedy, attendu ~10 triangles, obtenu %d (fusion insuffisante)" % tri_plein)
+
+	# CREUSER : retirer entierement la cellule centrale du mur.
+	# La cellule (5, sommet_base+1, 5). retirer_cellule vide la couche.
+	carte.retirer_cellule(Vector3i(5, sommet_base + 1, 5))
+	rendu._absorber_modifications_carte()
+
+	var occ_troue: OccluderInstance3D = null
+	for n in (rendu._tuiles[tuile] as Array):
+		if n is OccluderInstance3D:
+			occ_troue = n
+			break
+	if occ_troue == null:
+		_v.v(false, "S5 : apres trou, pas d'occludeur bake")
+		rendu.queue_free()
+		_faites += 1
+		return
+	var arr_troue: ArrayOccluder3D = occ_troue.occluder as ArrayOccluder3D
+	var tri_troue: int = arr_troue.indices.size() / 3
+	# La face Y- unique 10x10 (2 triangles) devient 3 rectangles (6 triangles)
+	# avec le trou. Les 4 faces internes du trou apparaissent aussi. Attendu :
+	# +4 triangles au minimum (juste la casse du rectangle Y-).
+	_v.v(tri_troue >= tri_plein + 4,
+		"S5 : trou dans le mur, triangles avant=%d apres=%d, casse insuffisante" % [tri_plein, tri_troue])
+
+	print("S5 greedy occludeur : mur plat 10x10 -> %d triangles ; apres trou central -> %d triangles" \
+		% [tri_plein, tri_troue])
 
 	rendu.queue_free()
 	_faites += 1

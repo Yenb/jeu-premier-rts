@@ -7,7 +7,7 @@ extends SceneTree
 # d'execution CROISEE avant toute modif.
 
 const MondePartageScript = preload("res://jeu/Outil de jeu/monde_partage.gd")
-const TerrainStreame = preload("res://jeu/Proto/terrain_streame.gd")
+const RenduMultimesh = preload("res://jeu/terrain/rendu_terrain_multimesh.gd")
 
 var _mp: Node = null
 var _echecs: int = 0
@@ -23,7 +23,7 @@ func _init() -> void:
 	await _test_mother_cube_perception()
 	_test_mother_cube_croissance()
 	await _test_generateur_mort()
-	_test_terrain_streame()
+	_test_visible_bits_col()
 
 	print("=== RESULTAT ===")
 	if _echecs == 0:
@@ -131,7 +131,7 @@ func _test_generateur_mort() -> void:
 	if is_instance_valid(g):
 		_echec("cadavre pas detruit apres 7 frappes finales")
 
-# Verrouille visible_bits_col de terrain_streame.gd contre les
+# Verrouille visible_bits_col de rendu_terrain_multimesh.gd contre les
 # regressions du chantier "streaming par visibilite" :
 #   (a) plat : SEUL le sommet visible (rangs enfouis scelles)
 #   (b) grotte chez voisin : les rangs sous r_top voisin restent visibles
@@ -140,43 +140,43 @@ func _test_generateur_mort() -> void:
 #   (d) bord de carte (voisin masque 0) : rangs pleins tous visibles
 #   (e) colonne isolee (4 voisins vides) : idem
 #   (f) colonne vide : rien a rendre
-func _test_terrain_streame() -> void:
-	print("- terrain_streame.visible_bits_col")
+# Signature actuelle (S2.7) : visible_bits_col(bits, mon_couvrant,
+# nxp_couvrant, nxm_couvrant, nzp_couvrant, nzm_couvrant). Ces cas ne
+# mettent en jeu que des cubes pleins par defaut -> couvrant == bits pour
+# chaque colonne. Un test rampe/couvrant vit deja dans
+# jeu/terrain/test_rendu_terrain_multimesh.gd (_s2_7_face_cube_contre_rampe).
+func _test_visible_bits_col() -> void:
+	print("- rendu_terrain_multimesh.visible_bits_col")
 	const PLEIN_7 := 0b1111111  # bits 0..6, defaut couches_pleines=7
 	# (a) plat
-	var vis_a: int = TerrainStreame.visible_bits_col(
-		PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7)
+	var vis_a: int = RenduMultimesh.visible_bits_col(
+		PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7)
 	if vis_a != (1 << 6):
 		_echec("(a) plat : attendu bit 6 seul, obtenu 0x%x" % vis_a)
 	# (b) grotte chez voisin +X (rang 0 + rang 6, air entre)
 	const VOISIN_GROTTE := 0b1000001
-	var vis_b: int = TerrainStreame.visible_bits_col(
-		PLEIN_7, VOISIN_GROTTE, PLEIN_7, PLEIN_7, PLEIN_7)
+	var vis_b: int = RenduMultimesh.visible_bits_col(
+		PLEIN_7, PLEIN_7, VOISIN_GROTTE, PLEIN_7, PLEIN_7, PLEIN_7)
 	if vis_b != 0b1111110:
 		_echec("(b) grotte : attendu 0b1111110, obtenu 0b%s" % _bin7(vis_b))
 	# (c) pont : bit 6 isole
-	var vis_c: int = TerrainStreame.visible_bits_col(
-		1 << 6, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7)
+	var vis_c: int = RenduMultimesh.visible_bits_col(
+		1 << 6, 1 << 6, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7)
 	if vis_c != (1 << 6):
 		_echec("(c) pont : attendu bit 6, obtenu 0x%x" % vis_c)
 	# (d) bord de carte : voisin +X hors emprise (masque 0)
-	var vis_d: int = TerrainStreame.visible_bits_col(
-		PLEIN_7, 0, PLEIN_7, PLEIN_7, PLEIN_7)
+	var vis_d: int = RenduMultimesh.visible_bits_col(
+		PLEIN_7, PLEIN_7, 0, PLEIN_7, PLEIN_7, PLEIN_7)
 	if vis_d != PLEIN_7:
 		_echec("(d) bord : attendu PLEIN_7, obtenu 0x%x" % vis_d)
 	# (e) colonne isolee
-	var vis_e: int = TerrainStreame.visible_bits_col(PLEIN_7, 0, 0, 0, 0)
+	var vis_e: int = RenduMultimesh.visible_bits_col(PLEIN_7, PLEIN_7, 0, 0, 0, 0)
 	if vis_e != PLEIN_7:
 		_echec("(e) isolee : attendu PLEIN_7, obtenu 0x%x" % vis_e)
 	# (f) colonne vide
-	var vis_f: int = TerrainStreame.visible_bits_col(0, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7)
+	var vis_f: int = RenduMultimesh.visible_bits_col(0, 0, PLEIN_7, PLEIN_7, PLEIN_7, PLEIN_7)
 	if vis_f != 0:
 		_echec("(f) vide : attendu 0, obtenu 0x%x" % vis_f)
-
-	# Tests greedy_mesh_slab retires : la fonction a ete supprimee du
-	# code (rendu cube par cube reintroduit, aucune fusion de faces).
-	# Le rendu par cube n'a pas de fonction pure a verrouiller par test
-	# unitaire : la logique est un simple parcours + emission de face.
 
 static func _bin7(n: int) -> String:
 	var s := ""

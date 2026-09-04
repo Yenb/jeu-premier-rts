@@ -2,7 +2,7 @@
 
 [ext_resource type="MeshLibrary" uid="uid://boolh7gmr16xi" path="res://jeu/terrain/bloc.tres" id="1_bloc"]
 [ext_resource type="Script" uid="uid://bhgpvlfsb1dwb" path="res://jeu/terrain/terrain_visible.gd" id="2_visible"]
-[ext_resource type="Script" uid="uid://n0vcmkgvpq5l" path="res://jeu/Proto/terrain_streame.gd" id="2_visible_mm"]
+[ext_resource type="Script" uid="uid://bilbwv7pk6e8h" path="res://jeu/terrain/rendu_terrain_multimesh.gd" id="2_visible_mm"]
 [ext_resource type="Resource" path="res://jeu/Proto/proto_carte.tres" id="3_carte"]
 [ext_resource type="PackedScene" path="res://jeu/unites/personnage.tscn" id="4_personnage"]
 [ext_resource type="Script" uid="uid://cc3ow046hewcb" path="res://jeu/terrain/murs_limite_boite.gd" id="12_murs"]
