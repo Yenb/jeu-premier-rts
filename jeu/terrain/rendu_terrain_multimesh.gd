@@ -74,6 +74,20 @@ const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 # `visibility_range_end`. A 0, aucune limite : tout se dessine jusqu'au rayon.
 @export var distance_rendu_metres: float = 0.0
 
+# S6 -- CHEMIN "INSTANCES RS DIRECTES", filet de securite par flag.
+# Faux (defaut) : chemin historique inchange, un MultiMeshInstance3D par forme et
+# par tuile est add_child dans le SceneTree ; c'est le chemin que les tests
+# S1/S2/S2.5-2.7 lisent (ils iterent `_tuiles[t] as Array` et testent
+# `n is MultiMeshInstance3D`).
+# Vrai : bascule sur des instances RenderingServer directes (aucun MMi dans le
+# SceneTree). Meme MultiMesh cote GPU, meme custom_aabb, meme culling ; seul
+# l'overhead SceneTree de ~4500 noeuds MMi par frame disparait. L'occludeur reste
+# un OccluderInstance3D (Godot 4 le requiert). Le stockage `_tuiles[tuile]` devient
+# alors un Dictionary { "instances_rs": [{mm, rid}], "occluder": OccluderInstance3D }
+# au lieu d'un Array de noeuds -- garder ce flag a false tant que le nouveau chemin
+# n'est pas valide en jeu, l'inverser dans un commit separe une fois teste.
+@export var utilise_rs_direct: bool = false
+
 # La forme "limite" ne porte aucun maillage (mur invisible) : jamais rendue.
 const ITEM_LIMITE := 1
 
@@ -229,6 +243,13 @@ func _preparer_mini_cubes(cote: float) -> void:
 		box.material = smat
 		_mini_box_par_item[item] = box
 
+# S6 -- Liberation des RIDs a la fermeture. En chemin nœud, queue_free suffit
+# (le SceneTree nettoie a l'exit) ; en chemin RS direct, les RIDs ne sont detenus
+# par personne d'autre -- sans free explicite ici, ils fuient (leak).
+func _exit_tree() -> void:
+	for tuile in _tuiles.keys():
+		_supprimer_tuile(tuile)
+
 func _process(_delta: float) -> void:
 	_absorber_modifications_carte()
 	# Tick teinte a 1 Hz (aligne sur regen). Cache anti-repose evite les
@@ -246,7 +267,10 @@ func _process(_delta: float) -> void:
 		var t: Vector2i = _file_creation.pop_back()
 		if _a_supprimer.has(t):
 			continue
-		if _tuiles.has(t) and (_tuiles[t] as Array).is_empty():
+		# SENTINELLE "EN FILE" : Array vide, commune aux deux chemins de stockage.
+		# Une tuile deja batie porte soit un Array non vide (nœud), soit un
+		# Dictionary (rs_direct) -- ni l'un ni l'autre ne match ici.
+		if _tuiles.has(t) and _tuiles[t] is Array and (_tuiles[t] as Array).is_empty():
 			_creer_tuile(t)
 			faits += 1
 	# ETALEMENT SUPPRESSION : meme rythme que la creation. Avant ce drain, toutes
@@ -521,46 +545,78 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				if couche > sommet_base and _quad_par_item.has(item):
 					cellules_occl[cellule] = true
 
+	# Map temporaire item -> MultiMesh pour mapper les entries teinte apres creation.
+	# Unifie entre les deux chemins : `mm` cote GPU est identique, seul le porteur
+	# (MMi ou instance RS) change ; le tick de teinte n'a donc pas besoin de brancher.
+	var mm_par_item_normal: Dictionary = {}
+	var mm_par_item_sol: Dictionary = {}
+	# CHEMIN NŒUD (utilise_rs_direct=false) : Array de noeuds add_child dans le
+	# SceneTree, comme historiquement.
+	# CHEMIN RS DIRECT (utilise_rs_direct=true) : Dictionary { instances_rs, occluder }.
+	# Le mm est garde en ref forte via chaque entree {mm, rid} de instances_rs.
 	var noeuds: Array = []
-	# Map temporaire item -> mmi pour mapper les entries teinte apres creation.
-	var mmi_par_item_normal: Dictionary = {}
-	var mmi_par_item_sol: Dictionary = {}
-	for item in par_forme.keys():
-		var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote)
-		if mmi != null:
-			add_child(mmi)
-			noeuds.append(mmi)
-			mmi_par_item_normal[item] = mmi
-	# LE SOL DE BASE NE PROJETTE PAS : il quitte les passes d'ombre. Il RECOIT
-	# toujours les ombres des objets poses dessus -- `cast_shadow` ne touche que la
-	# projection, jamais la reception.
-	for item in par_forme_sol.keys():
-		var mmi := _mmi_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote)
-		if mmi != null:
-			mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			add_child(mmi)
-			noeuds.append(mmi)
-			mmi_par_item_sol[item] = mmi
-	# Construire l'index de teinte pour cette tuile : cellule -> [{mmi, idx}].
+	var instances_rs: Array = []
+	var occluder_noeud: OccluderInstance3D = null
+	if utilise_rs_direct:
+		for item in par_forme.keys():
+			var e: Dictionary = _rs_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote, false)
+			if not e.is_empty():
+				instances_rs.append(e)
+				mm_par_item_normal[item] = e["mm"]
+		# LE SOL DE BASE NE PROJETTE PAS : il quitte les passes d'ombre. Il RECOIT
+		# toujours les ombres des objets poses dessus -- `cast_shadow` ne touche que la
+		# projection, jamais la reception.
+		for item in par_forme_sol.keys():
+			var e: Dictionary = _rs_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote, true)
+			if not e.is_empty():
+				instances_rs.append(e)
+				mm_par_item_sol[item] = e["mm"]
+		for item in par_forme_mini.keys():
+			var e: Dictionary = _rs_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
+			if not e.is_empty():
+				instances_rs.append(e)
+	else:
+		for item in par_forme.keys():
+			var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote)
+			if mmi != null:
+				add_child(mmi)
+				noeuds.append(mmi)
+				mm_par_item_normal[item] = mmi.multimesh
+		# LE SOL DE BASE NE PROJETTE PAS (idem cas RS ci-dessus).
+		for item in par_forme_sol.keys():
+			var mmi := _mmi_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote)
+			if mmi != null:
+				mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				add_child(mmi)
+				noeuds.append(mmi)
+				mm_par_item_sol[item] = mmi.multimesh
+		for item in par_forme_mini.keys():
+			var mmi := _mmi_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
+			if mmi != null:
+				add_child(mmi)
+				noeuds.append(mmi)
+	# Construire l'index de teinte pour cette tuile : cellule -> [{mm, idx}].
+	# `mm` (pas `mmi`) : voir _tick_teinte, unifie entre les deux chemins.
 	var index_tuile: Dictionary = {}
-	_agreger_teinte(index_tuile, teinte_normal, mmi_par_item_normal)
-	_agreger_teinte(index_tuile, teinte_sol, mmi_par_item_sol)
+	_agreger_teinte(index_tuile, teinte_normal, mm_par_item_normal)
+	_agreger_teinte(index_tuile, teinte_sol, mm_par_item_sol)
 	if not index_tuile.is_empty():
 		_teinte_par_tuile[tuile] = index_tuile
-	# Mini-cubes des cellules entamees. Un MMi par item, mesh = _mini_box_par_item.
-	for item in par_forme_mini.keys():
-		var mmi := _mmi_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
-		if mmi != null:
-			add_child(mmi)
-			noeuds.append(mmi)
 	# L'OCCLUDEUR DU RELIEF, s'il y en a. Ce qui est derriere ces cubes -- autres
-	# cubes, arbres, unites -- n'est plus dessine par Godot.
+	# cubes, arbres, unites -- n'est plus dessine par Godot. Reste un OccluderInstance3D
+	# dans les DEUX chemins (Godot 4 requiert un nœud pour le culling occlusion).
 	if not cellules_occl.is_empty():
 		var occl := _occludeur_de_cubes(cellules_occl, cote)
 		if occl != null:
 			add_child(occl)
-			noeuds.append(occl)
-	_tuiles[tuile] = noeuds
+			if utilise_rs_direct:
+				occluder_noeud = occl
+			else:
+				noeuds.append(occl)
+	if utilise_rs_direct:
+		_tuiles[tuile] = {"instances_rs": instances_rs, "occluder": occluder_noeud}
+	else:
+		_tuiles[tuile] = noeuds
 
 # LE VOISIN COUVRE-T-IL LA FACE ? Vrai seulement s'il est PLEIN a cette couche ET
 # que c'est un CUBE (il remplit sa cellule entiere). Une rampe, un cylindre, une
@@ -614,9 +670,24 @@ func _ajouter_mini_cubes(par_forme_mini: Dictionary, item: int, centre: Vector3,
 # AABB serree que _mmi_de_forme -- reutilise la meme fonction si possible.
 func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
 		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
+	var bake: Dictionary = _bake_mm_mini_cubes(item, transforms, origine_col, couche_min, couche_max, taille, cote)
+	if bake.is_empty():
+		return null
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = bake["mm"]
+	mmi.custom_aabb = bake["aabb"]
+	if distance_rendu_metres > 0.0:
+		mmi.visibility_range_end = distance_rendu_metres
+	return mmi
+
+# S6 -- BAKE PUR du MultiMesh + AABB pour les mini-cubes d'un item. Partage
+# entre _mmi_mini_cubes (chemin nœud) et _rs_mini_cubes (chemin instance RS).
+# Rend {} si l'item n'a pas de mini-box.
+func _bake_mm_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
+		couche_min: int, couche_max: int, taille: int, cote: float) -> Dictionary:
 	var mesh: Mesh = _mini_box_par_item.get(item, null)
 	if mesh == null:
-		return null
+		return {}
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
@@ -626,8 +697,6 @@ func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
 		var t = transforms[i]
 		mm.set_instance_transform(i, t.transform)
 		mm.set_instance_color(i, t.couleur)
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
 	var hauteur_couches := couche_max - couche_min + 1
 	var pos_aabb := Vector3(
 		float(origine_col.x) * cote - cote,
@@ -637,10 +706,7 @@ func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
 		float(taille) * cote + 2.0 * cote,
 		float(hauteur_couches) * cote + 2.0 * cote,
 		float(taille) * cote + 2.0 * cote)
-	mmi.custom_aabb = AABB(pos_aabb, taille_aabb)
-	if distance_rendu_metres > 0.0:
-		mmi.visibility_range_end = distance_rendu_metres
-	return mmi
+	return {"mm": mm, "aabb": AABB(pos_aabb, taille_aabb)}
 
 # Ajoute une instance de quad pour la face `i` d'un cube centre en `centre` :
 # translation vers le centre de la face (normale x demi-cote) et rotation qui
@@ -681,27 +747,39 @@ func _ajouter_face(par_forme: Dictionary, item: int, centre: Vector3, i: int, co
 # si la forme n'a aucun maillage (ex. limite).
 func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
+	var bake: Dictionary = _bake_mm_forme(item, transforms, origine_col, couche_min, couche_max, taille, cote)
+	if bake.is_empty():
+		return null
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = bake["mm"]
+	mmi.custom_aabb = bake["aabb"]
+	# LOD PAR DISTANCE : au-dela de `distance_rendu_metres`, Godot cesse de dessiner
+	# cette tuile. 0 = pas de limite.
+	if distance_rendu_metres > 0.0:
+		mmi.visibility_range_end = distance_rendu_metres
+	return mmi
+
+# S6 -- BAKE PUR du MultiMesh + AABB pour une forme. Partage entre _mmi_de_forme
+# (chemin nœud) et _rs_de_forme (chemin instance RS). Rend {} si la forme n'a
+# aucun maillage (ex. limite).
+func _bake_mm_forme(item: int, transforms: Array, origine_col: Vector2i,
+		couche_min: int, couche_max: int, taille: int, cote: float) -> Dictionary:
 	var mesh: Mesh = _quad_par_item.get(item, null)
 	if mesh == null:
 		mesh = mesh_library.get_item_mesh(item)
 	if mesh == null:
-		return null
+		return {}
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
-	# Teinte per-instance (feedback reserve). Blanc par defaut = ne modifie
-	# rien tant qu'aucune teinte n'est posee.
 	mm.use_colors = true
 	mm.mesh = mesh
 	mm.instance_count = transforms.size()
 	for i in range(transforms.size()):
 		mm.set_instance_transform(i, transforms[i])
 		mm.set_instance_color(i, Color(1, 1, 1))
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	# BOITE SERREE A LA TUILE, en coordonnees monde (ce noeud est a l'origine).
-	# Hauteur = la plage REELLE des couches posees dans cette tuile, plus une
-	# marge d'une cellule pour le debord du mesh. Serree, elle laisse le frustum
-	# culling ecarter la tuile hors champ ; haute de toutes les couches, jamais.
+	# BOITE SERREE A LA TUILE, coordonnees monde (le nœud parent est a l'origine ;
+	# une instance RS re-posera le même AABB dans son propre repere via set_transform
+	# = self.global_transform).
 	var hauteur_couches := couche_max - couche_min + 1
 	var pos_aabb := Vector3(
 		float(origine_col.x) * cote - cote,
@@ -711,12 +789,47 @@ func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
 		float(taille) * cote + 2.0 * cote,
 		float(hauteur_couches) * cote + 2.0 * cote,
 		float(taille) * cote + 2.0 * cote)
-	mmi.custom_aabb = AABB(pos_aabb, taille_aabb)
-	# LOD PAR DISTANCE : au-dela de `distance_rendu_metres`, Godot cesse de dessiner
-	# cette tuile. 0 = pas de limite.
+	return {"mm": mm, "aabb": AABB(pos_aabb, taille_aabb)}
+
+# S6 -- CREATION D'UNE INSTANCE RENDERINGSERVER DIRECTE.
+# Le MultiMesh doit etre garde en REFERENCE FORTE GDScript par l'appelant (dans
+# _tuiles) : sans ca, GC -> RID invalide -> instance disparait silencieusement
+# (issue godotengine/godot#80479). instance_set_scenario est OBLIGATOIRE (issue
+# godotengine/godot#77113) : sans lui, l'instance n'est jamais rendue.
+func _creer_instance_rs(mm: MultiMesh, transform: Transform3D, aabb: AABB, cast_shadow_off: bool = false) -> RID:
+	var rid := RenderingServer.instance_create()
+	RenderingServer.instance_set_base(rid, mm.get_rid())
+	RenderingServer.instance_set_scenario(rid, get_world_3d().scenario)
+	RenderingServer.instance_set_transform(rid, transform)
+	RenderingServer.instance_set_custom_aabb(rid, aabb)
+	if cast_shadow_off:
+		RenderingServer.instance_geometry_set_cast_shadows_setting(rid, RenderingServer.SHADOW_CASTING_SETTING_OFF)
 	if distance_rendu_metres > 0.0:
-		mmi.visibility_range_end = distance_rendu_metres
-	return mmi
+		RenderingServer.instance_geometry_set_visibility_range(
+			rid, 0.0, distance_rendu_metres, 0.0, 0.0,
+			RenderingServer.VISIBILITY_RANGE_FADE_DISABLED)
+	return rid
+
+# S6 -- Wrappers "instance RS" symetriques a _mmi_de_forme / _mmi_mini_cubes.
+# Retournent {"mm", "rid"} ou {} si aucun maillage. La reference forte a mm est
+# stockee dans le dict retourne -> l'appelant l'insere dans _tuiles, tant que
+# l'entree y est le mm ne peut pas etre GC.
+func _rs_de_forme(item: int, transforms: Array, origine_col: Vector2i,
+		couche_min: int, couche_max: int, taille: int, cote: float,
+		cast_shadow_off: bool) -> Dictionary:
+	var bake: Dictionary = _bake_mm_forme(item, transforms, origine_col, couche_min, couche_max, taille, cote)
+	if bake.is_empty():
+		return {}
+	var rid: RID = _creer_instance_rs(bake["mm"], global_transform, bake["aabb"], cast_shadow_off)
+	return {"mm": bake["mm"], "rid": rid}
+
+func _rs_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
+		couche_min: int, couche_max: int, taille: int, cote: float) -> Dictionary:
+	var bake: Dictionary = _bake_mm_mini_cubes(item, transforms, origine_col, couche_min, couche_max, taille, cote)
+	if bake.is_empty():
+		return {}
+	var rid: RID = _creer_instance_rs(bake["mm"], global_transform, bake["aabb"], false)
+	return {"mm": bake["mm"], "rid": rid}
 
 # UN OccluderInstance3D pour un SET de cellules (Vector3i -> true), bakée en
 # greedy meshing par direction de face. Godot rasterise cette geometrie et
@@ -923,8 +1036,10 @@ func _absorber_modifications_carte() -> void:
 		var t: Vector2i = _tuile_de_colonne(colonne)
 		if not _tuiles.has(t):
 			continue
-		var noeuds = _tuiles[t] as Array
-		if noeuds.is_empty():
+		# En file (sentinelle Array vide) : ignoree, elle lira l'etat a jour au bake.
+		# Batie (Array non vide OU Dictionary rs_direct) : a reconstruire.
+		var contenu = _tuiles[t]
+		if contenu is Array and (contenu as Array).is_empty():
 			continue
 		tuiles_a_reconstruire[t] = true
 	# REBUILD. Une passe, une par tuile.
@@ -942,11 +1057,26 @@ func _tuile_de_colonne(colonne: Vector2i) -> Vector2i:
 func _supprimer_tuile(tuile: Vector2i) -> void:
 	if not _tuiles.has(tuile):
 		return
-	var noeuds = _tuiles[tuile]
-	if noeuds != null:
-		for mmi in noeuds:
+	var contenu = _tuiles[tuile]
+	if contenu is Array:
+		# CHEMIN NŒUD : Array de MultiMeshInstance3D + eventuel OccluderInstance3D.
+		for mmi in (contenu as Array):
 			if is_instance_valid(mmi):
 				mmi.queue_free()
+	elif contenu is Dictionary:
+		# CHEMIN RS DIRECT : liberer les RIDs d'instances AVANT d'oublier les mm
+		# (free_rid libere l'instance qui pointait sur mm.get_rid() ; la ref forte
+		# a mm est dans le dict, GC quand on erase l'entree). Puis queue_free de
+		# l'occludeur (reste un nœud dans les deux chemins).
+		var d: Dictionary = contenu as Dictionary
+		var rs_list: Array = d.get("instances_rs", []) as Array
+		for e in rs_list:
+			var rid: RID = e["rid"]
+			if rid.is_valid():
+				RenderingServer.free_rid(rid)
+		var occl: OccluderInstance3D = d.get("occluder", null)
+		if occl != null and is_instance_valid(occl):
+			occl.queue_free()
 	_tuiles.erase(tuile)
 	# Nettoyage index teinte : les cellules de cette tuile disparaissent aussi
 	# de _teinte_precedente pour re-teinter proprement si la tuile revient.
@@ -966,17 +1096,19 @@ func _pousser_teinte(bucket: Dictionary, item: int, cellule: Vector3i, idx: int)
 	(bucket[item] as Array).append({"cellule": cellule, "idx": idx})
 
 # Helper : agrege un bucket (item -> [{cellule, idx}]) dans l'index de tuile
-# (cellule -> [{mmi, idx}]) en resolvant l'item vers son mmi.
-func _agreger_teinte(index_tuile: Dictionary, bucket: Dictionary, mmi_par_item: Dictionary) -> void:
+# (cellule -> [{mm, idx}]) en resolvant l'item vers son MultiMesh. Unifie entre
+# les deux chemins : `mm` cote GPU est le meme que le porteur soit MMi ou instance
+# RS -- le tick de teinte n'a pas a brancher sur le flag.
+func _agreger_teinte(index_tuile: Dictionary, bucket: Dictionary, mm_par_item: Dictionary) -> void:
 	for item in bucket:
-		var mmi = mmi_par_item.get(item, null)
-		if mmi == null:
+		var mm: MultiMesh = mm_par_item.get(item, null)
+		if mm == null:
 			continue
 		for entree in (bucket[item] as Array):
 			var cellule: Vector3i = entree["cellule"]
 			if not index_tuile.has(cellule):
 				index_tuile[cellule] = [] as Array
-			(index_tuile[cellule] as Array).append({"mmi": mmi, "idx": int(entree["idx"])})
+			(index_tuile[cellule] as Array).append({"mm": mm, "idx": int(entree["idx"])})
 
 # Tick de teinte : parcourt les cellules teintables de toutes les tuiles
 # chargees, calcule un gain [0.4..1.0] selon la reserve courante, pose la
@@ -1007,6 +1139,8 @@ func _tick_teinte() -> void:
 			_teinte_precedente[cellule] = gain
 			var couleur := Color(gain, gain, gain)
 			for face in (index[cellule] as Array):
-				var mmi: MultiMeshInstance3D = face["mmi"]
-				if is_instance_valid(mmi):
-					mmi.multimesh.set_instance_color(int(face["idx"]), couleur)
+				# `mm` (MultiMesh) : ref forte tenue via _tuiles (nœud MMi ou entree
+				# {mm, rid}) ; purge de _teinte_par_tuile faite dans _supprimer_tuile
+				# AVANT que la ref ne disparaisse -> pas de check de validite ici.
+				var mm: MultiMesh = face["mm"]
+				mm.set_instance_color(int(face["idx"]), couleur)
