@@ -88,6 +88,18 @@ const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 # n'est pas valide en jeu, l'inverser dans un commit separe une fois teste.
 @export var utilise_rs_direct: bool = false
 
+# S7 -- PIPELINE INTRA-TUILE, filet de securite par flag.
+# Faux (defaut) : _creer_tuile execute les 3 phases (parser, bake instances,
+#   bake occluder) EN SEQUENCE dans la meme frame -- comportement historique,
+#   tests S1/S2 non impactes. Un pic streaming reste concentre sur une frame.
+# Vrai : chaque tuile qui rentre en creation est enfilee dans _tuiles_en_pipeline
+#   avec phase=0. _process avance chaque frame `tuiles_avancees_par_frame` tuiles
+#   d'UNE phase. Latence perceptible : une tuile fraiche apparait a la 2e frame
+#   du drain (instances) et devient occludante a la 3e. Meme raison d'etre que
+#   utilise_rs_direct : garder faux tant que non valide en jeu.
+@export var utilise_pipeline_intra_tuile: bool = false
+@export var tuiles_avancees_par_frame: int = 1
+
 # La forme "limite" ne porte aucun maillage (mur invisible) : jamais rendue.
 const ITEM_LIMITE := 1
 
@@ -107,6 +119,19 @@ var _file_creation: Array = []
 # Supprimer ~25 tuiles d'un coup force ~25 rebuilds du BVH d'occlusion en une
 # seule frame ; les etaler en reduit le pic a 1 par frame.
 var _a_supprimer: Dictionary = {}
+# S7 -- PIPELINE INTRA-TUILE EN 3 PHASES. Chaque tuile en cours de bake vit ici,
+# _tuiles[tuile] garde la sentinelle Array vide tant que les 3 phases ne sont pas
+# finies. Repartit le pic de streaming : parsing frame N, instances N+1, occluder
+# N+2. Total inchange, pic divise par ~3 (Zylann/godot_voxel : BVH d'occlusion
+# coute 3-5x le parsing). tuile -> {
+#   "phase": int (0/1/2),
+#   "parsed": Dictionary,                     # apres phase 0
+#   "instances_rs": Array of {mm, rid},       # apres phase 1, chemin RS direct
+#   "noeuds": Array of MultiMeshInstance3D,   # apres phase 1, chemin nœud
+#   "mm_par_item_normal": Dictionary,         # apres phase 1
+#   "mm_par_item_sol": Dictionary,            # apres phase 1
+# }
+var _tuiles_en_pipeline: Dictionary = {}
 
 # GRIDMAP DE REFERENCE, jamais peuple ni rendu : sert UNIQUEMENT a convertir une
 # cellule en position par `map_to_local`, exactement comme le rendu GridMap le
@@ -273,6 +298,36 @@ func _process(_delta: float) -> void:
 		if _tuiles.has(t) and _tuiles[t] is Array and (_tuiles[t] as Array).is_empty():
 			_creer_tuile(t)
 			faits += 1
+	# S7 -- DRAIN PIPELINE INTRA-TUILE. Chaque frame, avance au plus
+	# `tuiles_avancees_par_frame` tuiles d'UNE phase chacune (une tuile n'est
+	# ratissee qu'UNE fois par frame -- pas de 0->1->2 dans le meme tick). Une
+	# tuile poussee par _creer_tuile plus tot dans cette frame peut donc etre
+	# avancee de phase 0 -> 1 le meme tick : c'est acceptable, phase 0 = parsing
+	# LEGER, elle ne se fait pas doubler par phase 1 (bake) ni par phase 2
+	# (occludeur, le lourd).
+	if utilise_pipeline_intra_tuile and not _tuiles_en_pipeline.is_empty():
+		var avances := 0
+		var cles_pipe := _tuiles_en_pipeline.keys()
+		for cle_p in cles_pipe:
+			if avances >= tuiles_avancees_par_frame:
+				break
+			# Une tuile supprimee entre-temps a deja disparu de _tuiles_en_pipeline
+			# via _supprimer_tuile ; le has() ci-dessous couvre l'unique cas de race
+			# (drain suppression et drain pipeline dans le meme tick).
+			if not _tuiles_en_pipeline.has(cle_p):
+				continue
+			var etat: Dictionary = _tuiles_en_pipeline[cle_p]
+			var phase: int = int(etat.get("phase", 0))
+			if phase == 0:
+				etat["parsed"] = _phase_parser(cle_p)
+				etat["phase"] = 1
+			elif phase == 1:
+				_phase_baker_instances(cle_p, etat)
+				etat["phase"] = 2
+			elif phase == 2:
+				_phase_baker_occluder(cle_p, etat)
+				_tuiles_en_pipeline.erase(cle_p)
+			avances += 1
 	# ETALEMENT SUPPRESSION : meme rythme que la creation. Avant ce drain, toutes
 	# les tuiles sortantes etaient detruites d'un coup dans _rafraichir_vers —
 	# ~25 OccluderInstance3D liberes en une frame, ~25 rebuilds du BVH d'occlusion.
@@ -385,11 +440,30 @@ func _masque_couvrant_col(col: Vector2i, memo: Dictionary) -> int:
 	memo[col] = couvrant
 	return couvrant
 
-# CREE UNE TUILE : parcourt ses colonnes, groupe les transforms des cellules
-# visibles PAR FORME, puis pose un MultiMeshInstance3D par forme presente. Tout
-# d'un bloc -- la tuile est monolithique.
+# CREE UNE TUILE. Deux chemins :
+# - utilise_pipeline_intra_tuile=false : les 3 phases s'executent en sequence
+#   dans la meme frame (comportement historique, pic streaming concentre).
+# - utilise_pipeline_intra_tuile=true : la tuile rentre en _tuiles_en_pipeline
+#   avec phase=0, _process avance chaque frame `tuiles_avancees_par_frame` tuiles
+#   d'UNE phase (S7 : parsing / bake instances / bake occluder etales sur 3 frames).
+# _creations_tuile_compte compte les ENTREES (une tuile qui commence a etre bakee),
+# semantique preservee pour le test S2 de coalescence.
 func _creer_tuile(tuile: Vector2i) -> void:
 	_creations_tuile_compte += 1
+	if utilise_pipeline_intra_tuile:
+		_tuiles_en_pipeline[tuile] = {"phase": 0}
+		return
+	var etat: Dictionary = {"parsed": _phase_parser(tuile)}
+	_phase_baker_instances(tuile, etat)
+	_phase_baker_occluder(tuile, etat)
+
+# S7 -- PHASE 0 (PARSER). Parcourt les colonnes de la tuile, calcule les faces
+# visibles par forme, collecte les buckets teintables et le set d'occludeurs.
+# AUCUN bake (aucun MultiMesh, aucun add_child, aucune instance RS). Alimente les
+# caches teinte (_cache_profil_cellule / _cache_quantite_cellule) et les compteurs
+# d'AABB (couche_min / couche_max). Retour : dict "parsed" self-contenu, suffisant
+# pour la phase 1 -- rien ne demande de re-parcourir les colonnes ensuite.
+func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var particularites: Dictionary = carte.particularites
@@ -398,40 +472,17 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	var memo_bits: Dictionary = {}
 	var memo_couvrant: Dictionary = {}
 
-	# forme (item) -> Array[Transform3D]. Deux groupes pour l'OMBRE, selon le NIVEAU
-	# du cube. `par_forme` : tout ce qui EMERGE (relief, murs, batiments) et les
-	# formes non-cube -> projette normalement. `par_forme_sol` : le sol de base
-	# (couche == sommet_de_base) -> `cast_shadow off`, car un sol plat ne jette
-	# aucune ombre utile (elle tomberait sous lui) et les passes d'ombre ignorent
-	# l'occlusion : l'y garder re-dessine tout le sol pour rien. Il RECOIT toujours
-	# les ombres des objets poses dessus.
+	# forme (item) -> Array[Transform3D]. Voir doc historique de _creer_tuile.
 	var par_forme: Dictionary = {}
 	var par_forme_sol: Dictionary = {}
-	# Cellules ENTAMEES : mini-cubes selon `carte.sous_cubes(cellule)`. Rendu
-	# comme un cube complet plutot que quad de face -- pas de face culling
-	# entre mini-cubes (proto, on optimisera si besoin).
 	var par_forme_mini: Dictionary = {}
-	# TEINTE : side-collector pour les cellules avec profil de reserve.
-	# item -> Array of {cellule, idx}. Deux buckets separes selon la cible
-	# (par_forme vs par_forme_sol) car chacun donne un MMi distinct.
 	var teinte_normal: Dictionary = {}
 	var teinte_sol: Dictionary = {}
 	if _ressources == null:
 		_ressources = get_tree().get_first_node_in_group(&"ressources_terrain")
-	# HAUTEUR REELLE DE LA TUILE, suivie au fil des poses : l'AABB s'y serre pour
-	# que le frustum culling ecarte les tuiles hors champ. Un AABB haut de toutes
-	# les couches possibles ne se ferait jamais culler.
 	var couche_min := couche_base + CarteTerrain.COUCHES_MAXIMALES
 	var couche_max := couche_base
-	# LE SOL DE BASE N'OCCULTE RIEN (il est plat). Seuls les cubes qui EMERGENT
-	# au-dessus du sommet de base -- murs, batiments, relief -- bloquent la vue et
-	# entrent dans l'occludeur. Le sol plat streame en permanence ; l'en exclure
-	# evite une recomputation d'occlusion a chaque pas.
 	var sommet_base := int(carte.sommet_de_base())
-	# CELLULES OCCLUDANTES : un SET de Vector3i (couche > sommet_base, cube
-	# cubique). Le set est indispensable au greedy meshing (S5) : chaque tranche
-	# a besoin de tester si une cellule voisine est occludante. Une liste de
-	# positions perdrait la structure grille.
 	var cellules_occl: Dictionary = {}
 
 	for lx in range(taille):
@@ -444,7 +495,6 @@ func _creer_tuile(tuile: Vector2i) -> void:
 			var nxm := _masque_col(Vector2i(col.x - 1, col.y), memo_bits)
 			var nzp := _masque_col(Vector2i(col.x, col.y + 1), memo_bits)
 			var nzm := _masque_col(Vector2i(col.x, col.y - 1), memo_bits)
-			# COUVRANTS pour le scellement, voir visible_bits_col.
 			var mon_couvrant := _masque_couvrant_col(col, memo_couvrant)
 			var nxp_c := _masque_couvrant_col(Vector2i(col.x + 1, col.y), memo_couvrant)
 			var nxm_c := _masque_couvrant_col(Vector2i(col.x - 1, col.y), memo_couvrant)
@@ -470,27 +520,14 @@ func _creer_tuile(tuile: Vector2i) -> void:
 					orientation = CarteTerrain.orientation_du_code(code)
 				if item == ITEM_LIMITE:
 					continue
-				# Position du centre de la cellule par la conversion native.
 				var pos := _regle.map_to_local(cellule)
-				# LE SOL DE BASE (couche == sommet) ne projette pas d'ombre ; tout ce
-				# qui emerge projette. Le RENDU (les faces) est identique dans les deux
-				# cas -- seul le GROUPE change, donc le cast_shadow du MMi.
 				var cible: Dictionary = par_forme_sol if couche == sommet_base else par_forme
 				if _quad_par_item.has(item):
-					# Cellule ENTAMEE (masque partiel) OU AVEC PV (traces
-					# accumulees mais aucun sous-cube casse) -> mini-cubes,
-					# avec teinte fonction du PV sur chaque sous-cube.
 					var masque_sous: int = carte.sous_cubes(cellule)
 					var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
 					if masque_sous != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN or not pv_map.is_empty():
 						_ajouter_mini_cubes(par_forme_mini, item, pos, cote, masque_sous, pv_map)
 					else:
-						# CUBE : un quad par face exposee. Une face n'est CACHEE que si le
-						# voisin de ce cote est un CUBE PLEIN (il remplit sa cellule). Un
-						# voisin vide, ou une rampe/cylindre/sphere qui ne remplit pas sa
-						# cellule, laisse la face visible -- sinon un trou apparait.
-						# CACHE ALIMENTE ICI, LU DANS _tick_teinte : un seul call() par
-						# cellule teintable, au streaming, plus jamais au tick.
 						var profil_cell: Resource = null
 						if _ressources != null and _ressources.has_method("profil_de_cellule"):
 							profil_cell = _ressources.call("profil_de_cellule", cellule) as Resource
@@ -524,8 +561,6 @@ func _creer_tuile(tuile: Vector2i) -> void:
 							if teintable:
 								_pousser_teinte(bucket_teinte, item, cellule, i5)
 				else:
-					# FORME NON-CUBE (rampe, cylindre, sphere) : mesh complet, orientee.
-					# Elle a du volume -> projette toujours (jamais dans par_forme_sol).
 					var base := _regle.get_basis_with_orthogonal_index(orientation)
 					var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
 					if not par_forme.has(item):
@@ -533,39 +568,50 @@ func _creer_tuile(tuile: Vector2i) -> void:
 					par_forme[item].append(t)
 				couche_min = mini(couche_min, couche)
 				couche_max = maxi(couche_max, couche)
-				# OCCLUDEUR : CUBES SEULEMENT. Une rampe (ou toute forme non-cube)
-				# est visuellement une pente, mais _occludeur_de_cubes la traitait
-				# comme un CUBE PLEIN autour de sa cellule -- la camera qui monte
-				# la rampe passe visuellement A L'INTERIEUR de ce cube d'occludeur
-				# boite pleine, ce qui casse le culling Vulkan (le terrain lointain
-				# disparait). Diagnostic S2.6 : bug specifique aux rampes, pas a la
-				# hauteur en general. Correction : les non-cubes ne portent plus
-				# d'occludeur. Une rampe n'occlude rien de serieux de toute facon,
-				# le regard passe naturellement au-dessus ou a travers la pente.
 				if couche > sommet_base and _quad_par_item.has(item):
 					cellules_occl[cellule] = true
+	return {
+		"par_forme": par_forme,
+		"par_forme_sol": par_forme_sol,
+		"par_forme_mini": par_forme_mini,
+		"teinte_normal": teinte_normal,
+		"teinte_sol": teinte_sol,
+		"cellules_occl": cellules_occl,
+		"couche_min": couche_min,
+		"couche_max": couche_max,
+		"origine_col": origine_col,
+		"cote": cote,
+		"taille": taille,
+	}
 
-	# Map temporaire item -> MultiMesh pour mapper les entries teinte apres creation.
-	# Unifie entre les deux chemins : `mm` cote GPU est identique, seul le porteur
-	# (MMi ou instance RS) change ; le tick de teinte n'a donc pas besoin de brancher.
+# S7 -- PHASE 1 (BAKER INSTANCES + INDEX TEINTE). Lit `etat.parsed`, alloue les
+# MultiMesh et les porteurs (instances RS ou MMi selon utilise_rs_direct), remplit
+# l'index de teinte de la tuile. Ne fait AUCUN occludeur (phase 2). Ecrit dans
+# etat : instances_rs / noeuds / mm_par_item_normal / mm_par_item_sol -- lus par
+# la phase 2 ET par _supprimer_tuile en cas d'annulation en cours de pipeline.
+func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
+	var parsed: Dictionary = etat["parsed"]
+	var par_forme: Dictionary = parsed["par_forme"]
+	var par_forme_sol: Dictionary = parsed["par_forme_sol"]
+	var par_forme_mini: Dictionary = parsed["par_forme_mini"]
+	var teinte_normal: Dictionary = parsed["teinte_normal"]
+	var teinte_sol: Dictionary = parsed["teinte_sol"]
+	var couche_min: int = int(parsed["couche_min"])
+	var couche_max: int = int(parsed["couche_max"])
+	var origine_col: Vector2i = parsed["origine_col"]
+	var cote: float = parsed["cote"]
+	var taille: int = int(parsed["taille"])
+
 	var mm_par_item_normal: Dictionary = {}
 	var mm_par_item_sol: Dictionary = {}
-	# CHEMIN NŒUD (utilise_rs_direct=false) : Array de noeuds add_child dans le
-	# SceneTree, comme historiquement.
-	# CHEMIN RS DIRECT (utilise_rs_direct=true) : Dictionary { instances_rs, occluder }.
-	# Le mm est garde en ref forte via chaque entree {mm, rid} de instances_rs.
 	var noeuds: Array = []
 	var instances_rs: Array = []
-	var occluder_noeud: OccluderInstance3D = null
 	if utilise_rs_direct:
 		for item in par_forme.keys():
 			var e: Dictionary = _rs_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote, false)
 			if not e.is_empty():
 				instances_rs.append(e)
 				mm_par_item_normal[item] = e["mm"]
-		# LE SOL DE BASE NE PROJETTE PAS : il quitte les passes d'ombre. Il RECOIT
-		# toujours les ombres des objets poses dessus -- `cast_shadow` ne touche que la
-		# projection, jamais la reception.
 		for item in par_forme_sol.keys():
 			var e: Dictionary = _rs_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote, true)
 			if not e.is_empty():
@@ -582,7 +628,6 @@ func _creer_tuile(tuile: Vector2i) -> void:
 				add_child(mmi)
 				noeuds.append(mmi)
 				mm_par_item_normal[item] = mmi.multimesh
-		# LE SOL DE BASE NE PROJETTE PAS (idem cas RS ci-dessus).
 		for item in par_forme_sol.keys():
 			var mmi := _mmi_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote)
 			if mmi != null:
@@ -595,28 +640,42 @@ func _creer_tuile(tuile: Vector2i) -> void:
 			if mmi != null:
 				add_child(mmi)
 				noeuds.append(mmi)
-	# Construire l'index de teinte pour cette tuile : cellule -> [{mm, idx}].
-	# `mm` (pas `mmi`) : voir _tick_teinte, unifie entre les deux chemins.
+	# Index teinte de la tuile.
 	var index_tuile: Dictionary = {}
 	_agreger_teinte(index_tuile, teinte_normal, mm_par_item_normal)
 	_agreger_teinte(index_tuile, teinte_sol, mm_par_item_sol)
 	if not index_tuile.is_empty():
-		_teinte_par_tuile[tuile] = index_tuile
-	# L'OCCLUDEUR DU RELIEF, s'il y en a. Ce qui est derriere ces cubes -- autres
-	# cubes, arbres, unites -- n'est plus dessine par Godot. Reste un OccluderInstance3D
-	# dans les DEUX chemins (Godot 4 requiert un nœud pour le culling occlusion).
+		_teinte_par_tuile[_tuile] = index_tuile
+	etat["instances_rs"] = instances_rs
+	etat["noeuds"] = noeuds
+	etat["mm_par_item_normal"] = mm_par_item_normal
+	etat["mm_par_item_sol"] = mm_par_item_sol
+
+# S7 -- PHASE 2 (BAKER OCCLUDEUR + FINALISER _tuiles[tuile]). Bake l'occludeur
+# greedy meshing (le lourd -- 3-5x le parsing selon Zylann/godot_voxel), l'attache,
+# puis ecrit _tuiles[tuile] avec le contenu final selon le chemin (Array pour
+# nœud, Dictionary pour RS direct). Rend la sentinelle Array vide obsolete -- la
+# tuile est desormais consideree comme "batie".
+func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
+	var parsed: Dictionary = etat["parsed"]
+	var cellules_occl: Dictionary = parsed["cellules_occl"]
+	var cote: float = float(parsed["cote"])
+	var occluder_noeud: OccluderInstance3D = null
 	if not cellules_occl.is_empty():
 		var occl := _occludeur_de_cubes(cellules_occl, cote)
 		if occl != null:
 			add_child(occl)
-			if utilise_rs_direct:
-				occluder_noeud = occl
-			else:
-				noeuds.append(occl)
+			occluder_noeud = occl
 	if utilise_rs_direct:
-		_tuiles[tuile] = {"instances_rs": instances_rs, "occluder": occluder_noeud}
+		_tuiles[tuile] = {
+			"instances_rs": etat.get("instances_rs", []),
+			"occluder": occluder_noeud,
+		}
 	else:
-		_tuiles[tuile] = noeuds
+		var arr: Array = etat.get("noeuds", [])
+		if occluder_noeud != null:
+			arr.append(occluder_noeud)
+		_tuiles[tuile] = arr
 
 # LE VOISIN COUVRE-T-IL LA FACE ? Vrai seulement s'il est PLEIN a cette couche ET
 # que c'est un CUBE (il remplit sa cellule entiere). Une rampe, un cylindre, une
@@ -1036,11 +1095,19 @@ func _absorber_modifications_carte() -> void:
 		var t: Vector2i = _tuile_de_colonne(colonne)
 		if not _tuiles.has(t):
 			continue
-		# En file (sentinelle Array vide) : ignoree, elle lira l'etat a jour au bake.
-		# Batie (Array non vide OU Dictionary rs_direct) : a reconstruire.
+		# En file (sentinelle Array vide) : trois sous-cas.
+		# - Pas en pipeline : file classique, sera batie au drain avec l'etat a jour -> skip.
+		# - En pipeline phase 0 : rien encore parse, le drain lira l'etat a jour -> skip.
+		# - En pipeline phase >= 1 : `parsed` deja fige mais perime -> reconstruire.
+		# Batie (Array non vide OU Dictionary rs_direct) : reconstruire.
 		var contenu = _tuiles[t]
-		if contenu is Array and (contenu as Array).is_empty():
-			continue
+		var est_sentinelle: bool = contenu is Array and (contenu as Array).is_empty()
+		if est_sentinelle:
+			if not _tuiles_en_pipeline.has(t):
+				continue
+			var phase: int = int(_tuiles_en_pipeline[t].get("phase", 0))
+			if phase == 0:
+				continue
 		tuiles_a_reconstruire[t] = true
 	# REBUILD. Une passe, une par tuile.
 	for t in tuiles_a_reconstruire:
@@ -1055,6 +1122,24 @@ func _tuile_de_colonne(colonne: Vector2i) -> Vector2i:
 		int(floor(float(colonne.y) / float(taille_tuile_cellules))))
 
 func _supprimer_tuile(tuile: Vector2i) -> void:
+	# S7 -- Purger le pipeline AVANT tout autre nettoyage. Si la tuile a atteint
+	# phase 1 (instances bakees), libere aussi les ressources partielles (RIDs RS
+	# ou nœuds MMi) que _tuiles ne connait pas encore (sentinelle Array vide).
+	if _tuiles_en_pipeline.has(tuile):
+		var etat: Dictionary = _tuiles_en_pipeline[tuile]
+		var phase: int = int(etat.get("phase", 0))
+		if phase >= 2:
+			# Phase 1 done : instances (RS ou nœud) existent. Libere-les.
+			var rs_list: Array = etat.get("instances_rs", []) as Array
+			for e in rs_list:
+				var rid: RID = e["rid"]
+				if rid.is_valid():
+					RenderingServer.free_rid(rid)
+			var noeuds_partiels: Array = etat.get("noeuds", []) as Array
+			for n in noeuds_partiels:
+				if is_instance_valid(n):
+					n.queue_free()
+		_tuiles_en_pipeline.erase(tuile)
 	if not _tuiles.has(tuile):
 		return
 	var contenu = _tuiles[tuile]
