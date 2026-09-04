@@ -101,6 +101,7 @@ const REFERENCES := [
 	{ "champ": "etats_actifs", "catalogue": "res://data/etats.json", "racine": "", "forme": "liste" },
 	{ "champ": "type_produit", "catalogue": "res://data/types.json", "racine": "" },
 	{ "champ": "reproduction_ref", "catalogue": "res://data/reproduction.json", "racine": "" },
+	{ "champ": "mesh_ref", "catalogue": "res://data/mesh.json", "racine": "" },
 ]
 
 # REGISTRE DU SCAN "PROPRIETE ORPHELINE" -- source de verite du deuxieme
@@ -200,6 +201,12 @@ const PROPRIETES_CABLAGE_SEUL := [
 	             # poids_verbes.experimenter. Aucun mecanisme du coeur ne la
 	             # lit : agir.gd ne connait que poids_verbes, jamais la cause
 	             # qui l'a ecrit.
+	"mesh_ref", # chantier "peuplement + rendu MultiMesh" (fondation M1a) --
+	            # reference forme A vers data/mesh.json (scripts/mesh_catalogue.gd),
+	            # lue par le cablage du banc de peuplement pour resoudre le mesh
+	            # partage du MultiMesh. A PROMOUVOIR dans REGISTRE_PROPRIETES_LUES
+	            # le jour ou scripts/peuplement.gd (mecanisme du coeur, etape
+	            # suivante du meme chantier) la consomme directement.
 ]
 
 # Personne ne la lit aujourd'hui, ni le coeur ni un banc -- fondation posee

@@ -1,0 +1,8 @@
+{
+	"_note": "Catalogue local du banc jeu/bancs/banc_peuplement.gd (chantier 'peuplement + rendu MultiMesh', etape 2 M1a -- ajouter a CARTE.md dans le prochain chantier d'inventaire). Chaque banc jetable porte son propre fichier de reglages (patron docs/design.md), lu par le banc au _ready pour surcharger ses defauts @export. type_id et mesh_ref sont des categories NOMMEES par le banc -- c'est l'exception ADN qui autorise ce nommage dans le cablage d'un banc, jamais dans un mecanisme du coeur. type_id est resolu contre data/types.json par Objet.fabriquer ; mesh_ref est resolu contre data/mesh.json par scripts/mesh_catalogue.gd.",
+	"nombre_individus": 100,
+	"type_id": "mobile_test",
+	"mesh_ref": "boite_simple",
+	"demi_zone_spawn": 40.0,
+	"graine_rng": 20260904
+}

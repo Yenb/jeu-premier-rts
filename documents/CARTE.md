@@ -4799,6 +4799,15 @@ le geste, recopié dans vingt-sept endroits, vit désormais une seule fois —
 ne pas reproposer : un `retirer()` sur `monde.gd` — il rouvrirait la question
 des index pour un geste que la liste d'appel exprime déjà.
 
+**AMENDÉ (chantier « peuplement + rendu MultiMesh », validation Yael)** : un
+`retirer(id)` a finalement été ajouté à `scripts/monde.gd` (voir `monde.gd:224`
+§ « ECART AVEC LE DEPOT FRAMEWORK ») pour couvrir le cas d'une population qui
+se reproduit ET se détruit (`scripts/peuplement.gd`, `jeu/Proto/ennemis.gd`).
+L'ÉCARTÉ ci-dessus reste vrai côté dépôt Orion — ce dépôt-jeu s'en écarte,
+jamais l'inverse. `banc_commun.gd:monde_depuis` et le filtrage des fantômes
+gardent leur raison d'être pour tout mécanisme qui n'utilise pas ce retrait
+explicite.
+
 **Convention de survie d'une fusion à deux objets — NON TRANCHÉE**
 (`scripts/soudure.gd:souder`, chantier « soudabilite ») : `chose_a` garde
 toujours son id et sa position, `chose_b` est toujours l'objet absorbé —

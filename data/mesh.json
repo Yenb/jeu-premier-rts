@@ -1,0 +1,8 @@
+{
+	"_note": "Catalogue de meshes DECLARES EN DONNEE (chantier 'peuplement + rendu MultiMesh', fondation M1a) : chaque entree decrit un maillage generique par ses seuls parametres geometriques et sa couleur, sans reference a une ressource Godot precompilee (aucun res://...tres). scripts/mesh_catalogue.gd:fabriquer_mesh resoud une fiche en un Mesh Godot a la volee, une fois par forme, jamais par individu. La cle 'type' selectionne la famille geometrique : 'boite' -> BoxMesh. Ajouter une famille = un case de plus dans mesh_catalogue.gd, jamais un case de plus dans peuplement.gd (le rendu ne connait aucune famille, il consomme un Mesh deja resolu). PATRON DE REFERENCE : meme forme A que profil_saillance/transformation/materiau (voir docs/design.md, 'Propriete du monde vs champ de configuration technique' et scripts/test_lint_donnees.gd:REFERENCES) : un type de data/types.json porte une String 'mesh_ref' qui pointe ICI, jamais une valeur de mesh recopiee sur le type. Toute cle commencant par '_' est un commentaire, jamais une entree resolvable (ignoree par le linter, voir test_lint_donnees.gd).",
+	"boite_simple": {
+		"type": "boite",
+		"taille": { "x": 0.8, "y": 0.8, "z": 0.8 },
+		"couleur": { "r": 0.15, "g": 0.8, "b": 0.15, "a": 1.0 }
+	}
+}
