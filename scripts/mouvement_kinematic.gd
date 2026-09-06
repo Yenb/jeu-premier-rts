@@ -534,6 +534,12 @@ static func redimensionner_entite(entite: Dictionary, nouvelle_hauteur: float, n
 # "position", "velocite", "desiree" (PackedVector3Array), "au_sol"
 # (PackedByteArray). count = nombre d'agents actifs. gravite est scalaire pour
 # tout le lot -- si un jour elle varie par agent, ajouter une colonne.
+#
+# MIROIR : le corps physique (S.2 a S.10) est recopie dans
+# jeu/bancs/banc_peuplement.gd::physique_et_buffer pour la fusion round 11
+# (physique + buffer en une seule boucle ; l'errance reste separee). Si l'un
+# change, l'autre DOIT changer aussi -- la parite est verrouillee par
+# scripts/test_tick_fusionne.gd.
 static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: float, carte) -> void:
 	if delta <= 0.0 or carte == null:
 		return
@@ -544,6 +550,10 @@ static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: 
 	var cote: float = 2.0
 	if "cote" in carte:
 		cote = float(carte.cote)
+	# Precalculs (alignes sur banc_peuplement.gd::physique_et_buffer) : les
+	# divisions par cote deviennent des multiplications.
+	var inv_cote: float = 1.0 / cote
+	var trois_sur_cote: float = 3.0 * inv_cote
 	# TABLE PLATE de hauteur : recuperee UNE fois en tete. Lecture O(1) par
 	# index arithmetique dans la boucle -- sur un hit, aucun appel a
 	# carte.sommet_sous. La ref locale est en retard d'une frame apres un miss
@@ -581,15 +591,15 @@ static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: 
 		var x1: float = pos.x
 		var z1: float = pos.z
 		var ymax1: float = pos.y + cote
-		var cx1: int = int(floor(x1 / cote))
-		var cz1: int = int(floor(z1 / cote))
+		var cx1: int = floori(x1 * inv_cote)
+		var cz1: int = floori(z1 * inv_cote)
 		var sol_ici_val: float = 0.0
 		var sol_ici_present: bool = false
 		if cx1 >= -demi_cote and cx1 < demi_cote and cz1 >= -demi_cote and cz1 < demi_cote:
 			var xl1: float = x1 - float(cx1) * cote
 			var zl1: float = z1 - float(cz1) * cote
-			var ix1: int = clampi(int(floor(xl1 * 3.0 / cote)), 0, 2)
-			var iz1: int = clampi(int(floor(zl1 * 3.0 / cote)), 0, 2)
+			var ix1: int = clampi(floori(xl1 * trois_sur_cote), 0, 2)
+			var iz1: int = clampi(floori(zl1 * trois_sur_cote), 0, 2)
 			var idx1: int = ((cx1 + demi_cote) + (cz1 + demi_cote) * cote_lin) * 9 + ix1 + iz1 * 3
 			var cache1: float = table[idx1]
 			if not is_nan(cache1) and cache1 <= ymax1:
@@ -605,15 +615,15 @@ static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: 
 		var x2: float = pos.x + dep_x
 		var z2: float = pos.z + dep_z
 		var ymax2: float = pos.y + cote
-		var cx2: int = int(floor(x2 / cote))
-		var cz2: int = int(floor(z2 / cote))
+		var cx2: int = floori(x2 * inv_cote)
+		var cz2: int = floori(z2 * inv_cote)
 		var sol_dv_val: float = 0.0
 		var sol_dv_present: bool = false
 		if cx2 >= -demi_cote and cx2 < demi_cote and cz2 >= -demi_cote and cz2 < demi_cote:
 			var xl2: float = x2 - float(cx2) * cote
 			var zl2: float = z2 - float(cz2) * cote
-			var ix2: int = clampi(int(floor(xl2 * 3.0 / cote)), 0, 2)
-			var iz2: int = clampi(int(floor(zl2 * 3.0 / cote)), 0, 2)
+			var ix2: int = clampi(floori(xl2 * trois_sur_cote), 0, 2)
+			var iz2: int = clampi(floori(zl2 * trois_sur_cote), 0, 2)
 			var idx2: int = ((cx2 + demi_cote) + (cz2 + demi_cote) * cote_lin) * 9 + ix2 + iz2 * 3
 			var cache2: float = table[idx2]
 			if not is_nan(cache2) and cache2 <= ymax2:
@@ -645,15 +655,15 @@ static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: 
 		var x3: float = pos.x
 		var z3: float = pos.z
 		var ymax3: float = pos.y + cote
-		var cx3: int = int(floor(x3 / cote))
-		var cz3: int = int(floor(z3 / cote))
+		var cx3: int = floori(x3 * inv_cote)
+		var cz3: int = floori(z3 * inv_cote)
 		var sol_val: float = 0.0
 		var sol_present: bool = false
 		if cx3 >= -demi_cote and cx3 < demi_cote and cz3 >= -demi_cote and cz3 < demi_cote:
 			var xl3: float = x3 - float(cx3) * cote
 			var zl3: float = z3 - float(cz3) * cote
-			var ix3: int = clampi(int(floor(xl3 * 3.0 / cote)), 0, 2)
-			var iz3: int = clampi(int(floor(zl3 * 3.0 / cote)), 0, 2)
+			var ix3: int = clampi(floori(xl3 * trois_sur_cote), 0, 2)
+			var iz3: int = clampi(floori(zl3 * trois_sur_cote), 0, 2)
 			var idx3: int = ((cx3 + demi_cote) + (cz3 + demi_cote) * cote_lin) * 9 + ix3 + iz3 * 3
 			var cache3: float = table[idx3]
 			if not is_nan(cache3) and cache3 <= ymax3:

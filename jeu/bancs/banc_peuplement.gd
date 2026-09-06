@@ -223,10 +223,14 @@ func _remplir_colonnes_depuis_individus() -> void:
 		var p: Dictionary = individu.proprietes
 		positions[i] = individu.position
 		velocites[i] = p.get("velocite", Vector3.ZERO)
-		desirees[i] = p.get("velocite_desiree_horizontale", Vector3.ZERO)
 		directions[i] = p.get("errance_direction", Vector3.ZERO)
 		cap_horloges[i] = float(p.get("errance_cap_horloge", 0.0))
 		vitesses[i] = float(p.get("vitesse", 1.0))
+		# desiree = direction * vitesse au spawn : la passe errance revisee du
+		# round 11 ne reecrit desiree qu'a l'expiration de l'horloge ; sans
+		# cette init, frame 1 partirait de Vector3.ZERO au lieu de la direction
+		# tiree au spawn.
+		desirees[i] = directions[i] * vitesses[i]
 		au_sols[i] = 1 if bool(p.get("au_sol", false)) else 0
 		slots[i] = int(p.get("_slot", -1))
 		i += 1
@@ -242,50 +246,200 @@ func _remplir_colonnes_depuis_individus() -> void:
 func _physics_process(delta: float) -> void:
 	if _pool.is_empty():
 		return
-	var carte = _carte
-	var cols: Dictionary = _pool.colonnes
 	var count: int = (_pool.individus as Array).size()
 	if count == 0:
 		return
-	# PASSE ERRANCE sur les colonnes. Depack CoW en tete, muter, REPACK.
+	# ROUND 11 (revise) : deux passes au lieu de trois.
+	# PASSE 1 -- intention (errance) : reste separee car dans le vrai jeu
+	# elle deviendra une couche IA qui decide hors du tick physique. Optim :
+	# desiree[i] n'est reecrit QUE quand l'horloge expire (direction change) --
+	# les autres frames, desiree conserve sa valeur, identique par definition.
+	var cols: Dictionary = _pool.colonnes
 	var directions: PackedVector3Array = cols.direction
 	var cap_horloges: PackedFloat32Array = cols.cap_horloge
 	var vitesses: PackedFloat32Array = cols.vitesse
 	var desirees: PackedVector3Array = cols.desiree
+	var repack_desiree: bool = false
+	var repack_direction: bool = false
 	var i: int = 0
 	while i < count:
 		var horloge: float = cap_horloges[i] - delta
-		var direction: Vector3 = directions[i]
 		if horloge <= 0.0:
-			direction = _nouvelle_direction()
+			var angle: float = _rng.randf() * TAU
+			var direction := Vector3(cos(angle), 0.0, sin(angle))
 			directions[i] = direction
+			repack_direction = true
 			horloge = _rng.randf_range(3.0, 8.0)
+			desirees[i] = direction * vitesses[i]
+			repack_desiree = true
 		cap_horloges[i] = horloge
-		desirees[i] = direction * vitesses[i]
 		i += 1
-	cols.direction = directions
 	cols.cap_horloge = cap_horloges
-	cols.desiree = desirees
-	# UNE SEULE passe physique sur tout le lot. pas_simple_lot repack lui-meme
-	# position / velocite / au_sol dans cols avant de rendre.
-	Mouvement.pas_simple_lot(cols, count, GRAVITE_LOT, delta, carte)
-	# TAMPON UNIQUE : ecrire les 3 floats d'origine par slot depuis cols.position,
-	# pousser au mm et reassigner _pool.buffer (piege CoW, meme que le round 7).
+	if repack_direction:
+		cols.direction = directions
+	if repack_desiree:
+		cols.desiree = desirees
+	# PASSE 2 -- physique + buffer fusionnes, dans physique_et_buffer.
+	var buffer: PackedFloat32Array = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
+	(_pool.mm as MultiMesh).buffer = buffer
+	_pool["buffer"] = buffer
+
+
+# PHYSIQUE + BUFFER FUSIONNES (round 11 revise) : une seule boucle sur count qui
+# applique le corps physique de pas_simple_lot puis ecrit les trois floats
+# d'origine du buffer MultiMesh du slot depuis la nouvelle position. Depack
+# desiree/position/velocite/au_sol/slot + buffer en tete, repack en queue.
+#
+# MIROIR : le corps physique (S.2 a S.10) est une COPIE de
+# scripts/mouvement_kinematic.gd::pas_simple_lot. Si l'un change, l'autre
+# DOIT changer aussi. Commentaire croise pose la-bas.
+# Le verrou de parite (meme resultat que pas_simple_lot + ecriture buffer
+# separee) est scripts/test_tick_fusionne.gd.
+#
+# REGLAGES ROUND 11 REVISE :
+# - floori(x) au lieu de int(floor(x)) dans les calculs d'index de sol.
+# - inv_cote = 1.0 / cote et trois_sur_cote = 3.0 / cote precalcules,
+#   les divisions par cote deviennent des multiplications.
+#
+# Static : la helper prend tout en parametre pour etre testable hors du banc.
+static func physique_et_buffer(cols: Dictionary, buffer: PackedFloat32Array, count: int, gravite: float, delta: float, carte) -> PackedFloat32Array:
+	if delta <= 0.0 or count <= 0 or carte == null:
+		return buffer
+	var desirees: PackedVector3Array = cols.desiree
 	var positions: PackedVector3Array = cols.position
+	var velocites: PackedVector3Array = cols.velocite
+	var au_sols: PackedByteArray = cols.au_sol
 	var slots: PackedInt32Array = cols.slot
-	var buffer: PackedFloat32Array = _pool.buffer
-	i = 0
+	var cote: float = 2.0
+	if "cote" in carte:
+		cote = float(carte.cote)
+	var inv_cote: float = 1.0 / cote
+	var trois_sur_cote: float = 3.0 * inv_cote
+	var table: PackedFloat32Array = carte.table_sommet()
+	var demi_cote: int = int(carte.demi_cote)
+	var cote_lin: int = 2 * demi_cote
+	var g_dt: float = gravite * delta
+	# VITESSE_TERMINALE = 55.0 (IDENTIQUE a Mouvement.VITESSE_TERMINALE dans
+	# scripts/mouvement_kinematic.gd -- valeur constante du profil simple).
+	var vt: float = -55.0
+	var i: int = 0
 	while i < count:
+		# ---- PHYSIQUE (copie EXACTE de pas_simple_lot, S.2 a S.10) ----
+		var ve: Vector3 = velocites[i]
+		ve.y -= g_dt
+		if ve.y < vt:
+			ve.y = vt
+		var vdh: Vector3 = desirees[i]
+		ve.x = vdh.x
+		ve.z = vdh.z
+		var dep_x: float = ve.x * delta
+		var dep_y: float = ve.y * delta
+		var dep_z: float = ve.z * delta
+		var pos: Vector3 = positions[i]
+		# --- sol sous les pieds ---
+		var x1: float = pos.x
+		var z1: float = pos.z
+		var ymax1: float = pos.y + cote
+		var cx1: int = floori(x1 * inv_cote)
+		var cz1: int = floori(z1 * inv_cote)
+		var sol_ici_val: float = 0.0
+		var sol_ici_present: bool = false
+		if cx1 >= -demi_cote and cx1 < demi_cote and cz1 >= -demi_cote and cz1 < demi_cote:
+			var xl1: float = x1 - float(cx1) * cote
+			var zl1: float = z1 - float(cz1) * cote
+			var ix1: int = clampi(floori(xl1 * trois_sur_cote), 0, 2)
+			var iz1: int = clampi(floori(zl1 * trois_sur_cote), 0, 2)
+			var idx1: int = ((cx1 + demi_cote) + (cz1 + demi_cote) * cote_lin) * 9 + ix1 + iz1 * 3
+			var cache1: float = table[idx1]
+			if not is_nan(cache1) and cache1 <= ymax1:
+				sol_ici_val = cache1
+				sol_ici_present = true
+		if not sol_ici_present:
+			var r1 = carte.sommet_sous(x1, z1, ymax1)
+			if r1 != null:
+				sol_ici_val = float(r1)
+				sol_ici_present = true
+		# --- sol devant ---
+		var x2: float = pos.x + dep_x
+		var z2: float = pos.z + dep_z
+		var ymax2: float = pos.y + cote
+		var cx2: int = floori(x2 * inv_cote)
+		var cz2: int = floori(z2 * inv_cote)
+		var sol_dv_val: float = 0.0
+		var sol_dv_present: bool = false
+		if cx2 >= -demi_cote and cx2 < demi_cote and cz2 >= -demi_cote and cz2 < demi_cote:
+			var xl2: float = x2 - float(cx2) * cote
+			var zl2: float = z2 - float(cz2) * cote
+			var ix2: int = clampi(floori(xl2 * trois_sur_cote), 0, 2)
+			var iz2: int = clampi(floori(zl2 * trois_sur_cote), 0, 2)
+			var idx2: int = ((cx2 + demi_cote) + (cz2 + demi_cote) * cote_lin) * 9 + ix2 + iz2 * 3
+			var cache2: float = table[idx2]
+			if not is_nan(cache2) and cache2 <= ymax2:
+				sol_dv_val = cache2
+				sol_dv_present = true
+		if not sol_dv_present:
+			var r2 = carte.sommet_sous(x2, z2, ymax2)
+			if r2 != null:
+				sol_dv_val = float(r2)
+				sol_dv_present = true
+		if not sol_ici_present or not sol_dv_present:
+			dep_x = 0.0
+			dep_z = 0.0
+			ve.x = 0.0
+			ve.z = 0.0
+		elif sol_dv_val - sol_ici_val > cote:
+			dep_x = 0.0
+			dep_z = 0.0
+			ve.x = 0.0
+			ve.z = 0.0
+		pos.x += dep_x
+		pos.z += dep_z
+		pos.y += dep_y
+		# --- snap sol ---
+		var x3: float = pos.x
+		var z3: float = pos.z
+		var ymax3: float = pos.y + cote
+		var cx3: int = floori(x3 * inv_cote)
+		var cz3: int = floori(z3 * inv_cote)
+		var sol_val: float = 0.0
+		var sol_present: bool = false
+		if cx3 >= -demi_cote and cx3 < demi_cote and cz3 >= -demi_cote and cz3 < demi_cote:
+			var xl3: float = x3 - float(cx3) * cote
+			var zl3: float = z3 - float(cz3) * cote
+			var ix3: int = clampi(floori(xl3 * trois_sur_cote), 0, 2)
+			var iz3: int = clampi(floori(zl3 * trois_sur_cote), 0, 2)
+			var idx3: int = ((cx3 + demi_cote) + (cz3 + demi_cote) * cote_lin) * 9 + ix3 + iz3 * 3
+			var cache3: float = table[idx3]
+			if not is_nan(cache3) and cache3 <= ymax3:
+				sol_val = cache3
+				sol_present = true
+		if not sol_present:
+			var r3 = carte.sommet_sous(x3, z3, ymax3)
+			if r3 != null:
+				sol_val = float(r3)
+				sol_present = true
+		var contact: bool = false
+		if sol_present and pos.y <= sol_val:
+			pos.y = sol_val
+			contact = true
+		var au_sol_final: bool = contact and ve.y <= 0.0
+		au_sols[i] = 1 if au_sol_final else 0
+		if au_sol_final:
+			ve.y = 0.0
+		velocites[i] = ve
+		positions[i] = pos
+		# ---- BUFFER (round 7, layout TRANSFORM_3D 12 floats/slot) ----
 		var slot: int = slots[i]
 		if slot >= 0:
 			var base: int = slot * 12
-			var pos: Vector3 = positions[i]
 			buffer[base + 3] = pos.x
 			buffer[base + 7] = pos.y
 			buffer[base + 11] = pos.z
 		i += 1
-	(_pool.mm as MultiMesh).buffer = buffer
-	_pool["buffer"] = buffer
+	cols.position = positions
+	cols.velocite = velocites
+	cols.au_sol = au_sols
+	return buffer
 
 func _nouvelle_direction() -> Vector3:
 	var angle: float = _rng.randf() * TAU
