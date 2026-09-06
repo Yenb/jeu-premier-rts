@@ -177,9 +177,25 @@ var _creations_tuile_compte: int = 0
 var _mini_box_par_item: Dictionary = {}
 
 # Instance de MesheurTuile (GDExtension) instancie paresseusement au premier
-# appel de _appliquer_cpp_a. Voir extension_terrain/. Depuis l'etape (d), c'est
-# l'UNIQUE chemin de meshing de la phase 0.
+# bake. Voir extension_terrain/. Chemin unique de meshing de la phase 0.
 var _mesheur: Object = null
+
+# INDEX SPATIAL PAR TUILE (voie C). Chaque tuile porte SES colonnes/cellules
+# non-defaut, restreintes a elle-meme. Le bake d'une tuile lit 9 entrees
+# (self + 8 voisins) et rien d'autre -- cout constant, independant de la
+# taille de la carte. Construit une fois au _ready, maintenu par
+# _mettre_a_jour_index_pour_colonne appele pour chaque colonne du drain
+# `drainer_modifications` dans _absorber_modifications_carte.
+#
+# Structure par tuile (Vector2i) :
+#   {
+#     "volumes":            Dict[Vector2i col -> int masque],
+#     "particularites":     Dict[Vector3i cellule -> int code],
+#     "masques_sous_cube":  Dict[Vector3i cellule -> int masque_sous],
+#     "pv_sous_cubes":      Dict[Vector3i cellule -> Dict[int sous_idx -> int pv]]
+#   }
+# Entree vide si la tuile n'a que du terrain par defaut.
+var _index_par_tuile: Dictionary = {}
 
 func _ready() -> void:
 	if carte == null:
@@ -203,6 +219,7 @@ func _ready() -> void:
 	# face_base / face_normale). Le GDScript n'emet plus aucune face.
 	_preparer_quads(cote)
 	_preparer_mini_cubes(cote)
+	_construire_index_initial()
 	_rafraichir_vers(_centre_tuile_observateur())
 
 # UN QUAD PAR FORME CUBIQUE. Chaque cube (BoxMesh) sera rendu face par face au
@@ -466,7 +483,6 @@ func _creer_tuile(tuile: Vector2i) -> void:
 func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
-	var particularites: Dictionary = carte.particularites
 	var taille := taille_tuile_cellules
 	var origine_col := Vector2i(tuile.x * taille, tuile.y * taille)
 	if _ressources == null:
@@ -477,7 +493,7 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 			push_error("MesheurTuile introuvable -- extension_terrain non chargee")
 			return {}
 
-	var blob := _blob_tuile_a(origine_col, cote, couche_base, particularites)
+	var blob := _blob_tuile_a(origine_col, cote, couche_base)
 	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
 
 	# Teinte : pour chaque cellule candidate rendue par le C++, lire profil et
@@ -924,6 +940,11 @@ func _absorber_modifications_carte() -> void:
 	# meme carre coutait 10 rebuilds pour 10 sous-cubes.
 	var tuiles_a_reconstruire: Dictionary = {}
 	for colonne in modifs:
+		# INDEX SPATIAL (voie C) : rafraichir l'entree d'index de la tuile
+		# affectee AVANT le rebuild, sinon le bake C++ lirait des donnees
+		# perimees. Fait meme pour les tuiles hors disque : leur index se
+		# retrouve a jour pour quand elles entreront.
+		_mettre_a_jour_index_pour_colonne(colonne)
 		var t: Vector2i = _tuile_de_colonne(colonne)
 		if not _tuiles.has(t):
 			continue
@@ -1107,70 +1128,37 @@ func _tick_teinte() -> void:
 				var mm: MultiMesh = face["mm"]
 				mm.set_instance_color(int(face["idx"]), couleur)
 
-# ETAPE (a) -- assemble le blob d'entree pour MesheurTuile.bake_tuile_a. Voir
-# l'entete de extension_terrain/src/mesheur_tuile.h pour le contrat. Le blob
-# tient tout ce que le C++ doit lire sur la tuile + ses 4 anneaux (12x12), plus
-# les tables qui ne bougent pas d'une tuile a l'autre (items cubiques,
-# hauteurs). Le C++ ne rappelle jamais la carte apres reception.
-func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
-		particularites: Dictionary) -> Dictionary:
+# Assemble le blob d'entree pour MesheurTuile.bake_tuile_a. Voie C : merge
+# de 9 entrees de l'index spatial (self + 8 voisins) -- aucun parcours de
+# tuile, aucun lookup carte.* en boucle. Cout : somme des tailles des 9
+# entrees d'index (petites -- borne par ce qui a ete sculpte). Independant
+# de la taille totale de la carte.
+#
+# Le C++ recoit les dicts bruts tuile-locaux et les monte en unordered_map
+# natifs a l'entree. Il calcule visibilite + couvrants + emission en natif.
+func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int) -> Dictionary:
 	var taille := taille_tuile_cellules
-	var wsize := taille + 2
-	var masques := PackedInt64Array()
-	var couvrants := PackedInt64Array()
-	masques.resize(wsize * wsize)
-	couvrants.resize(wsize * wsize)
-	var memo_bits: Dictionary = {}
-	var memo_couvrant: Dictionary = {}
-	for lx in range(-1, taille + 1):
-		for lz in range(-1, taille + 1):
-			var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
-			var idx := (lx + 1) + (lz + 1) * wsize
-			masques[idx] = _masque_col(col, memo_bits)
-			couvrants[idx] = _masque_couvrant_col(col, memo_couvrant)
+	var tuile := _tuile_de_colonne(origine_col)
 
-	# Particularites de la tuile SEULE. Iteration par cellule via le masque de
-	# chaque colonne : cout borne a taille² × r_top, jamais lie a la taille
-	# globale du dict `particularites` de la carte.
-	var part_arr := PackedInt32Array()
-	var sc_arr := PackedInt32Array()
-	var pv_arr := PackedInt32Array()
-	for lx in range(taille):
-		for lz in range(taille):
-			var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
-			var bits: int = masques[(lx + 1) + (lz + 1) * wsize]
-			if bits == 0:
+	# Merge des 9 entrees d'index (self + 8 voisins) en 4 dicts unifies.
+	# `merge` sans overwrite parce qu'aucune cellule ne peut vivre dans deux
+	# tuiles voisines simultanement -- clefs disjointes.
+	var vol_merged: Dictionary = {}
+	var part_merged: Dictionary = {}
+	var sc_merged: Dictionary = {}
+	var pv_merged: Dictionary = {}
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var t := Vector2i(tuile.x + dx, tuile.y + dz)
+			var entree: Dictionary = _index_par_tuile.get(t, {})
+			if entree.is_empty():
 				continue
-			var r_top := CarteTerrain.rang_le_plus_haut(bits)
-			for rang in range(r_top + 1):
-				if (bits & (1 << rang)) == 0:
-					continue
-				var cellule := Vector3i(col.x, couche_base + rang, col.y)
-				if particularites.has(cellule):
-					part_arr.append(cellule.x)
-					part_arr.append(cellule.y)
-					part_arr.append(cellule.z)
-					part_arr.append(int(particularites[cellule]))
-				var m: int = int(carte.sous_cubes(cellule))
-				if m != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN:
-					sc_arr.append(cellule.x)
-					sc_arr.append(cellule.y)
-					sc_arr.append(cellule.z)
-					sc_arr.append(m)
-				var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
-				if not pv_map.is_empty():
-					# ETAPE (b) : UN quintuple par sous-cube endommage, pour
-					# que le C++ puisse teinter chaque mini-cube (blanc a noir
-					# selon pv/MAX_PV_SOUS_CUBE).
-					for sous_idx in pv_map:
-						pv_arr.append(cellule.x)
-						pv_arr.append(cellule.y)
-						pv_arr.append(cellule.z)
-						pv_arr.append(int(sous_idx))
-						pv_arr.append(int(pv_map[sous_idx]))
+			vol_merged.merge(entree["volumes"])
+			part_merged.merge(entree["particularites"])
+			sc_merged.merge(entree["masques_sous_cube"])
+			pv_merged.merge(entree["pv_sous_cubes"])
 
-	# Tables item -> cubique / hauteur. Petites (une entree par forme de la
-	# bibliotheque), reconstruites a chaque tuile car peu couteuses.
+	# Tables item.
 	var items_cub := PackedInt32Array()
 	for item in _quad_par_item.keys():
 		items_cub.append(int(item))
@@ -1179,16 +1167,7 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 	for item in _hauteur_par_item.keys():
 		h_cle.append(int(item))
 		h_val.append(float(_hauteur_par_item[item]))
-
-	# Offset de centre : ce que _regle.map_to_local rend pour la cellule (0,0,0).
-	# Passe pour ne pas dependre des defauts cell_center_x/y/z du GridMap dans
-	# le C++.
 	var centre_offset: Vector3 = _regle.map_to_local(Vector3i(0, 0, 0))
-
-	# ETAPE (b) : les 24 bases orthogonales du GridMap, encodees a plat
-	# (m00,m01,m02, m10,m11,m12, m20,m21,m22 par basis). Le C++ decode par
-	# `orient * 9 + k`. get_basis_with_orthogonal_index est cote nœud, jamais
-	# appele du C++.
 	var bases_ortho := PackedFloat32Array()
 	bases_ortho.resize(24 * 9)
 	for orient in range(24):
@@ -1203,11 +1182,6 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 		bases_ortho[off + 6] = b.x.z
 		bases_ortho[off + 7] = b.y.z
 		bases_ortho[off + 8] = b.z.z
-
-	# ETAPE (b) : mesh_transforms des items NON-cubiques uniquement. Le C++
-	# multiplie base_orthogonale x mesh_transform pour ces items. Items
-	# cubiques et ITEM_LIMITE exclus (pas de rendu direct de leur mesh
-	# complet).
 	var mesh_transforms: Dictionary = {}
 	for item in mesh_library.get_item_list():
 		if _quad_par_item.has(item):
@@ -1221,22 +1195,126 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 		"taille": taille,
 		"couche_base": couche_base,
 		"couches_max": CarteTerrain.COUCHES_MAXIMALES,
+		"demi_cote": int(carte.demi_cote),
 		"cote": cote,
 		"sommet_base": int(carte.sommet_de_base()),
+		"masque_base": int(carte.masque_de_base()),
 		"item_limite": ITEM_LIMITE,
 		"item_defaut": CarteTerrain.ITEM_DEFAUT,
 		"orientation_defaut": CarteTerrain.ORIENTATION_DEFAUT,
 		"masque_sous_plein": CarteTerrain.MASQUE_SOUS_CUBE_PLEIN,
 		"max_pv_sous_cube": CarteTerrain.MAX_PV_SOUS_CUBE,
 		"centre_offset": centre_offset,
-		"masques": masques,
-		"couvrants": couvrants,
-		"particularites": part_arr,
-		"sous_cubes_partiels": sc_arr,
-		"pv_par_cellule": pv_arr,
+		"volumes": vol_merged,
+		"particularites": part_merged,
+		"masques_sous_cube": sc_merged,
+		"pv_sous_cubes": pv_merged,
 		"items_cubiques": items_cub,
 		"items_hauteur_cle": h_cle,
 		"items_hauteur_val": h_val,
 		"bases_orthogonales": bases_ortho,
 		"mesh_transforms": mesh_transforms,
+	}
+
+# ----- INDEX SPATIAL PAR TUILE (voie C) -------------------------------------
+# Construit une fois au _ready. L'iteration passe UNE fois sur chaque dict de
+# la carte pour dispatcher les entrees vers leur tuile owner. Cout O(dict
+# size), one-time. Toutes les mises a jour ulterieures sont incrementales via
+# _mettre_a_jour_index_pour_colonne.
+func _construire_index_initial() -> void:
+	_index_par_tuile.clear()
+	# Volumes : Dict[Vector2i col -> int]
+	for col in carte.volumes:
+		var t: Vector2i = _tuile_de_colonne(col)
+		var entree: Dictionary = _index_par_tuile.get(t, {})
+		if entree.is_empty():
+			entree = _nouvelle_entree_index()
+			_index_par_tuile[t] = entree
+		entree["volumes"][col] = carte.volumes[col]
+	# Particularites : Dict[Vector3i cellule -> int]
+	for cellule in carte.particularites:
+		var t: Vector2i = _tuile_de_colonne(Vector2i(cellule.x, cellule.z))
+		var entree: Dictionary = _index_par_tuile.get(t, {})
+		if entree.is_empty():
+			entree = _nouvelle_entree_index()
+			_index_par_tuile[t] = entree
+		entree["particularites"][cellule] = carte.particularites[cellule]
+	# _masques_sous_cube (prive de carte) : Dict[Vector3i -> int]
+	var scd: Variant = carte.get("_masques_sous_cube")
+	if scd is Dictionary:
+		var scd_d: Dictionary = scd
+		for cellule in scd_d:
+			var t: Vector2i = _tuile_de_colonne(Vector2i(cellule.x, cellule.z))
+			var entree: Dictionary = _index_par_tuile.get(t, {})
+			if entree.is_empty():
+				entree = _nouvelle_entree_index()
+				_index_par_tuile[t] = entree
+			entree["masques_sous_cube"][cellule] = scd_d[cellule]
+	# _pv_sous_cubes (prive de carte) : Dict[Vector3i -> Dict[int, int]]
+	var pvd: Variant = carte.get("_pv_sous_cubes")
+	if pvd is Dictionary:
+		var pvd_d: Dictionary = pvd
+		for cellule in pvd_d:
+			var t: Vector2i = _tuile_de_colonne(Vector2i(cellule.x, cellule.z))
+			var entree: Dictionary = _index_par_tuile.get(t, {})
+			if entree.is_empty():
+				entree = _nouvelle_entree_index()
+				_index_par_tuile[t] = entree
+			entree["pv_sous_cubes"][cellule] = pvd_d[cellule]
+
+# Met a jour l'index pour UNE colonne modifiee. Appele pour chaque colonne du
+# drain `drainer_modifications`. Cout : ~189 dict lookups par colonne
+# (indeependant de la taille de la carte).
+func _mettre_a_jour_index_pour_colonne(colonne: Vector2i) -> void:
+	var t: Vector2i = _tuile_de_colonne(colonne)
+	var entree: Dictionary = _index_par_tuile.get(t, {})
+	if entree.is_empty():
+		entree = _nouvelle_entree_index()
+		_index_par_tuile[t] = entree
+	# Volumes : lookup carte, put ou erase.
+	if carte.volumes.has(colonne):
+		entree["volumes"][colonne] = carte.volumes[colonne]
+	else:
+		entree["volumes"].erase(colonne)
+	# Particularites / masques_sous_cube / pv : purger les cellules de cette
+	# colonne dans l'index, puis rescanner les 63 rangs possibles sur la carte.
+	var to_erase_part: Array = []
+	for k in entree["particularites"]:
+		if k.x == colonne.x and k.z == colonne.y:
+			to_erase_part.append(k)
+	for k in to_erase_part:
+		entree["particularites"].erase(k)
+	var to_erase_sc: Array = []
+	for k in entree["masques_sous_cube"]:
+		if k.x == colonne.x and k.z == colonne.y:
+			to_erase_sc.append(k)
+	for k in to_erase_sc:
+		entree["masques_sous_cube"].erase(k)
+	var to_erase_pv: Array = []
+	for k in entree["pv_sous_cubes"]:
+		if k.x == colonne.x and k.z == colonne.y:
+			to_erase_pv.append(k)
+	for k in to_erase_pv:
+		entree["pv_sous_cubes"].erase(k)
+	var couche_base: int = int(carte.couche_base)
+	var carte_part: Dictionary = carte.particularites
+	var scd: Variant = carte.get("_masques_sous_cube")
+	var pvd: Variant = carte.get("_pv_sous_cubes")
+	var scd_d: Dictionary = scd if scd is Dictionary else {}
+	var pvd_d: Dictionary = pvd if pvd is Dictionary else {}
+	for rang in range(CarteTerrain.COUCHES_MAXIMALES):
+		var cellule := Vector3i(colonne.x, couche_base + rang, colonne.y)
+		if carte_part.has(cellule):
+			entree["particularites"][cellule] = carte_part[cellule]
+		if scd_d.has(cellule):
+			entree["masques_sous_cube"][cellule] = scd_d[cellule]
+		if pvd_d.has(cellule):
+			entree["pv_sous_cubes"][cellule] = pvd_d[cellule]
+
+func _nouvelle_entree_index() -> Dictionary:
+	return {
+		"volumes": {},
+		"particularites": {},
+		"masques_sous_cube": {},
+		"pv_sous_cubes": {},
 	}

@@ -1,12 +1,12 @@
 #include "mesheur_tuile.h"
 
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/basis.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
-#include <godot_cpp/variant/packed_int64_array.hpp>
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/vector2i.hpp>
 #include <godot_cpp/variant/vector3.hpp>
@@ -20,8 +20,15 @@
 
 using namespace godot;
 
-// ----- helpers ---------------------------------------------------------------
 namespace {
+
+struct Vec2iHash {
+	size_t operator()(const Vector2i &v) const noexcept {
+		size_t h = std::hash<int32_t>()(v.x);
+		h ^= std::hash<int32_t>()(v.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+		return h;
+	}
+};
 
 struct Vec3iHash {
 	size_t operator()(const Vector3i &v) const noexcept {
@@ -32,13 +39,9 @@ struct Vec3iHash {
 	}
 };
 
-// Buffer natif d'un item : buffer plat (16 floats/instance) et cellules
-// paralleles (3 ints/instance). Reserve() peut etre appele apres estimation
-// rapide pour eviter les reallocations.
 struct BucketItem {
-	std::vector<float> buffer;   // 16 floats par instance
-	std::vector<int32_t> cellules; // 3 ints par instance (x,y,z)
-	inline int count() const { return (int)(cellules.size() / 3); }
+	std::vector<float> buffer;
+	std::vector<int32_t> cellules;
 };
 
 constexpr double PI_D = 3.14159265358979323846;
@@ -76,9 +79,6 @@ inline Basis decode_basis(const PackedFloat32Array &arr, int orient) {
 	return out;
 }
 
-// Ecrit UNE instance dans le buffer plat : 12 floats de transform (layout
-// TRANSFORM_3D de MultiMesh : rows[0].xyz + origin.x, rows[1].xyz + origin.y,
-// rows[2].xyz + origin.z) puis 4 floats de couleur.
 inline void ecrire_instance(std::vector<float> &buffer, const Basis &b, const Vector3 &origin,
 		float r, float g, float bl, float a) {
 	buffer.push_back((float)b.rows[0].x);
@@ -105,7 +105,6 @@ inline void ecrire_cellule(std::vector<int32_t> &cellules, const Vector3i &c) {
 	cellules.push_back(c.z);
 }
 
-// Conversion std::vector<float> -> PackedFloat32Array en UN memcpy.
 inline PackedFloat32Array to_packed_float(const std::vector<float> &v) {
 	PackedFloat32Array out;
 	out.resize((int)v.size());
@@ -126,8 +125,6 @@ inline PackedInt32Array to_packed_int(const std::vector<int32_t> &v) {
 
 } // namespace
 
-// -----------------------------------------------------------------------------
-
 void MesheurTuile::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("bonjour"), &MesheurTuile::bonjour);
 	ClassDB::bind_method(D_METHOD("bake_tuile_a", "entree"), &MesheurTuile::bake_tuile_a);
@@ -141,91 +138,148 @@ String MesheurTuile::bonjour() const {
 }
 
 Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
-	// ----- decodage des scalaires du blob ------------------------------------
 	Vector2i origine_col = e["origine_col"];
 	int taille = (int)e["taille"];
 	int couche_base = (int)e["couche_base"];
 	int couches_max = (int)e["couches_max"];
+	int demi_cote = (int)e["demi_cote"];
 	real_t cote = (real_t)(double)e["cote"];
 	int sommet_base = (int)e["sommet_base"];
-	int item_limite = (int)e["item_limite"];
-	int item_defaut = (int)e["item_defaut"];
-	int orientation_defaut = (int)e["orientation_defaut"];
-	(void)orientation_defaut;
+	int64_t masque_base = (int64_t)e["masque_base"];
 	int masque_sous_plein = (int)e["masque_sous_plein"];
 	int max_pv_sous_cube = (int)e["max_pv_sous_cube"];
+	int item_defaut = (int)e["item_defaut"];
+	int item_limite = (int)e["item_limite"];
 	Vector3 centre_offset = e["centre_offset"];
 
-	PackedInt64Array masques = e["masques"];
-	PackedInt64Array couvrants = e["couvrants"];
-	PackedInt32Array part_arr = e["particularites"];
-	PackedInt32Array sc_arr = e["sous_cubes_partiels"];
-	PackedInt32Array pv_arr = e["pv_par_cellule"];
 	PackedInt32Array items_cubiques = e["items_cubiques"];
 	PackedInt32Array items_h_cle = e["items_hauteur_cle"];
 	PackedFloat32Array items_h_val = e["items_hauteur_val"];
 	PackedFloat32Array bases_ortho = e["bases_orthogonales"];
 	Dictionary mesh_transforms = e["mesh_transforms"];
 
-	const int wsize = taille + 2;
-	const int ORIENTATIONS = 32;
+	Dictionary volumes_dict = e["volumes"];
+	Dictionary particularites_dict = e["particularites"];
+	Dictionary masques_sc_dict = e["masques_sous_cube"];
+	Dictionary pv_dict = e["pv_sous_cubes"];
 
-	// Cache scalaire des Packed*Array pour lecture inline sans indirection.
-	const int64_t *masques_ptr = masques.ptr();
-	const int64_t *couvrants_ptr = couvrants.ptr();
-
-	// ----- montage des caches locaux (une seule fois par tuile) --------------
-	std::unordered_set<int> is_cubic;
-	is_cubic.reserve((size_t)items_cubiques.size());
+	// Dicts tuile-locaux (petits) -> unordered_map natifs. Une passe par dict.
+	std::unordered_map<Vector2i, int64_t, Vec2iHash> volumes;
 	{
-		const int32_t *ptr = items_cubiques.ptr();
-		for (int i = 0; i < items_cubiques.size(); ++i) {
-			is_cubic.insert(ptr[i]);
-		}
-	}
-
-	std::unordered_map<int, real_t> hauteur_par_item;
-	{
-		int nh = items_h_cle.size();
-		hauteur_par_item.reserve((size_t)nh);
-		const int32_t *cle = items_h_cle.ptr();
-		const float *val = items_h_val.ptr();
-		for (int i = 0; i < nh; ++i) {
-			hauteur_par_item[cle[i]] = (real_t)val[i];
+		Array keys = volumes_dict.keys();
+		int n = keys.size();
+		volumes.reserve((size_t)n);
+		for (int i = 0; i < n; ++i) {
+			Variant kv = keys[i];
+			volumes[(Vector2i)kv] = (int64_t)(int)volumes_dict[kv];
 		}
 	}
 
 	std::unordered_map<Vector3i, int, Vec3iHash> particularites;
 	{
-		int n = part_arr.size();
-		particularites.reserve((size_t)(n / 4));
-		const int32_t *ptr = part_arr.ptr();
-		for (int k = 0; k + 3 < n; k += 4) {
-			particularites[Vector3i(ptr[k], ptr[k + 1], ptr[k + 2])] = ptr[k + 3];
+		Array keys = particularites_dict.keys();
+		int n = keys.size();
+		particularites.reserve((size_t)n);
+		for (int i = 0; i < n; ++i) {
+			Variant kv = keys[i];
+			particularites[(Vector3i)kv] = (int)particularites_dict[kv];
 		}
 	}
 
-	std::unordered_map<Vector3i, int, Vec3iHash> sous_cubes_partiels;
+	std::unordered_map<Vector3i, int, Vec3iHash> masques_sous_cube;
 	{
-		int n = sc_arr.size();
-		sous_cubes_partiels.reserve((size_t)(n / 4));
-		const int32_t *ptr = sc_arr.ptr();
-		for (int k = 0; k + 3 < n; k += 4) {
-			sous_cubes_partiels[Vector3i(ptr[k], ptr[k + 1], ptr[k + 2])] = ptr[k + 3];
+		Array keys = masques_sc_dict.keys();
+		int n = keys.size();
+		masques_sous_cube.reserve((size_t)n);
+		for (int i = 0; i < n; ++i) {
+			Variant kv = keys[i];
+			masques_sous_cube[(Vector3i)kv] = (int)masques_sc_dict[kv];
 		}
 	}
 
 	std::unordered_map<Vector3i, std::unordered_map<int, int>, Vec3iHash> pv_par_cellule;
 	{
-		int n = pv_arr.size();
-		const int32_t *ptr = pv_arr.ptr();
-		for (int k = 0; k + 4 < n; k += 5) {
-			Vector3i cellule(ptr[k], ptr[k + 1], ptr[k + 2]);
-			pv_par_cellule[cellule][ptr[k + 3]] = ptr[k + 4];
+		Array keys = pv_dict.keys();
+		int n = keys.size();
+		pv_par_cellule.reserve((size_t)n);
+		for (int i = 0; i < n; ++i) {
+			Variant kv = keys[i];
+			Dictionary inner = pv_dict[kv];
+			Array inner_keys = inner.keys();
+			int m = inner_keys.size();
+			auto &inner_map = pv_par_cellule[(Vector3i)kv];
+			inner_map.reserve((size_t)m);
+			for (int j = 0; j < m; ++j) {
+				Variant ikv = inner_keys[j];
+				inner_map[(int)ikv] = (int)inner[ikv];
+			}
 		}
 	}
 
-	// ----- buffers de sortie natifs ------------------------------------------
+	std::unordered_set<int> is_cubic;
+	{
+		const int32_t *ptr = items_cubiques.ptr();
+		is_cubic.reserve((size_t)items_cubiques.size());
+		for (int i = 0; i < items_cubiques.size(); ++i) is_cubic.insert(ptr[i]);
+	}
+
+	std::unordered_map<int, real_t> hauteur_par_item;
+	{
+		int nh = items_h_cle.size();
+		const int32_t *cle = items_h_cle.ptr();
+		const float *val = items_h_val.ptr();
+		hauteur_par_item.reserve((size_t)nh);
+		for (int i = 0; i < nh; ++i) hauteur_par_item[cle[i]] = (real_t)val[i];
+	}
+
+	auto masque_col = [&](const Vector2i &col) -> int64_t {
+		if (col.x < -demi_cote || col.x >= demi_cote ||
+				col.y < -demi_cote || col.y >= demi_cote) return 0;
+		auto it = volumes.find(col);
+		if (it != volumes.end()) return it->second;
+		return masque_base;
+	};
+
+	const int wsize = taille + 2;
+	const int ORIENTATIONS = 32;
+
+	// Precalcul masques + couvrants sur la fenetre 12x12 (natif).
+	std::vector<int64_t> masques_win((size_t)wsize * wsize);
+	std::vector<int64_t> couvrants_win((size_t)wsize * wsize);
+
+	for (int lx = -1; lx <= taille; ++lx) {
+		for (int lz = -1; lz <= taille; ++lz) {
+			Vector2i col(origine_col.x + lx, origine_col.y + lz);
+			int idx = (lx + 1) + (lz + 1) * wsize;
+			int64_t bits = masque_col(col);
+			masques_win[idx] = bits;
+			if (bits == 0) {
+				couvrants_win[idx] = 0;
+				continue;
+			}
+			int64_t couvrant = bits;
+			for (int rang = 0; rang < couches_max; ++rang) {
+				if ((bits & ((int64_t)1 << rang)) == 0) continue;
+				Vector3i cellule(col.x, couche_base + rang, col.y);
+				int code = -1;
+				auto pit = particularites.find(cellule);
+				if (pit != particularites.end()) code = pit->second;
+				int item;
+				if (code == -1) item = item_defaut;
+				else item = code / ORIENTATIONS;
+				if (is_cubic.find(item) == is_cubic.end()) {
+					couvrant &= ~((int64_t)1 << rang);
+					continue;
+				}
+				auto sit = masques_sous_cube.find(cellule);
+				if (sit != masques_sous_cube.end() && sit->second != masque_sous_plein) {
+					couvrant &= ~((int64_t)1 << rang);
+				}
+			}
+			couvrants_win[idx] = couvrant;
+		}
+	}
+
 	std::unordered_map<int, BucketItem> par_forme;
 	std::unordered_map<int, BucketItem> par_forme_sol;
 	std::unordered_map<int, BucketItem> par_forme_mini;
@@ -234,20 +288,24 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	int couche_min_out = couche_base + couches_max;
 	int couche_max_out = couche_base;
 
-	// ----- boucle principale, portage a l'identique de _phase_parser ---------
+	auto voisin_couvre = [couches_max](int64_t couvrant_voisin, int r) -> bool {
+		if (r < 0 || r >= couches_max) return false;
+		return (couvrant_voisin & ((int64_t)1 << r)) != 0;
+	};
+
 	for (int lx = 0; lx < taille; ++lx) {
 		for (int lz = 0; lz < taille; ++lz) {
 			int cx = origine_col.x + lx;
 			int cz = origine_col.y + lz;
 			int i_self = (lx + 1) + (lz + 1) * wsize;
-			int64_t bits = masques_ptr[i_self];
+			int64_t bits = masques_win[i_self];
 			if (bits == 0) continue;
 
-			int64_t mon_c = couvrants_ptr[i_self];
-			int64_t nxp_c = couvrants_ptr[(lx + 2) + (lz + 1) * wsize];
-			int64_t nxm_c = couvrants_ptr[(lx    ) + (lz + 1) * wsize];
-			int64_t nzp_c = couvrants_ptr[(lx + 1) + (lz + 2) * wsize];
-			int64_t nzm_c = couvrants_ptr[(lx + 1) + (lz    ) * wsize];
+			int64_t mon_c = couvrants_win[i_self];
+			int64_t nxp_c = couvrants_win[(lx + 2) + (lz + 1) * wsize];
+			int64_t nxm_c = couvrants_win[(lx    ) + (lz + 1) * wsize];
+			int64_t nzp_c = couvrants_win[(lx + 1) + (lz + 2) * wsize];
+			int64_t nzm_c = couvrants_win[(lx + 1) + (lz    ) * wsize];
 
 			int64_t sealed = (mon_c >> 1) & nxp_c & nxm_c & nzp_c & nzm_c;
 			int64_t visible = bits & ~sealed;
@@ -283,7 +341,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				}
 				if (item == item_limite) continue;
 
-				// Derives : couche_min/max et cellules_occl (visible + cubique + couche > sommet_base).
 				if (couche < couche_min_out) couche_min_out = couche;
 				if (couche > couche_max_out) couche_max_out = couche;
 				bool cubique = (is_cubic.find(item) != is_cubic.end());
@@ -297,7 +354,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 					(real_t)cellule.z * cote + centre_offset.z);
 
 				if (!cubique) {
-					// NON-CUBE : une seule instance, transform = base_ortho * mesh_transform.
 					Basis base_ortho = decode_basis(bases_ortho, orientation);
 					Variant mtv = mesh_transforms.get(item, Variant());
 					Transform3D mesh_tf;
@@ -311,15 +367,13 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 					continue;
 				}
 
-				// CUBIQUE : distinguer mini-cubes (cellule cassee ou avec PV) et cube propre.
 				int masque_sous = masque_sous_plein;
-				auto sit = sous_cubes_partiels.find(cellule);
-				if (sit != sous_cubes_partiels.end()) masque_sous = sit->second;
+				auto sit = masques_sous_cube.find(cellule);
+				if (sit != masques_sous_cube.end()) masque_sous = sit->second;
 				auto pvit = pv_par_cellule.find(cellule);
 				bool a_pv = (pvit != pv_par_cellule.end());
 
 				if (masque_sous != masque_sous_plein || a_pv) {
-					// MINI-CUBES : un par bit du masque_sous.
 					BucketItem &bucket = par_forme_mini[item];
 					const real_t pas = cote / (real_t)3.0;
 					const std::unordered_map<int, int> *pv_map = a_pv ? &pvit->second : nullptr;
@@ -347,17 +401,9 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 					continue;
 				}
 
-				// CUBE PROPRE : candidat teinte + emission des 6 faces exposees.
 				ecrire_cellule(cellules_teintables, cellule);
 				BucketItem &bucket = (couche == sommet_base) ? par_forme_sol[item] : par_forme[item];
 
-				// Voisin couvre reduit a un test de bit sur les couvrants.
-				auto voisin_couvre = [couches_max](int64_t couvrant_voisin, int r) -> bool {
-					if (r < 0 || r >= couches_max) return false;
-					return (couvrant_voisin & ((int64_t)1 << r)) != 0;
-				};
-
-				// Emission d'UNE face i (portage exact de _ajouter_face GDScript).
 				auto emettre_face = [&](int i, int64_t couvrant_neighbor, int rang_check) {
 					if (voisin_couvre(couvrant_neighbor, rang_check)) return;
 					real_t h = cote;
@@ -389,7 +435,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 		}
 	}
 
-	// ----- conversion en Variants, UNE fois -----------------------------------
 	auto items_to_dict = [](std::unordered_map<int, BucketItem> &m) -> Dictionary {
 		Dictionary out;
 		for (auto &kv : m) {
