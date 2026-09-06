@@ -6,10 +6,14 @@ compatibility_minimum = "4.5"
 [libraries]
 
 ; Chemins des .dll/.so produits par SCons, par plateforme et architecture.
-; Debug (developpement) et release (export final) pointes separement.
-; Le nom du fichier doit matcher ce que le SConstruct produit dans bin/.
+; Les DEUX slots windows.x86_64 pointent sur la .dll RELEASE : l'editeur
+; utilise le slot debug, l'export final utilise le slot release. Sans ca,
+; l'editeur chargerait un build target=template_debug (-O0) qui pese ~10x
+; plus lourd que la release et faussait toute mesure de perf en jeu.
+; La .dll debug reste construite sur disque si besoin de redeployer un vrai
+; build debuggable (rebuild target=template_debug, changer les chemins).
 
-windows.debug.x86_64 = "res://extension_terrain/bin/libterrain.windows.template_debug.x86_64.dll"
+windows.debug.x86_64 = "res://extension_terrain/bin/libterrain.windows.template_release.x86_64.dll"
 windows.release.x86_64 = "res://extension_terrain/bin/libterrain.windows.template_release.x86_64.dll"
 
 linux.debug.x86_64 = "res://extension_terrain/bin/libterrain.linux.template_debug.x86_64.so"

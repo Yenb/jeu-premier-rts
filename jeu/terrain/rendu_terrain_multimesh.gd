@@ -450,107 +450,93 @@ func _creer_tuile(tuile: Vector2i) -> void:
 	_phase_baker_instances(tuile, etat)
 	_phase_baker_occluder(tuile, etat)
 
-# S7 -- PHASE 0 (PARSER). Parcourt les colonnes de la tuile, calcule les faces
-# visibles par forme, collecte les buckets teintables et le set d'occludeurs.
-# AUCUN bake (aucun MultiMesh, aucun add_child, aucune instance RS). Alimente les
-# caches teinte (_cache_profil_cellule / _cache_quantite_cellule) et les compteurs
-# d'AABB (couche_min / couche_max). Retour : dict "parsed" self-contenu, suffisant
-# pour la phase 1 -- rien ne demande de re-parcourir les colonnes ensuite.
+# PHASE 0 -- COORDINATEUR C++. Ne parcourt PLUS la tuile : monte le blob une
+# fois, appelle MesheurTuile.bake_tuile_a, integre les sorties. Le C++ rend :
+# par_forme / par_forme_sol / par_forme_mini (chacun { buffer, cellules }
+# par item), cellules_occl (triplets), cellules_teintables (triplets),
+# couche_min / couche_max.
+#
+# Ce qui reste ici :
+#   - lookup Resource profil via _ressources.profil_de_cellule pour les
+#     cellules candidates que le C++ liste (une seule lecture par candidate,
+#     pas par cellule de la tuile),
+#   - construction des buckets teinte a partir des `cellules` paralleles aux
+#     buffers (aucun re-parcours de la tuile),
+#   - Dict cellules_occl a partir du PackedInt32Array de sortie.
 func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var particularites: Dictionary = carte.particularites
 	var taille := taille_tuile_cellules
 	var origine_col := Vector2i(tuile.x * taille, tuile.y * taille)
-	var memo_bits: Dictionary = {}
-	var memo_couvrant: Dictionary = {}
-
-	# forme (item) -> Array[Transform3D]. Voir doc historique de _creer_tuile.
-	var par_forme: Dictionary = {}
-	var par_forme_sol: Dictionary = {}
-	var par_forme_mini: Dictionary = {}
-	var teinte_normal: Dictionary = {}
-	var teinte_sol: Dictionary = {}
 	if _ressources == null:
 		_ressources = get_tree().get_first_node_in_group(&"ressources_terrain")
-	var couche_min := couche_base + CarteTerrain.COUCHES_MAXIMALES
-	var couche_max := couche_base
-	var sommet_base := int(carte.sommet_de_base())
-	var cellules_occl: Dictionary = {}
+	if _mesheur == null:
+		_mesheur = ClassDB.instantiate("MesheurTuile")
+		if _mesheur == null:
+			push_error("MesheurTuile introuvable -- extension_terrain non chargee")
+			return {}
 
-	for lx in range(taille):
-		for lz in range(taille):
-			var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
-			var bits: int = _masque_col(col, memo_bits)
-			if bits == 0:
-				continue
-			var mon_couvrant := _masque_couvrant_col(col, memo_couvrant)
-			var nxp_c := _masque_couvrant_col(Vector2i(col.x + 1, col.y), memo_couvrant)
-			var nxm_c := _masque_couvrant_col(Vector2i(col.x - 1, col.y), memo_couvrant)
-			var nzp_c := _masque_couvrant_col(Vector2i(col.x, col.y + 1), memo_couvrant)
-			var nzm_c := _masque_couvrant_col(Vector2i(col.x, col.y - 1), memo_couvrant)
-			var visible_bits := visible_bits_col(bits, mon_couvrant, nxp_c, nxm_c, nzp_c, nzm_c)
-			if visible_bits == 0:
-				continue
-			var r_top := CarteTerrain.rang_le_plus_haut(bits)
-			for rang in range(r_top + 1):
-				if (visible_bits & (1 << rang)) == 0:
-					continue
-				var couche := couche_base + rang
-				var cellule := Vector3i(col.x, couche, col.y)
-				var code: int = int(particularites.get(cellule, -1))
-				var item: int
-				if code == -1:
-					item = CarteTerrain.ITEM_DEFAUT
-				else:
-					item = CarteTerrain.item_du_code(code)
-				if item == ITEM_LIMITE:
-					continue
-				# GDScript n'emet plus rien -- le C++ (`_appliquer_cpp_a` appele
-				# apres la boucle) rend cubes propres, mini-cubes et non-cubes,
-				# avec mapping face->cellule pour la teinte. Ce parcours ne sert
-				# plus qu'a :
-				#   - `couche_min` / `couche_max` (AABB de tuile, phase 1),
-				#   - `cellules_occl` (occluder greedy, phase 2),
-				#   - peuplement des caches teinte pour les cubes propres
-				#     teintables (utilises par `_integrer_cpp` et
-				#     `_tick_teinte`).
-				# Le C++ recalcule la visibilite en interne ; on ne partage pas
-				# ces trois derives via le blob pour minimiser le contrat.
-				if _quad_par_item.has(item):
-					var masque_sous: int = carte.sous_cubes(cellule)
-					var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
-					if masque_sous == CarteTerrain.MASQUE_SOUS_CUBE_PLEIN and pv_map.is_empty():
-						var profil_cell: Resource = null
-						if _ressources != null and _ressources.has_method("profil_de_cellule"):
-							profil_cell = _ressources.call("profil_de_cellule", cellule) as Resource
-						if profil_cell != null:
-							_cache_profil_cellule[cellule] = profil_cell
-							_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
-				couche_min = mini(couche_min, couche)
-				couche_max = maxi(couche_max, couche)
-				if couche > sommet_base and _quad_par_item.has(item):
-					cellules_occl[cellule] = true
-	# Portage C++ (etapes a+b+c) : le C++ ajoute cubes propres + mini-cubes +
-	# non-cubes, et publie le mapping face->cellule des cubes propres pour la
-	# teinte. Aucun fallback GDScript depuis l'etape (d) -- les 3 branches
-	# d'emission GDScript ont ete retirees.
-	_appliquer_cpp_a(par_forme, par_forme_sol, par_forme_mini,
-			teinte_normal, teinte_sol,
-			origine_col, cote, couche_base, particularites)
+	var blob := _blob_tuile_a(origine_col, cote, couche_base, particularites)
+	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
+
+	# Teinte : pour chaque cellule candidate rendue par le C++, lire profil et
+	# alimenter les caches. _tick_teinte lit ces caches par cellule.
+	var teintables: PackedInt32Array = res.get("cellules_teintables", PackedInt32Array())
+	if _ressources != null and _ressources.has_method("profil_de_cellule"):
+		@warning_ignore("integer_division")
+		var n_t: int = teintables.size() / 3
+		for k in range(n_t):
+			var cellule := Vector3i(teintables[k * 3], teintables[k * 3 + 1], teintables[k * 3 + 2])
+			var profil_cell: Resource = _ressources.call("profil_de_cellule", cellule) as Resource
+			if profil_cell != null:
+				_cache_profil_cellule[cellule] = profil_cell
+				_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
+
+	# Buckets teinte par item : parcourt les `cellules` paralleles au buffer et
+	# pousse (item, cellule, idx) pour toute cellule qui a un profil en cache.
+	# idx = position dans le buffer = index d'instance dans le MultiMesh final.
+	var teinte_normal: Dictionary = {}
+	var teinte_sol: Dictionary = {}
+	_extraire_teinte(res.get("par_forme", {}), teinte_normal)
+	_extraire_teinte(res.get("par_forme_sol", {}), teinte_sol)
+
+	# Cellules_occl : PackedInt32Array (triplets) -> Dict { cellule -> true },
+	# format attendu par _phase_baker_occluder.
+	var cellules_occl: Dictionary = {}
+	var occl_arr: PackedInt32Array = res.get("cellules_occl", PackedInt32Array())
+	@warning_ignore("integer_division")
+	var n_o: int = occl_arr.size() / 3
+	for k in range(n_o):
+		cellules_occl[Vector3i(occl_arr[k * 3], occl_arr[k * 3 + 1], occl_arr[k * 3 + 2])] = true
+
 	return {
-		"par_forme": par_forme,
-		"par_forme_sol": par_forme_sol,
-		"par_forme_mini": par_forme_mini,
+		"par_forme": res.get("par_forme", {}),
+		"par_forme_sol": res.get("par_forme_sol", {}),
+		"par_forme_mini": res.get("par_forme_mini", {}),
 		"teinte_normal": teinte_normal,
 		"teinte_sol": teinte_sol,
 		"cellules_occl": cellules_occl,
-		"couche_min": couche_min,
-		"couche_max": couche_max,
+		"couche_min": int(res.get("couche_min", couche_base)),
+		"couche_max": int(res.get("couche_max", couche_base)),
 		"origine_col": origine_col,
 		"cote": cote,
 		"taille": taille,
 	}
+
+# Helper : parcourt src (Dict item -> {buffer, cellules}) et pousse les paires
+# de teinte pour chaque cellule qui a un profil en cache. idx = position dans
+# le buffer = index d'instance MMi.
+func _extraire_teinte(src: Dictionary, dst_teinte: Dictionary) -> void:
+	for item in src.keys():
+		var entree: Dictionary = src[item]
+		var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
+		@warning_ignore("integer_division")
+		var n: int = cellules.size() / 3
+		for i in range(n):
+			var cellule := Vector3i(cellules[i * 3], cellules[i * 3 + 1], cellules[i * 3 + 2])
+			if _cache_profil_cellule.has(cellule):
+				_pousser_teinte(dst_teinte, int(item), cellule, i)
 
 # S7 -- PHASE 1 (BAKER INSTANCES + INDEX TEINTE). Lit `etat.parsed`, alloue les
 # MultiMesh et les porteurs (instances RS ou MMi selon utilise_rs_direct), remplit
@@ -558,6 +544,10 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 # etat : instances_rs / noeuds / mm_par_item_normal / mm_par_item_sol -- lus par
 # la phase 2 ET par _supprimer_tuile en cas d'annulation en cours de pipeline.
 func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
+	# Reception du format { item -> { buffer: PackedFloat32Array, cellules:
+	# PackedInt32Array } } produit par MesheurTuile.bake_tuile_a. Chaque bake
+	# construit un MultiMesh via `mm.buffer = ...` en UN appel natif -- pas de
+	# Variant construit par instance.
 	var parsed: Dictionary = etat["parsed"]
 	var par_forme: Dictionary = parsed["par_forme"]
 	var par_forme_sol: Dictionary = parsed["par_forme_sol"]
@@ -576,35 +566,35 @@ func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
 	var instances_rs: Array = []
 	if utilise_rs_direct:
 		for item in par_forme.keys():
-			var e: Dictionary = _rs_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote, false)
+			var e: Dictionary = _rs_depuis_buffer(_mesh_pour_item(int(item)), par_forme[item], origine_col, couche_min, couche_max, taille, cote, false)
 			if not e.is_empty():
 				instances_rs.append(e)
 				mm_par_item_normal[item] = e["mm"]
 		for item in par_forme_sol.keys():
-			var e: Dictionary = _rs_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote, true)
+			var e: Dictionary = _rs_depuis_buffer(_mesh_pour_item(int(item)), par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote, true)
 			if not e.is_empty():
 				instances_rs.append(e)
 				mm_par_item_sol[item] = e["mm"]
 		for item in par_forme_mini.keys():
-			var e: Dictionary = _rs_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
+			var e: Dictionary = _rs_depuis_buffer(_mini_box_par_item.get(int(item), null), par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote, false)
 			if not e.is_empty():
 				instances_rs.append(e)
 	else:
 		for item in par_forme.keys():
-			var mmi := _mmi_de_forme(item, par_forme[item], origine_col, couche_min, couche_max, taille, cote)
+			var mmi := _mmi_depuis_buffer(_mesh_pour_item(int(item)), par_forme[item], origine_col, couche_min, couche_max, taille, cote)
 			if mmi != null:
 				add_child(mmi)
 				noeuds.append(mmi)
 				mm_par_item_normal[item] = mmi.multimesh
 		for item in par_forme_sol.keys():
-			var mmi := _mmi_de_forme(item, par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote)
+			var mmi := _mmi_depuis_buffer(_mesh_pour_item(int(item)), par_forme_sol[item], origine_col, couche_min, couche_max, taille, cote)
 			if mmi != null:
 				mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				add_child(mmi)
 				noeuds.append(mmi)
 				mm_par_item_sol[item] = mmi.multimesh
 		for item in par_forme_mini.keys():
-			var mmi := _mmi_mini_cubes(item, par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
+			var mmi := _mmi_depuis_buffer(_mini_box_par_item.get(int(item), null), par_forme_mini[item], origine_col, couche_min, couche_max, taille, cote)
 			if mmi != null:
 				add_child(mmi)
 				noeuds.append(mmi)
@@ -645,37 +635,24 @@ func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
 			arr.append(occluder_noeud)
 		_tuiles[tuile] = arr
 
-# MMi pour les mini-cubes d'un item. Mesh = _mini_box_par_item[item]. Meme
-# AABB serree que _mmi_de_forme -- reutilise la meme fonction si possible.
-func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
-		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
-	var bake: Dictionary = _bake_mm_mini_cubes(item, transforms, origine_col, couche_min, couche_max, taille, cote)
-	if bake.is_empty():
-		return null
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = bake["mm"]
-	mmi.custom_aabb = bake["aabb"]
-	if distance_rendu_metres > 0.0:
-		mmi.visibility_range_end = distance_rendu_metres
-	return mmi
-
-# S6 -- BAKE PUR du MultiMesh + AABB pour les mini-cubes d'un item. Partage
-# entre _mmi_mini_cubes (chemin nœud) et _rs_mini_cubes (chemin instance RS).
-# Rend {} si l'item n'a pas de mini-box.
-func _bake_mm_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
-		couche_min: int, couche_max: int, taille: int, cote: float) -> Dictionary:
-	var mesh: Mesh = _mini_box_par_item.get(item, null)
-	if mesh == null:
+# BAKE PUR du MultiMesh + AABB depuis un buffer plat (16 floats/instance,
+# layout TRANSFORM_3D + color). `mesh` est passe par l'appelant (mesh cubique,
+# mini-box ou mesh complet non-cubique). `count` = nombre d'instances (=
+# cellules.size() / 3 dans la sortie C++). Le buffer est pose sur le
+# MultiMesh en UN appel natif (mm.buffer = ...) -- aucune iteration
+# GDScript, aucun Variant construit par instance. Rend {} si mesh ou count
+# invalide.
+func _bake_mm_depuis_buffer(mesh: Mesh, buffer: PackedFloat32Array, count: int,
+		origine_col: Vector2i, couche_min: int, couche_max: int,
+		taille: int, cote: float) -> Dictionary:
+	if mesh == null or count <= 0 or buffer.is_empty():
 		return {}
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
 	mm.mesh = mesh
-	mm.instance_count = transforms.size()
-	for i in range(transforms.size()):
-		var t = transforms[i]
-		mm.set_instance_transform(i, t.transform)
-		mm.set_instance_color(i, t.couleur)
+	mm.instance_count = count
+	mm.buffer = buffer
 	var hauteur_couches := couche_max - couche_min + 1
 	var pos_aabb := Vector3(
 		float(origine_col.x) * cote - cote,
@@ -687,55 +664,44 @@ func _bake_mm_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
 		float(taille) * cote + 2.0 * cote)
 	return {"mm": mm, "aabb": AABB(pos_aabb, taille_aabb)}
 
-# UN MultiMeshInstance3D pour une forme. Le mesh est le QUAD de la forme si elle
-# est cubique (rendu face par face), sinon le mesh complet de la bibliotheque.
-# `custom_aabb` serre a la boite de la tuile pour le frustum culling. Rend null
-# si la forme n'a aucun maillage (ex. limite).
-func _mmi_de_forme(item: int, transforms: Array, origine_col: Vector2i,
+# Wrappers "nœud" (MultiMeshInstance3D) et "RS direct" pour une entree
+# {buffer, cellules}. Extrait mesh du dict item->Mesh donne.
+func _mmi_depuis_buffer(mesh: Mesh, entree: Dictionary, origine_col: Vector2i,
 		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
-	var bake: Dictionary = _bake_mm_forme(item, transforms, origine_col, couche_min, couche_max, taille, cote)
+	var buffer: PackedFloat32Array = entree.get("buffer", PackedFloat32Array())
+	var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
+	@warning_ignore("integer_division")
+	var count: int = cellules.size() / 3
+	var bake: Dictionary = _bake_mm_depuis_buffer(mesh, buffer, count, origine_col, couche_min, couche_max, taille, cote)
 	if bake.is_empty():
 		return null
 	var mmi := MultiMeshInstance3D.new()
 	mmi.multimesh = bake["mm"]
 	mmi.custom_aabb = bake["aabb"]
-	# LOD PAR DISTANCE : au-dela de `distance_rendu_metres`, Godot cesse de dessiner
-	# cette tuile. 0 = pas de limite.
 	if distance_rendu_metres > 0.0:
 		mmi.visibility_range_end = distance_rendu_metres
 	return mmi
 
-# S6 -- BAKE PUR du MultiMesh + AABB pour une forme. Partage entre _mmi_de_forme
-# (chemin nœud) et _rs_de_forme (chemin instance RS). Rend {} si la forme n'a
-# aucun maillage (ex. limite).
-func _bake_mm_forme(item: int, transforms: Array, origine_col: Vector2i,
-		couche_min: int, couche_max: int, taille: int, cote: float) -> Dictionary:
-	var mesh: Mesh = _quad_par_item.get(item, null)
-	if mesh == null:
-		mesh = mesh_library.get_item_mesh(item)
-	if mesh == null:
+func _rs_depuis_buffer(mesh: Mesh, entree: Dictionary, origine_col: Vector2i,
+		couche_min: int, couche_max: int, taille: int, cote: float,
+		cast_shadow_off: bool) -> Dictionary:
+	var buffer: PackedFloat32Array = entree.get("buffer", PackedFloat32Array())
+	var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
+	@warning_ignore("integer_division")
+	var count: int = cellules.size() / 3
+	var bake: Dictionary = _bake_mm_depuis_buffer(mesh, buffer, count, origine_col, couche_min, couche_max, taille, cote)
+	if bake.is_empty():
 		return {}
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.mesh = mesh
-	mm.instance_count = transforms.size()
-	for i in range(transforms.size()):
-		mm.set_instance_transform(i, transforms[i])
-		mm.set_instance_color(i, Color(1, 1, 1))
-	# BOITE SERREE A LA TUILE, coordonnees monde (le nœud parent est a l'origine ;
-	# une instance RS re-posera le même AABB dans son propre repere via set_transform
-	# = self.global_transform).
-	var hauteur_couches := couche_max - couche_min + 1
-	var pos_aabb := Vector3(
-		float(origine_col.x) * cote - cote,
-		float(couche_min) * cote - cote,
-		float(origine_col.y) * cote - cote)
-	var taille_aabb := Vector3(
-		float(taille) * cote + 2.0 * cote,
-		float(hauteur_couches) * cote + 2.0 * cote,
-		float(taille) * cote + 2.0 * cote)
-	return {"mm": mm, "aabb": AABB(pos_aabb, taille_aabb)}
+	var rid: RID = _creer_instance_rs(bake["mm"], global_transform, bake["aabb"], cast_shadow_off)
+	return {"mm": bake["mm"], "rid": rid}
+
+# Mesh pour un item cubique/non-cubique (quad de face pour cube, mesh complet
+# pour rampe/cylindre/sphere).
+func _mesh_pour_item(item: int) -> Mesh:
+	var m: Mesh = _quad_par_item.get(item, null)
+	if m == null:
+		m = mesh_library.get_item_mesh(item)
+	return m
 
 # S6 -- CREATION D'UNE INSTANCE RENDERINGSERVER DIRECTE.
 # Le MultiMesh doit etre garde en REFERENCE FORTE GDScript par l'appelant (dans
@@ -755,27 +721,6 @@ func _creer_instance_rs(mm: MultiMesh, transform_locale: Transform3D, aabb: AABB
 			rid, 0.0, distance_rendu_metres, 0.0, 0.0,
 			RenderingServer.VISIBILITY_RANGE_FADE_DISABLED)
 	return rid
-
-# S6 -- Wrappers "instance RS" symetriques a _mmi_de_forme / _mmi_mini_cubes.
-# Retournent {"mm", "rid"} ou {} si aucun maillage. La reference forte a mm est
-# stockee dans le dict retourne -> l'appelant l'insere dans _tuiles, tant que
-# l'entree y est le mm ne peut pas etre GC.
-func _rs_de_forme(item: int, transforms: Array, origine_col: Vector2i,
-		couche_min: int, couche_max: int, taille: int, cote: float,
-		cast_shadow_off: bool) -> Dictionary:
-	var bake: Dictionary = _bake_mm_forme(item, transforms, origine_col, couche_min, couche_max, taille, cote)
-	if bake.is_empty():
-		return {}
-	var rid: RID = _creer_instance_rs(bake["mm"], global_transform, bake["aabb"], cast_shadow_off)
-	return {"mm": bake["mm"], "rid": rid}
-
-func _rs_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
-		couche_min: int, couche_max: int, taille: int, cote: float) -> Dictionary:
-	var bake: Dictionary = _bake_mm_mini_cubes(item, transforms, origine_col, couche_min, couche_max, taille, cote)
-	if bake.is_empty():
-		return {}
-	var rid: RID = _creer_instance_rs(bake["mm"], global_transform, bake["aabb"], false)
-	return {"mm": bake["mm"], "rid": rid}
 
 # UN OccluderInstance3D pour un SET de cellules (Vector3i -> true), bakée en
 # greedy meshing par direction de face. Godot rasterise cette geometrie et
@@ -1295,65 +1240,3 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 		"bases_orthogonales": bases_ortho,
 		"mesh_transforms": mesh_transforms,
 	}
-
-# ETAPES (a)+(b) -- appelle MesheurTuile.bake_tuile_a et integre son resultat
-# dans les buckets locaux de _phase_parser. Le C++ produit :
-#   - par_forme     : cubes propres non-sol ET non-cubes (rampes, cylindres...)
-#   - par_forme_sol : cubes propres de la couche sommet_base
-#   - par_forme_mini: mini-cubes des cellules cassees / avec PV
-# Le mapping face->cellule des cubes propres est repousse dans teinte_normal /
-# teinte_sol via _cache_profil_cellule deja alimente par la boucle GDScript.
-func _appliquer_cpp_a(par_forme: Dictionary, par_forme_sol: Dictionary,
-		par_forme_mini: Dictionary,
-		teinte_normal: Dictionary, teinte_sol: Dictionary,
-		origine_col: Vector2i, cote: float, couche_base: int,
-		particularites: Dictionary) -> void:
-	if _mesheur == null:
-		_mesheur = ClassDB.instantiate("MesheurTuile")
-		if _mesheur == null:
-			push_error("MesheurTuile introuvable -- extension_terrain non chargee")
-			return
-	var blob := _blob_tuile_a(origine_col, cote, couche_base, particularites)
-	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
-	_integrer_cpp(res.get("par_forme", {}), par_forme, teinte_normal)
-	_integrer_cpp(res.get("par_forme_sol", {}), par_forme_sol, teinte_sol)
-	_integrer_cpp_mini(res.get("par_forme_mini", {}), par_forme_mini)
-
-# ETAPE (b) -- integration des mini-cubes rendus par le C++. Format C++ :
-# Dict { item -> Array<Dictionary{transform, couleur}> }, meme format que le
-# fallback GDScript (_ajouter_mini_cubes) -- injection directe dans le bucket.
-func _integrer_cpp_mini(src: Dictionary, dst_par_forme_mini: Dictionary) -> void:
-	for item in src.keys():
-		var liste: Array = src[item]
-		if liste.is_empty():
-			continue
-		if not dst_par_forme_mini.has(item):
-			dst_par_forme_mini[item] = [] as Array
-		var bucket: Array = dst_par_forme_mini[item]
-		for entree in liste:
-			bucket.append(entree)
-
-# ETAPE (a) -- pour chaque item, appende les transforms produits par le C++ a
-# `dst_par_forme[item]` et pousse une paire teinte pour chaque face dont la
-# cellule d'origine porte un profil (present dans _cache_profil_cellule, deja
-# alimente par la boucle _phase_parser). L'index pousse est la position DANS
-# le bucket final, decalee de la taille avant append (pour supporter un futur
-# cas ou dst_par_forme[item] ne serait pas vide -- aujourd'hui il l'est pour
-# les items cubiques, l'emission GDScript des cubes propres etant gatee).
-func _integrer_cpp(src: Dictionary, dst_par_forme: Dictionary, dst_teinte: Dictionary) -> void:
-	for item in src.keys():
-		var entree: Dictionary = src[item]
-		var transforms: Array = entree.get("transforms", [])
-		var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
-		var n: int = transforms.size()
-		if n == 0:
-			continue
-		if not dst_par_forme.has(item):
-			dst_par_forme[item] = [] as Array
-		var bucket: Array = dst_par_forme[item]
-		var offset: int = bucket.size()
-		for k in range(n):
-			bucket.append(transforms[k])
-			var cellule := Vector3i(cellules[k * 3], cellules[k * 3 + 1], cellules[k * 3 + 2])
-			if _cache_profil_cellule.has(cellule):
-				_pousser_teinte(dst_teinte, int(item), cellule, offset + k)
