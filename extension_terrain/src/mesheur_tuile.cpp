@@ -232,6 +232,20 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 		for (int i = 0; i < nh; ++i) hauteur_par_item[cle[i]] = (real_t)val[i];
 	}
 
+	// mesh_transforms passe en Dictionary Godot -> unordered_map natif une fois
+	// a l'entree. La boucle interne (branche non-cube) lit en natif au lieu
+	// d'un Variant lookup par cellule non-cubique.
+	std::unordered_map<int, Transform3D> mesh_transforms_native;
+	{
+		Array keys = mesh_transforms.keys();
+		int n = keys.size();
+		mesh_transforms_native.reserve((size_t)n);
+		for (int i = 0; i < n; ++i) {
+			Variant kv = keys[i];
+			mesh_transforms_native[(int)kv] = (Transform3D)mesh_transforms[kv];
+		}
+	}
+
 	auto masque_col = [&](const Vector2i &col) -> int64_t {
 		if (col.x < -demi_cote || col.x >= demi_cote ||
 				col.y < -demi_cote || col.y >= demi_cote) return 0;
@@ -355,11 +369,9 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 
 				if (!cubique) {
 					Basis base_ortho = decode_basis(bases_ortho, orientation);
-					Variant mtv = mesh_transforms.get(item, Variant());
 					Transform3D mesh_tf;
-					if (mtv.get_type() == Variant::TRANSFORM3D) {
-						mesh_tf = (Transform3D)mtv;
-					}
+					auto mtit = mesh_transforms_native.find(item);
+					if (mtit != mesh_transforms_native.end()) mesh_tf = mtit->second;
 					Transform3D total = Transform3D(base_ortho, pos) * mesh_tf;
 					BucketItem &bucket = par_forme[item];
 					ecrire_instance(bucket.buffer, total.basis, total.origin, 1.0f, 1.0f, 1.0f, 1.0f);
@@ -404,11 +416,17 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				ecrire_cellule(cellules_teintables, cellule);
 				BucketItem &bucket = (couche == sommet_base) ? par_forme_sol[item] : par_forme[item];
 
-				auto emettre_face = [&](int i, int64_t couvrant_neighbor, int rang_check) {
-					if (voisin_couvre(couvrant_neighbor, rang_check)) return;
-					real_t h = cote;
+				// Hauteur item : constant sur la cellule -> sorti de la lambda
+				// emettre_face (appelee jusqu'a 6x). Capture par valeur.
+				real_t h_item = cote;
+				{
 					auto ith = hauteur_par_item.find(item);
-					if (ith != hauteur_par_item.end()) h = ith->second;
+					if (ith != hauteur_par_item.end()) h_item = ith->second;
+				}
+
+				auto emettre_face = [&, h_item](int i, int64_t couvrant_neighbor, int rang_check) {
+					if (voisin_couvre(couvrant_neighbor, rang_check)) return;
+					real_t h = h_item;
 					Basis base = face_base(i);
 					Vector3 n = face_normale(i);
 					Vector3 origine;

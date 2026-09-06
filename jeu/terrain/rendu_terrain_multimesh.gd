@@ -169,6 +169,22 @@ var _teinte_precedente: Dictionary = {}
 # Le tick de teinte lit ces caches, plus aucun _ressources.call() par cellule.
 var _cache_profil_cellule: Dictionary = {}    # Vector3i cellule -> Resource
 var _cache_quantite_cellule: Dictionary = {}  # Vector3i cellule -> int
+# Cache de la reserve (capacite) d'une cellule teintable. Rempli en meme temps
+# que _cache_profil_cellule (profil.get("reserve") est un acces Variant, et
+# reserve ne change pas pour un profil donne -- inutile de le relire au tick
+# de teinte). Purge en meme temps que les 2 autres caches.
+var _cache_reserve_cellule: Dictionary = {}   # Vector3i cellule -> int
+
+# TABLES INVARIANTES (calculees une fois au _ready, ne changent JAMAIS ensuite).
+# Elles ne dependent que de mesh_library / _regle qui sont fixes apres le
+# demarrage. Referencees telles quelles dans le blob par tuile -- Packed*Array
+# est copy-on-write, le blob ne copie rien tant qu'il ne mute pas.
+var _bases_orthogonales_cache: PackedFloat32Array
+var _items_cubiques_cache: PackedInt32Array
+var _items_hauteur_cle_cache: PackedInt32Array
+var _items_hauteur_val_cache: PackedFloat32Array
+var _mesh_transforms_cache: Dictionary = {}
+var _centre_offset_cache: Vector3
 # COMPTEUR DEBUG/PERF, incremente en tete de _creer_tuile. Sert au test S2 a
 # prouver qu'une salve de modifs dans une meme tuile collapse en UN rebuild.
 var _creations_tuile_compte: int = 0
@@ -219,6 +235,7 @@ func _ready() -> void:
 	# face_base / face_normale). Le GDScript n'emet plus aucune face.
 	_preparer_quads(cote)
 	_preparer_mini_cubes(cote)
+	_construire_caches_invariantes()
 	_construire_index_initial()
 	_rafraichir_vers(_centre_tuile_observateur())
 
@@ -467,6 +484,7 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 			if profil_cell != null:
 				_cache_profil_cellule[cellule] = profil_cell
 				_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
+				_cache_reserve_cellule[cellule] = int(profil_cell.get("reserve"))
 
 	# Buckets teinte par item : parcourt les `cellules` paralleles au buffer et
 	# pousse (item, cellule, idx) pour toute cellule qui a un profil en cache.
@@ -1028,6 +1046,7 @@ func _supprimer_tuile(tuile: Vector2i) -> void:
 			_teinte_precedente.erase(cellule)
 			_cache_profil_cellule.erase(cellule)
 			_cache_quantite_cellule.erase(cellule)
+			_cache_reserve_cellule.erase(cellule)
 		_teinte_par_tuile.erase(tuile)
 
 # Helper : memorise (cellule, idx) dans un bucket item -> Array. Appele au
@@ -1066,10 +1085,10 @@ func _tick_teinte() -> void:
 	for tuile in _teinte_par_tuile:
 		var index: Dictionary = _teinte_par_tuile[tuile]
 		for cellule in index:
-			var profil: Resource = _cache_profil_cellule.get(cellule) as Resource
-			if profil == null:
-				continue
-			var cap: int = int(profil.get("reserve"))
+			# Cap lu depuis _cache_reserve_cellule (peuple en meme temps que
+			# profil) -- profil.get("reserve") serait un acces Variant par
+			# cellule, alors que reserve ne change pas pour un profil donne.
+			var cap: int = int(_cache_reserve_cellule.get(cellule, 0))
 			if cap <= 0:
 				continue
 			var q: int = int(_cache_quantite_cellule.get(cellule, 0))
@@ -1117,38 +1136,9 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int) -> Dict
 			sc_merged.merge(entree["masques_sous_cube"])
 			pv_merged.merge(entree["pv_sous_cubes"])
 
-	# Tables item.
-	var items_cub := PackedInt32Array()
-	for item in _quad_par_item.keys():
-		items_cub.append(int(item))
-	var h_cle := PackedInt32Array()
-	var h_val := PackedFloat32Array()
-	for item in _hauteur_par_item.keys():
-		h_cle.append(int(item))
-		h_val.append(float(_hauteur_par_item[item]))
-	var centre_offset: Vector3 = _regle.map_to_local(Vector3i(0, 0, 0))
-	var bases_ortho := PackedFloat32Array()
-	bases_ortho.resize(24 * 9)
-	for orient in range(24):
-		var b: Basis = _regle.get_basis_with_orthogonal_index(orient)
-		var off := orient * 9
-		bases_ortho[off + 0] = b.x.x
-		bases_ortho[off + 1] = b.y.x
-		bases_ortho[off + 2] = b.z.x
-		bases_ortho[off + 3] = b.x.y
-		bases_ortho[off + 4] = b.y.y
-		bases_ortho[off + 5] = b.z.y
-		bases_ortho[off + 6] = b.x.z
-		bases_ortho[off + 7] = b.y.z
-		bases_ortho[off + 8] = b.z.z
-	var mesh_transforms: Dictionary = {}
-	for item in mesh_library.get_item_list():
-		if _quad_par_item.has(item):
-			continue
-		if item == ITEM_LIMITE:
-			continue
-		mesh_transforms[int(item)] = mesh_library.get_item_mesh_transform(item)
-
+	# Tables item : referencees telles quelles depuis les caches invariantes
+	# (calculees au _ready). PackedArray copy-on-write, Dictionary passe par
+	# reference -- aucune copie ici.
 	return {
 		"origine_col": origine_col,
 		"taille": taille,
@@ -1163,16 +1153,16 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int) -> Dict
 		"orientation_defaut": CarteTerrain.ORIENTATION_DEFAUT,
 		"masque_sous_plein": CarteTerrain.MASQUE_SOUS_CUBE_PLEIN,
 		"max_pv_sous_cube": CarteTerrain.MAX_PV_SOUS_CUBE,
-		"centre_offset": centre_offset,
+		"centre_offset": _centre_offset_cache,
 		"volumes": vol_merged,
 		"particularites": part_merged,
 		"masques_sous_cube": sc_merged,
 		"pv_sous_cubes": pv_merged,
-		"items_cubiques": items_cub,
-		"items_hauteur_cle": h_cle,
-		"items_hauteur_val": h_val,
-		"bases_orthogonales": bases_ortho,
-		"mesh_transforms": mesh_transforms,
+		"items_cubiques": _items_cubiques_cache,
+		"items_hauteur_cle": _items_hauteur_cle_cache,
+		"items_hauteur_val": _items_hauteur_val_cache,
+		"bases_orthogonales": _bases_orthogonales_cache,
+		"mesh_transforms": _mesh_transforms_cache,
 	}
 
 # ----- INDEX SPATIAL PAR TUILE (voie C) -------------------------------------
@@ -1277,3 +1267,39 @@ func _nouvelle_entree_index() -> Dictionary:
 		"masques_sous_cube": {},
 		"pv_sous_cubes": {},
 	}
+
+# Precalcul des tables INVARIANTES (mesh_library / _regle). Appelee une fois au
+# _ready apres _preparer_quads / _preparer_mini_cubes. Le blob par tuile ne
+# fait plus que referencer ces caches -- PackedArray copy-on-write, aucune
+# copie tant qu'aucun mutateur.
+func _construire_caches_invariantes() -> void:
+	_bases_orthogonales_cache = PackedFloat32Array()
+	_bases_orthogonales_cache.resize(24 * 9)
+	for orient in range(24):
+		var b: Basis = _regle.get_basis_with_orthogonal_index(orient)
+		var off := orient * 9
+		_bases_orthogonales_cache[off + 0] = b.x.x
+		_bases_orthogonales_cache[off + 1] = b.y.x
+		_bases_orthogonales_cache[off + 2] = b.z.x
+		_bases_orthogonales_cache[off + 3] = b.x.y
+		_bases_orthogonales_cache[off + 4] = b.y.y
+		_bases_orthogonales_cache[off + 5] = b.z.y
+		_bases_orthogonales_cache[off + 6] = b.x.z
+		_bases_orthogonales_cache[off + 7] = b.y.z
+		_bases_orthogonales_cache[off + 8] = b.z.z
+	_items_cubiques_cache = PackedInt32Array()
+	for item in _quad_par_item.keys():
+		_items_cubiques_cache.append(int(item))
+	_items_hauteur_cle_cache = PackedInt32Array()
+	_items_hauteur_val_cache = PackedFloat32Array()
+	for item in _hauteur_par_item.keys():
+		_items_hauteur_cle_cache.append(int(item))
+		_items_hauteur_val_cache.append(float(_hauteur_par_item[item]))
+	_mesh_transforms_cache = {}
+	for item in mesh_library.get_item_list():
+		if _quad_par_item.has(item):
+			continue
+		if item == ITEM_LIMITE:
+			continue
+		_mesh_transforms_cache[int(item)] = mesh_library.get_item_mesh_transform(item)
+	_centre_offset_cache = _regle.map_to_local(Vector3i(0, 0, 0))
