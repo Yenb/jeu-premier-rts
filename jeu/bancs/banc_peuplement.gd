@@ -281,7 +281,7 @@ func _physics_process(delta: float) -> void:
 		cols.desiree = desirees
 	# PASSE 2 -- physique + buffer fusionnes, dans physique_et_buffer.
 	var buffer: PackedFloat32Array = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
-	(_pool.mm as MultiMesh).buffer = buffer
+	RenderingServer.multimesh_set_buffer((_pool.mm as MultiMesh).get_rid(), buffer)
 	_pool["buffer"] = buffer
 
 

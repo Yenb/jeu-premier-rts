@@ -64,6 +64,7 @@ func _executer() -> void:
 	slots_init.resize(n)
 	for i in range(n):
 		var x: float = float(i % 20) - 10.0 + 0.5
+		@warning_ignore("integer_division")
 		var z: float = float(i / 20) - 10.0 + 0.5
 		var y: float = 14.4 if (i % 3) == 0 else 20.0
 		positions_init[i] = Vector3(x, y, z)

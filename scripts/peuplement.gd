@@ -168,7 +168,7 @@ static func creer_pool(taille_max: int, mesh: Mesh, scenario: RID, colonnes: Dic
 	# de N set_instance_transform.
 	var buffer := PackedFloat32Array()
 	buffer.resize(taille_max * 12)
-	mm.buffer = buffer
+	RenderingServer.multimesh_set_buffer(mm.get_rid(), buffer)
 	var slots_libres: Array = []
 	slots_libres.resize(taille_max)
 	var i: int = taille_max - 1
@@ -267,7 +267,7 @@ static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, posi
 	buffer[base + 9] = 0.0
 	buffer[base + 10] = 1.0
 	buffer[base + 11] = position.z
-	(pool.mm as MultiMesh).buffer = buffer
+	RenderingServer.multimesh_set_buffer((pool.mm as MultiMesh).get_rid(), buffer)
 	pool["buffer"] = buffer
 	return id
 
@@ -288,7 +288,7 @@ static func retirer(pool: Dictionary, id: String, monde = null) -> void:
 		var base: int = slot * 12
 		for k in range(12):
 			buffer[base + k] = 0.0
-		(pool.mm as MultiMesh).buffer = buffer
+		RenderingServer.multimesh_set_buffer((pool.mm as MultiMesh).get_rid(), buffer)
 		pool["buffer"] = buffer
 		(pool.slots_libres as Array).push_back(slot)
 	# Swap-remove : deplace le dernier a la place du retire, evite le O(N) d'un
@@ -343,7 +343,7 @@ static func pousser_buffer(pool: Dictionary) -> void:
 	# set_instance_transform en boucle.
 	if pool.is_empty():
 		return
-	(pool.mm as MultiMesh).buffer = pool.buffer
+	RenderingServer.multimesh_set_buffer((pool.mm as MultiMesh).get_rid(), pool.buffer)
 
 static func detruire_pool(pool: Dictionary) -> void:
 	if pool.is_empty():

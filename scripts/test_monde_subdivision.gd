@@ -86,7 +86,9 @@ func _split_recursif_dans_un_octant() -> void:
 	var monde := Monde.new()
 	for i in range(100):
 		var x := float(i % 5) * 0.3
+		@warning_ignore("integer_division")
 		var y := float((i / 5) % 5) * 0.3
+		@warning_ignore("integer_division")
 		var z := float(i / 25) * 0.3
 		var pos := Vector3(x, y, z)
 		var o := Objet.fabriquer("r%d" % i, "t", pos, {})

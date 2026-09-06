@@ -855,11 +855,11 @@ func _bake_mm_forme(item: int, transforms: Array, origine_col: Vector2i,
 # _tuiles) : sans ca, GC -> RID invalide -> instance disparait silencieusement
 # (issue godotengine/godot#80479). instance_set_scenario est OBLIGATOIRE (issue
 # godotengine/godot#77113) : sans lui, l'instance n'est jamais rendue.
-func _creer_instance_rs(mm: MultiMesh, transform: Transform3D, aabb: AABB, cast_shadow_off: bool = false) -> RID:
+func _creer_instance_rs(mm: MultiMesh, transform_locale: Transform3D, aabb: AABB, cast_shadow_off: bool = false) -> RID:
 	var rid := RenderingServer.instance_create()
 	RenderingServer.instance_set_base(rid, mm.get_rid())
 	RenderingServer.instance_set_scenario(rid, get_world_3d().scenario)
-	RenderingServer.instance_set_transform(rid, transform)
+	RenderingServer.instance_set_transform(rid, transform_locale)
 	RenderingServer.instance_set_custom_aabb(rid, aabb)
 	if cast_shadow_off:
 		RenderingServer.instance_geometry_set_cast_shadows_setting(rid, RenderingServer.SHADOW_CASTING_SETTING_OFF)
@@ -1018,7 +1018,7 @@ func _greedy_direction(cellules: Dictionary, sommets: PackedVector3Array,
 					axe_t, axe_u, axe_v, normale)
 
 func _emettre_quad_greedy(sommets: PackedVector3Array, indices: PackedInt32Array,
-		cote: float, t: int, sens: int,
+		cote: float, t: int, _sens: int,
 		u_debut: int, u_fin: int, v_debut: int, v_fin: int,
 		axe_t: int, axe_u: int, axe_v: int, normale: Vector3) -> void:
 	var h := cote * 0.5

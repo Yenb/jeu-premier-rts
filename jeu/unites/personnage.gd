@@ -158,12 +158,12 @@ var _hud_inanition_label: Label = null
 
 # LA VITESSE HORIZONTALE VOULUE, dans le repere du monde. L'axe -Z d'une Basis est
 # le « devant » en Godot : avancer, c'est aller vers ou l'on regarde.
-static func vitesse_voulue(orientation: Basis, avance: float, vitesse_marche: float) -> Vector3:
+static func vitesse_voulue(orientation: Basis, avance: float, vitesse_marche_metres: float) -> Vector3:
 	var devant := -orientation.z
 	devant.y = 0.0
 	if devant.length_squared() <= 0.0:
 		return Vector3.ZERO
-	return devant.normalized() * (avance * vitesse_marche)
+	return devant.normalized() * (avance * vitesse_marche_metres)
 
 # L'ANGLE A AJOUTER CE PAS. `pivot` vaut +1 quand DROITE est enfoncee ; tourner a
 # droite est une rotation NEGATIVE autour de l'axe vertical en Godot.

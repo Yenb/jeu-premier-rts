@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Premier jeu rst"
-run/main_scene="res://jeu/bancs/banc_peuplement.tscn"
+run/main_scene="uid://dg7xc0kbdbc5d"
 config/features=PackedStringArray("4.7", "Mobile")
 run/max_fps=60
 config/icon="res://icon.svg"
