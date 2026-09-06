@@ -100,16 +100,6 @@ const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 @export var utilise_pipeline_intra_tuile: bool = false
 @export var tuiles_avancees_par_frame: int = 1
 
-# ETAPE (a) du portage C++ de _phase_parser (extension_terrain/src/mesheur_tuile.cpp).
-# Faux (defaut) : chemin historique inchange, GDScript emet toutes les faces.
-# Vrai : le C++ prend en charge UNIQUEMENT les faces cubiques PROPRES (cellule
-#   avec sous_cubes plein et sans PV en cours). Les mini-cubes, non-cubes,
-#   occluder cells et la resolution des profils teinte restent en GDScript pour
-#   cette etape. La teinte des cubes propres est repoussee ici a partir du
-#   mapping face->cellule que le C++ rend en parallele des transforms -- sans
-#   cela elle disparaitrait sur ces cellules. Voir _appliquer_cpp_a.
-@export var utilise_cpp_phase0: bool = false
-
 # La forme "limite" ne porte aucun maillage (mur invisible) : jamais rendue.
 const ITEM_LIMITE := 1
 
@@ -150,11 +140,6 @@ var _tuiles_en_pipeline: Dictionary = {}
 # cellules.
 var _regle: GridMap
 
-# LES SIX FACES D'UN CUBE : la normale (vers le vide) et la rotation qui oriente
-# le quad vers elle. Un cube n'est PAS rendu plein : il ne pose qu'un quad par
-# face exposee (voisin vide). Une face collee a un voisin plein ne se voit
-# jamais et n'existe pas dans le rendu -- c'est le vrai economie de triangles.
-var _faces: Array = []
 # item -> PlaneMesh (avec le materiau du cube) pour les formes CUBIQUES. Une
 # forme non-cube (rampe, cylindre, sphere) n'y figure pas : elle garde son mesh
 # complet, instancie tel quel -- le face culling n'a de sens que pour un cube.
@@ -212,16 +197,9 @@ func _ready() -> void:
 	_regle.cell_size = Vector3(cote, cote, cote)
 	_regle.visible = false
 	add_child(_regle)
-	# Les six orientations de face : le quad (PlaneMesh, normale +Y) tourne pour
-	# pointer sa normale vers le vide.
-	_faces = [
-		{"n": Vector3(0, 1, 0), "b": Basis()},
-		{"n": Vector3(0, -1, 0), "b": Basis(Vector3(1, 0, 0), PI)},
-		{"n": Vector3(1, 0, 0), "b": Basis(Vector3(0, 0, 1), -PI / 2.0)},
-		{"n": Vector3(-1, 0, 0), "b": Basis(Vector3(0, 0, 1), PI / 2.0)},
-		{"n": Vector3(0, 0, 1), "b": Basis(Vector3(1, 0, 0), PI / 2.0)},
-		{"n": Vector3(0, 0, -1), "b": Basis(Vector3(1, 0, 0), -PI / 2.0)},
-	]
+	# Les 6 bases orthogonales de face (dessus, dessous, +X, -X, +Z, -Z) sont
+	# desormais uniquement portees en C++ (extension_terrain/src/mesheur_tuile.cpp,
+	# face_base / face_normale). Le GDScript n'emet plus aucune face.
 	_preparer_quads(cote)
 	_preparer_mini_cubes(cote)
 	_rafraichir_vers(_centre_tuile_observateur())
@@ -505,10 +483,6 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 			var bits: int = _masque_col(col, memo_bits)
 			if bits == 0:
 				continue
-			var nxp := _masque_col(Vector2i(col.x + 1, col.y), memo_bits)
-			var nxm := _masque_col(Vector2i(col.x - 1, col.y), memo_bits)
-			var nzp := _masque_col(Vector2i(col.x, col.y + 1), memo_bits)
-			var nzm := _masque_col(Vector2i(col.x, col.y - 1), memo_bits)
 			var mon_couvrant := _masque_couvrant_col(col, memo_couvrant)
 			var nxp_c := _masque_couvrant_col(Vector2i(col.x + 1, col.y), memo_couvrant)
 			var nxm_c := _masque_couvrant_col(Vector2i(col.x - 1, col.y), memo_couvrant)
@@ -525,88 +499,44 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 				var cellule := Vector3i(col.x, couche, col.y)
 				var code: int = int(particularites.get(cellule, -1))
 				var item: int
-				var orientation: int
 				if code == -1:
 					item = CarteTerrain.ITEM_DEFAUT
-					orientation = CarteTerrain.ORIENTATION_DEFAUT
 				else:
 					item = CarteTerrain.item_du_code(code)
-					orientation = CarteTerrain.orientation_du_code(code)
 				if item == ITEM_LIMITE:
 					continue
-				var pos := _regle.map_to_local(cellule)
-				var cible: Dictionary = par_forme_sol if couche == sommet_base else par_forme
+				# GDScript n'emet plus rien -- le C++ (`_appliquer_cpp_a` appele
+				# apres la boucle) rend cubes propres, mini-cubes et non-cubes,
+				# avec mapping face->cellule pour la teinte. Ce parcours ne sert
+				# plus qu'a :
+				#   - `couche_min` / `couche_max` (AABB de tuile, phase 1),
+				#   - `cellules_occl` (occluder greedy, phase 2),
+				#   - peuplement des caches teinte pour les cubes propres
+				#     teintables (utilises par `_integrer_cpp` et
+				#     `_tick_teinte`).
+				# Le C++ recalcule la visibilite en interne ; on ne partage pas
+				# ces trois derives via le blob pour minimiser le contrat.
 				if _quad_par_item.has(item):
 					var masque_sous: int = carte.sous_cubes(cellule)
 					var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
-					if masque_sous != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN or not pv_map.is_empty():
-						# ETAPE (b) : quand utilise_cpp_phase0, le C++ emet les
-						# mini-cubes. GDScript saute ; l'integration se fait
-						# apres la boucle dans _appliquer_cpp_a.
-						if not utilise_cpp_phase0:
-							_ajouter_mini_cubes(par_forme_mini, item, pos, cote, masque_sous, pv_map)
-					else:
+					if masque_sous == CarteTerrain.MASQUE_SOUS_CUBE_PLEIN and pv_map.is_empty():
 						var profil_cell: Resource = null
 						if _ressources != null and _ressources.has_method("profil_de_cellule"):
 							profil_cell = _ressources.call("profil_de_cellule", cellule) as Resource
-						var teintable: bool = profil_cell != null
-						if teintable:
+						if profil_cell != null:
 							_cache_profil_cellule[cellule] = profil_cell
 							_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
-						# ETAPE (a) : quand utilise_cpp_phase0, le C++ emet les 6 faces
-						# ET publie le mapping face->cellule. La teinte est
-						# repoussee apres la boucle dans _appliquer_cpp_a a
-						# partir de ce mapping. Le cache profil/quantite ci-dessus
-						# reste peuple pour cette cellule quelle que soit la
-						# valeur du flag -- _tick_teinte en depend.
-						if not utilise_cpp_phase0:
-							var bucket_teinte: Dictionary = teinte_sol if cible == par_forme_sol else teinte_normal
-							if not _voisin_couvre(col, couche + 1, bits, rang + 1):
-								var i0 := _ajouter_face(cible, item, pos, 0, cote)
-								if teintable:
-									_pousser_teinte(bucket_teinte, item, cellule, i0)
-							if not _voisin_couvre(col, couche - 1, bits, rang - 1):
-								var i1 := _ajouter_face(cible, item, pos, 1, cote)
-								if teintable:
-									_pousser_teinte(bucket_teinte, item, cellule, i1)
-							if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
-								var i2 := _ajouter_face(cible, item, pos, 2, cote)
-								if teintable:
-									_pousser_teinte(bucket_teinte, item, cellule, i2)
-							if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
-								var i3 := _ajouter_face(cible, item, pos, 3, cote)
-								if teintable:
-									_pousser_teinte(bucket_teinte, item, cellule, i3)
-							if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
-								var i4 := _ajouter_face(cible, item, pos, 4, cote)
-								if teintable:
-									_pousser_teinte(bucket_teinte, item, cellule, i4)
-							if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
-								var i5 := _ajouter_face(cible, item, pos, 5, cote)
-								if teintable:
-									_pousser_teinte(bucket_teinte, item, cellule, i5)
-				else:
-					# ETAPE (b) : quand utilise_cpp_phase0, le C++ emet les
-					# non-cubes (transform = base_orthogonale x mesh_transform).
-					# GDScript saute ; l'integration se fait dans
-					# _appliquer_cpp_a via par_forme.
-					if not utilise_cpp_phase0:
-						var base := _regle.get_basis_with_orthogonal_index(orientation)
-						var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
-						if not par_forme.has(item):
-							par_forme[item] = [] as Array
-						par_forme[item].append(t)
 				couche_min = mini(couche_min, couche)
 				couche_max = maxi(couche_max, couche)
 				if couche > sommet_base and _quad_par_item.has(item):
 					cellules_occl[cellule] = true
-	# ETAPES (a)+(b) : le C++ ajoute cubes propres + mini-cubes + non-cubes,
-	# et publie le mapping face->cellule des cubes propres pour la teinte
-	# (etape c). Aucun effet quand le flag est faux -- rien n'est appele.
-	if utilise_cpp_phase0:
-		_appliquer_cpp_a(par_forme, par_forme_sol, par_forme_mini,
-				teinte_normal, teinte_sol,
-				origine_col, cote, couche_base, particularites)
+	# Portage C++ (etapes a+b+c) : le C++ ajoute cubes propres + mini-cubes +
+	# non-cubes, et publie le mapping face->cellule des cubes propres pour la
+	# teinte. Aucun fallback GDScript depuis l'etape (d) -- les 3 branches
+	# d'emission GDScript ont ete retirees.
+	_appliquer_cpp_a(par_forme, par_forme_sol, par_forme_mini,
+			teinte_normal, teinte_sol,
+			origine_col, cote, couche_base, particularites)
 	return {
 		"par_forme": par_forme,
 		"par_forme_sol": par_forme_sol,
@@ -714,54 +644,6 @@ func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
 			arr.append(occluder_noeud)
 		_tuiles[tuile] = arr
 
-# LE VOISIN COUVRE-T-IL LA FACE ? Vrai seulement s'il est PLEIN a cette couche ET
-# que c'est un CUBE (il remplit sa cellule entiere). Une rampe, un cylindre, une
-# sphere sont "pleins" au sens du masque mais laissent un vide -- ils ne couvrent
-# pas, la face du cube derriere reste visible. Hors des couches representables,
-# aucun voisin : la face est exposee.
-func _voisin_couvre(col: Vector2i, couche: int, masque: int, rang: int) -> bool:
-	if rang < 0 or rang >= CarteTerrain.COUCHES_MAXIMALES:
-		return false
-	if (masque & (1 << rang)) == 0:
-		return false
-	var cellule := Vector3i(col.x, couche, col.y)
-	if not _quad_par_item.has(carte.item_de(cellule)):
-		return false
-	# Cellule entamee = ne couvre pas : la face du cube en face doit rester
-	# visible, le rendu classique du cube plein serait un mur solide sur la
-	# geometrie sous-jacente cassee.
-	return carte.sous_cubes(cellule) == CarteTerrain.MASQUE_SOUS_CUBE_PLEIN
-
-# Pose UN mini-cube (BoxMesh de cote/3) par bit a 1 dans le masque. Position
-# du centre : centre_cellule + (ix-1, iy-1, iz-1) * cote/3. Index : bit i =
-# ix + iy*3 + iz*9.
-func _ajouter_mini_cubes(par_forme_mini: Dictionary, item: int, centre: Vector3,
-		cote: float, masque: int, pv_map: Dictionary) -> void:
-	var pas := cote / 3.0
-	if not par_forme_mini.has(item):
-		par_forme_mini[item] = [] as Array
-	var liste: Array = par_forme_mini[item]
-	for i in range(27):
-		if (masque & (1 << i)) == 0:
-			continue
-		var ix := i % 3
-		@warning_ignore("integer_division")
-		var iy := (i / 3) % 3
-		@warning_ignore("integer_division")
-		var iz := i / 9
-		var offset := Vector3(
-			float(ix - 1) * pas,
-			float(iy - 1) * pas,
-			float(iz - 1) * pas)
-		# Teinte selon PV : blanc (COLOR=1) neuf, noir (COLOR=0) presque casse.
-		# `carte.MAX_PV_SOUS_CUBE` : 0 -> teinte 1, MAX -> teinte 0.
-		var pv: int = int(pv_map.get(i, 0))
-		var t: float = clampf(1.0 - float(pv) / float(CarteTerrain.MAX_PV_SOUS_CUBE), 0.0, 1.0)
-		liste.append({
-			"transform": Transform3D(Basis.IDENTITY, centre + offset),
-			"couleur": Color(t, t, t, 1.0),
-		})
-
 # MMi pour les mini-cubes d'un item. Mesh = _mini_box_par_item[item]. Meme
 # AABB serree que _mmi_de_forme -- reutilise la meme fonction si possible.
 func _mmi_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
@@ -803,39 +685,6 @@ func _bake_mm_mini_cubes(item: int, transforms: Array, origine_col: Vector2i,
 		float(hauteur_couches) * cote + 2.0 * cote,
 		float(taille) * cote + 2.0 * cote)
 	return {"mm": mm, "aabb": AABB(pos_aabb, taille_aabb)}
-
-# Ajoute une instance de quad pour la face `i` d'un cube centre en `centre` :
-# translation vers le centre de la face (normale x demi-cote) et rotation qui
-# oriente le quad vers le vide.
-func _ajouter_face(par_forme: Dictionary, item: int, centre: Vector3, i: int, cote: float) -> int:
-	var f: Dictionary = _faces[i]
-	# Hauteur reelle du bloc (defaut = cote pour un cube plein). Un item plus
-	# court est dessine abaisse : bas de la cellule inchange, dessus descendu.
-	var h: float = float(_hauteur_par_item.get(item, cote))
-	var base: Basis = f.b
-	var origine: Vector3
-	if i == 0:
-		# Dessus : descend au sommet reel du bloc (sol de cellule + h).
-		origine = centre + Vector3(0.0, h - cote * 0.5, 0.0)
-	elif i == 1:
-		# Dessous : inchange, au sol de la cellule.
-		origine = centre + (f.n as Vector3) * (cote * 0.5)
-	else:
-		# Cotes : le quad partage (cote x cote) est mis a l'echelle verticale en
-		# MONDE par ratio = h/cote -- base = diag(1, ratio, 1) * f.b, construite
-		# colonne par colonne (Y de chaque colonne x ratio). Recentre a mi-hauteur
-		# du slab pour que son bas reste au sol de la cellule.
-		var ratio: float = h / cote
-		base = Basis(
-			Vector3(f.b.x.x, f.b.x.y * ratio, f.b.x.z),
-			Vector3(f.b.y.x, f.b.y.y * ratio, f.b.y.z),
-			Vector3(f.b.z.x, f.b.z.y * ratio, f.b.z.z))
-		origine = centre + (f.n as Vector3) * (cote * 0.5) + Vector3(0.0, (h - cote) * 0.5, 0.0)
-	var t := Transform3D(base, origine)
-	if not par_forme.has(item):
-		par_forme[item] = [] as Array
-	par_forme[item].append(t)
-	return (par_forme[item] as Array).size() - 1
 
 # UN MultiMeshInstance3D pour une forme. Le mesh est le QUAD de la forme si elle
 # est cubique (rendu face par face), sinon le mesh complet de la bibliotheque.
