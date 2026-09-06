@@ -1146,50 +1146,57 @@ func _absorber_modifications_carte() -> void:
 			if phase == 0:
 				continue
 		tuiles_a_reconstruire[t] = true
-	# REBUILD. Une passe, une par tuile.
+	# REBUILD. NEUF D'ABORD, ANCIEN LIBERE APRES : sans quoi il reste un trou
+	# de 1+ frames pendant lequel l'ancien est deja detruit et le neuf pas
+	# encore bake (visible en tirant : la tuile clignote, le vide en dessous
+	# apparait un instant). On construit la nouvelle tuile SYNCHRONE en 3
+	# phases -- meme quand utilise_pipeline_intra_tuile est vrai, le pipeline
+	# etale ne sert QU'aux entrees/sorties disque (anneau de ~25 tuiles) ; un
+	# rebuild ponctuel isole coute < 5 ms, sans interet a l'etaler. Une fois
+	# _phase_baker_occluder ecrit _tuiles[t] = neuf, l'ancien contenu est
+	# libere. Meme frame -> pas de double render persistant, pas de fuite.
 	for t in tuiles_a_reconstruire:
 		_a_supprimer.erase(t)
-		_supprimer_tuile(t)
-		_tuiles[t] = []
-		_creer_tuile(t)
+		# Snapshot de l'ancien contenu AVANT reconstruction.
+		var ancien_contenu: Variant = _tuiles.get(t, null)
+		var ancien_pipeline: Variant = _tuiles_en_pipeline.get(t, null)
+		# Detache : le neuf ecrira _tuiles[t] et _teinte_par_tuile[t] dessus.
+		_tuiles_en_pipeline.erase(t)
+		_tuiles.erase(t)
+		# Bake synchrone, hors pipeline etale.
+		var etat: Dictionary = {"parsed": _phase_parser(t)}
+		_phase_baker_instances(t, etat)
+		_phase_baker_occluder(t, etat)
+		# Le neuf a ecrit _teinte_par_tuile[t] avec ses propres {mm, idx}.
+		# Invalider _teinte_precedente sur ses cellules pour que le prochain
+		# _tick_teinte reposeune couleur sur les nouveaux MMi (sinon le cache
+		# "gain identique au dernier pose" skip le set_instance_color et le
+		# nouveau MMi reste blanc).
+		if _teinte_par_tuile.has(t):
+			var idx_neuf: Dictionary = _teinte_par_tuile[t]
+			for cellule in idx_neuf:
+				_teinte_precedente.erase(cellule)
+		# Liberer l'ancien MAINTENANT que le neuf est en place.
+		_liberer_contenu_tuile(ancien_contenu)
+		_liberer_contenu_pipeline(ancien_pipeline)
 
-func _tuile_de_colonne(colonne: Vector2i) -> Vector2i:
-	return Vector2i(
-		int(floor(float(colonne.x) / float(taille_tuile_cellules))),
-		int(floor(float(colonne.y) / float(taille_tuile_cellules))))
-
-func _supprimer_tuile(tuile: Vector2i) -> void:
-	# S7 -- Purger le pipeline AVANT tout autre nettoyage. Si la tuile a atteint
-	# phase 1 (instances bakees), libere aussi les ressources partielles (RIDs RS
-	# ou nœuds MMi) que _tuiles ne connait pas encore (sentinelle Array vide).
-	if _tuiles_en_pipeline.has(tuile):
-		var etat: Dictionary = _tuiles_en_pipeline[tuile]
-		var phase: int = int(etat.get("phase", 0))
-		if phase >= 2:
-			# Phase 1 done : instances (RS ou nœud) existent. Libere-les.
-			var rs_list: Array = etat.get("instances_rs", []) as Array
-			for e in rs_list:
-				var rid: RID = e["rid"]
-				if rid.is_valid():
-					RenderingServer.free_rid(rid)
-			var noeuds_partiels: Array = etat.get("noeuds", []) as Array
-			for n in noeuds_partiels:
-				if is_instance_valid(n):
-					n.queue_free()
-		_tuiles_en_pipeline.erase(tuile)
-	if not _tuiles.has(tuile):
+# Libere les nœuds MMi et RIDs d'instances RS d'un ancien contenu de tuile.
+# Extrait de _supprimer_tuile pour permettre le rebuild "neuf avant ancien"
+# de _absorber_modifications_carte : le contenu est detache de _tuiles avant
+# la reconstruction, puis passe ici quand le neuf est prêt.
+func _liberer_contenu_tuile(contenu: Variant) -> void:
+	if contenu == null:
 		return
-	var contenu = _tuiles[tuile]
 	if contenu is Array:
 		# CHEMIN NŒUD : Array de MultiMeshInstance3D + eventuel OccluderInstance3D.
 		for mmi in (contenu as Array):
 			if is_instance_valid(mmi):
 				mmi.queue_free()
 	elif contenu is Dictionary:
-		# CHEMIN RS DIRECT : liberer les RIDs d'instances AVANT d'oublier les mm
-		# (free_rid libere l'instance qui pointait sur mm.get_rid() ; la ref forte
-		# a mm est dans le dict, GC quand on erase l'entree). Puis queue_free de
-		# l'occludeur (reste un nœud dans les deux chemins).
+		# CHEMIN RS DIRECT : liberer les RIDs d'instances AVANT d'oublier les
+		# mm (free_rid libere l'instance qui pointait sur mm.get_rid() ; la
+		# ref forte a mm est dans le dict, GC quand l'appelant l'oublie).
+		# Puis queue_free de l'occludeur.
 		var d: Dictionary = contenu as Dictionary
 		var rs_list: Array = d.get("instances_rs", []) as Array
 		for e in rs_list:
@@ -1199,7 +1206,45 @@ func _supprimer_tuile(tuile: Vector2i) -> void:
 		var occl: OccluderInstance3D = d.get("occluder", null)
 		if occl != null and is_instance_valid(occl):
 			occl.queue_free()
+
+# Libere les ressources partielles bakees d'une tuile en cours de pipeline
+# intra-tuile (phase 1 = instances, phase 2 = occluder). Une tuile a phase 0
+# n'a rien bake, rien a liberer. Extrait de _supprimer_tuile pour la meme
+# raison que _liberer_contenu_tuile.
+func _liberer_contenu_pipeline(etat: Variant) -> void:
+	if etat == null:
+		return
+	var d: Dictionary = etat as Dictionary
+	var phase: int = int(d.get("phase", 0))
+	if phase < 2:
+		return
+	var rs_list: Array = d.get("instances_rs", []) as Array
+	for e in rs_list:
+		var rid: RID = e["rid"]
+		if rid.is_valid():
+			RenderingServer.free_rid(rid)
+	var noeuds_partiels: Array = d.get("noeuds", []) as Array
+	for n in noeuds_partiels:
+		if is_instance_valid(n):
+			n.queue_free()
+
+func _tuile_de_colonne(colonne: Vector2i) -> Vector2i:
+	return Vector2i(
+		int(floor(float(colonne.x) / float(taille_tuile_cellules))),
+		int(floor(float(colonne.y) / float(taille_tuile_cellules))))
+
+func _supprimer_tuile(tuile: Vector2i) -> void:
+	# Libere le partiel pipeline (rien si phase 0, instances si phase >= 2) et
+	# retire l'entree. Delegue a _liberer_contenu_pipeline pour ne pas
+	# dupliquer la logique avec le rebuild.
+	if _tuiles_en_pipeline.has(tuile):
+		_liberer_contenu_pipeline(_tuiles_en_pipeline[tuile])
+		_tuiles_en_pipeline.erase(tuile)
+	if not _tuiles.has(tuile):
+		return
+	var contenu = _tuiles[tuile]
 	_tuiles.erase(tuile)
+	_liberer_contenu_tuile(contenu)
 	# Nettoyage index teinte : les cellules de cette tuile disparaissent aussi
 	# de _teinte_precedente pour re-teinter proprement si la tuile revient.
 	if _teinte_par_tuile.has(tuile):
