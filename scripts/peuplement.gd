@@ -39,6 +39,11 @@ extends RefCounted
 #   mm              : MultiMesh (reference forte, N slots -- issue #80479 :
 #                     sans ref forte GDScript, GC -> RID invalide, instance
 #                     disparait silencieusement),
+#   buffer          : PackedFloat32Array de taille_max * 12, layout
+#                     TRANSFORM_3D. Ecrit par spawn/retirer et par tout
+#                     consommateur qui bouge des transforms ; envoye au mm en
+#                     UN appel par frame via pousser_buffer(pool). CoW :
+#                     toujours reassigner pool.buffer apres mutation locale.
 #   rid             : RID (UNE seule instance RS, base = mm.get_rid()),
 #   scenario        : RID (World3D scenario -- garde pour trace),
 #   taille_max      : int,
@@ -46,7 +51,15 @@ extends RefCounted
 # }
 #
 # ---- API PUBLIQUE ----
-# static creer_pool(taille_max, mesh, scenario) -> Dictionary
+# static creer_pool(taille_max, mesh, scenario, colonnes = {}) -> Dictionary
+#   colonnes : Dictionary { nom -> valeur par defaut } declare les colonnes
+#   PARALLELES au pool tenues par peuplement. Le TYPE est deduit du defaut :
+#   Vector3 -> PackedVector3Array, bool -> PackedByteArray, int ->
+#   PackedInt32Array, float -> PackedFloat32Array. peuplement ne connait
+#   aucun nom : c'est le consommateur qui declare. Une colonne est append
+#   au spawn (defaut) et swap-remove au retrait, en meme temps que
+#   individus, pour rester alignee ; peuplement ne LIT JAMAIS le contenu et
+#   n'en NOMME AUCUNE.
 #   Alloue le MultiMesh (N slots, mm.mesh = mesh, TRANSFORM_3D), puis UNE
 #   instance RS pointant vers lui. scenario pose (obligatoire, issue
 #   godotengine/godot#77113). custom_aabb TRES LARGE (Godot ne cull pas par
@@ -131,7 +144,7 @@ const TRANSFORM_SLOT_LIBRE := Transform3D(
 # individu est dans le champ de la camera.
 const AABB_TRES_LARGE := AABB(Vector3(-1e6, -1e6, -1e6), Vector3(2e6, 2e6, 2e6))
 
-static func creer_pool(taille_max: int, mesh: Mesh, scenario: RID) -> Dictionary:
+static func creer_pool(taille_max: int, mesh: Mesh, scenario: RID, colonnes: Dictionary = {}) -> Dictionary:
 	if taille_max <= 0:
 		push_error("peuplement.gd : creer_pool(taille_max = %d) -- taille non positive, pool inutilisable" % taille_max)
 		return {}
@@ -146,27 +159,64 @@ static func creer_pool(taille_max: int, mesh: Mesh, scenario: RID) -> Dictionary
 	mm.mesh = mesh
 	mm.instance_count = taille_max
 	mm.visible_instance_count = taille_max
-	# Tous les slots demarrent invisibles ; spawn ecrira la vraie transform.
-	# Pas de compaction : visible_instance_count reste a taille_max, les slots
-	# libres portent TRANSFORM_SLOT_LIBRE (echelle nulle, invisibles).
+	# TAMPON UNIQUE. Un PackedFloat32Array de 12 floats par slot -- layout
+	# TRANSFORM_3D : [xx, xy, xz, ox, yx, yy, yz, oy, zx, zy, zz, oz]. Rempli
+	# de 0.0 par resize : base nulle + origine nulle = slot invisible (equivalent
+	# a l'ancien TRANSFORM_SLOT_LIBRE d'echelle nulle). spawn/retirer et le
+	# consommateur ecrivent dans ce tampon puis appellent pousser_buffer pour
+	# faire monter le tout au RenderingServer en UN envoi par frame, au lieu
+	# de N set_instance_transform.
+	var buffer := PackedFloat32Array()
+	buffer.resize(taille_max * 12)
+	mm.buffer = buffer
 	var slots_libres: Array = []
-	for slot in range(taille_max):
-		mm.set_instance_transform(slot, TRANSFORM_SLOT_LIBRE)
-		slots_libres.append(slot)
+	slots_libres.resize(taille_max)
+	var i: int = taille_max - 1
+	var j: int = 0
+	while i >= 0:
+		slots_libres[j] = i
+		i -= 1
+		j += 1
 	var rid: RID = RenderingServer.instance_create()
 	RenderingServer.instance_set_base(rid, mm.get_rid())
 	RenderingServer.instance_set_scenario(rid, scenario)
 	RenderingServer.instance_set_custom_aabb(rid, AABB_TRES_LARGE)
+	# Colonnes paralleles au pool : nom -> PackedArray vide du bon type. Le
+	# consommateur les remplira via `pool.colonnes[nom][index]` a chaque spawn
+	# (index = id_to_index[id]). peuplement les tient alignees en append/swap.
+	var cols: Dictionary = {}
+	for nom in colonnes.keys():
+		cols[String(nom)] = _colonne_vide_pour_defaut(colonnes[nom])
 	return {
 		"individus": [] as Array,
 		"id_to_index": {} as Dictionary,
 		"slots_libres": slots_libres,
 		"mm": mm,
+		"buffer": buffer,
 		"rid": rid,
 		"scenario": scenario,
 		"taille_max": taille_max,
 		"_counter": 0,
+		"colonnes": cols,
+		"_defauts_colonnes": colonnes.duplicate(),
 	}
+
+
+# COLONNE VIDE, TYPE DEDUIT DU DEFAUT. Sans jamais nommer la nature de la
+# colonne (peuplement n'en connait aucun nom).
+static func _colonne_vide_pour_defaut(defaut) -> Variant:
+	match typeof(defaut):
+		TYPE_VECTOR3:
+			return PackedVector3Array()
+		TYPE_BOOL:
+			return PackedByteArray()
+		TYPE_INT:
+			return PackedInt32Array()
+		TYPE_FLOAT:
+			return PackedFloat32Array()
+		_:
+			push_error("peuplement.gd : type de defaut de colonne non supporte (%d) -- utiliser Vector3, bool, int ou float" % typeof(defaut))
+			return null
 
 static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, position: Vector3, monde = null) -> String:
 	if pool.is_empty():
@@ -189,9 +239,36 @@ static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, posi
 	(individu.proprietes as Dictionary)["_slot"] = slot
 	(pool.individus as Array).append(individu)
 	(pool.id_to_index as Dictionary)[id] = (pool.individus as Array).size() - 1
+	# COLONNES PARALLELES : append la valeur par defaut de chaque colonne,
+	# alignement garanti sur individus. Le consommateur ecrit ensuite la vraie
+	# valeur a l'index rendu.
+	var cols: Dictionary = pool.colonnes
+	var defauts: Dictionary = pool._defauts_colonnes
+	for nom in cols.keys():
+		var defaut = defauts[nom]
+		var col = cols[nom]
+		col.push_back(defaut)
+		cols[nom] = col
 	if monde != null:
 		monde.ajouter(individu, type_id, position)
-	(pool.mm as MultiMesh).set_instance_transform(slot, Transform3D(Basis.IDENTITY, position))
+	# TAMPON UNIQUE : pose la base identite + position dans les 12 floats du
+	# slot, puis pousse. CoW : buffer local, muter, reassigner a pool ET a mm.
+	var buffer: PackedFloat32Array = pool.buffer
+	var base: int = slot * 12
+	buffer[base + 0] = 1.0
+	buffer[base + 1] = 0.0
+	buffer[base + 2] = 0.0
+	buffer[base + 3] = position.x
+	buffer[base + 4] = 0.0
+	buffer[base + 5] = 1.0
+	buffer[base + 6] = 0.0
+	buffer[base + 7] = position.y
+	buffer[base + 8] = 0.0
+	buffer[base + 9] = 0.0
+	buffer[base + 10] = 1.0
+	buffer[base + 11] = position.z
+	(pool.mm as MultiMesh).buffer = buffer
+	pool["buffer"] = buffer
 	return id
 
 static func retirer(pool: Dictionary, id: String, monde = null) -> void:
@@ -205,7 +282,14 @@ static func retirer(pool: Dictionary, id: String, monde = null) -> void:
 	var individu: Dictionary = individus[index]
 	var slot: int = int((individu.proprietes as Dictionary).get("_slot", -1))
 	if slot >= 0:
-		(pool.mm as MultiMesh).set_instance_transform(slot, TRANSFORM_SLOT_LIBRE)
+		# TAMPON UNIQUE : remet les 12 floats du slot a 0.0 (slot invisible,
+		# equivalent a l'ancien TRANSFORM_SLOT_LIBRE), puis pousse. CoW.
+		var buffer: PackedFloat32Array = pool.buffer
+		var base: int = slot * 12
+		for k in range(12):
+			buffer[base + k] = 0.0
+		(pool.mm as MultiMesh).buffer = buffer
+		pool["buffer"] = buffer
 		(pool.slots_libres as Array).push_back(slot)
 	# Swap-remove : deplace le dernier a la place du retire, evite le O(N) d'un
 	# remove_at + rebuild complet de id_to_index.
@@ -216,6 +300,15 @@ static func retirer(pool: Dictionary, id: String, monde = null) -> void:
 		id_to_index[String(swap.id)] = index
 	individus.pop_back()
 	id_to_index.erase(id)
+	# COLONNES PARALLELES : appliquer LE MEME swap-remove que sur individus,
+	# depack/mute/repack pour le CoW. Alignement colonne <-> individus tenu.
+	var cols: Dictionary = pool.colonnes
+	for nom in cols.keys():
+		var col = cols[nom]
+		if index != dernier:
+			col[index] = col[dernier]
+		col.resize(col.size() - 1)
+		cols[nom] = col
 	if monde != null and (monde.choses as Dictionary).has(id):
 		monde.retirer(id)
 
@@ -243,6 +336,15 @@ static func ecrire_transform_index(pool: Dictionary, index: int) -> void:
 		return
 	(pool.mm as MultiMesh).set_instance_transform(slot, Transform3D(Basis.IDENTITY, individu.position))
 
+static func pousser_buffer(pool: Dictionary) -> void:
+	# Envoi UNIQUE du tampon complet au serveur de rendu. A appeler apres avoir
+	# ecrit les nouvelles transforms de la frame dans pool.buffer (le
+	# consommateur qui itere ses individus lui-meme). Alternative aux N
+	# set_instance_transform en boucle.
+	if pool.is_empty():
+		return
+	(pool.mm as MultiMesh).buffer = pool.buffer
+
 static func detruire_pool(pool: Dictionary) -> void:
 	if pool.is_empty():
 		return
@@ -252,3 +354,4 @@ static func detruire_pool(pool: Dictionary) -> void:
 	(pool.individus as Array).clear()
 	(pool.id_to_index as Dictionary).clear()
 	(pool.slots_libres as Array).clear()
+	(pool.colonnes as Dictionary).clear()

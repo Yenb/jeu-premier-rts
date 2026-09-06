@@ -518,6 +518,92 @@ static func redimensionner_entite(entite: Dictionary, nouvelle_hauteur: float, n
 # (comparaison de sommets), portee dans le module partage.
 # UN seul pas, UNE seule passe. PAS de sub-stepping, PAS de GJK/multipass, PAS de
 # saut, PAS de y_appui_entite (le profil simple ne monte pas sur les autres).
+# PASSE UNIQUE de pas_simple sur PackedArray paralleles, pour une population
+# homogene ou l'ordre est fixe (pas de spawn/retrait pendant le tick). Meme
+# physique que pas_simple, ligne par ligne : gravite, vitesse terminale,
+# composition horizontale, blocage par carte.sommet_sous aux trois memes points
+# (sous les pieds, devant, apres le pas), snap sol, au_sol. La seule difference
+# est la boucle sur index au lieu d'un appel par agent.
+#
+# PIEGE CoW (doc Godot 4 : Packed*Array is always passed by value). La
+# signature passe donc par un Dictionary : depack en tete en locaux types,
+# boucle, REPACK dans state en queue -- sans le repack, l'appelant ne voit
+# rien.
+#
+# cols porte les COLONNES paralleles du pool consommateur (nom -> PackedArray) :
+# "position", "velocite", "desiree" (PackedVector3Array), "au_sol"
+# (PackedByteArray). count = nombre d'agents actifs. gravite est scalaire pour
+# tout le lot -- si un jour elle varie par agent, ajouter une colonne.
+static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: float, carte) -> void:
+	if delta <= 0.0 or carte == null:
+		return
+	var positions: PackedVector3Array = cols.position
+	var velocites: PackedVector3Array = cols.velocite
+	var desirees: PackedVector3Array = cols.desiree
+	var au_sols: PackedByteArray = cols.au_sol
+	var cote: float = 2.0
+	if "cote" in carte:
+		cote = float(carte.cote)
+	var g_dt: float = gravite * delta
+	var vt: float = -VITESSE_TERMINALE
+	var i: int = 0
+	while i < count:
+		var ve: Vector3 = velocites[i]
+		# S.2 -- Gravite.
+		ve.y -= g_dt
+		# S.3 -- Vitesse terminale.
+		if ve.y < vt:
+			ve.y = vt
+		# S.4 -- Composition horizontale.
+		var vdh: Vector3 = desirees[i]
+		ve.x = vdh.x
+		ve.z = vdh.z
+		# S.5 -- Deplacement candidat.
+		var dep_x: float = ve.x * delta
+		var dep_y: float = ve.y * delta
+		var dep_z: float = ve.z * delta
+		# S.6 -- Blocage terrain simple (regle ennemis.gd) : bord de carte ou
+		# marche trop haute a la destination -> l'horizontale est annulee.
+		var pos: Vector3 = positions[i]
+		var sol_ici = carte.sommet_sous(pos.x, pos.z, pos.y + cote)
+		var sol_devant = carte.sommet_sous(pos.x + dep_x, pos.z + dep_z, pos.y + cote)
+		if sol_ici == null or sol_devant == null:
+			dep_x = 0.0
+			dep_z = 0.0
+			ve.x = 0.0
+			ve.z = 0.0
+		elif float(sol_devant) - float(sol_ici) > cote:
+			dep_x = 0.0
+			dep_z = 0.0
+			ve.x = 0.0
+			ve.z = 0.0
+		# S.7 -- Application.
+		pos.x += dep_x
+		pos.z += dep_z
+		pos.y += dep_y
+		# S.8 -- Snap sol simple.
+		var sol = carte.sommet_sous(pos.x, pos.z, pos.y + cote)
+		var contact: bool = false
+		if sol != null and pos.y <= float(sol):
+			pos.y = float(sol)
+			contact = true
+		# S.9 -- au_sol conditionnel.
+		var au_sol_final: bool = contact and ve.y <= 0.0
+		au_sols[i] = 1 if au_sol_final else 0
+		if au_sol_final:
+			ve.y = 0.0
+		# S.10 -- Ecriture.
+		velocites[i] = ve
+		positions[i] = pos
+		i += 1
+	# REPACK obligatoire (piege CoW) : sans ces trois lignes, les mutations
+	# ci-dessus vivent dans les copies locales et l'appelant garde ses anciens
+	# tableaux. "desiree" n'est pas ecrit par la physique, pas besoin de repack.
+	cols.position = positions
+	cols.velocite = velocites
+	cols.au_sol = au_sols
+
+
 static func pas_simple(entite: Dictionary, delta: float, monde, carte) -> void:
 	# S.0 -- Gardes.
 	if delta <= 0.0 or carte == null:

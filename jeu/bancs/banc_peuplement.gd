@@ -65,10 +65,13 @@ var _monde = null
 var _carte: Resource = null
 var _catalogue: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
-# L'ETAT D'ERRANCE VIT DANS individu.proprietes (cles errance_direction,
-# errance_cap_horloge) : la boucle _physics_process les lit direct depuis le
-# proprietes qu'elle tient deja, sans hash de id String ni dict separe --
-# supprime aussi la fuite latente d'un dict membre non nettoye au retrait.
+# LES COLONNES PARALLELES DU POOL, tenues par peuplement.gd, remplies par le
+# banc au spawn. Le hot loop n'accede plus a individu.proprietes ni n'appelle
+# pas_simple par agent : il lit/mute les colonnes directement et invoque
+# Mouvement.pas_simple_lot une fois. Les colonnes restent alignees quand un
+# agent est retire (peuplement fait le meme swap-remove sur chaque colonne),
+# ce qui prepare la population dynamique du vrai jeu.
+const GRAVITE_LOT := 18.0
 
 func _ready() -> void:
 	_charger_reglages_locaux()
@@ -145,7 +148,19 @@ func _monter_pool() -> void:
 	# Taille du pool = capacite avec un peu de marge -- des chantiers ulterieurs
 	# pourront spawn/kill dynamiquement sans re-allouer.
 	# Node (pas Node3D) : pas de get_world_3d() direct. Passer par le Viewport.
-	_pool = Peuplement.creer_pool(nombre_individus * 2, mesh, get_viewport().get_world_3d().scenario)
+	# Colonnes paralleles declarees ici (peuplement les alloue vides et les tient
+	# alignees) ; le banc les remplit au spawn et les mute en boucle.
+	var colonnes := {
+		"position": Vector3.ZERO,
+		"velocite": Vector3.ZERO,
+		"desiree": Vector3.ZERO,
+		"direction": Vector3.ZERO,
+		"au_sol": false,
+		"cap_horloge": 0.0,
+		"vitesse": 1.0,
+		"slot": 0,
+	}
+	_pool = Peuplement.creer_pool(nombre_individus * 2, mesh, get_viewport().get_world_3d().scenario, colonnes)
 
 func _fabriquer_lot() -> void:
 	if _pool.is_empty():
@@ -184,35 +199,93 @@ func _fabriquer_lot() -> void:
 		poses += 1
 	if poses < nombre_individus:
 		push_error("banc_peuplement : seulement %d/%d individus poses (%d tentatives)" % [poses, nombre_individus, tentatives])
+	# Remplir les colonnes du pool en batch (peuplement les a appendees vides
+	# a chaque spawn ; le banc y ecrit les vraies valeurs). Depack / mute /
+	# repack par colonne (CoW). Ordre = ordre de _pool.individus.
+	_remplir_colonnes_depuis_individus()
+
+
+func _remplir_colonnes_depuis_individus() -> void:
+	var individus: Array = _pool.individus
+	var n: int = individus.size()
+	var cols: Dictionary = _pool.colonnes
+	var positions: PackedVector3Array = cols.position
+	var velocites: PackedVector3Array = cols.velocite
+	var desirees: PackedVector3Array = cols.desiree
+	var directions: PackedVector3Array = cols.direction
+	var cap_horloges: PackedFloat32Array = cols.cap_horloge
+	var vitesses: PackedFloat32Array = cols.vitesse
+	var au_sols: PackedByteArray = cols.au_sol
+	var slots: PackedInt32Array = cols.slot
+	var i: int = 0
+	while i < n:
+		var individu: Dictionary = individus[i]
+		var p: Dictionary = individu.proprietes
+		positions[i] = individu.position
+		velocites[i] = p.get("velocite", Vector3.ZERO)
+		desirees[i] = p.get("velocite_desiree_horizontale", Vector3.ZERO)
+		directions[i] = p.get("errance_direction", Vector3.ZERO)
+		cap_horloges[i] = float(p.get("errance_cap_horloge", 0.0))
+		vitesses[i] = float(p.get("vitesse", 1.0))
+		au_sols[i] = 1 if bool(p.get("au_sol", false)) else 0
+		slots[i] = int(p.get("_slot", -1))
+		i += 1
+	cols.position = positions
+	cols.velocite = velocites
+	cols.desiree = desirees
+	cols.direction = directions
+	cols.cap_horloge = cap_horloges
+	cols.vitesse = vitesses
+	cols.au_sol = au_sols
+	cols.slot = slots
 
 func _physics_process(delta: float) -> void:
 	if _pool.is_empty():
 		return
-	var individus: Array = _pool.individus
 	var carte = _carte
-	# HOT PATH : mm cache une fois hors boucle -- l'ecriture de la transform
-	# est INLINEE en set_instance_transform direct, plus d'appel a
-	# Peuplement.ecrire_transform_index par individu.
-	var mm: MultiMesh = _pool.mm
-	# monde = null a pas_simple : ce banc n'interroge pas l'index spatial, on
-	# ne l'entretient donc pas (evite un monde.deplacer par individu et par
-	# frame). _monde reste utilise pour spawn/retirer (les seuls gestes qui
-	# publient dans l'index a naissance et mort d'un individu).
-	for individu in individus:
-		var p: Dictionary = individu.proprietes
-		var horloge: float = float(p.errance_cap_horloge) - delta
-		var direction: Vector3 = p.errance_direction
+	var cols: Dictionary = _pool.colonnes
+	var count: int = (_pool.individus as Array).size()
+	if count == 0:
+		return
+	# PASSE ERRANCE sur les colonnes. Depack CoW en tete, muter, REPACK.
+	var directions: PackedVector3Array = cols.direction
+	var cap_horloges: PackedFloat32Array = cols.cap_horloge
+	var vitesses: PackedFloat32Array = cols.vitesse
+	var desirees: PackedVector3Array = cols.desiree
+	var i: int = 0
+	while i < count:
+		var horloge: float = cap_horloges[i] - delta
+		var direction: Vector3 = directions[i]
 		if horloge <= 0.0:
 			direction = _nouvelle_direction()
-			p["errance_direction"] = direction
+			directions[i] = direction
 			horloge = _rng.randf_range(3.0, 8.0)
-		p["errance_cap_horloge"] = horloge
-		var vitesse: float = float(p.get("vitesse", 1.0))
-		p["velocite_desiree_horizontale"] = direction * vitesse
-		Mouvement.pas_simple(individu, delta, null, carte)
-		var slot: int = int(p.get("_slot", -1))
+		cap_horloges[i] = horloge
+		desirees[i] = direction * vitesses[i]
+		i += 1
+	cols.direction = directions
+	cols.cap_horloge = cap_horloges
+	cols.desiree = desirees
+	# UNE SEULE passe physique sur tout le lot. pas_simple_lot repack lui-meme
+	# position / velocite / au_sol dans cols avant de rendre.
+	Mouvement.pas_simple_lot(cols, count, GRAVITE_LOT, delta, carte)
+	# TAMPON UNIQUE : ecrire les 3 floats d'origine par slot depuis cols.position,
+	# pousser au mm et reassigner _pool.buffer (piege CoW, meme que le round 7).
+	var positions: PackedVector3Array = cols.position
+	var slots: PackedInt32Array = cols.slot
+	var buffer: PackedFloat32Array = _pool.buffer
+	i = 0
+	while i < count:
+		var slot: int = slots[i]
 		if slot >= 0:
-			mm.set_instance_transform(slot, Transform3D(Basis.IDENTITY, individu.position))
+			var base: int = slot * 12
+			var pos: Vector3 = positions[i]
+			buffer[base + 3] = pos.x
+			buffer[base + 7] = pos.y
+			buffer[base + 11] = pos.z
+		i += 1
+	(_pool.mm as MultiMesh).buffer = buffer
+	_pool["buffer"] = buffer
 
 func _nouvelle_direction() -> Vector3:
 	var angle: float = _rng.randf() * TAU
