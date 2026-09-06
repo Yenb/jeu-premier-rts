@@ -120,6 +120,7 @@ carte = ExtResource("3_g2etm")
 mesh_library = ExtResource("1_csflq")
 utilise_rs_direct = true
 utilise_pipeline_intra_tuile = true
+utilise_cpp_phase0 = true
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 22.990662, 272.74768)

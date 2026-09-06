@@ -540,7 +540,11 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 					var masque_sous: int = carte.sous_cubes(cellule)
 					var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
 					if masque_sous != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN or not pv_map.is_empty():
-						_ajouter_mini_cubes(par_forme_mini, item, pos, cote, masque_sous, pv_map)
+						# ETAPE (b) : quand utilise_cpp_phase0, le C++ emet les
+						# mini-cubes. GDScript saute ; l'integration se fait
+						# apres la boucle dans _appliquer_cpp_a.
+						if not utilise_cpp_phase0:
+							_ajouter_mini_cubes(par_forme_mini, item, pos, cote, masque_sous, pv_map)
 					else:
 						var profil_cell: Resource = null
 						if _ressources != null and _ressources.has_method("profil_de_cellule"):
@@ -582,20 +586,26 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 								if teintable:
 									_pousser_teinte(bucket_teinte, item, cellule, i5)
 				else:
-					var base := _regle.get_basis_with_orthogonal_index(orientation)
-					var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
-					if not par_forme.has(item):
-						par_forme[item] = [] as Array
-					par_forme[item].append(t)
+					# ETAPE (b) : quand utilise_cpp_phase0, le C++ emet les
+					# non-cubes (transform = base_orthogonale x mesh_transform).
+					# GDScript saute ; l'integration se fait dans
+					# _appliquer_cpp_a via par_forme.
+					if not utilise_cpp_phase0:
+						var base := _regle.get_basis_with_orthogonal_index(orientation)
+						var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
+						if not par_forme.has(item):
+							par_forme[item] = [] as Array
+						par_forme[item].append(t)
 				couche_min = mini(couche_min, couche)
 				couche_max = maxi(couche_max, couche)
 				if couche > sommet_base and _quad_par_item.has(item):
 					cellules_occl[cellule] = true
-	# ETAPE (a) : le C++ ajoute ses faces cubiques propres et repousse la teinte
-	# a partir du mapping face->cellule qu'il rend. Aucun effet quand le flag
-	# est faux -- rien n'est appele.
+	# ETAPES (a)+(b) : le C++ ajoute cubes propres + mini-cubes + non-cubes,
+	# et publie le mapping face->cellule des cubes propres pour la teinte
+	# (etape c). Aucun effet quand le flag est faux -- rien n'est appele.
 	if utilise_cpp_phase0:
-		_appliquer_cpp_a(par_forme, par_forme_sol, teinte_normal, teinte_sol,
+		_appliquer_cpp_a(par_forme, par_forme_sol, par_forme_mini,
+				teinte_normal, teinte_sol,
 				origine_col, cote, couche_base, particularites)
 	return {
 		"par_forme": par_forme,
@@ -1309,9 +1319,15 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 					sc_arr.append(m)
 				var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
 				if not pv_map.is_empty():
-					pv_arr.append(cellule.x)
-					pv_arr.append(cellule.y)
-					pv_arr.append(cellule.z)
+					# ETAPE (b) : UN quintuple par sous-cube endommage, pour
+					# que le C++ puisse teinter chaque mini-cube (blanc a noir
+					# selon pv/MAX_PV_SOUS_CUBE).
+					for sous_idx in pv_map:
+						pv_arr.append(cellule.x)
+						pv_arr.append(cellule.y)
+						pv_arr.append(cellule.z)
+						pv_arr.append(int(sous_idx))
+						pv_arr.append(int(pv_map[sous_idx]))
 
 	# Tables item -> cubique / hauteur. Petites (une entree par forme de la
 	# bibliotheque), reconstruites a chaque tuile car peu couteuses.
@@ -1329,6 +1345,37 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 	# le C++.
 	var centre_offset: Vector3 = _regle.map_to_local(Vector3i(0, 0, 0))
 
+	# ETAPE (b) : les 24 bases orthogonales du GridMap, encodees a plat
+	# (m00,m01,m02, m10,m11,m12, m20,m21,m22 par basis). Le C++ decode par
+	# `orient * 9 + k`. get_basis_with_orthogonal_index est cote nœud, jamais
+	# appele du C++.
+	var bases_ortho := PackedFloat32Array()
+	bases_ortho.resize(24 * 9)
+	for orient in range(24):
+		var b: Basis = _regle.get_basis_with_orthogonal_index(orient)
+		var off := orient * 9
+		bases_ortho[off + 0] = b.x.x
+		bases_ortho[off + 1] = b.y.x
+		bases_ortho[off + 2] = b.z.x
+		bases_ortho[off + 3] = b.x.y
+		bases_ortho[off + 4] = b.y.y
+		bases_ortho[off + 5] = b.z.y
+		bases_ortho[off + 6] = b.x.z
+		bases_ortho[off + 7] = b.y.z
+		bases_ortho[off + 8] = b.z.z
+
+	# ETAPE (b) : mesh_transforms des items NON-cubiques uniquement. Le C++
+	# multiplie base_orthogonale x mesh_transform pour ces items. Items
+	# cubiques et ITEM_LIMITE exclus (pas de rendu direct de leur mesh
+	# complet).
+	var mesh_transforms: Dictionary = {}
+	for item in mesh_library.get_item_list():
+		if _quad_par_item.has(item):
+			continue
+		if item == ITEM_LIMITE:
+			continue
+		mesh_transforms[int(item)] = mesh_library.get_item_mesh_transform(item)
+
 	return {
 		"origine_col": origine_col,
 		"taille": taille,
@@ -1340,22 +1387,29 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
 		"item_defaut": CarteTerrain.ITEM_DEFAUT,
 		"orientation_defaut": CarteTerrain.ORIENTATION_DEFAUT,
 		"masque_sous_plein": CarteTerrain.MASQUE_SOUS_CUBE_PLEIN,
+		"max_pv_sous_cube": CarteTerrain.MAX_PV_SOUS_CUBE,
 		"centre_offset": centre_offset,
 		"masques": masques,
 		"couvrants": couvrants,
 		"particularites": part_arr,
 		"sous_cubes_partiels": sc_arr,
-		"cellules_pv": pv_arr,
+		"pv_par_cellule": pv_arr,
 		"items_cubiques": items_cub,
 		"items_hauteur_cle": h_cle,
 		"items_hauteur_val": h_val,
+		"bases_orthogonales": bases_ortho,
+		"mesh_transforms": mesh_transforms,
 	}
 
-# ETAPE (a) -- appelle MesheurTuile.bake_tuile_a et integre son resultat dans
-# les buckets locaux de _phase_parser. Le C++ produit les faces cubes propres
-# (par item, normal et sol). Le mapping face->cellule sert a repousser la
-# teinte a partir du cache _cache_profil_cellule deja alimente par la boucle.
+# ETAPES (a)+(b) -- appelle MesheurTuile.bake_tuile_a et integre son resultat
+# dans les buckets locaux de _phase_parser. Le C++ produit :
+#   - par_forme     : cubes propres non-sol ET non-cubes (rampes, cylindres...)
+#   - par_forme_sol : cubes propres de la couche sommet_base
+#   - par_forme_mini: mini-cubes des cellules cassees / avec PV
+# Le mapping face->cellule des cubes propres est repousse dans teinte_normal /
+# teinte_sol via _cache_profil_cellule deja alimente par la boucle GDScript.
 func _appliquer_cpp_a(par_forme: Dictionary, par_forme_sol: Dictionary,
+		par_forme_mini: Dictionary,
 		teinte_normal: Dictionary, teinte_sol: Dictionary,
 		origine_col: Vector2i, cote: float, couche_base: int,
 		particularites: Dictionary) -> void:
@@ -1368,6 +1422,21 @@ func _appliquer_cpp_a(par_forme: Dictionary, par_forme_sol: Dictionary,
 	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
 	_integrer_cpp(res.get("par_forme", {}), par_forme, teinte_normal)
 	_integrer_cpp(res.get("par_forme_sol", {}), par_forme_sol, teinte_sol)
+	_integrer_cpp_mini(res.get("par_forme_mini", {}), par_forme_mini)
+
+# ETAPE (b) -- integration des mini-cubes rendus par le C++. Format C++ :
+# Dict { item -> Array<Dictionary{transform, couleur}> }, meme format que le
+# fallback GDScript (_ajouter_mini_cubes) -- injection directe dans le bucket.
+func _integrer_cpp_mini(src: Dictionary, dst_par_forme_mini: Dictionary) -> void:
+	for item in src.keys():
+		var liste: Array = src[item]
+		if liste.is_empty():
+			continue
+		if not dst_par_forme_mini.has(item):
+			dst_par_forme_mini[item] = [] as Array
+		var bucket: Array = dst_par_forme_mini[item]
+		for entree in liste:
+			bucket.append(entree)
 
 # ETAPE (a) -- pour chaque item, appende les transforms produits par le C++ a
 # `dst_par_forme[item]` et pousse une paire teinte pour chaque face dont la
