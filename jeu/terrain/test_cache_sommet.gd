@@ -35,7 +35,41 @@ func _init() -> void:
 	_juger_sculpte_invalide_cache()
 	_juger_rampe_continue()
 	_juger_surplomb()
+	_juger_demi_cote_realloue()
 	_conclure()
+
+
+func _juger_demi_cote_realloue() -> void:
+	# Round 9 : _table_sommet est une PackedFloat32Array de taille
+	# (2*demi_cote)^2 * 9. Changer demi_cote via le setter doit reallouer la
+	# table a la nouvelle taille et la remplir de NAN, sans quoi l'index
+	# arithmetique de pas_simple_lot pointerait hors-tableau (crash) ou lirait
+	# des valeurs perimees.
+	var carte: Resource = CarteTerrain.new()
+	# Chauffer la table au sommet plat.
+	var _y_avant: Variant = carte.sommet(0.5, 0.5)
+	var t_avant: PackedFloat32Array = carte.table_sommet()
+	var attendu_avant: int = (2 * 150) * (2 * 150) * 9
+	_v.v(t_avant.size() == attendu_avant,
+		"demi_cote : table taille %d != %d attendu (demi_cote=150)" % [t_avant.size(), attendu_avant])
+	# Changer demi_cote : le setter doit reallouer et remettre a NAN.
+	carte.demi_cote = 40
+	var t_apres: PackedFloat32Array = carte.table_sommet()
+	var attendu_apres: int = (2 * 40) * (2 * 40) * 9
+	_v.v(t_apres.size() == attendu_apres,
+		"demi_cote : table taille %d != %d attendu apres realloc (demi_cote=40)" % [t_apres.size(), attendu_apres])
+	# Toutes les cases doivent etre NAN apres realloc.
+	var toutes_nan: bool = true
+	for k in range(t_apres.size()):
+		if not is_nan(t_apres[k]):
+			toutes_nan = false
+			break
+	_v.v(toutes_nan, "demi_cote : table apres realloc contient des valeurs non-NAN")
+	# La carte doit rester interrogeable dans la nouvelle emprise (colonne (0,0)
+	# reste dans [-40, 39]).
+	var y_new: Variant = carte.sommet(0.5, 0.5)
+	_v.v(y_new != null, "demi_cote : sommet sur nouvelle emprise = null")
+	print("demi_cote : setter reallouee (%d -> %d cases), NAN, carte interrogeable" % [attendu_avant, attendu_apres])
 
 
 func _juger_plat() -> void:

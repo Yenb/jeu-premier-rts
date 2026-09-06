@@ -93,7 +93,13 @@ extends "res://jeu/monde/registre.gd"
 
 # Moitie du cote de la carte, EN CELLULES. La carte est centree sur l'origine :
 # les colonnes valides vont de -demi_cote a demi_cote - 1 sur les deux axes.
-@export var demi_cote: int = 150
+# Setter : reallouer _table_sommet a la nouvelle taille et la remplir de NAN.
+# Sans ca, l'index arithmetique du round 9 pointerait hors-tableau ou lirait
+# des valeurs perimees d'une emprise precedente.
+@export var demi_cote: int = 150:
+	set(valeur):
+		demi_cote = valeur
+		_reallouer_table_sommet()
 
 # Couche de la premiere cellule pleine, et nombre de couches pleines du defaut.
 # Le sommet par defaut est donc `couche_base + couches_pleines - 1`.
@@ -113,11 +119,30 @@ extends "res://jeu/monde/registre.gd"
 var _masque_base: int = masque_plein(7)
 
 
-# Surcharge : le cache _cache_sommet est un derive du terrain, il tombe des que
-# le terrain est marque sale. Toute mutation qui passe par marquer_sale l'invalide.
+# Flag paresseux d'invalidation de _table_sommet. marquer_sale POSE le flag ;
+# le fill(NAN) reel se fait a la premiere lecture qui suit. Sans ca, un test
+# de sculpture qui enchaine 100 000 mutations ferait 100 000 * 810 000 =
+# 81 milliards d'ecritures en amont de toute lecture -- hang confirme.
+var _table_sale: bool = false
+
+
+# Surcharge : _table_sommet est un derive du terrain, elle tombe des que le
+# terrain est marque sale. Invalidation POSE le flag ; le vidage effectif est
+# paresseux (a la premiere lecture).
 func marquer_sale() -> void:
 	super.marquer_sale()
-	_cache_sommet.clear()
+	_table_sale = true
+
+
+# Videment paresseux : appele par les points de lecture (sommet, sommet_sous,
+# table_sommet). Alloue la table si vide, la remet a NAN si sale.
+func _rafraichir_table_sommet() -> void:
+	if _table_sommet.size() == 0:
+		_reallouer_table_sommet()
+		_table_sale = false
+	elif _table_sale:
+		_table_sommet.fill(NAN)
+		_table_sale = false
 
 # Arete de la cellule, en metres. Portee par la carte pour la meme raison que
 # l'emprise : c'est elle qui convertit une emprise en superficie.
@@ -249,22 +274,31 @@ func sommet(x_monde: float, z_monde: float) -> Variant:
 	var cx: int = int(floor(x_monde / cote_f))
 	var cz: int = int(floor(z_monde / cote_f))
 	var col := Vector2i(cx, cz)
-	# Position du point DANS la cellule, calculee en tete pour construire la
-	# cle du cache (sous-index ix+iz*3 dans la sous-cellule).
+	# Position du point DANS la cellule, calculee en tete pour construire
+	# l'index dans _table_sommet (sous-index ix+iz*3 dans la sous-cellule).
 	var x_local: float = x_monde - float(cx) * cote_f
 	var z_local: float = z_monde - float(cz) * cote_f
 	var ix: int = clampi(int(floor(x_local * 3.0 / cote_f)), 0, 2)
 	var iz: int = clampi(int(floor(z_local * 3.0 / cote_f)), 0, 2)
-	# CACHE PARTAGE : sommet renvoie TOUJOURS le sommet reel de la sous-cellule.
-	# Si le cache le porte, on a la reponse (invalidation par marquer_sale sur
-	# toute mutation du terrain -- volumes / _masques_sous_cube / particularites).
-	var cache_key := Vector3i(cx, cz, ix + iz * 3)
-	if _cache_sommet.has(cache_key):
-		return float(_cache_sommet[cache_key])
+	# TABLE PLATE : lecture O(1) par index arithmetique. sommet renvoie
+	# TOUJOURS le sommet reel de la sous-cellule -- si la case porte une
+	# valeur non-NAN, c'est la reponse (invalidation par marquer_sale).
+	# COUPLAGE : formule d'index reprise TELLE QUELLE dans
+	# scripts/mouvement_kinematic.gd::pas_simple_lot (doit rester identique).
+	var dans_emprise_ici: bool = cx >= -demi_cote and cx < demi_cote and cz >= -demi_cote and cz < demi_cote
+	var cote_lin: int = 2 * demi_cote
+	var idx_tbl: int = -1
+	if dans_emprise_ici:
+		if _table_sommet.size() == 0 or _table_sale:
+			_rafraichir_table_sommet()
+		idx_tbl = ((cx + demi_cote) + (cz + demi_cote) * cote_lin) * 9 + ix + iz * 3
+		var cached: float = _table_sommet[idx_tbl]
+		if not is_nan(cached):
+			return cached
 	# HOT PATH : masque(col) INLINE (test d'emprise + volumes.get). Aucun
 	# appel de fonction interne dans le corps de sommet() pour lire la carte.
 	var bits: int
-	if cx < -demi_cote or cx >= demi_cote or cz < -demi_cote or cz >= demi_cote:
+	if not dans_emprise_ici:
 		bits = 0
 	else:
 		bits = int(volumes.get(col, _masque_base))
@@ -319,7 +353,8 @@ func sommet(x_monde: float, z_monde: float) -> Variant:
 		var idx: int = ix + iy * 3 + iz * 9
 		if (masque_sc & (1 << idx)) != 0:
 			var top: float = float(couche) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
-			_cache_sommet[cache_key] = top
+			if idx_tbl >= 0:
+				_table_sommet[idx_tbl] = top
 			return top
 		iy -= 1
 	# Aucun sous-cube plein sous ce point dans la couche sommet.
@@ -340,7 +375,8 @@ func sommet(x_monde: float, z_monde: float) -> Variant:
 			var idx2: int = ix + iy2 * 3 + iz * 9
 			if (m & (1 << idx2)) != 0:
 				var top2: float = float(c) * cote_f + (float(iy2) + 1.0) * (cote_f / 3.0)
-				_cache_sommet[cache_key] = top2
+				if idx_tbl >= 0:
+					_table_sommet[idx_tbl] = top2
 				return top2
 			iy2 -= 1
 		c -= 1
@@ -363,21 +399,29 @@ func sommet_sous(x_monde: float, z_monde: float, y_max: float) -> Variant:
 	var z_local: float = z_monde - float(cz) * cote_f
 	var ix: int = clampi(int(floor(x_local * 3.0 / cote_f)), 0, 2)
 	var iz: int = clampi(int(floor(z_local * 3.0 / cote_f)), 0, 2)
-	# CACHE PARTAGE : lit le sommet reel de la sous-cellule si connu.
-	# top <= y_max -> reponse (c'est la surface la plus haute et elle rentre).
-	# top > y_max  -> scan complet (on cherche plus bas), sans REECRIRE le cache
-	#                 (l'entree existante reste le vrai sommet).
-	var cache_key := Vector3i(cx, cz, ix + iz * 3)
+	# TABLE PLATE : lit le sommet reel de la sous-cellule si connu.
+	# table <= y_max -> reponse (c'est la surface la plus haute et elle rentre).
+	# table > y_max  -> scan complet (on cherche plus bas), sans REECRIRE la table
+	#                   (l'entree existante reste le vrai sommet).
+	# COUPLAGE : formule d'index reprise TELLE QUELLE dans
+	# scripts/mouvement_kinematic.gd::pas_simple_lot (doit rester identique).
+	var dans_emprise_ici: bool = cx >= -demi_cote and cx < demi_cote and cz >= -demi_cote and cz < demi_cote
+	var cote_lin: int = 2 * demi_cote
+	var idx_tbl: int = -1
 	var scan_avec_ecriture: bool = true
-	if _cache_sommet.has(cache_key):
-		var cached: float = float(_cache_sommet[cache_key])
-		if cached <= y_max:
-			return cached
-		scan_avec_ecriture = false
+	if dans_emprise_ici:
+		if _table_sommet.size() == 0 or _table_sale:
+			_rafraichir_table_sommet()
+		idx_tbl = ((cx + demi_cote) + (cz + demi_cote) * cote_lin) * 9 + ix + iz * 3
+		var cached: float = _table_sommet[idx_tbl]
+		if not is_nan(cached):
+			if cached <= y_max:
+				return cached
+			scan_avec_ecriture = false
 	# HOT PATH : masque(col) INLINE (test d'emprise + volumes.get). Aucun
 	# appel de fonction interne dans le corps de sommet_sous().
 	var bits: int
-	if cx < -demi_cote or cx >= demi_cote or cz < -demi_cote or cz >= demi_cote:
+	if not dans_emprise_ici:
 		bits = 0
 	else:
 		bits = int(volumes.get(col, _masque_base))
@@ -446,8 +490,8 @@ func sommet_sous(x_monde: float, z_monde: float, y_max: float) -> Variant:
 					if (masque_sc & (1 << idx)) != 0:
 						var y_sc: float = float(c) * cote_f + (float(iy) + 1.0) * (cote_f / 3.0)
 						if y_sc <= y_max:
-							if cache_eligible:
-								_cache_sommet[cache_key] = y_sc
+							if cache_eligible and idx_tbl >= 0:
+								_table_sommet[idx_tbl] = y_sc
 							return y_sc
 						# Ce sous-cube etait le sommet reel mais y_max le coupe :
 						# on va renvoyer une surface plus basse, invalider le cache.
@@ -746,26 +790,50 @@ const MAX_PV_SOUS_CUBE := 50
 
 var _masques_sous_cube: Dictionary = {}  # Vector3i cellule -> int masque
 
-# CACHE PARTAGE DE LA HAUTEUR DE SURFACE, par sous-cellule. Cle :
-# Vector3i(cx, cz, ix + iz * 3) -- (cx, cz) est la colonne, ix+iz*3 est le
-# sous-index (0..8) de la sous-cellule dans la colonne. Valeur : la hauteur
-# reelle du sommet de cette sous-cellule. Utilise par sommet() et sommet_sous()
-# : deux agents au meme (x, z) qui redemandent la meme frame, ou une frame
-# apres, lisent le cache au lieu de rescanner les couches.
+# TABLE PLATE de la hauteur de surface, par sous-cellule. Layout :
+# cote_lin = 2*demi_cote ; lin = (cx+demi_cote) + (cz+demi_cote)*cote_lin ;
+# idx = lin*9 + ix + iz*3. Valeur = hauteur reelle du sommet ; NAN = case non
+# calculee. Lecture O(1) par index arithmetique -- l'inline dans
+# pas_simple_lot passe par la, sans appel de fonction.
 #
-# INVALIDATION : marquer_sale() vide le cache. Tout mutateur des trois sources
-# de verite (volumes, _masques_sous_cube, particularites) passe par
-# marquer_sale -- verifie a l'introduction du cache.
+# INVALIDATION : marquer_sale() remet toute la table a NAN. Tout mutateur des
+# trois sources de verite (volumes, _masques_sous_cube, particularites) passe
+# par marquer_sale.
 #
 # EXCLUSION : une cellule sommet resolue par _hauteur_profil (rampe) n'entre
-# JAMAIS dans le cache. Sa surface est continue dans la cellule (interpolation
+# JAMAIS dans la table. Sa surface est continue dans la cellule (interpolation
 # bilineaire) ; la cacher par sous-cellule quantifierait la rampe en 9 marches.
 #
 # EXCLUSION cote sommet_sous : quand y_max plafonne SOUS le sommet reel, la
-# surface renvoyee n'est PAS le sommet -- on ne l'ecrit pas dans le cache. On
-# lit le cache en garde y_max si l'entree existe : cache <= y_max -> retour ;
-# cache > y_max -> scan complet.
-var _cache_sommet: Dictionary = {}
+# surface renvoyee n'est PAS le sommet -- pas ecrite. On lit la table en garde
+# y_max si la case est non-NAN : table <= y_max -> retour ; table > y_max ->
+# scan complet.
+#
+# COUPLAGE ASSUME : la formule d'index est reprise TELLE QUELLE dans
+# scripts/mouvement_kinematic.gd::pas_simple_lot (lecture inline). Si la
+# formule change ici, elle DOIT changer la-bas aussi -- sinon le fallback
+# sommet_sous serait pris systematiquement (correct, mais gain perdu).
+var _table_sommet: PackedFloat32Array = PackedFloat32Array()
+
+
+# Reallouer _table_sommet a la taille correspondant a demi_cote actuel, remplie
+# de NAN. Appele par le setter de demi_cote et au premier acces.
+func _reallouer_table_sommet() -> void:
+	var cote_lin: int = 2 * demi_cote
+	var taille: int = cote_lin * cote_lin * 9
+	_table_sommet.resize(taille)
+	_table_sommet.fill(NAN)
+	_table_sale = false
+
+
+# Accesseur pour l'inline (pas_simple_lot). Rend la reference partagee (CoW) --
+# l'appelant lit en O(1), ne mute pas. Un fallback sommet_sous cote appelant
+# ecrira dans la table de la carte, PAS dans la copie locale de l'appelant :
+# la copie locale reste en retard d'une frame sur un miss, sans effet fonctionnel.
+func table_sommet() -> PackedFloat32Array:
+	if _table_sommet.size() == 0 or _table_sale:
+		_rafraichir_table_sommet()
+	return _table_sommet
 # PV par sous-cube : cellule -> {idx -> pv}. Etat data, jamais persiste (idem
 # `_drains`). Publie dans les drains a chaque changement pour que le rendu
 # puisse foncer la couleur du mini-cube au fil des coups.

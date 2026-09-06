@@ -544,6 +544,17 @@ static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: 
 	var cote: float = 2.0
 	if "cote" in carte:
 		cote = float(carte.cote)
+	# TABLE PLATE de hauteur : recuperee UNE fois en tete. Lecture O(1) par
+	# index arithmetique dans la boucle -- sur un hit, aucun appel a
+	# carte.sommet_sous. La ref locale est en retard d'une frame apres un miss
+	# (CoW cote carte), sans effet : le miss est repris par l'appel de repli.
+	# COUPLAGE : la formule d'index (cote_lin, lin, idx) est reprise TELLE
+	# QUELLE de jeu/terrain/carte_terrain.gd::sommet_sous. Si l'une change,
+	# l'autre DOIT changer aussi -- sinon le fallback est pris systematiquement
+	# (correct mais gain perdu).
+	var table: PackedFloat32Array = carte.table_sommet()
+	var demi_cote: int = int(carte.demi_cote)
+	var cote_lin: int = 2 * demi_cote
 	var g_dt: float = gravite * delta
 	var vt: float = -VITESSE_TERMINALE
 	var i: int = 0
@@ -562,30 +573,101 @@ static func pas_simple_lot(cols: Dictionary, count: int, gravite: float, delta: 
 		var dep_x: float = ve.x * delta
 		var dep_y: float = ve.y * delta
 		var dep_z: float = ve.z * delta
-		# S.6 -- Blocage terrain simple (regle ennemis.gd) : bord de carte ou
-		# marche trop haute a la destination -> l'horizontale est annulee.
+		# S.6 -- Blocage terrain simple : lecture INLINE de _table_sommet.
+		# Repli sur carte.sommet_sous sur miss (case NAN ou plafonnee).
 		var pos: Vector3 = positions[i]
-		var sol_ici = carte.sommet_sous(pos.x, pos.z, pos.y + cote)
-		var sol_devant = carte.sommet_sous(pos.x + dep_x, pos.z + dep_z, pos.y + cote)
-		if sol_ici == null or sol_devant == null:
+
+		# ---- sol sous les pieds ----
+		var x1: float = pos.x
+		var z1: float = pos.z
+		var ymax1: float = pos.y + cote
+		var cx1: int = int(floor(x1 / cote))
+		var cz1: int = int(floor(z1 / cote))
+		var sol_ici_val: float = 0.0
+		var sol_ici_present: bool = false
+		if cx1 >= -demi_cote and cx1 < demi_cote and cz1 >= -demi_cote and cz1 < demi_cote:
+			var xl1: float = x1 - float(cx1) * cote
+			var zl1: float = z1 - float(cz1) * cote
+			var ix1: int = clampi(int(floor(xl1 * 3.0 / cote)), 0, 2)
+			var iz1: int = clampi(int(floor(zl1 * 3.0 / cote)), 0, 2)
+			var idx1: int = ((cx1 + demi_cote) + (cz1 + demi_cote) * cote_lin) * 9 + ix1 + iz1 * 3
+			var cache1: float = table[idx1]
+			if not is_nan(cache1) and cache1 <= ymax1:
+				sol_ici_val = cache1
+				sol_ici_present = true
+		if not sol_ici_present:
+			var r1 = carte.sommet_sous(x1, z1, ymax1)
+			if r1 != null:
+				sol_ici_val = float(r1)
+				sol_ici_present = true
+
+		# ---- sol devant ----
+		var x2: float = pos.x + dep_x
+		var z2: float = pos.z + dep_z
+		var ymax2: float = pos.y + cote
+		var cx2: int = int(floor(x2 / cote))
+		var cz2: int = int(floor(z2 / cote))
+		var sol_dv_val: float = 0.0
+		var sol_dv_present: bool = false
+		if cx2 >= -demi_cote and cx2 < demi_cote and cz2 >= -demi_cote and cz2 < demi_cote:
+			var xl2: float = x2 - float(cx2) * cote
+			var zl2: float = z2 - float(cz2) * cote
+			var ix2: int = clampi(int(floor(xl2 * 3.0 / cote)), 0, 2)
+			var iz2: int = clampi(int(floor(zl2 * 3.0 / cote)), 0, 2)
+			var idx2: int = ((cx2 + demi_cote) + (cz2 + demi_cote) * cote_lin) * 9 + ix2 + iz2 * 3
+			var cache2: float = table[idx2]
+			if not is_nan(cache2) and cache2 <= ymax2:
+				sol_dv_val = cache2
+				sol_dv_present = true
+		if not sol_dv_present:
+			var r2 = carte.sommet_sous(x2, z2, ymax2)
+			if r2 != null:
+				sol_dv_val = float(r2)
+				sol_dv_present = true
+
+		if not sol_ici_present or not sol_dv_present:
 			dep_x = 0.0
 			dep_z = 0.0
 			ve.x = 0.0
 			ve.z = 0.0
-		elif float(sol_devant) - float(sol_ici) > cote:
+		elif sol_dv_val - sol_ici_val > cote:
 			dep_x = 0.0
 			dep_z = 0.0
 			ve.x = 0.0
 			ve.z = 0.0
+
 		# S.7 -- Application.
 		pos.x += dep_x
 		pos.z += dep_z
 		pos.y += dep_y
-		# S.8 -- Snap sol simple.
-		var sol = carte.sommet_sous(pos.x, pos.z, pos.y + cote)
+
+		# S.8 -- Snap sol simple (lecture INLINE + repli).
+		var x3: float = pos.x
+		var z3: float = pos.z
+		var ymax3: float = pos.y + cote
+		var cx3: int = int(floor(x3 / cote))
+		var cz3: int = int(floor(z3 / cote))
+		var sol_val: float = 0.0
+		var sol_present: bool = false
+		if cx3 >= -demi_cote and cx3 < demi_cote and cz3 >= -demi_cote and cz3 < demi_cote:
+			var xl3: float = x3 - float(cx3) * cote
+			var zl3: float = z3 - float(cz3) * cote
+			var ix3: int = clampi(int(floor(xl3 * 3.0 / cote)), 0, 2)
+			var iz3: int = clampi(int(floor(zl3 * 3.0 / cote)), 0, 2)
+			var idx3: int = ((cx3 + demi_cote) + (cz3 + demi_cote) * cote_lin) * 9 + ix3 + iz3 * 3
+			var cache3: float = table[idx3]
+			if not is_nan(cache3) and cache3 <= ymax3:
+				sol_val = cache3
+				sol_present = true
+		if not sol_present:
+			var r3 = carte.sommet_sous(x3, z3, ymax3)
+			if r3 != null:
+				sol_val = float(r3)
+				sol_present = true
+
 		var contact: bool = false
-		if sol != null and pos.y <= float(sol):
-			pos.y = float(sol)
+		if sol_present and pos.y <= sol_val:
+			pos.y = sol_val
 			contact = true
 		# S.9 -- au_sol conditionnel.
 		var au_sol_final: bool = contact and ve.y <= 0.0
