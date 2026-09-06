@@ -1,0 +1,16 @@
+[configuration]
+
+entry_symbol = "GDE_terrain_init"
+compatibility_minimum = "4.5"
+
+[libraries]
+
+; Chemins des .dll/.so produits par SCons, par plateforme et architecture.
+; Debug (developpement) et release (export final) pointes separement.
+; Le nom du fichier doit matcher ce que le SConstruct produit dans bin/.
+
+windows.debug.x86_64 = "res://extension_terrain/bin/libterrain.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://extension_terrain/bin/libterrain.windows.template_release.x86_64.dll"
+
+linux.debug.x86_64 = "res://extension_terrain/bin/libterrain.linux.template_debug.x86_64.so"
+linux.release.x86_64 = "res://extension_terrain/bin/libterrain.linux.template_release.x86_64.so"

@@ -412,7 +412,9 @@ func _poser_bodies_sous_cubes(colonne: Vector2i) -> void:
 			if (masque & (1 << i)) == 0:
 				continue
 			var ix := i % 3
+			@warning_ignore("integer_division")
 			var iy := (i / 3) % 3
+			@warning_ignore("integer_division")
 			var iz := i / 9
 			var shape := CollisionShape3D.new()
 			var box := BoxShape3D.new()

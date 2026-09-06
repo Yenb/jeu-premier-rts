@@ -6,3 +6,23 @@
 # .claude/ contient l'etat local Claude Code : verrou de hook (last_test_ok),
 # settings locaux de session. Aucune source de verite, purement local.
 .claude/
+
+# godot-cpp : clone amont, immense (headers gen + libgodot-cpp.lib) et
+# reconstructible par `git clone https://github.com/godotengine/godot-cpp.git`.
+# On l'ecarte du depot -- seul le SConstruct de extension_terrain en depend.
+godot-cpp/
+
+# Sous-produits de build MSVC de l'extension. Seule la .dll est utile au jeu ;
+# .exp/.lib/.TMP sont regeneres par SCons a chaque compilation, ~libterrain*
+# sont des restes d'ecriture atomique.
+extension_terrain/bin/*.exp
+extension_terrain/bin/*.lib
+extension_terrain/bin/*.TMP
+extension_terrain/bin/~*
+
+# Sous-produits intermediaires de SCons (objets .obj et cache .sconsign) et
+# fichiers d'import Godot generes pour ces objets a l'import de la scene.
+# Regeneres a chaque compilation, aucun besoin de les versionner.
+extension_terrain/src/*.obj
+extension_terrain/src/*.obj.import
+extension_terrain/.sconsign.dblite

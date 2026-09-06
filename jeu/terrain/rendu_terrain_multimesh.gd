@@ -100,6 +100,16 @@ const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 @export var utilise_pipeline_intra_tuile: bool = false
 @export var tuiles_avancees_par_frame: int = 1
 
+# ETAPE (a) du portage C++ de _phase_parser (extension_terrain/src/mesheur_tuile.cpp).
+# Faux (defaut) : chemin historique inchange, GDScript emet toutes les faces.
+# Vrai : le C++ prend en charge UNIQUEMENT les faces cubiques PROPRES (cellule
+#   avec sous_cubes plein et sans PV en cours). Les mini-cubes, non-cubes,
+#   occluder cells et la resolution des profils teinte restent en GDScript pour
+#   cette etape. La teinte des cubes propres est repoussee ici a partir du
+#   mapping face->cellule que le C++ rend en parallele des transforms -- sans
+#   cela elle disparaitrait sur ces cellules. Voir _appliquer_cpp_a.
+@export var utilise_cpp_phase0: bool = false
+
 # La forme "limite" ne porte aucun maillage (mur invisible) : jamais rendue.
 const ITEM_LIMITE := 1
 
@@ -180,6 +190,10 @@ var _creations_tuile_compte: int = 0
 # item -> BoxMesh de cote/3, materiau du cube. Pose UN mini-cube par bit a 1
 # dans le masque `carte.sous_cubes(cellule)` -- resolution 3x3x3.
 var _mini_box_par_item: Dictionary = {}
+
+# Instance de MesheurTuile (GDExtension) instancie paresseusement au premier
+# usage. Voir extension_terrain/. Nul tant que utilise_cpp_phase0 = false.
+var _mesheur: Object = null
 
 func _ready() -> void:
 	if carte == null:
@@ -535,31 +549,38 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 						if teintable:
 							_cache_profil_cellule[cellule] = profil_cell
 							_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
-						var bucket_teinte: Dictionary = teinte_sol if cible == par_forme_sol else teinte_normal
-						if not _voisin_couvre(col, couche + 1, bits, rang + 1):
-							var i0 := _ajouter_face(cible, item, pos, 0, cote)
-							if teintable:
-								_pousser_teinte(bucket_teinte, item, cellule, i0)
-						if not _voisin_couvre(col, couche - 1, bits, rang - 1):
-							var i1 := _ajouter_face(cible, item, pos, 1, cote)
-							if teintable:
-								_pousser_teinte(bucket_teinte, item, cellule, i1)
-						if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
-							var i2 := _ajouter_face(cible, item, pos, 2, cote)
-							if teintable:
-								_pousser_teinte(bucket_teinte, item, cellule, i2)
-						if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
-							var i3 := _ajouter_face(cible, item, pos, 3, cote)
-							if teintable:
-								_pousser_teinte(bucket_teinte, item, cellule, i3)
-						if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
-							var i4 := _ajouter_face(cible, item, pos, 4, cote)
-							if teintable:
-								_pousser_teinte(bucket_teinte, item, cellule, i4)
-						if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
-							var i5 := _ajouter_face(cible, item, pos, 5, cote)
-							if teintable:
-								_pousser_teinte(bucket_teinte, item, cellule, i5)
+						# ETAPE (a) : quand utilise_cpp_phase0, le C++ emet les 6 faces
+						# ET publie le mapping face->cellule. La teinte est
+						# repoussee apres la boucle dans _appliquer_cpp_a a
+						# partir de ce mapping. Le cache profil/quantite ci-dessus
+						# reste peuple pour cette cellule quelle que soit la
+						# valeur du flag -- _tick_teinte en depend.
+						if not utilise_cpp_phase0:
+							var bucket_teinte: Dictionary = teinte_sol if cible == par_forme_sol else teinte_normal
+							if not _voisin_couvre(col, couche + 1, bits, rang + 1):
+								var i0 := _ajouter_face(cible, item, pos, 0, cote)
+								if teintable:
+									_pousser_teinte(bucket_teinte, item, cellule, i0)
+							if not _voisin_couvre(col, couche - 1, bits, rang - 1):
+								var i1 := _ajouter_face(cible, item, pos, 1, cote)
+								if teintable:
+									_pousser_teinte(bucket_teinte, item, cellule, i1)
+							if not _voisin_couvre(Vector2i(col.x + 1, col.y), couche, nxp, rang):
+								var i2 := _ajouter_face(cible, item, pos, 2, cote)
+								if teintable:
+									_pousser_teinte(bucket_teinte, item, cellule, i2)
+							if not _voisin_couvre(Vector2i(col.x - 1, col.y), couche, nxm, rang):
+								var i3 := _ajouter_face(cible, item, pos, 3, cote)
+								if teintable:
+									_pousser_teinte(bucket_teinte, item, cellule, i3)
+							if not _voisin_couvre(Vector2i(col.x, col.y + 1), couche, nzp, rang):
+								var i4 := _ajouter_face(cible, item, pos, 4, cote)
+								if teintable:
+									_pousser_teinte(bucket_teinte, item, cellule, i4)
+							if not _voisin_couvre(Vector2i(col.x, col.y - 1), couche, nzm, rang):
+								var i5 := _ajouter_face(cible, item, pos, 5, cote)
+								if teintable:
+									_pousser_teinte(bucket_teinte, item, cellule, i5)
 				else:
 					var base := _regle.get_basis_with_orthogonal_index(orientation)
 					var t := Transform3D(base, pos) * mesh_library.get_item_mesh_transform(item)
@@ -570,6 +591,12 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 				couche_max = maxi(couche_max, couche)
 				if couche > sommet_base and _quad_par_item.has(item):
 					cellules_occl[cellule] = true
+	# ETAPE (a) : le C++ ajoute ses faces cubiques propres et repousse la teinte
+	# a partir du mapping face->cellule qu'il rend. Aucun effet quand le flag
+	# est faux -- rien n'est appele.
+	if utilise_cpp_phase0:
+		_appliquer_cpp_a(par_forme, par_forme_sol, teinte_normal, teinte_sol,
+				origine_col, cote, couche_base, particularites)
 	return {
 		"par_forme": par_forme,
 		"par_forme_sol": par_forme_sol,
@@ -1229,3 +1256,140 @@ func _tick_teinte() -> void:
 				# AVANT que la ref ne disparaisse -> pas de check de validite ici.
 				var mm: MultiMesh = face["mm"]
 				mm.set_instance_color(int(face["idx"]), couleur)
+
+# ETAPE (a) -- assemble le blob d'entree pour MesheurTuile.bake_tuile_a. Voir
+# l'entete de extension_terrain/src/mesheur_tuile.h pour le contrat. Le blob
+# tient tout ce que le C++ doit lire sur la tuile + ses 4 anneaux (12x12), plus
+# les tables qui ne bougent pas d'une tuile a l'autre (items cubiques,
+# hauteurs). Le C++ ne rappelle jamais la carte apres reception.
+func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int,
+		particularites: Dictionary) -> Dictionary:
+	var taille := taille_tuile_cellules
+	var wsize := taille + 2
+	var masques := PackedInt64Array()
+	var couvrants := PackedInt64Array()
+	masques.resize(wsize * wsize)
+	couvrants.resize(wsize * wsize)
+	var memo_bits: Dictionary = {}
+	var memo_couvrant: Dictionary = {}
+	for lx in range(-1, taille + 1):
+		for lz in range(-1, taille + 1):
+			var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
+			var idx := (lx + 1) + (lz + 1) * wsize
+			masques[idx] = _masque_col(col, memo_bits)
+			couvrants[idx] = _masque_couvrant_col(col, memo_couvrant)
+
+	# Particularites de la tuile SEULE. Iteration par cellule via le masque de
+	# chaque colonne : cout borne a taille² × r_top, jamais lie a la taille
+	# globale du dict `particularites` de la carte.
+	var part_arr := PackedInt32Array()
+	var sc_arr := PackedInt32Array()
+	var pv_arr := PackedInt32Array()
+	for lx in range(taille):
+		for lz in range(taille):
+			var col := Vector2i(origine_col.x + lx, origine_col.y + lz)
+			var bits: int = masques[(lx + 1) + (lz + 1) * wsize]
+			if bits == 0:
+				continue
+			var r_top := CarteTerrain.rang_le_plus_haut(bits)
+			for rang in range(r_top + 1):
+				if (bits & (1 << rang)) == 0:
+					continue
+				var cellule := Vector3i(col.x, couche_base + rang, col.y)
+				if particularites.has(cellule):
+					part_arr.append(cellule.x)
+					part_arr.append(cellule.y)
+					part_arr.append(cellule.z)
+					part_arr.append(int(particularites[cellule]))
+				var m: int = int(carte.sous_cubes(cellule))
+				if m != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN:
+					sc_arr.append(cellule.x)
+					sc_arr.append(cellule.y)
+					sc_arr.append(cellule.z)
+					sc_arr.append(m)
+				var pv_map: Dictionary = carte.pv_sous_cubes_cellule(cellule)
+				if not pv_map.is_empty():
+					pv_arr.append(cellule.x)
+					pv_arr.append(cellule.y)
+					pv_arr.append(cellule.z)
+
+	# Tables item -> cubique / hauteur. Petites (une entree par forme de la
+	# bibliotheque), reconstruites a chaque tuile car peu couteuses.
+	var items_cub := PackedInt32Array()
+	for item in _quad_par_item.keys():
+		items_cub.append(int(item))
+	var h_cle := PackedInt32Array()
+	var h_val := PackedFloat32Array()
+	for item in _hauteur_par_item.keys():
+		h_cle.append(int(item))
+		h_val.append(float(_hauteur_par_item[item]))
+
+	# Offset de centre : ce que _regle.map_to_local rend pour la cellule (0,0,0).
+	# Passe pour ne pas dependre des defauts cell_center_x/y/z du GridMap dans
+	# le C++.
+	var centre_offset: Vector3 = _regle.map_to_local(Vector3i(0, 0, 0))
+
+	return {
+		"origine_col": origine_col,
+		"taille": taille,
+		"couche_base": couche_base,
+		"couches_max": CarteTerrain.COUCHES_MAXIMALES,
+		"cote": cote,
+		"sommet_base": int(carte.sommet_de_base()),
+		"item_limite": ITEM_LIMITE,
+		"item_defaut": CarteTerrain.ITEM_DEFAUT,
+		"orientation_defaut": CarteTerrain.ORIENTATION_DEFAUT,
+		"masque_sous_plein": CarteTerrain.MASQUE_SOUS_CUBE_PLEIN,
+		"centre_offset": centre_offset,
+		"masques": masques,
+		"couvrants": couvrants,
+		"particularites": part_arr,
+		"sous_cubes_partiels": sc_arr,
+		"cellules_pv": pv_arr,
+		"items_cubiques": items_cub,
+		"items_hauteur_cle": h_cle,
+		"items_hauteur_val": h_val,
+	}
+
+# ETAPE (a) -- appelle MesheurTuile.bake_tuile_a et integre son resultat dans
+# les buckets locaux de _phase_parser. Le C++ produit les faces cubes propres
+# (par item, normal et sol). Le mapping face->cellule sert a repousser la
+# teinte a partir du cache _cache_profil_cellule deja alimente par la boucle.
+func _appliquer_cpp_a(par_forme: Dictionary, par_forme_sol: Dictionary,
+		teinte_normal: Dictionary, teinte_sol: Dictionary,
+		origine_col: Vector2i, cote: float, couche_base: int,
+		particularites: Dictionary) -> void:
+	if _mesheur == null:
+		_mesheur = ClassDB.instantiate("MesheurTuile")
+		if _mesheur == null:
+			push_error("MesheurTuile introuvable -- extension_terrain non chargee")
+			return
+	var blob := _blob_tuile_a(origine_col, cote, couche_base, particularites)
+	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
+	_integrer_cpp(res.get("par_forme", {}), par_forme, teinte_normal)
+	_integrer_cpp(res.get("par_forme_sol", {}), par_forme_sol, teinte_sol)
+
+# ETAPE (a) -- pour chaque item, appende les transforms produits par le C++ a
+# `dst_par_forme[item]` et pousse une paire teinte pour chaque face dont la
+# cellule d'origine porte un profil (present dans _cache_profil_cellule, deja
+# alimente par la boucle _phase_parser). L'index pousse est la position DANS
+# le bucket final, decalee de la taille avant append (pour supporter un futur
+# cas ou dst_par_forme[item] ne serait pas vide -- aujourd'hui il l'est pour
+# les items cubiques, l'emission GDScript des cubes propres etant gatee).
+func _integrer_cpp(src: Dictionary, dst_par_forme: Dictionary, dst_teinte: Dictionary) -> void:
+	for item in src.keys():
+		var entree: Dictionary = src[item]
+		var transforms: Array = entree.get("transforms", [])
+		var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
+		var n: int = transforms.size()
+		if n == 0:
+			continue
+		if not dst_par_forme.has(item):
+			dst_par_forme[item] = [] as Array
+		var bucket: Array = dst_par_forme[item]
+		var offset: int = bucket.size()
+		for k in range(n):
+			bucket.append(transforms[k])
+			var cellule := Vector3i(cellules[k * 3], cellules[k * 3 + 1], cellules[k * 3 + 2])
+			if _cache_profil_cellule.has(cellule):
+				_pousser_teinte(dst_teinte, int(item), cellule, offset + k)

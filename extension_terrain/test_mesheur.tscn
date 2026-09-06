@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://d1goh3n13m4g2"]
+
+[ext_resource type="Script" uid="uid://cejlu354puucv" path="res://extension_terrain/test_mesheur.gd" id="1_test"]
+
+[node name="Node" type="Node"]
+script = ExtResource("1_test")

@@ -1,0 +1,22 @@
+#!/usr/bin/env python
+import os
+
+# Construit l'extension terrain en s'appuyant sur godot-cpp (clone dans ./godot-cpp).
+# Lance le SConstruct de godot-cpp, qui rend un `env` deja configure pour la
+# plateforme et l'architecture, puis compile nos sources par-dessus.
+
+env = SConscript("../godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/"])
+sources = Glob("src/*.cpp")
+
+# Nom de la bibliotheque produite. Depose dans bin/ a cote du projet.
+# Le suffixe (plateforme, arch, mode) est ajoute par godot-cpp via env.
+nom = "terrain"
+
+bibliotheque = env.SharedLibrary(
+    "bin/lib{}{}{}".format(nom, env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+
+Default(bibliotheque)
