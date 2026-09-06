@@ -409,47 +409,6 @@ static func visible_bits_col(bits: int, mon_couvrant: int,
 	var sealed_bits := (mon_couvrant >> 1) & nxp_couvrant & nxm_couvrant & nzp_couvrant & nzm_couvrant
 	return bits & ~sealed_bits
 
-# Masque bitwise complet d'une colonne, memoize par tuile.
-func _masque_col(col: Vector2i, memo: Dictionary) -> int:
-	if not memo.has(col):
-		memo[col] = carte.masque(col)
-	return memo[col]
-
-# MASQUE COUVRANT d'une colonne : `_masque_col` filtre des rangs qui ne
-# couvrent pas la face carree de la cellule voisine :
-# - cellule dont l'item n'est PAS cubique (rampe, cylindre, sphere : pente ou
-#   arrondi -> laisse toujours un vide sur le cote) ;
-# - cellule cassee (sous_cubes != PLEIN : troue).
-# Memoize separement de _masque_col : les deux valeurs sont utilisees ensemble
-# et lues plusieurs fois par tuile (chaque colonne teste ses 4 voisins).
-func _masque_couvrant_col(col: Vector2i, memo: Dictionary) -> int:
-	if memo.has(col):
-		return memo[col]
-	var bits: int = carte.masque(col)
-	if bits == 0:
-		memo[col] = 0
-		return 0
-	var particularites: Dictionary = carte.particularites
-	var base: int = int(carte.couche_base)
-	var couvrant := bits
-	for rang in range(CarteTerrain.COUCHES_MAXIMALES):
-		if (bits & (1 << rang)) == 0:
-			continue
-		var cellule := Vector3i(col.x, base + rang, col.y)
-		var code: int = int(particularites.get(cellule, -1))
-		var item: int
-		if code == -1:
-			item = CarteTerrain.ITEM_DEFAUT
-		else:
-			item = CarteTerrain.item_du_code(code)
-		if not _quad_par_item.has(item):
-			couvrant &= ~(1 << rang)  # non-cube : ne couvre pas
-			continue
-		if carte.sous_cubes(cellule) != CarteTerrain.MASQUE_SOUS_CUBE_PLEIN:
-			couvrant &= ~(1 << rang)  # cube casse : ne couvre pas
-	memo[col] = couvrant
-	return couvrant
-
 # CREE UNE TUILE. Deux chemins :
 # - utilise_pipeline_intra_tuile=false : les 3 phases s'executent en sequence
 #   dans la meme frame (comportement historique, pic streaming concentre).
