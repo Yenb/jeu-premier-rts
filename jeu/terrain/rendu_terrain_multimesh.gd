@@ -177,7 +177,8 @@ var _creations_tuile_compte: int = 0
 var _mini_box_par_item: Dictionary = {}
 
 # Instance de MesheurTuile (GDExtension) instancie paresseusement au premier
-# usage. Voir extension_terrain/. Nul tant que utilise_cpp_phase0 = false.
+# appel de _appliquer_cpp_a. Voir extension_terrain/. Depuis l'etape (d), c'est
+# l'UNIQUE chemin de meshing de la phase 0.
 var _mesheur: Object = null
 
 func _ready() -> void:
