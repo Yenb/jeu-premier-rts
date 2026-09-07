@@ -534,7 +534,6 @@ func _creer_tuile(tuile: Vector2i) -> void:
 #     buffers (aucun re-parcours de la tuile),
 #   - Dict cellules_occl a partir du PackedInt32Array de sortie.
 func _phase_parser(tuile: Vector2i) -> Dictionary:
-	var _t0_total := Time.get_ticks_usec()
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var taille := taille_tuile_cellules
@@ -557,17 +556,9 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 			"bases_orthogonales": _bases_orthogonales_cache,
 		})
 
-	var _t0_blob := Time.get_ticks_usec()
 	var blob := _blob_tuile_a(origine_col, cote, couche_base)
-	var _t_blob := Time.get_ticks_usec() - _t0_blob
-
-	var _t0_cpp := Time.get_ticks_usec()
 	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
-	var _t_cpp := Time.get_ticks_usec() - _t0_cpp
 
-	var _t0_teinte := Time.get_ticks_usec()
-
-	var _t0_profil := Time.get_ticks_usec()
 	# Teinte : pour chaque cellule candidate rendue par le C++, lire profil et
 	# alimenter les caches. Appels TYPES DIRECTS sur _ressources (evite le
 	# dispatch string de .call() par cellule).
@@ -582,9 +573,7 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 				_cache_profil_cellule[cellule] = profil_cell
 				_cache_quantite_cellule[cellule] = _ressources.quantite_a(cellule)
 				_cache_reserve_cellule[cellule] = int(profil_cell.get("reserve"))
-	var _t_profil := Time.get_ticks_usec() - _t0_profil
 
-	var _t0_candidats := Time.get_ticks_usec()
 	# Buckets teinte : consommes les 6-tuples (item, x, y, z, idx_start, count)
 	# rendus par le C++ -- plus de re-parcours des `cellules` par item cote
 	# GDScript. Une entree par cellule cubique propre visible.
@@ -592,9 +581,7 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var teinte_sol: Dictionary = {}
 	_pousser_candidats_teinte(res.get("teinte_candidats_normal", PackedInt32Array()), teinte_normal)
 	_pousser_candidats_teinte(res.get("teinte_candidats_sol", PackedInt32Array()), teinte_sol)
-	var _t_candidats := Time.get_ticks_usec() - _t0_candidats
 
-	var _t0_occl := Time.get_ticks_usec()
 	# Cellules_occl : PackedInt32Array (triplets) -> Dict { cellule -> true },
 	# format attendu par _phase_baker_occluder.
 	var cellules_occl: Dictionary = {}
@@ -603,16 +590,6 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var n_o: int = occl_arr.size() / 3
 	for k in range(n_o):
 		cellules_occl[Vector3i(occl_arr[k * 3], occl_arr[k * 3 + 1], occl_arr[k * 3 + 2])] = true
-	var _t_occl := Time.get_ticks_usec() - _t0_occl
-	var _t_teinte := Time.get_ticks_usec() - _t0_teinte
-
-	print("bake tuile : ", Time.get_ticks_usec() - _t0_total, " us")
-	print("  blob     : ", _t_blob, " us")
-	print("  cpp      : ", _t_cpp, " us")
-	print("  teinte   : ", _t_teinte, " us")
-	print("    profil   : ", _t_profil, " us")
-	print("    candidats: ", _t_candidats, " us")
-	print("    occl     : ", _t_occl, " us")
 
 	return {
 		"par_forme": res.get("par_forme", {}),
@@ -629,10 +606,15 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	}
 
 # Helper : consomme le PackedInt32Array de 6-tuples (item, x, y, z, idx_start,
-# count) rendu par le C++ pour un bucket (normal ou sol) et pousse les paires
-# de teinte pour chaque cellule qui a un profil en cache. Une entree par
-# cellule cubique propre visible : pas de re-parcours de par_forme[item].
-# cellules cote GDScript.
+# count) rendu par le C++. NE PAS DEROULER : stocker (cellule, idx_start, count)
+# UNE fois par cellule teintable, pas par face. Le deroule se fait au tick
+# teinte (plage contigue dans le buffer MultiMesh).
+#   dst_teinte[item] = { "cellules": Array[Vector3i],
+#                        "idx_starts": Array[int],
+#                        "counts": Array[int] }
+# Trois Array paralleles, un append de scalaire chacun par cellule teintable
+# (pas un append par face). Array (pas PackedArray) pour eviter le piege
+# copy-on-write + reassignation par entree.
 func _pousser_candidats_teinte(candidats: PackedInt32Array, dst_teinte: Dictionary) -> void:
 	@warning_ignore("integer_division")
 	var n: int = candidats.size() / 6
@@ -645,10 +627,11 @@ func _pousser_candidats_teinte(candidats: PackedInt32Array, dst_teinte: Dictiona
 		var idx_start: int = candidats[base + 4]
 		var count: int = candidats[base + 5]
 		if not dst_teinte.has(item):
-			dst_teinte[item] = [] as Array
-		var bucket: Array = dst_teinte[item]
-		for i in range(count):
-			bucket.append({"cellule": cellule, "idx": idx_start + i})
+			dst_teinte[item] = {"cellules": [] as Array, "idx_starts": [] as Array, "counts": [] as Array}
+		var bucket: Dictionary = dst_teinte[item]
+		(bucket["cellules"] as Array).append(cellule)
+		(bucket["idx_starts"] as Array).append(idx_start)
+		(bucket["counts"] as Array).append(count)
 
 # S7 -- PHASE 1 (BAKER INSTANCES + INDEX TEINTE). Lit `etat.parsed`, alloue les
 # MultiMesh et les porteurs (instances RS ou MMi selon utilise_rs_direct), remplit
@@ -1168,27 +1151,23 @@ func _supprimer_tuile(tuile: Vector2i) -> void:
 			_cache_reserve_cellule.erase(cellule)
 		_teinte_par_tuile.erase(tuile)
 
-# Helper : memorise (cellule, idx) dans un bucket item -> Array. Appele au
-# streaming pour chaque face teintable.
-func _pousser_teinte(bucket: Dictionary, item: int, cellule: Vector3i, idx: int) -> void:
-	if not bucket.has(item):
-		bucket[item] = [] as Array
-	(bucket[item] as Array).append({"cellule": cellule, "idx": idx})
-
-# Helper : agrege un bucket (item -> [{cellule, idx}]) dans l'index de tuile
-# (cellule -> [{mm, idx}]) en resolvant l'item vers son MultiMesh. Unifie entre
-# les deux chemins : `mm` cote GPU est le meme que le porteur soit MMi ou instance
-# RS -- le tick de teinte n'a pas a brancher sur le flag.
+# Helper : agrege un bucket ({cellules, idx_starts, counts}) dans l'index de
+# tuile. Une cellule appartient a UN seul bucket (par_forme XOR par_forme_sol,
+# selon couche == sommet_base), donc une seule entree (mm, idx_start, count)
+# par cellule dans l'index. Format compact, pas de tableaux paralleles ici.
+#   index_tuile[cellule] = { "mm": MultiMesh, "idx_start": int, "count": int }
 func _agreger_teinte(index_tuile: Dictionary, bucket: Dictionary, mm_par_item: Dictionary) -> void:
 	for item in bucket:
 		var mm: MultiMesh = mm_par_item.get(item, null)
 		if mm == null:
 			continue
-		for entree in (bucket[item] as Array):
-			var cellule: Vector3i = entree["cellule"]
-			if not index_tuile.has(cellule):
-				index_tuile[cellule] = [] as Array
-			(index_tuile[cellule] as Array).append({"mm": mm, "idx": int(entree["idx"])})
+		var b: Dictionary = bucket[item]
+		var bcells: Array = b["cellules"]
+		var bstarts: Array = b["idx_starts"]
+		var bcounts: Array = b["counts"]
+		var n: int = bcells.size()
+		for i in range(n):
+			index_tuile[bcells[i]] = {"mm": mm, "idx_start": bstarts[i], "count": bcounts[i]}
 
 # Tick de teinte : parcourt les cellules teintables de toutes les tuiles
 # chargees, calcule un gain [0.4..1.0] selon la reserve courante, pose la
@@ -1218,12 +1197,17 @@ func _tick_teinte() -> void:
 				continue
 			_teinte_precedente[cellule] = gain
 			var couleur := Color(gain, gain, gain)
-			for face in (index[cellule] as Array):
-				# `mm` (MultiMesh) : ref forte tenue via _tuiles (nœud MMi ou entree
-				# {mm, rid}) ; purge de _teinte_par_tuile faite dans _supprimer_tuile
-				# AVANT que la ref ne disparaisse -> pas de check de validite ici.
-				var mm: MultiMesh = face["mm"]
-				mm.set_instance_color(int(face["idx"]), couleur)
+			# Format compact : mm + plage (idx_start, count). Trois acces cle par
+			# cellule (mm, idx_start, count), puis boucle entiere sur la plage
+			# contigue dans le buffer MultiMesh. Zero acces cle String par face.
+			# `mm` : ref forte tenue via _tuiles ; purge de _teinte_par_tuile
+			# faite dans _supprimer_tuile AVANT que la ref ne disparaisse.
+			var entry: Dictionary = index[cellule]
+			var mm: MultiMesh = entry["mm"]
+			var start: int = entry["idx_start"]
+			var count: int = entry["count"]
+			for i in range(count):
+				mm.set_instance_color(start + i, couleur)
 
 # Assemble le blob d'entree pour MesheurTuile.bake_tuile_a. Voie C : merge
 # de 9 entrees de l'index spatial (self + 8 voisins) -- aucun parcours de
