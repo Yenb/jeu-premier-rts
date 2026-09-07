@@ -190,16 +190,15 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	int item_limite = (int)e["item_limite"];
 	Vector3 centre_offset = e["centre_offset"];
 
-	Dictionary volumes_dict = e["volumes"];
-	Dictionary particularites_dict = e["particularites"];
-	Dictionary masques_sc_dict = e["masques_sous_cube"];
-	Dictionary pv_dict = e["pv_sous_cubes"];
+	Array entrees_index = e["entrees_index"];
 
 	std::unordered_map<Vector2i, int64_t, Vec2iHash> volumes;
-	{
+	for (int ei = 0; ei < entrees_index.size(); ++ei) {
+		Dictionary ent = entrees_index[ei];
+		Dictionary volumes_dict = ent["volumes"];
 		Array keys = volumes_dict.keys();
 		int n = keys.size();
-		volumes.reserve((size_t)n);
+		volumes.reserve(volumes.size() + (size_t)n);
 		for (int i = 0; i < n; ++i) {
 			Variant kv = keys[i];
 			volumes[(Vector2i)kv] = (int64_t)(int)volumes_dict[kv];
@@ -207,10 +206,12 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	}
 
 	std::unordered_map<Vector3i, int, Vec3iHash> particularites;
-	{
+	for (int ei = 0; ei < entrees_index.size(); ++ei) {
+		Dictionary ent = entrees_index[ei];
+		Dictionary particularites_dict = ent["particularites"];
 		Array keys = particularites_dict.keys();
 		int n = keys.size();
-		particularites.reserve((size_t)n);
+		particularites.reserve(particularites.size() + (size_t)n);
 		for (int i = 0; i < n; ++i) {
 			Variant kv = keys[i];
 			particularites[(Vector3i)kv] = (int)particularites_dict[kv];
@@ -218,10 +219,12 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	}
 
 	std::unordered_map<Vector3i, int, Vec3iHash> masques_sous_cube;
-	{
+	for (int ei = 0; ei < entrees_index.size(); ++ei) {
+		Dictionary ent = entrees_index[ei];
+		Dictionary masques_sc_dict = ent["masques_sous_cube"];
 		Array keys = masques_sc_dict.keys();
 		int n = keys.size();
-		masques_sous_cube.reserve((size_t)n);
+		masques_sous_cube.reserve(masques_sous_cube.size() + (size_t)n);
 		for (int i = 0; i < n; ++i) {
 			Variant kv = keys[i];
 			masques_sous_cube[(Vector3i)kv] = (int)masques_sc_dict[kv];
@@ -229,10 +232,12 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	}
 
 	std::unordered_map<Vector3i, std::unordered_map<int, int>, Vec3iHash> pv_par_cellule;
-	{
+	for (int ei = 0; ei < entrees_index.size(); ++ei) {
+		Dictionary ent = entrees_index[ei];
+		Dictionary pv_dict = ent["pv_sous_cubes"];
 		Array keys = pv_dict.keys();
 		int n = keys.size();
-		pv_par_cellule.reserve((size_t)n);
+		pv_par_cellule.reserve(pv_par_cellule.size() + (size_t)n);
 		for (int i = 0; i < n; ++i) {
 			Variant kv = keys[i];
 			Dictionary inner = pv_dict[kv];

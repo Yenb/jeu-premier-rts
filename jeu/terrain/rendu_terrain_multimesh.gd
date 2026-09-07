@@ -1209,35 +1209,26 @@ func _tick_teinte() -> void:
 			for i in range(count):
 				mm.set_instance_color(start + i, couleur)
 
-# Assemble le blob d'entree pour MesheurTuile.bake_tuile_a. Voie C : merge
-# de 9 entrees de l'index spatial (self + 8 voisins) -- aucun parcours de
-# tuile, aucun lookup carte.* en boucle. Cout : somme des tailles des 9
-# entrees d'index (petites -- borne par ce qui a ete sculpte). Independant
-# de la taille totale de la carte.
+# Assemble le blob d'entree pour MesheurTuile.bake_tuile_a. Voie C : passe
+# les 9 entrees d'index (self + 8 voisins) telles quelles au C++ -- aucun
+# parcours de tuile, aucun lookup carte.* en boucle, aucun merge cote
+# GDScript. Cout : borne par ce qui a ete sculpte, independant de la taille
+# totale de la carte.
 #
-# Le C++ recoit les dicts bruts tuile-locaux et les monte en unordered_map
-# natifs a l'entree. Il calcule visibilite + couvrants + emission en natif.
+# Le C++ itere les 9 entrees a l'entree et peuple ses unordered_map natifs
+# directement -- chaque cellule vivant dans UNE seule tuile (clefs
+# disjointes), itere 9 entrees peuple exactement les memes maps que le
+# merge produisait.
 func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int) -> Dictionary:
 	var taille := taille_tuile_cellules
 	var tuile := _tuile_de_colonne(origine_col)
 
-	# Merge des 9 entrees d'index (self + 8 voisins) en 4 dicts unifies.
-	# `merge` sans overwrite parce qu'aucune cellule ne peut vivre dans deux
-	# tuiles voisines simultanement -- clefs disjointes.
-	var vol_merged: Dictionary = {}
-	var part_merged: Dictionary = {}
-	var sc_merged: Dictionary = {}
-	var pv_merged: Dictionary = {}
+	var entrees_index: Array = []
 	for dx in range(-1, 2):
 		for dz in range(-1, 2):
-			var t := Vector2i(tuile.x + dx, tuile.y + dz)
-			var entree: Dictionary = _index_par_tuile.get(t, {})
-			if entree.is_empty():
-				continue
-			vol_merged.merge(entree["volumes"])
-			part_merged.merge(entree["particularites"])
-			sc_merged.merge(entree["masques_sous_cube"])
-			pv_merged.merge(entree["pv_sous_cubes"])
+			var entree: Dictionary = _index_par_tuile.get(Vector2i(tuile.x + dx, tuile.y + dz), {})
+			if not entree.is_empty():
+				entrees_index.append(entree)
 
 	# Tables item : referencees telles quelles depuis les caches invariantes
 	# (calculees au _ready). PackedArray copy-on-write, Dictionary passe par
@@ -1257,10 +1248,7 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int) -> Dict
 		"masque_sous_plein": CarteTerrain.MASQUE_SOUS_CUBE_PLEIN,
 		"max_pv_sous_cube": CarteTerrain.MAX_PV_SOUS_CUBE,
 		"centre_offset": _centre_offset_cache,
-		"volumes": vol_merged,
-		"particularites": part_merged,
-		"masques_sous_cube": sc_merged,
-		"pv_sous_cubes": pv_merged,
+		"entrees_index": entrees_index,
 	}
 
 # ----- INDEX SPATIAL PAR TUILE (voie C) -------------------------------------

@@ -71,11 +71,19 @@ public:
 	//   "item_limite"         int
 	//   "centre_offset"       Vector3
 	//
-	//   -- DICTS BRUTS TUILE-LOCAUX (merges des 9 entrees d'index) --
-	//   "volumes"             Dictionary[Vector2i, int]
-	//   "particularites"      Dictionary[Vector3i, int]
-	//   "masques_sous_cube"   Dictionary[Vector3i, int]
-	//   "pv_sous_cubes"       Dictionary[Vector3i, Dictionary[int, int]]
+	//   -- 9 ENTREES D'INDEX BRUTES (self + 8 voisins, entrees vides omises) --
+	//   "entrees_index"       Array de Dictionary, chacun portant les 4 sous-
+	//                         dicts tuile-locaux sous leurs cles officielles :
+	//                           "volumes"           Dictionary[Vector2i, int]
+	//                           "particularites"    Dictionary[Vector3i, int]
+	//                           "masques_sous_cube" Dictionary[Vector3i, int]
+	//                           "pv_sous_cubes"     Dictionary[Vector3i, Dictionary[int, int]]
+	//                         Le C++ itere ces 9 entrees a l'entree et peuple
+	//                         ses unordered_map natifs directement -- chaque
+	//                         cellule vit dans UNE seule tuile (clefs
+	//                         disjointes), donc iterer 9 entrees peuple
+	//                         exactement les memes maps qu'un merge cote
+	//                         GDScript produisait.
 	//
 	// Sortie :
 	//   "par_forme"                Dict { item -> { buffer, cellules } }
