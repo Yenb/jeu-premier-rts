@@ -109,7 +109,24 @@ const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 #   du drain (instances) et devient occludante a la 3e. Meme raison d'etre que
 #   utilise_rs_direct : garder faux tant que non valide en jeu.
 @export var utilise_pipeline_intra_tuile: bool = false
+# DEBIT DU PIPELINE, ADAPTATIF (meme principe que le debit de creation).
+# `tuiles_avancees_par_frame` = plancher (regime de jeu, franchissement d'un
+# seuil pousse quelques tuiles -- pas d'a-coup).
+# `tuiles_avancees_par_frame_haut` = plafond (regime de remplissage, anneau
+# initial ~450 tuiles x 3 phases = 1350 avancees, vidage en 1-2 s a 60 fps).
+# `seuil_pipeline_debit_haut` = taille de `_tuiles_en_pipeline` au-dela de
+# laquelle on est au plafond ; rampe lineaire entre les deux.
 @export var tuiles_avancees_par_frame: int = 1
+# Plafond de tuiles ENTIEREMENT FINIES (3 phases dans la meme frame) quand la
+# file est grosse -- l'ecran est vide au premier chargement, l'etalement en 3
+# phases (qui sert a lisser le pic EN JEU) triple le temps de chargement pour
+# rien. 40 tuiles × ~550 us de bake ≈ 22 ms, tient dans une frame de premier
+# chargement sans figer. Reglable a l'usage.
+@export var tuiles_avancees_par_frame_haut: int = 40
+# Seuil sur `_tuiles_en_pipeline.size()` : au-dela, mode "gros" (3 phases
+# groupees, debit = plafond) ; en-dessous, mode "etalement" (1 phase/tuile,
+# aucun a-coup en avancant). Sert aussi de fin de rampe du debit.
+@export var seuil_pipeline_debit_haut: int = 40
 
 # La forme "limite" ne porte aucun maillage (mur invisible) : jamais rendue.
 const ITEM_LIMITE := 1
@@ -249,7 +266,7 @@ func _ready() -> void:
 	_construire_caches_invariantes()
 	_construire_index_initial()
 	_rafraichir_vers(_centre_tuile_observateur())
-	print("[terrain] premier remplissage : ", _file_creation.size(), " tuiles en file | pipeline=", utilise_pipeline_intra_tuile, " | par_frame=", tuiles_par_frame, " (haut=", tuiles_par_frame_haut, " si file>", seuil_file_debit_haut, ")")
+	_amorcer_synchrone()
 
 # UN QUAD PAR FORME CUBIQUE. Chaque cube (BoxMesh) sera rendu face par face au
 # lieu d'un cube plein. Le quad porte le materiau du cube, en DOUBLE FACE pour
@@ -319,6 +336,18 @@ func _exit_tree() -> void:
 # `seuil_file_debit_haut`), bornee par les deux. Sans rampe, le passage
 # binaire (bas -> haut) sautait d'un facteur 15 sur une tuile de plus ou de
 # moins dans la file : la rampe etale ce saut sur toute la plage.
+# DEBIT DE PIPELINE POUR UNE FILE DE `taille` TUILES. Meme rampe que
+# _debit_pour_file, mais lit tuiles_avancees_par_frame /
+# tuiles_avancees_par_frame_haut / seuil_pipeline_debit_haut.
+func _debit_pipeline_pour_file(taille: int) -> int:
+	var bas: int = tuiles_avancees_par_frame
+	var haut: int = maxi(tuiles_avancees_par_frame, tuiles_avancees_par_frame_haut)
+	if seuil_pipeline_debit_haut <= 0:
+		return haut if taille > 0 else bas
+	var t: float = clampf(float(taille) / float(seuil_pipeline_debit_haut), 0.0, 1.0)
+	var interp: float = float(bas) + t * float(haut - bas)
+	return clampi(int(ceil(interp)), bas, haut)
+
 func _debit_pour_file(taille: int) -> int:
 	# `tuiles_par_frame` est un PLANCHER : les tests le poussent a 1000 pour
 	# vider la file d'un coup, alors que le defaut de `tuiles_par_frame_haut`
@@ -366,10 +395,16 @@ func _process(_delta: float) -> void:
 	# LEGER, elle ne se fait pas doubler par phase 1 (bake) ni par phase 2
 	# (occludeur, le lourd).
 	if utilise_pipeline_intra_tuile and not _tuiles_en_pipeline.is_empty():
-		var avances := 0
+		var taille_pipe: int = _tuiles_en_pipeline.size()
+		var debit_pipeline: int = _debit_pipeline_pour_file(taille_pipe)
+		# Mode "gros" au premier chargement : 3 phases dans la meme frame.
+		# L'ecran est vide, aucun a-coup a lisser. En jeu (file petite) on
+		# reste en etalement 1 phase/tuile pour ne pas piquer.
+		var mode_gros: bool = taille_pipe > seuil_pipeline_debit_haut
+		var traites := 0
 		var cles_pipe := _tuiles_en_pipeline.keys()
 		for cle_p in cles_pipe:
-			if avances >= tuiles_avancees_par_frame:
+			if traites >= debit_pipeline:
 				break
 			# Une tuile supprimee entre-temps a deja disparu de _tuiles_en_pipeline
 			# via _supprimer_tuile ; le has() ci-dessous couvre l'unique cas de race
@@ -377,17 +412,24 @@ func _process(_delta: float) -> void:
 			if not _tuiles_en_pipeline.has(cle_p):
 				continue
 			var etat: Dictionary = _tuiles_en_pipeline[cle_p]
-			var phase: int = int(etat.get("phase", 0))
-			if phase == 0:
+			if mode_gros:
+				# 3 phases groupees, tuile FINIE dans cette iteration.
 				etat["parsed"] = _phase_parser(cle_p)
-				etat["phase"] = 1
-			elif phase == 1:
 				_phase_baker_instances(cle_p, etat)
-				etat["phase"] = 2
-			elif phase == 2:
 				_phase_baker_occluder(cle_p, etat)
 				_tuiles_en_pipeline.erase(cle_p)
-			avances += 1
+			else:
+				var phase: int = int(etat.get("phase", 0))
+				if phase == 0:
+					etat["parsed"] = _phase_parser(cle_p)
+					etat["phase"] = 1
+				elif phase == 1:
+					_phase_baker_instances(cle_p, etat)
+					etat["phase"] = 2
+				elif phase == 2:
+					_phase_baker_occluder(cle_p, etat)
+					_tuiles_en_pipeline.erase(cle_p)
+			traites += 1
 	# ETALEMENT SUPPRESSION : meme rythme que la creation. Avant ce drain, toutes
 	# les tuiles sortantes etaient detruites d'un coup dans _rafraichir_vers —
 	# ~25 OccluderInstance3D liberes en une frame, ~25 rebuilds du BVH d'occlusion.
@@ -492,7 +534,6 @@ func _creer_tuile(tuile: Vector2i) -> void:
 #     buffers (aucun re-parcours de la tuile),
 #   - Dict cellules_occl a partir du PackedInt32Array de sortie.
 func _phase_parser(tuile: Vector2i) -> Dictionary:
-	var _t0_p := Time.get_ticks_usec()
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var taille := taille_tuile_cellules
@@ -539,7 +580,6 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	for k in range(n_o):
 		cellules_occl[Vector3i(occl_arr[k * 3], occl_arr[k * 3 + 1], occl_arr[k * 3 + 2])] = true
 
-	print("  parser   : ", Time.get_ticks_usec() - _t0_p, " us")
 	return {
 		"par_forme": res.get("par_forme", {}),
 		"par_forme_sol": res.get("par_forme_sol", {}),
@@ -574,7 +614,6 @@ func _extraire_teinte(src: Dictionary, dst_teinte: Dictionary) -> void:
 # etat : instances_rs / noeuds / mm_par_item_normal / mm_par_item_sol -- lus par
 # la phase 2 ET par _supprimer_tuile en cas d'annulation en cours de pipeline.
 func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
-	var _t0_bi := Time.get_ticks_usec()
 	# Reception du format { item -> { buffer: PackedFloat32Array, cellules:
 	# PackedInt32Array } } produit par MesheurTuile.bake_tuile_a. Chaque bake
 	# construit un MultiMesh via `mm.buffer = ...` en UN appel natif -- pas de
@@ -639,7 +678,6 @@ func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
 	etat["noeuds"] = noeuds
 	etat["mm_par_item_normal"] = mm_par_item_normal
 	etat["mm_par_item_sol"] = mm_par_item_sol
-	print("  instances: ", Time.get_ticks_usec() - _t0_bi, " us")
 
 # S7 -- PHASE 2 (BAKER OCCLUDEUR + FINALISER _tuiles[tuile]). Bake l'occludeur
 # greedy meshing (le lourd -- 3-5x le parsing selon Zylann/godot_voxel), l'attache,
@@ -647,7 +685,6 @@ func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
 # nœud, Dictionary pour RS direct). Rend la sentinelle Array vide obsolete -- la
 # tuile est desormais consideree comme "batie".
 func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
-	var _t0_bo := Time.get_ticks_usec()
 	var parsed: Dictionary = etat["parsed"]
 	var cellules_occl: Dictionary = parsed["cellules_occl"]
 	var cote: float = float(parsed["cote"])
@@ -667,7 +704,6 @@ func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
 		if occluder_noeud != null:
 			arr.append(occluder_noeud)
 		_tuiles[tuile] = arr
-	print("  occluder : ", Time.get_ticks_usec() - _t0_bo, " us")
 
 # BAKE PUR du MultiMesh + AABB depuis un buffer plat (16 floats/instance,
 # layout TRANSFORM_3D + color). `mesh` est passe par l'appelant (mesh cubique,
@@ -1300,6 +1336,29 @@ func _mettre_a_jour_index_pour_colonne(colonne: Vector2i) -> void:
 			entree["masques_sous_cube"][cellule] = scd_d[cellule]
 		if pvd_d.has(cellule):
 			entree["pv_sous_cubes"][cellule] = pvd_d[cellule]
+
+# PREMIER CHARGEMENT SYNCHRONE. Au _ready, _rafraichir_vers a rempli
+# _file_creation avec l'anneau initial (~450 tuiles). L'ecran est vide, le
+# joueur n'interagit pas -- aucun a-coup a lisser. On bake TOUTES les tuiles
+# de la file d'un bloc, chacune entierement (3 phases sequentielles), au lieu
+# de laisser _process les etaler sur des centaines de frames. Le pipeline ne
+# sert qu'APRES, en jeu, quand le joueur avance et decouvre de nouvelles tuiles.
+func _amorcer_synchrone() -> void:
+	if _file_creation.is_empty():
+		return
+	while not _file_creation.is_empty():
+		var t: Vector2i = _file_creation.pop_back()
+		if _a_supprimer.has(t):
+			continue
+		# Sentinelle "en file" : Array vide. Si pas la sentinelle, la tuile a
+		# deja ete traitee ailleurs (ne devrait pas arriver au premier _ready).
+		if not (_tuiles.has(t) and _tuiles[t] is Array and (_tuiles[t] as Array).is_empty()):
+			continue
+		# Bake synchrone des 3 phases, sans pipeline. Le rendu de la premiere
+		# frame reste bloque tant qu'on n'a pas rendu, c'est voulu.
+		var etat: Dictionary = {"parsed": _phase_parser(t)}
+		_phase_baker_instances(t, etat)
+		_phase_baker_occluder(t, etat)
 
 func _nouvelle_entree_index() -> Dictionary:
 	return {
