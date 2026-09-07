@@ -7,9 +7,9 @@
 // specifiques.
 //
 // Sortie par item : PackedFloat32Array buffer (16 floats/instance = 12
-// transform TRANSFORM_3D + 4 color) + cellules paralleles (3 ints/instance),
-// pret pour `MultiMesh.buffer = ...` en UN appel. Plus les derives
-// cellules_occl, couche_min/max, et l'INDEX teinte pret-a-l'emploi
+// transform TRANSFORM_3D + 4 color), pret pour `MultiMesh.buffer = ...`
+// en UN appel natif cote GDScript. Plus les derives cellules_occl,
+// couche_min/max, et l'INDEX teinte pret-a-l'emploi
 // (teinte_candidats_normal / _sol : 6-tuples (item, x, y, z, idx_start,
 // count) par cellule cubique propre visible, evite le re-parcours du buffer
 // cote GDScript).
@@ -86,7 +86,11 @@ public:
 	//                         GDScript produisait.
 	//
 	// Sortie :
-	//   "par_forme"                Dict { item -> { buffer, cellules } }
+	//   "par_forme"                Dict { item -> { buffer: PackedFloat32Array } }
+	//                              -- le GDScript construit le MultiMesh
+	//                              (MultiMesh.new + transform_format +
+	//                              use_colors + mesh + instance_count +
+	//                              buffer).
 	//   "par_forme_sol"            idem
 	//   "par_forme_mini"           idem
 	//   "cellules_occl"            PackedInt32Array (triplets)
@@ -96,9 +100,9 @@ public:
 	//                              z, idx_start, count) -- une entree par
 	//                              cellule cubique propre visible dans le
 	//                              bucket normal ; count = nombre de faces
-	//                              emises (1..6), idx_start = position de
-	//                              la premiere face dans par_forme[item].
-	//                              cellules (donc dans .buffer/16).
+	//                              emises (1..6), idx_start = index de
+	//                              la premiere face dans le buffer
+	//                              (offset en instances, buffer/16).
 	//   "teinte_candidats_sol"     idem, bucket sol.
 	//   "couche_min"               int
 	//   "couche_max"               int

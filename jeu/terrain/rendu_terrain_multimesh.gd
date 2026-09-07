@@ -522,17 +522,18 @@ func _creer_tuile(tuile: Vector2i) -> void:
 
 # PHASE 0 -- COORDINATEUR C++. Ne parcourt PLUS la tuile : monte le blob une
 # fois, appelle MesheurTuile.bake_tuile_a, integre les sorties. Le C++ rend :
-# par_forme / par_forme_sol / par_forme_mini (chacun { buffer, cellules }
-# par item), cellules_occl (triplets), cellules_teintables (triplets),
-# couche_min / couche_max.
+# par_forme / par_forme_sol / par_forme_mini (chacun { buffer } par item),
+# cellules_occl (triplets), cellules_teintables (triplets),
+# teinte_candidats_normal/sol (6-tuples), couche_min / couche_max.
 #
 # Ce qui reste ici :
 #   - lookup Resource profil via _ressources.profil_de_cellule pour les
 #     cellules candidates que le C++ liste (une seule lecture par candidate,
 #     pas par cellule de la tuile),
-#   - construction des buckets teinte a partir des `cellules` paralleles aux
-#     buffers (aucun re-parcours de la tuile),
-#   - Dict cellules_occl a partir du PackedInt32Array de sortie.
+#   - construction des buckets teinte depuis les 6-tuples C++,
+#   - Dict cellules_occl a partir du PackedInt32Array de sortie,
+#   - construction du MultiMesh de chaque item (MultiMesh.new + buffer pose
+#     via mm.buffer = ...).
 func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
@@ -644,10 +645,10 @@ func _pousser_candidats_teinte(candidats: PackedInt32Array, dst_teinte: Dictiona
 # etat : instances_rs / noeuds / mm_par_item_normal / mm_par_item_sol -- lus par
 # la phase 2 ET par _supprimer_tuile en cas d'annulation en cours de pipeline.
 func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
-	# Reception du format { item -> { buffer: PackedFloat32Array, cellules:
-	# PackedInt32Array } } produit par MesheurTuile.bake_tuile_a. Chaque bake
-	# construit un MultiMesh via `mm.buffer = ...` en UN appel natif -- pas de
-	# Variant construit par instance.
+	# Reception du format { item -> { buffer: PackedFloat32Array } } produit
+	# par MesheurTuile.bake_tuile_a. Chaque bake construit un MultiMesh via
+	# `mm.buffer = ...` en UN appel natif -- pas de Variant construit par
+	# instance.
 	var parsed: Dictionary = etat["parsed"]
 	var par_forme: Dictionary = parsed["par_forme"]
 	var par_forme_sol: Dictionary = parsed["par_forme_sol"]
@@ -737,11 +738,11 @@ func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
 
 # BAKE PUR du MultiMesh + AABB depuis un buffer plat (16 floats/instance,
 # layout TRANSFORM_3D + color). `mesh` est passe par l'appelant (mesh cubique,
-# mini-box ou mesh complet non-cubique). `count` = nombre d'instances (=
-# cellules.size() / 3 dans la sortie C++). Le buffer est pose sur le
-# MultiMesh en UN appel natif (mm.buffer = ...) -- aucune iteration
-# GDScript, aucun Variant construit par instance. Rend {} si mesh ou count
-# invalide.
+# mini-box ou mesh complet non-cubique). `count` = buffer.size() / 16. Le
+# buffer est pose sur le MultiMesh en UN appel natif (mm.buffer = ...) --
+# aucune iteration GDScript, aucun Variant construit par instance. Ordre
+# obligatoire (doc MultiMesh) : use_colors AVANT instance_count, buffer
+# APRES instance_count. Rend {} si mesh/count/buffer invalide.
 func _bake_mm_depuis_buffer(mesh: Mesh, buffer: PackedFloat32Array, count: int,
 		origine_col: Vector2i, couche_min: int, couche_max: int,
 		taille: int, cote: float) -> Dictionary:
@@ -765,13 +766,12 @@ func _bake_mm_depuis_buffer(mesh: Mesh, buffer: PackedFloat32Array, count: int,
 	return {"mm": mm, "aabb": AABB(pos_aabb, taille_aabb)}
 
 # Wrappers "nœud" (MultiMeshInstance3D) et "RS direct" pour une entree
-# {buffer, cellules}. Extrait mesh du dict item->Mesh donne.
+# { buffer } venue du C++. Extrait mesh du dict item->Mesh donne.
 func _mmi_depuis_buffer(mesh: Mesh, entree: Dictionary, origine_col: Vector2i,
 		couche_min: int, couche_max: int, taille: int, cote: float) -> MultiMeshInstance3D:
 	var buffer: PackedFloat32Array = entree.get("buffer", PackedFloat32Array())
-	var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
 	@warning_ignore("integer_division")
-	var count: int = cellules.size() / 3
+	var count: int = buffer.size() / 16
 	var bake: Dictionary = _bake_mm_depuis_buffer(mesh, buffer, count, origine_col, couche_min, couche_max, taille, cote)
 	if bake.is_empty():
 		return null
@@ -786,9 +786,8 @@ func _rs_depuis_buffer(mesh: Mesh, entree: Dictionary, origine_col: Vector2i,
 		couche_min: int, couche_max: int, taille: int, cote: float,
 		cast_shadow_off: bool) -> Dictionary:
 	var buffer: PackedFloat32Array = entree.get("buffer", PackedFloat32Array())
-	var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
 	@warning_ignore("integer_division")
-	var count: int = cellules.size() / 3
+	var count: int = buffer.size() / 16
 	var bake: Dictionary = _bake_mm_depuis_buffer(mesh, buffer, count, origine_col, couche_min, couche_max, taille, cote)
 	if bake.is_empty():
 		return {}

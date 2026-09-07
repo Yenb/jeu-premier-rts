@@ -478,9 +478,10 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	auto items_to_dict = [](std::unordered_map<int, BucketItem> &m) -> Dictionary {
 		Dictionary out;
 		for (auto &kv : m) {
+			int count = (int)(kv.second.buffer.size() / 16);
+			if (count <= 0) continue;
 			Dictionary d;
 			d["buffer"] = to_packed_float(kv.second.buffer);
-			d["cellules"] = to_packed_int(kv.second.cellules);
 			out[kv.first] = d;
 		}
 		return out;
