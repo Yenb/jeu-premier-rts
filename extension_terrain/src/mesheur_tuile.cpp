@@ -14,9 +14,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 using namespace godot;
 
@@ -70,7 +67,7 @@ inline Vector3 face_normale(int i) {
 	return Vector3();
 }
 
-inline Basis decode_basis(const PackedFloat32Array &arr, int orient) {
+inline Basis decode_basis(const std::vector<float> &arr, int orient) {
 	int b = orient * 9;
 	Basis out;
 	out.rows[0] = Vector3((real_t)arr[b + 0], (real_t)arr[b + 1], (real_t)arr[b + 2]);
@@ -127,6 +124,7 @@ inline PackedInt32Array to_packed_int(const std::vector<int32_t> &v) {
 
 void MesheurTuile::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("bonjour"), &MesheurTuile::bonjour);
+	ClassDB::bind_method(D_METHOD("configurer_catalogues", "catalogues"), &MesheurTuile::configurer_catalogues);
 	ClassDB::bind_method(D_METHOD("bake_tuile_a", "entree"), &MesheurTuile::bake_tuile_a);
 }
 
@@ -135,6 +133,46 @@ MesheurTuile::~MesheurTuile() {}
 
 String MesheurTuile::bonjour() const {
 	return String("MesheurTuile C++ vivant.");
+}
+
+void MesheurTuile::configurer_catalogues(const Dictionary &c) {
+	PackedInt32Array items_cubiques = c["items_cubiques"];
+	PackedInt32Array items_h_cle = c["items_hauteur_cle"];
+	PackedFloat32Array items_h_val = c["items_hauteur_val"];
+	Dictionary mesh_transforms = c["mesh_transforms"];
+	PackedFloat32Array bases_ortho = c["bases_orthogonales"];
+
+	_is_cubic.clear();
+	_is_cubic.reserve((size_t)items_cubiques.size());
+	{
+		const int32_t *ptr = items_cubiques.ptr();
+		for (int i = 0; i < items_cubiques.size(); ++i) _is_cubic.insert(ptr[i]);
+	}
+
+	_hauteur_par_item.clear();
+	{
+		int nh = items_h_cle.size();
+		const int32_t *cle = items_h_cle.ptr();
+		const float *val = items_h_val.ptr();
+		_hauteur_par_item.reserve((size_t)nh);
+		for (int i = 0; i < nh; ++i) _hauteur_par_item[cle[i]] = val[i];
+	}
+
+	_mesh_transforms.clear();
+	{
+		Array keys = mesh_transforms.keys();
+		int n = keys.size();
+		_mesh_transforms.reserve((size_t)n);
+		for (int i = 0; i < n; ++i) {
+			Variant kv = keys[i];
+			_mesh_transforms[(int)kv] = (Transform3D)mesh_transforms[kv];
+		}
+	}
+
+	_bases_ortho.assign(bases_ortho.size(), 0.0f);
+	if (bases_ortho.size() > 0) {
+		std::memcpy(_bases_ortho.data(), bases_ortho.ptr(), (size_t)bases_ortho.size() * sizeof(float));
+	}
 }
 
 Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
@@ -152,18 +190,11 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	int item_limite = (int)e["item_limite"];
 	Vector3 centre_offset = e["centre_offset"];
 
-	PackedInt32Array items_cubiques = e["items_cubiques"];
-	PackedInt32Array items_h_cle = e["items_hauteur_cle"];
-	PackedFloat32Array items_h_val = e["items_hauteur_val"];
-	PackedFloat32Array bases_ortho = e["bases_orthogonales"];
-	Dictionary mesh_transforms = e["mesh_transforms"];
-
 	Dictionary volumes_dict = e["volumes"];
 	Dictionary particularites_dict = e["particularites"];
 	Dictionary masques_sc_dict = e["masques_sous_cube"];
 	Dictionary pv_dict = e["pv_sous_cubes"];
 
-	// Dicts tuile-locaux (petits) -> unordered_map natifs. Une passe par dict.
 	std::unordered_map<Vector2i, int64_t, Vec2iHash> volumes;
 	{
 		Array keys = volumes_dict.keys();
@@ -216,36 +247,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 		}
 	}
 
-	std::unordered_set<int> is_cubic;
-	{
-		const int32_t *ptr = items_cubiques.ptr();
-		is_cubic.reserve((size_t)items_cubiques.size());
-		for (int i = 0; i < items_cubiques.size(); ++i) is_cubic.insert(ptr[i]);
-	}
-
-	std::unordered_map<int, real_t> hauteur_par_item;
-	{
-		int nh = items_h_cle.size();
-		const int32_t *cle = items_h_cle.ptr();
-		const float *val = items_h_val.ptr();
-		hauteur_par_item.reserve((size_t)nh);
-		for (int i = 0; i < nh; ++i) hauteur_par_item[cle[i]] = (real_t)val[i];
-	}
-
-	// mesh_transforms passe en Dictionary Godot -> unordered_map natif une fois
-	// a l'entree. La boucle interne (branche non-cube) lit en natif au lieu
-	// d'un Variant lookup par cellule non-cubique.
-	std::unordered_map<int, Transform3D> mesh_transforms_native;
-	{
-		Array keys = mesh_transforms.keys();
-		int n = keys.size();
-		mesh_transforms_native.reserve((size_t)n);
-		for (int i = 0; i < n; ++i) {
-			Variant kv = keys[i];
-			mesh_transforms_native[(int)kv] = (Transform3D)mesh_transforms[kv];
-		}
-	}
-
 	auto masque_col = [&](const Vector2i &col) -> int64_t {
 		if (col.x < -demi_cote || col.x >= demi_cote ||
 				col.y < -demi_cote || col.y >= demi_cote) return 0;
@@ -257,7 +258,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	const int wsize = taille + 2;
 	const int ORIENTATIONS = 32;
 
-	// Precalcul masques + couvrants sur la fenetre 12x12 (natif).
 	std::vector<int64_t> masques_win((size_t)wsize * wsize);
 	std::vector<int64_t> couvrants_win((size_t)wsize * wsize);
 
@@ -281,7 +281,7 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				int item;
 				if (code == -1) item = item_defaut;
 				else item = code / ORIENTATIONS;
-				if (is_cubic.find(item) == is_cubic.end()) {
+				if (_is_cubic.find(item) == _is_cubic.end()) {
 					couvrant &= ~((int64_t)1 << rang);
 					continue;
 				}
@@ -299,6 +299,11 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	std::unordered_map<int, BucketItem> par_forme_mini;
 	std::vector<int32_t> cellules_occl;
 	std::vector<int32_t> cellules_teintables;
+	// teinte_candidats : 6-tuples (item, x, y, z, idx_start, count) par cellule
+	// cubique propre visible. Pret pour le GDScript qui ne re-scannera plus
+	// par_forme[item].cellules.
+	std::vector<int32_t> teinte_cand_normal;
+	std::vector<int32_t> teinte_cand_sol;
 	int couche_min_out = couche_base + couches_max;
 	int couche_max_out = couche_base;
 
@@ -357,7 +362,7 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 
 				if (couche < couche_min_out) couche_min_out = couche;
 				if (couche > couche_max_out) couche_max_out = couche;
-				bool cubique = (is_cubic.find(item) != is_cubic.end());
+				bool cubique = (_is_cubic.find(item) != _is_cubic.end());
 				if (cubique && couche > sommet_base) {
 					ecrire_cellule(cellules_occl, cellule);
 				}
@@ -368,10 +373,10 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 					(real_t)cellule.z * cote + centre_offset.z);
 
 				if (!cubique) {
-					Basis base_ortho = decode_basis(bases_ortho, orientation);
+					Basis base_ortho = decode_basis(_bases_ortho, orientation);
 					Transform3D mesh_tf;
-					auto mtit = mesh_transforms_native.find(item);
-					if (mtit != mesh_transforms_native.end()) mesh_tf = mtit->second;
+					auto mtit = _mesh_transforms.find(item);
+					if (mtit != _mesh_transforms.end()) mesh_tf = mtit->second;
 					Transform3D total = Transform3D(base_ortho, pos) * mesh_tf;
 					BucketItem &bucket = par_forme[item];
 					ecrire_instance(bucket.buffer, total.basis, total.origin, 1.0f, 1.0f, 1.0f, 1.0f);
@@ -413,15 +418,16 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 					continue;
 				}
 
+				// CUBE PROPRE : candidat teinte + emission 6 faces exposees.
 				ecrire_cellule(cellules_teintables, cellule);
-				BucketItem &bucket = (couche == sommet_base) ? par_forme_sol[item] : par_forme[item];
+				bool est_sol = (couche == sommet_base);
+				BucketItem &bucket = est_sol ? par_forme_sol[item] : par_forme[item];
+				int idx_start = (int)bucket.cellules.size() / 3;
 
-				// Hauteur item : constant sur la cellule -> sorti de la lambda
-				// emettre_face (appelee jusqu'a 6x). Capture par valeur.
 				real_t h_item = cote;
 				{
-					auto ith = hauteur_par_item.find(item);
-					if (ith != hauteur_par_item.end()) h_item = ith->second;
+					auto ith = _hauteur_par_item.find(item);
+					if (ith != _hauteur_par_item.end()) h_item = ith->second;
 				}
 
 				auto emettre_face = [&, h_item](int i, int64_t couvrant_neighbor, int rang_check) {
@@ -449,6 +455,17 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				emettre_face(3, nxm_c, rang);
 				emettre_face(4, nzp_c, rang);
 				emettre_face(5, nzm_c, rang);
+
+				int count_faces = (int)bucket.cellules.size() / 3 - idx_start;
+				if (count_faces > 0) {
+					std::vector<int32_t> &tc = est_sol ? teinte_cand_sol : teinte_cand_normal;
+					tc.push_back(item);
+					tc.push_back(cellule.x);
+					tc.push_back(cellule.y);
+					tc.push_back(cellule.z);
+					tc.push_back(idx_start);
+					tc.push_back(count_faces);
+				}
 			}
 		}
 	}
@@ -470,6 +487,8 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 	result["par_forme_mini"] = items_to_dict(par_forme_mini);
 	result["cellules_occl"] = to_packed_int(cellules_occl);
 	result["cellules_teintables"] = to_packed_int(cellules_teintables);
+	result["teinte_candidats_normal"] = to_packed_int(teinte_cand_normal);
+	result["teinte_candidats_sol"] = to_packed_int(teinte_cand_sol);
 	result["couche_min"] = couche_min_out;
 	result["couche_max"] = couche_max_out;
 	return result;

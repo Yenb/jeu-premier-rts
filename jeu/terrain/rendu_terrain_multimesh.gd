@@ -534,6 +534,7 @@ func _creer_tuile(tuile: Vector2i) -> void:
 #     buffers (aucun re-parcours de la tuile),
 #   - Dict cellules_occl a partir du PackedInt32Array de sortie.
 func _phase_parser(tuile: Vector2i) -> Dictionary:
+	var _t0_total := Time.get_ticks_usec()
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var taille := taille_tuile_cellules
@@ -545,32 +546,55 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 		if _mesheur == null:
 			push_error("MesheurTuile introuvable -- extension_terrain non chargee")
 			return {}
+		# Catalogues invariants montes UNE fois : is_cubic, hauteur_par_item,
+		# mesh_transforms, bases_ortho. Restent en membres du MesheurTuile,
+		# ne sont plus resserialises dans chaque blob ni re-parses par tuile.
+		_mesheur.configurer_catalogues({
+			"items_cubiques": _items_cubiques_cache,
+			"items_hauteur_cle": _items_hauteur_cle_cache,
+			"items_hauteur_val": _items_hauteur_val_cache,
+			"mesh_transforms": _mesh_transforms_cache,
+			"bases_orthogonales": _bases_orthogonales_cache,
+		})
 
+	var _t0_blob := Time.get_ticks_usec()
 	var blob := _blob_tuile_a(origine_col, cote, couche_base)
-	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
+	var _t_blob := Time.get_ticks_usec() - _t0_blob
 
+	var _t0_cpp := Time.get_ticks_usec()
+	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
+	var _t_cpp := Time.get_ticks_usec() - _t0_cpp
+
+	var _t0_teinte := Time.get_ticks_usec()
+
+	var _t0_profil := Time.get_ticks_usec()
 	# Teinte : pour chaque cellule candidate rendue par le C++, lire profil et
-	# alimenter les caches. _tick_teinte lit ces caches par cellule.
+	# alimenter les caches. Appels TYPES DIRECTS sur _ressources (evite le
+	# dispatch string de .call() par cellule).
 	var teintables: PackedInt32Array = res.get("cellules_teintables", PackedInt32Array())
 	if _ressources != null and _ressources.has_method("profil_de_cellule"):
 		@warning_ignore("integer_division")
 		var n_t: int = teintables.size() / 3
 		for k in range(n_t):
 			var cellule := Vector3i(teintables[k * 3], teintables[k * 3 + 1], teintables[k * 3 + 2])
-			var profil_cell: Resource = _ressources.call("profil_de_cellule", cellule) as Resource
+			var profil_cell: Resource = _ressources.profil_de_cellule(cellule)
 			if profil_cell != null:
 				_cache_profil_cellule[cellule] = profil_cell
-				_cache_quantite_cellule[cellule] = int(_ressources.call("quantite_a", cellule))
+				_cache_quantite_cellule[cellule] = _ressources.quantite_a(cellule)
 				_cache_reserve_cellule[cellule] = int(profil_cell.get("reserve"))
+	var _t_profil := Time.get_ticks_usec() - _t0_profil
 
-	# Buckets teinte par item : parcourt les `cellules` paralleles au buffer et
-	# pousse (item, cellule, idx) pour toute cellule qui a un profil en cache.
-	# idx = position dans le buffer = index d'instance dans le MultiMesh final.
+	var _t0_candidats := Time.get_ticks_usec()
+	# Buckets teinte : consommes les 6-tuples (item, x, y, z, idx_start, count)
+	# rendus par le C++ -- plus de re-parcours des `cellules` par item cote
+	# GDScript. Une entree par cellule cubique propre visible.
 	var teinte_normal: Dictionary = {}
 	var teinte_sol: Dictionary = {}
-	_extraire_teinte(res.get("par_forme", {}), teinte_normal)
-	_extraire_teinte(res.get("par_forme_sol", {}), teinte_sol)
+	_pousser_candidats_teinte(res.get("teinte_candidats_normal", PackedInt32Array()), teinte_normal)
+	_pousser_candidats_teinte(res.get("teinte_candidats_sol", PackedInt32Array()), teinte_sol)
+	var _t_candidats := Time.get_ticks_usec() - _t0_candidats
 
+	var _t0_occl := Time.get_ticks_usec()
 	# Cellules_occl : PackedInt32Array (triplets) -> Dict { cellule -> true },
 	# format attendu par _phase_baker_occluder.
 	var cellules_occl: Dictionary = {}
@@ -579,6 +603,16 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var n_o: int = occl_arr.size() / 3
 	for k in range(n_o):
 		cellules_occl[Vector3i(occl_arr[k * 3], occl_arr[k * 3 + 1], occl_arr[k * 3 + 2])] = true
+	var _t_occl := Time.get_ticks_usec() - _t0_occl
+	var _t_teinte := Time.get_ticks_usec() - _t0_teinte
+
+	print("bake tuile : ", Time.get_ticks_usec() - _t0_total, " us")
+	print("  blob     : ", _t_blob, " us")
+	print("  cpp      : ", _t_cpp, " us")
+	print("  teinte   : ", _t_teinte, " us")
+	print("    profil   : ", _t_profil, " us")
+	print("    candidats: ", _t_candidats, " us")
+	print("    occl     : ", _t_occl, " us")
 
 	return {
 		"par_forme": res.get("par_forme", {}),
@@ -594,19 +628,27 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 		"taille": taille,
 	}
 
-# Helper : parcourt src (Dict item -> {buffer, cellules}) et pousse les paires
-# de teinte pour chaque cellule qui a un profil en cache. idx = position dans
-# le buffer = index d'instance MMi.
-func _extraire_teinte(src: Dictionary, dst_teinte: Dictionary) -> void:
-	for item in src.keys():
-		var entree: Dictionary = src[item]
-		var cellules: PackedInt32Array = entree.get("cellules", PackedInt32Array())
-		@warning_ignore("integer_division")
-		var n: int = cellules.size() / 3
-		for i in range(n):
-			var cellule := Vector3i(cellules[i * 3], cellules[i * 3 + 1], cellules[i * 3 + 2])
-			if _cache_profil_cellule.has(cellule):
-				_pousser_teinte(dst_teinte, int(item), cellule, i)
+# Helper : consomme le PackedInt32Array de 6-tuples (item, x, y, z, idx_start,
+# count) rendu par le C++ pour un bucket (normal ou sol) et pousse les paires
+# de teinte pour chaque cellule qui a un profil en cache. Une entree par
+# cellule cubique propre visible : pas de re-parcours de par_forme[item].
+# cellules cote GDScript.
+func _pousser_candidats_teinte(candidats: PackedInt32Array, dst_teinte: Dictionary) -> void:
+	@warning_ignore("integer_division")
+	var n: int = candidats.size() / 6
+	for k in range(n):
+		var base := k * 6
+		var cellule := Vector3i(candidats[base + 1], candidats[base + 2], candidats[base + 3])
+		if not _cache_profil_cellule.has(cellule):
+			continue
+		var item: int = candidats[base]
+		var idx_start: int = candidats[base + 4]
+		var count: int = candidats[base + 5]
+		if not dst_teinte.has(item):
+			dst_teinte[item] = [] as Array
+		var bucket: Array = dst_teinte[item]
+		for i in range(count):
+			bucket.append({"cellule": cellule, "idx": idx_start + i})
 
 # S7 -- PHASE 1 (BAKER INSTANCES + INDEX TEINTE). Lit `etat.parsed`, alloue les
 # MultiMesh et les porteurs (instances RS ou MMi selon utilise_rs_direct), remplit
@@ -1235,11 +1277,6 @@ func _blob_tuile_a(origine_col: Vector2i, cote: float, couche_base: int) -> Dict
 		"particularites": part_merged,
 		"masques_sous_cube": sc_merged,
 		"pv_sous_cubes": pv_merged,
-		"items_cubiques": _items_cubiques_cache,
-		"items_hauteur_cle": _items_hauteur_cle_cache,
-		"items_hauteur_val": _items_hauteur_val_cache,
-		"bases_orthogonales": _bases_orthogonales_cache,
-		"mesh_transforms": _mesh_transforms_cache,
 	}
 
 # ----- INDEX SPATIAL PAR TUILE (voie C) -------------------------------------
