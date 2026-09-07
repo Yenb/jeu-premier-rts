@@ -556,8 +556,11 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 			"bases_orthogonales": _bases_orthogonales_cache,
 		})
 
+	var t0 := Time.get_ticks_usec()
 	var blob := _blob_tuile_a(origine_col, cote, couche_base)
+	var t1 := Time.get_ticks_usec()
 	var res: Dictionary = _mesheur.call("bake_tuile_a", blob)
+	var t2 := Time.get_ticks_usec()
 
 	# Teinte : pour chaque cellule candidate rendue par le C++, lire profil et
 	# alimenter les caches. Appels TYPES DIRECTS sur _ressources (evite le
@@ -581,6 +584,8 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	var teinte_sol: Dictionary = {}
 	_pousser_candidats_teinte(res.get("teinte_candidats_normal", PackedInt32Array()), teinte_normal)
 	_pousser_candidats_teinte(res.get("teinte_candidats_sol", PackedInt32Array()), teinte_sol)
+	var t3 := Time.get_ticks_usec()
+	print("bake tuile ", tuile, " : total=", t3 - t0, " us | blob=", t1 - t0, " us | cpp=", t2 - t1, " us | teinte=", t3 - t2, " us")
 
 	# Cellules_occl : PackedInt32Array (triplets) -> Dict { cellule -> true },
 	# format attendu par _phase_baker_occluder.
