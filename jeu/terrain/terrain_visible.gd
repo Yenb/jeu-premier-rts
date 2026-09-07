@@ -72,6 +72,13 @@ const CarteTerrain = preload("res://jeu/terrain/carte_terrain.gd")
 # π·rayon² × couches, et ne depend d'aucune autre grandeur.
 @export var rayon_cellules: int = 50
 
+# Rayon du NOYAU pose SYNCHRONE au _ready, autour de l'observateur. Le reste
+# du disque part en file et se pose etale sur plusieurs images. Sans noyau,
+# le joueur qui spawn juste avant que la file draine tomberait a travers le
+# sol. Deux cellules suffisent a le porter (13 colonnes au total) ; plus
+# reintroduirait le pic que ce chantier existe pour supprimer.
+@export var rayon_noyau_initial: int = 2
+
 # De combien de cellules l'observateur doit s'ecarter du centre pose avant
 # qu'on retouche quoi que ce soit.
 @export var pas_de_rafraichissement: int = 4
@@ -147,7 +154,7 @@ func _ready() -> void:
 	# ce GridMap ne rend jamais.
 	mesh_library = sans_mesh(mesh_library)
 	_bloc = Commun.premier_bloc(self)
-	_rafraichir_vers(_centre_observateur())
+	_amorcer_pose_etalee(_centre_observateur())
 
 func _process(_delta: float) -> void:
 	if carte == null or _bloc == GridMap.INVALID_CELL_ITEM:
@@ -251,6 +258,32 @@ func _rafraichir_vers(centre: Vector2i) -> void:
 	# rafraichir(). Le static ne peut pas les creer lui-meme, l'appelant le fait.
 	for colonne in _pose:
 		_poser_bodies_sous_cubes(colonne)
+
+# AMORCE LE PREMIER AFFICHAGE EN DEUX TEMPS : un noyau POSE SYNCHRONE autour de
+# l'observateur (`rayon_noyau_initial`, defaut 2 cellules = 13 colonnes) pour
+# porter le joueur au spawn, et le RESTE du disque enfile dans `_a_poser` --
+# draine par `_process` sur les images suivantes. Sans le noyau, un joueur qui
+# spawn juste avant le premier drain tomberait a travers le sol pas encore pose.
+# Sans le RESTE etale, le _ready poserait tout le disque d'un coup (~55 000
+# cellules pour rayon 50, 7 couches) et rendrait le premier chargement long.
+func _amorcer_pose_etalee(centre: Vector2i) -> void:
+	var vise := colonnes_du_disque(centre, rayon_cellules)
+	for colonne in vise.keys():
+		if not carte.dans_emprise(colonne):
+			vise.erase(colonne)
+	var rayon_noyau: int = mini(rayon_noyau_initial, rayon_cellules)
+	var noyau := colonnes_du_disque(centre, rayon_noyau)
+	for colonne in noyau.keys():
+		if not vise.has(colonne):
+			continue
+		poser_colonne(self, carte, colonne, _bloc)
+		_poser_bodies_sous_cubes(colonne)
+		_pose[colonne] = true
+	for colonne in vise.keys():
+		if not _pose.has(colonne):
+			_a_poser[colonne] = true
+	_centre_pose = centre
+	_amorce = true
 
 # Les colonnes d'un disque de `rayon` cellules autour d'un centre, en ENSEMBLE
 # (colonne -> true).

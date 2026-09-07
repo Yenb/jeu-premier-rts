@@ -288,24 +288,35 @@ func _etalement() -> void:
 	terrain.colonnes_par_image = 7
 	get_root().add_child(terrain)
 
-	var complet: Dictionary = terrain._pose.duplicate()
+	# LE _READY POSE UN NOYAU SYNCHRONE (rayon_noyau_initial) autour de l'observateur,
+	# le RESTE du disque part en file -- pour qu'un premier chargement ne pique pas.
+	# Le noyau doit etre STRICTEMENT plus petit que le disque vise, sinon l'etalement
+	# n'a rien etale.
+	var noyau_initial: Dictionary = terrain._pose.duplicate()
+	var reste_initial: Dictionary = terrain._a_poser.duplicate()
 	var attendu := TerrainVisible.colonnes_du_disque(Vector2i.ZERO, 10)
-	_v.v(complet.size() == attendu.size(),
-		"le premier affichage n'est pas complet : %d colonnes, %d attendues" % [
-			complet.size(), attendu.size()])
-	_v.v(terrain._a_poser.is_empty() and terrain._a_effacer.is_empty(),
-		"le premier affichage laisse des files non vides")
+	_v.v(noyau_initial.size() > 0 and noyau_initial.size() < attendu.size(),
+		"le _ready n'etale rien : %d colonnes noyau, %d visees" % [
+			noyau_initial.size(), attendu.size()])
+	_v.v(noyau_initial.size() + reste_initial.size() == attendu.size(),
+		"noyau + reste != disque vise au _ready : %d + %d != %d" % [
+			noyau_initial.size(), reste_initial.size(), attendu.size()])
+	_v.v(terrain._a_effacer.is_empty(),
+		"le _ready laisse des colonnes en file d'effacement")
 
-	# UN DEMI-TOUR AVANT LE MOINDRE DRAINAGE N'A RIEN A FAIRE : les deux files
-	# reviennent exactement a vide, l'etat reste celui du premier affichage.
-	terrain._retargeter(Vector2i(4, 0))
-	_v.v(not terrain._a_poser.is_empty() or not terrain._a_effacer.is_empty(),
-		"viser une nouvelle cible ne remplit aucune file : le test ne prouve rien")
+	# UN DEMI-TOUR AVANT LE MOINDRE DRAINAGE : les deux files reviennent
+	# EXACTEMENT a leur etat post-_ready, `_pose` reste le noyau initial.
+	# Cible loin du noyau (r=2) : (15,0) sort le noyau du disque vise et remplit
+	# _a_effacer -- une cible proche laisserait le noyau dedans, rien en effacement,
+	# et le test ne prouverait pas le travail de retarget.
+	terrain._retargeter(Vector2i(15, 0))
+	_v.v(not terrain._a_effacer.is_empty(),
+		"viser (15,0) ne sort rien du noyau : le test ne prouve rien")
 	terrain._retargeter(Vector2i.ZERO)
-	_v.v(terrain._a_poser.is_empty() and terrain._a_effacer.is_empty(),
-		"revenir a la cible de depart avant tout drainage laisse du travail en file")
-	_v.v(terrain._pose.size() == complet.size(),
-		"un aller-retour sans drainage a quand meme change ce qui est pose")
+	_v.v(terrain._a_poser.size() == reste_initial.size() and terrain._a_effacer.is_empty(),
+		"revenir a la cible de depart avant drainage laisse un etat different du post-_ready")
+	_v.v(terrain._pose.size() == noyau_initial.size(),
+		"un aller-retour sans drainage a change ce qui est pose")
 
 	# UNE VRAIE CIBLE : chaque image ne draine que le budget, jusqu'a vider
 	# les files et rejoindre exactement le disque vise.

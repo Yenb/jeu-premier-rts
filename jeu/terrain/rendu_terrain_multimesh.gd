@@ -62,12 +62,23 @@ const SolMiniCubeShader = preload("res://jeu/terrain/sol_mini_cube.gdshader")
 @export var taille_tuile_cellules: int = 10
 @export var pas_de_rafraichissement: int = 4
 @export var groupe_observateur: StringName = &"observateur"
-# COMBIEN DE TUILES BATIES PAR FRAME. Franchir une bordure fait entrer tout un
-# ANNEAU de tuiles d'un coup ; les batir toutes dans la meme frame (avec un
-# occludeur bake par tuile) gele le jeu -- mesure : 127 ms. Elles sont mises en
-# file et batties quelques-unes par frame. Meme etalement que
-# jeu/Proto/terrain_streame.gd, patron deja eprouve.
+# DEBIT DE BAKE PAR FRAME, VARIABLE selon la taille de la file.
+# En REGIME DE JEU (avancee lente, quelques tuiles en file au franchissement
+# d'un seuil), on tient le debit BAS pour ne causer aucun a-coup. En REGIME
+# DE REMPLISSAGE (premier chargement, l'anneau initial fait ~450 tuiles), on
+# monte jusqu'au debit HAUT pour vider la file en 1-2 secondes. Le debit est
+# INTERPOLE lineairement entre les deux extremes en fonction de la taille de
+# la file : file=0 -> bas, file>=seuil -> haut, entre les deux en proportion.
+# Un seuil binaire (`si file > N alors haut sinon bas`) laissait le debit
+# sauter d'un facteur 15 sur une seule tuile en plus ou en moins ; la rampe
+# etale ce saut.
+# `tuiles_par_frame` = debit BAS (regime de jeu, defaut 1 = comportement
+# historique). `tuiles_par_frame_haut` = debit HAUT (regime de remplissage).
+# `seuil_file_debit_haut` = taille de file a partir de laquelle le debit
+# atteint son maximum.
 @export var tuiles_par_frame: int = 1
+@export var tuiles_par_frame_haut: int = 15
+@export var seuil_file_debit_haut: int = 20
 
 # DISTANCE DE RENDU (LOD par distance). Au-dela, une tuile n'est plus dessinee --
 # le lointain n'a pas besoin d'etre net. Posee sur chaque MultiMeshInstance3D via
@@ -110,8 +121,8 @@ var _amorce := false
 var _rayon_tuiles: int = 0
 var _rayon_interne_tuiles: int = 0
 var _pas_tuiles: int = 1
-# LES TUILES EN ATTENTE DE CONSTRUCTION, drainee par _process a raison de
-# `tuiles_par_frame`. Une tuile en file est marquee dans `_tuiles` par un Array
+# LES TUILES EN ATTENTE DE CONSTRUCTION, drainee par _process au debit rendu
+# par `_debit_pour_file`. Une tuile en file est marquee dans `_tuiles` par un Array
 # VIDE (batie -> Array de noeuds). Si elle sort du disque avant d'etre batie,
 # _supprimer_tuile la retire de `_tuiles` et le drain la saute.
 var _file_creation: Array = []
@@ -238,6 +249,7 @@ func _ready() -> void:
 	_construire_caches_invariantes()
 	_construire_index_initial()
 	_rafraichir_vers(_centre_tuile_observateur())
+	print("[terrain] premier remplissage : ", _file_creation.size(), " tuiles en file | pipeline=", utilise_pipeline_intra_tuile, " | par_frame=", tuiles_par_frame, " (haut=", tuiles_par_frame_haut, " si file>", seuil_file_debit_haut, ")")
 
 # UN QUAD PAR FORME CUBIQUE. Chaque cube (BoxMesh) sera rendu face par face au
 # lieu d'un cube plein. Le quad porte le materiau du cube, en DOUBLE FACE pour
@@ -302,6 +314,24 @@ func _exit_tree() -> void:
 	for tuile in _tuiles.keys():
 		_supprimer_tuile(tuile)
 
+# DEBIT DE BAKE POUR UNE FILE DE `taille` TUILES. Rampe lineaire entre
+# `tuiles_par_frame` (file vide) et `tuiles_par_frame_haut` (file >=
+# `seuil_file_debit_haut`), bornee par les deux. Sans rampe, le passage
+# binaire (bas -> haut) sautait d'un facteur 15 sur une tuile de plus ou de
+# moins dans la file : la rampe etale ce saut sur toute la plage.
+func _debit_pour_file(taille: int) -> int:
+	# `tuiles_par_frame` est un PLANCHER : les tests le poussent a 1000 pour
+	# vider la file d'un coup, alors que le defaut de `tuiles_par_frame_haut`
+	# est 15. Sans ce max, l'appelant qui monte le plancher au-dessus du
+	# plafond tomberait a 15 en silence.
+	var bas: int = tuiles_par_frame
+	var haut: int = maxi(tuiles_par_frame, tuiles_par_frame_haut)
+	if seuil_file_debit_haut <= 0:
+		return haut if taille > 0 else bas
+	var t: float = clampf(float(taille) / float(seuil_file_debit_haut), 0.0, 1.0)
+	var interp: float = float(bas) + t * float(haut - bas)
+	return clampi(int(ceil(interp)), bas, haut)
+
 func _process(_delta: float) -> void:
 	_absorber_modifications_carte()
 	# Tick teinte a 1 Hz (aligne sur regen). Cache anti-repose evite les
@@ -313,9 +343,12 @@ func _process(_delta: float) -> void:
 	var centre := _centre_tuile_observateur()
 	if _doit_rafraichir(centre):
 		_rafraichir_vers(centre)
-	# ETALEMENT CREATION : quelques tuiles par frame, jamais tout l'anneau d'un coup.
+	# ETALEMENT CREATION : debit VARIABLE selon la taille de la file. Rampe
+	# lineaire entre `tuiles_par_frame` (file vide) et `tuiles_par_frame_haut`
+	# (file >= seuil). Voir en-tete @export.
+	var debit_creation: int = _debit_pour_file(_file_creation.size())
 	var faits := 0
-	while faits < tuiles_par_frame and not _file_creation.is_empty():
+	while faits < debit_creation and not _file_creation.is_empty():
 		var t: Vector2i = _file_creation.pop_back()
 		if _a_supprimer.has(t):
 			continue
@@ -358,10 +391,12 @@ func _process(_delta: float) -> void:
 	# ETALEMENT SUPPRESSION : meme rythme que la creation. Avant ce drain, toutes
 	# les tuiles sortantes etaient detruites d'un coup dans _rafraichir_vers —
 	# ~25 OccluderInstance3D liberes en une frame, ~25 rebuilds du BVH d'occlusion.
+	# ETALEMENT SUPPRESSION : meme rampe variable que la creation.
 	var supprimes := 0
 	if not _a_supprimer.is_empty():
+		var debit_suppression: int = _debit_pour_file(_a_supprimer.size())
 		var cles := _a_supprimer.keys()
-		while supprimes < tuiles_par_frame and supprimes < cles.size():
+		while supprimes < debit_suppression and supprimes < cles.size():
 			var t: Vector2i = cles[supprimes]
 			_a_supprimer.erase(t)
 			_supprimer_tuile(t)
@@ -457,6 +492,7 @@ func _creer_tuile(tuile: Vector2i) -> void:
 #     buffers (aucun re-parcours de la tuile),
 #   - Dict cellules_occl a partir du PackedInt32Array de sortie.
 func _phase_parser(tuile: Vector2i) -> Dictionary:
+	var _t0_p := Time.get_ticks_usec()
 	var cote: float = carte.get("cote")
 	var couche_base: int = int(carte.couche_base)
 	var taille := taille_tuile_cellules
@@ -503,6 +539,7 @@ func _phase_parser(tuile: Vector2i) -> Dictionary:
 	for k in range(n_o):
 		cellules_occl[Vector3i(occl_arr[k * 3], occl_arr[k * 3 + 1], occl_arr[k * 3 + 2])] = true
 
+	print("  parser   : ", Time.get_ticks_usec() - _t0_p, " us")
 	return {
 		"par_forme": res.get("par_forme", {}),
 		"par_forme_sol": res.get("par_forme_sol", {}),
@@ -537,6 +574,7 @@ func _extraire_teinte(src: Dictionary, dst_teinte: Dictionary) -> void:
 # etat : instances_rs / noeuds / mm_par_item_normal / mm_par_item_sol -- lus par
 # la phase 2 ET par _supprimer_tuile en cas d'annulation en cours de pipeline.
 func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
+	var _t0_bi := Time.get_ticks_usec()
 	# Reception du format { item -> { buffer: PackedFloat32Array, cellules:
 	# PackedInt32Array } } produit par MesheurTuile.bake_tuile_a. Chaque bake
 	# construit un MultiMesh via `mm.buffer = ...` en UN appel natif -- pas de
@@ -601,6 +639,7 @@ func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
 	etat["noeuds"] = noeuds
 	etat["mm_par_item_normal"] = mm_par_item_normal
 	etat["mm_par_item_sol"] = mm_par_item_sol
+	print("  instances: ", Time.get_ticks_usec() - _t0_bi, " us")
 
 # S7 -- PHASE 2 (BAKER OCCLUDEUR + FINALISER _tuiles[tuile]). Bake l'occludeur
 # greedy meshing (le lourd -- 3-5x le parsing selon Zylann/godot_voxel), l'attache,
@@ -608,6 +647,7 @@ func _phase_baker_instances(_tuile: Vector2i, etat: Dictionary) -> void:
 # nœud, Dictionary pour RS direct). Rend la sentinelle Array vide obsolete -- la
 # tuile est desormais consideree comme "batie".
 func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
+	var _t0_bo := Time.get_ticks_usec()
 	var parsed: Dictionary = etat["parsed"]
 	var cellules_occl: Dictionary = parsed["cellules_occl"]
 	var cote: float = float(parsed["cote"])
@@ -627,6 +667,7 @@ func _phase_baker_occluder(tuile: Vector2i, etat: Dictionary) -> void:
 		if occluder_noeud != null:
 			arr.append(occluder_noeud)
 		_tuiles[tuile] = arr
+	print("  occluder : ", Time.get_ticks_usec() - _t0_bo, " us")
 
 # BAKE PUR du MultiMesh + AABB depuis un buffer plat (16 floats/instance,
 # layout TRANSFORM_3D + color). `mesh` est passe par l'appelant (mesh cubique,
