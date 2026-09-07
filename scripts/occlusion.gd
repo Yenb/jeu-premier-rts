@@ -29,10 +29,17 @@ extends RefCounted
 #     ids_exclus = []) -> float ---
 # Recoit : `depuis`/`vers` (Vector3, les deux bouts du segment -- l'ordre est
 # sans effet sur le resultat, la projection est symetrique) ; `obstacles`
-# (Array de Dictionary { position: Vector3, proprietes: Dictionary, id
-# (FACULTATIF) } -- CONSTRUIT ET POSSEDE ENTIEREMENT PAR L'APPELANT, ce
-# fichier ne fabrique, ne charge, ne filtre jamais aucune liste lui-meme,
-# meme patron que vent.gd:sources_locales/lumiere.gd:sources) ;
+# (Array de Dictionary DUCK-TYPE : chaque obstacle expose `position` (Vector3,
+# OBLIGATOIRE), `proprietes` (Dictionary, FACULTATIF -- absent = 0.0 sur toute
+# propriete, transparent) et `id` (Variant, FACULTATIF -- absent = jamais
+# nomme par ids_exclus). CE CONTRAT COUVRE DEUX FORMES a la fois sans copie :
+# une CHOSE DU MONDE brute (Objet.fabriquer rend {id, position, proprietes,
+# ...} a plat) que perception.gd:_percevoir_propagation_obstacles passe
+# directement depuis monde.choses_dans_couloir, ET un dict plat {position,
+# proprietes} sans id que champ_occulte.gd construit lui-meme. Les deux
+# appelants passent des references vers leurs propres objets, ce fichier ne
+# fabrique, ne charge, ne filtre jamais aucune liste lui-meme, meme patron
+# que vent.gd:sources_locales/lumiere.gd:sources) ;
 # `propriete_obstacle` (String, nom de la propriete qui attenue --
 # "absorption_sonore", "densite", "relief_bloquant" : JAMAIS en dur ici) ;
 # `largeur` (float, tolerance laterale au segment, meme unite que les
@@ -74,11 +81,14 @@ extends RefCounted
 #   perception.gd, tout candidat de la sphere sert de candidat obstacle,
 #   la plupart ne portant pas la propriete du canal).
 #
-# COUT : O(n) obstacles testes par appel. L'appelant qui boucle sur n sources
-# paie donc O(n^2) -- limite CONNUE et NON OPTIMISEE (aucune structure
-# d'acceleration spatiale ici, voir CLAUDE.md : signaler, pas contourner en
-# silence). perception.gd portait deja cette note avant l'extraction ; elle
-# vaut desormais pour tout appelant, champ_occulte.gd compris.
+# COUT : O(obstacles) testes par appel. GEOMETRIE PURE, jamais de requete
+# spatiale ici -- a charge de l'appelant de borner sa liste d'obstacles au
+# couloir source->cible qui l'interesse. perception.gd le fait via
+# monde.choses_dans_couloir (voir son en-tete "CANDIDATS-OBSTACLES BORNES AU
+# COULOIR") ; champ_occulte.gd recoit sa liste construite par son propre
+# appelant. Une liste envoyee sans etre bornee au couloir reste correcte
+# geometriquement (les obstacles hors couloir sont rejetes par le filtre
+# distance_laterale > largeur), elle est simplement plus lourde a parcourir.
 #
 # --- attenuer_par_distance(force, distance, exposant) -> float ---
 # Rend `force / distance^exposant`. `exposant` 0.0 rend `force` inchangee

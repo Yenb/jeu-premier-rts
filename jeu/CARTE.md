@@ -997,9 +997,10 @@ capacité. `restant(chose, nom_reserve)`. Contrat, pièges et frontières :
 en-tête du fichier. Test : `test_combustible.gd`.
 
 ### `scripts/monde.gd` — requête spatiale
-Le contenant réellement utilisé en jeu : il rend les choses dans un rayon, et
-une chose par son id. `ajouter`, `par_id`, `choses_dans_rayon`. Contrat,
-pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
+Le contenant réellement utilisé en jeu : il rend les choses dans un rayon, dans
+un couloir (segment épaissi) ou par son id. `ajouter`, `par_id`,
+`choses_dans_rayon`, `choses_dans_couloir`. Contrat, pièges et frontières :
+en-tête du fichier. Test : `test_monde.gd`.
 
 ### `scripts/etat_effectif.gd` — un état écrase ou module une propriété
 Les états actifs d'une chose écrasent ou multiplient la valeur de base d'une

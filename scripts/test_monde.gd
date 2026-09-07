@@ -28,14 +28,44 @@ func _init() -> void:
 	_filtre_de_distance_nominal()
 	_ajouter_refuse_sans_position_et_refuse_un_id_deja_pris()
 	_retirer_sort_une_chose_de_partout()
+	_choses_dans_couloir_ne_lit_que_les_cases_traversees()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
 		return
 	print("OK: position vivante suivie apres deplacement, filtre de distance nominal, " +
 		"ajouter() refuse sans position comme sur un id deja pris sans jamais ecraser, " +
-		"et retirer() ne laisse aucun fantome derriere lui")
+		"retirer() ne laisse aucun fantome derriere lui, et choses_dans_couloir suit " +
+		"la longueur du segment (candidats_mesures borne, jamais N)")
 	quit(0)
+
+# COUT DE LA REQUETE COULOIR : N=2000 choses eparpillees en anneau tres loin
+# du segment (y=100+/-50), trois choses PILE sur le segment. Le compteur
+# candidats_mesures doit rester borne par la petite bande transverse, jamais
+# suivre N -- c'est ce qui prouve l'absence de balayage cache (un test de
+# correction seul ne verrait pas un O(n) qui donne encore la bonne reponse).
+func _choses_dans_couloir_ne_lit_que_les_cases_traversees() -> void:
+	var monde := Monde.new()
+	# 2000 choses HORS du couloir : anneau autour de (50,100,0), tous les y
+	# entre ~50 et ~150. Le couloir demande [y=-0.5, y=+0.5] -- aucune de ces
+	# choses n'est dans une case y visitee par la requete.
+	for i in range(2000):
+		var angle: float = float(i) * TAU / 2000.0
+		var pos := Vector3(50.0 + cos(angle) * 50.0, 100.0 + sin(angle) * 50.0, 0.0)
+		var hors := Objet.fabriquer("hors_%d" % i, "hors", pos, {})
+		monde.ajouter(hors, "hors", hors.position)
+	# TROIS choses PILE dans le couloir, cases x distinctes.
+	for k in range(3):
+		var pos_dedans := Vector3(25.0 * float(k + 1), 0.0, 0.0)
+		var dedans := Objet.fabriquer("dedans_%d" % k, "dedans", pos_dedans, {})
+		monde.ajouter(dedans, "dedans", dedans.position)
+
+	monde.remettre_les_compteurs()
+	var trouves := monde.choses_dans_couloir(Vector3.ZERO, Vector3(100.0, 0.0, 0.0), 0.5)
+	verif.v(trouves.size() == 3,
+		"les trois choses PILE dans le couloir doivent etre trouvees (recu %d)" % trouves.size())
+	verif.v(monde.candidats_mesures < 50,
+		"candidats_mesures doit suivre la longueur du segment, pas N=2000 (recu %d)" % monde.candidats_mesures)
 
 # UNE CHOSE RETIREE NE COMPTE PLUS NULLE PART -- ni dans une requete de
 # rayon, ni dans un par_id() qui suit. Deux niveaux ouverts avant le

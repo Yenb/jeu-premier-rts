@@ -27,6 +27,8 @@ extends SceneTree
 
 const BancOcclusion = preload("res://scripts/banc_occlusion.gd")
 const Monde = preload("res://scripts/monde.gd")
+const Perception = preload("res://scripts/perception.gd")
+const Occlusion = preload("res://scripts/occlusion.gd")
 const Verif = preload("res://scripts/verif.gd")
 
 var verif := Verif.new()
@@ -46,6 +48,8 @@ func _init() -> void:
 	_chemin_reel_mur_absent_la_source_est_percue()
 	_chemin_reel_paire_temoin_jamais_affectee_par_le_mur()
 
+	_parite_couloir_vs_sphere_entiere_sur_les_trois_cas_pieges()
+
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -55,7 +59,11 @@ func _init() -> void:
 		"place), facteur d'affichage neutre sans mur ; chemin reel (data/" +
 		"banc_occlusion.json + materiaux.json + canaux.json) : un mur en pierre " +
 		"bloque la source qu'il occulte, retire il la laisse repasser, la paire " +
-		"temoin (sans mur) n'est jamais affectee")
+		"temoin (sans mur) n'est jamais affectee ; PARITE COULOIR : perception via " +
+		"monde.choses_dans_couloir rend EXACTEMENT le meme resultat (memes sources " +
+		"retenues, meme facteur d'occlusion source par source) qu'un oracle qui " +
+		"passe la sphere ENTIERE a occlusion.facteur -- verifie sur trois cas pieges " +
+		"(obstacle PILE a la demi-largeur, juste au-dela, derriere le percepteur)")
 	quit(0)
 
 # ---- Catalogue local, memes canaux que la donnee reelle mais sans dependre
@@ -225,3 +233,138 @@ func _chemin_reel_paire_temoin_jamais_affectee_par_le_mur() -> void:
 	var entendus_temoin := BancOcclusion.ids_de(BancOcclusion.captures_ouie(colon_temoin, monde, catalogue_canaux))
 	verif.v(entendus_temoin.has(source_temoin.id),
 		"chemin reel : colon_temoin doit toujours entendre source_temoin, MEME quand le mur de l'autre paire est actif -- aucune paire n'affecte l'autre")
+
+# ---- PARITE COULOIR vs SPHERE-ENTIERE ----
+#
+# Le chantier « occlusion sortie du O(n^2) » a remplace, dans
+# perception.gd:_percevoir_propagation_obstacles, le balayage de toute la
+# sphere par une requete monde.choses_dans_couloir(percepteur, source,
+# largeur_obstacle) par source. Le gain de cout est deja verrouille dans
+# test_monde.gd. Ce test-ci prouve l'AUTRE moitie : que le remplacement n'a
+# rien change au COMPORTEMENT.
+#
+# ORACLE : recalculer sur place l'ancien chemin -- pour chaque source, passer
+# a occlusion.facteur la sphere ENTIERE (choses_dans_rayon) comme obstacles.
+# Le facteur rendu doit etre EGAL, source par source, a ce qu'obtient
+# perception via le couloir. Trois cas pieges nommes : obstacle PILE a la
+# demi-largeur (couloir : distance point-segment <= largeur, occlusion :
+# distance_laterale > largeur strict -- les deux retiennent), juste au-dela
+# (les deux rejettent), derriere le percepteur (couloir peut retenir la
+# projection clampee, occlusion rejette par t hors ]0,1[ -- le facteur final
+# reste identique parce qu'occlusion filtre de toute facon). Si le test
+# echoue, c'est une VRAIE divergence -- il faut la remonter, pas ajuster le
+# coeur.
+func _parite_couloir_vs_sphere_entiere_sur_les_trois_cas_pieges() -> void:
+	var portee := 200.0
+	var largeur_obstacle := 40.0
+	# Seuil > 0 : sans lui, perception retient TOUS les candidats de la sphere
+	# (force=0 donne attenuee=0, 0 < 0 est faux -- rien n'est skippe), et le
+	# test de parite se reduirait a "les deux algorithmes voient les memes ids
+	# dans la sphere", sans jamais toucher a l'occlusion. Avec seuil > 0, les
+	# obstacles a son_emis=0 sont rejetes des deux cotes de la meme facon.
+	var seuil := 0.001
+	var percepteur := _chose("percepteur", Vector3.ZERO, {
+		"canaux": ["ouie"],
+		"canaux_config": { "ouie": { "portee": portee, "seuil": seuil } },
+	})
+	# DEUX sources : une devant, une derriere -- la source arriere prouve que
+	# les obstacles LATERAUX au premier segment ne polluent PAS le facteur du
+	# second, et vice versa.
+	var source_a := _chose("source_a", Vector3(100.0, 0.0, 0.0), { "son_emis": 1.0 })
+	var source_b := _chose("source_b", Vector3(-80.0, 20.0, 0.0), { "son_emis": 1.0 })
+	# Six obstacles couvrant les trois cas pieges + un obstacle strictement
+	# dans le couloir + un obstacle lateral hors couloir mais DANS la sphere.
+	var obstacles := [
+		_chose("dans_couloir", Vector3(50.0, 0.0, 0.0), { "absorption_sonore": 0.3 }),
+		_chose("hors_couloir_lateral", Vector3(50.0, 100.0, 0.0), { "absorption_sonore": 0.5 }),
+		_chose("derriere_percepteur", Vector3(-30.0, 0.0, 0.0), { "absorption_sonore": 0.4 }),
+		_chose("au_dela_source_a", Vector3(150.0, 0.0, 0.0), { "absorption_sonore": 0.6 }),
+		_chose("pile_a_la_largeur", Vector3(30.0, 40.0, 0.0), { "absorption_sonore": 0.2 }),
+		_chose("juste_au_dela_de_la_largeur", Vector3(30.0, 40.1, 0.0), { "absorption_sonore": 0.9 }),
+	]
+
+	var monde := Monde.new()
+	monde.ajouter(percepteur, "colon", percepteur.position)
+	monde.ajouter(source_a, "source_son", source_a.position)
+	monde.ajouter(source_b, "source_son", source_b.position)
+	for obst in obstacles:
+		monde.ajouter(obst, "mur", obst.position)
+
+	var catalogue_canaux_parite := {
+		"ouie": { "geometrie": "propagation_obstacles", "propriete_obstacle": "absorption_sonore", "largeur_obstacle": largeur_obstacle },
+	}
+
+	# CHEMIN REEL (perception via couloir).
+	var perceptions := Perception.percevoir(percepteur, monde, catalogue_canaux_parite)
+	var ids_reels: Array = []
+	for entree in perceptions:
+		ids_reels.append(entree.chose.id)
+	ids_reels.sort()
+
+	# ORACLE : sphere ENTIERE passee a occlusion.facteur pour chaque source.
+	var sphere: Array = monde.choses_dans_rayon(percepteur.position, portee)
+	var obstacles_sphere: Array = []
+	for entree in sphere:
+		if entree.chose.id == percepteur.id:
+			continue
+		obstacles_sphere.append({
+			"id": entree.chose.id,
+			"position": entree.position,
+			"proprietes": entree.chose.get("proprietes", {}),
+		})
+	var ids_oracle: Array = []
+	for entree in sphere:
+		if entree.chose.id == percepteur.id:
+			continue
+		var force: float = entree.chose.get("proprietes", {}).get("son_emis", 0.0)
+		var attenuation_distance: float = 1.0 - percepteur.position.distance_to(entree.position) / portee
+		var facteur_oracle: float = Occlusion.facteur(percepteur.position, entree.position, obstacles_sphere, "absorption_sonore", largeur_obstacle, [entree.chose.id])
+		var attenuee: float = force * attenuation_distance * facteur_oracle
+		if attenuee < seuil:
+			continue
+		ids_oracle.append(entree.chose.id)
+	ids_oracle.sort()
+
+	verif.v(ids_reels == ids_oracle,
+		"parite : memes sources retenues (couloir=%s, oracle sphere-entiere=%s)" % [str(ids_reels), str(ids_oracle)])
+
+	# FACTEUR PAR SOURCE : oracle (sphere entiere) vs couloir (choses_dans_couloir).
+	# La comparaison porte sur TOUT segment percepteur -> candidat, pas
+	# seulement les vraies sources -- c'est la propriete geometrique du couloir
+	# vs sphere-entiere qu'on verrouille, independamment du son_emis.
+	for entree in sphere:
+		if entree.chose.id == percepteur.id:
+			continue
+		var facteur_oracle: float = Occlusion.facteur(percepteur.position, entree.position, obstacles_sphere, "absorption_sonore", largeur_obstacle, [entree.chose.id])
+		var candidats_couloir: Array = monde.choses_dans_couloir(percepteur.position, entree.position, largeur_obstacle)
+		var obstacles_couloir: Array = []
+		for c in candidats_couloir:
+			obstacles_couloir.append({
+				"id": c.chose.id,
+				"position": c.position,
+				"proprietes": c.chose.get("proprietes", {}),
+			})
+		var facteur_couloir: float = Occlusion.facteur(percepteur.position, entree.position, obstacles_couloir, "absorption_sonore", largeur_obstacle, [entree.chose.id])
+		verif.v(is_equal_approx(facteur_oracle, facteur_couloir),
+			"parite facteur pour source '%s' : couloir=%f vs oracle sphere-entiere=%f -- divergence, REMONTER, pas masquer" % [entree.chose.id, facteur_couloir, facteur_oracle])
+
+	# TROIS CAS PIEGES nommes explicitement : le couloir doit retenir l'obstacle
+	# PILE a la demi-largeur (distance point-segment == largeur, egalite passe),
+	# rejeter celui juste au-dela, et le fait qu'il retienne l'obstacle derriere
+	# le percepteur (projection clampee courte) N'IMPORTE PAS -- occlusion
+	# filtre par t hors ]0,1[ et le facteur reste 1.0 sur ce segment.
+	var candidats_devant: Array = monde.choses_dans_couloir(percepteur.position, source_a.position, largeur_obstacle)
+	var ids_couloir_devant: Array = []
+	for c in candidats_devant:
+		ids_couloir_devant.append(c.chose.id)
+	verif.v("pile_a_la_largeur" in ids_couloir_devant,
+		"cas piege : obstacle PILE a la demi-largeur (distance laterale == largeur_obstacle) doit etre retenu par le couloir")
+	verif.v(not ("juste_au_dela_de_la_largeur" in ids_couloir_devant),
+		"cas piege : obstacle juste au-dela de la demi-largeur doit etre rejete par le couloir")
+	# Facteur d'occlusion sur source_a doit ignorer "derriere_percepteur" et
+	# "au_dela_source_a" (occlusion les rejette par t hors ]0,1[), ne compter
+	# que "dans_couloir" (0.3) et "pile_a_la_largeur" (0.2) : (1-0.3)*(1-0.2)=0.56.
+	var facteur_attendu_source_a := (1.0 - 0.3) * (1.0 - 0.2)
+	var facteur_reel_source_a: float = Occlusion.facteur(percepteur.position, source_a.position, obstacles_sphere, "absorption_sonore", largeur_obstacle, [source_a.id])
+	verif.v(is_equal_approx(facteur_reel_source_a, facteur_attendu_source_a),
+		"cas piege : sur source_a, occlusion doit ne compter que les deux obstacles dans le couloir (0.3 et 0.2) -- attendu %f, recu %f" % [facteur_attendu_source_a, facteur_reel_source_a])

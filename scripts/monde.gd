@@ -88,6 +88,23 @@ extends RefCounted
 # choses_dans_rayon(position, rayon) -> Array des entrees { chose, type,
 # position } a distance <= rayon, `position` relue sur `entree.chose.position`.
 #
+# choses_dans_couloir(depuis, vers, demi_largeur) -> Array des entrees dont la
+# position tombe dans le couloir (segment `depuis`->`vers`, tolerance laterale
+# `demi_largeur`). Meme forme rendue que choses_dans_rayon. NE LIT QUE LES
+# CASES QUE LE SEGMENT TRAVERSE : parcours de la bbox du segment epaissi, a la
+# resolution _exposant_pour(2 * demi_largeur), chaque case testee par capsule
+# vs AABB (surestime -- jamais un faux negatif), chaque candidat teste par
+# distance point-segment <= demi_largeur. Meme discipline de compteurs
+# (requetes, cases_lues, candidats_mesures) que choses_dans_rayon, pour qu'un
+# test puisse poser un plafond de COUT et voir un balayage cache.
+#
+# ECART AVEC LE DEPOT FRAMEWORK : sa version n'a pas ce geste (voir CLAUDE.md
+# § Frontiere). L'appelant qui en a besoin sans cette requete paie O(sources *
+# n_sphere) : chaque source teste TOUS les candidats de la sphere comme
+# obstacles potentiels, jamais bornes au couloir source->percepteur. C'est ce
+# que perception.gd:_percevoir_propagation_obstacles payait avant cette
+# requete.
+#
 # Ne fait pas : ne fabrique aucun objet (voir objet.gd), ne connait aucune
 # propriete.
 
@@ -289,6 +306,111 @@ func _sphere_touche_boite(centre: Vector3, carre_r: float, origine: Vector3, tai
 		clampf(centre.y, origine.y, origine.y + taille),
 		clampf(centre.z, origine.z, origine.z + taille))
 	return centre.distance_squared_to(proche) <= carre_r
+
+# Segment [a, b] contre AABB [origine, origine + taille] etendu de demi_largeur
+# sur chaque axe. Slab test standard sur l'AABB dilate : conservateur (les coins
+# de l'AABB dilate depassent la capsule vraie), jamais un faux negatif -- une
+# case qui contient un point du couloir renvoie toujours true. Faux positifs
+# possibles aux coins (< 5%), rattrapes par le test distance point-segment sur
+# chaque candidat de la case retenue.
+func _segment_touche_boite(a: Vector3, b: Vector3, demi_largeur: float, origine: Vector3, taille: float) -> bool:
+	var minimum := Vector3(origine.x - demi_largeur, origine.y - demi_largeur, origine.z - demi_largeur)
+	var maximum := Vector3(origine.x + taille + demi_largeur, origine.y + taille + demi_largeur, origine.z + taille + demi_largeur)
+	var direction := b - a
+	var tmin := 0.0
+	var tmax := 1.0
+	for axe in range(3):
+		var d: float = direction[axe]
+		var origine_axe: float = a[axe]
+		var min_axe: float = minimum[axe]
+		var max_axe: float = maximum[axe]
+		if absf(d) < 0.000001:
+			if origine_axe < min_axe or origine_axe > max_axe:
+				return false
+			continue
+		var t1: float = (min_axe - origine_axe) / d
+		var t2: float = (max_axe - origine_axe) / d
+		if t1 > t2:
+			var tmp := t1
+			t1 = t2
+			t2 = tmp
+		if t1 > tmin:
+			tmin = t1
+		if t2 < tmax:
+			tmax = t2
+		if tmin > tmax:
+			return false
+	return true
+
+# Distance CARREE d'un point au segment [a, b], jamais la distance : meme
+# verdict qu'un test avec racine, une racine de moins par candidat.
+func _distance_carree_point_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
+	var vecteur := b - a
+	var longueur_carre := vecteur.length_squared()
+	if longueur_carre <= 0.000001:
+		return p.distance_squared_to(a)
+	var t := clampf((p - a).dot(vecteur) / longueur_carre, 0.0, 1.0)
+	var projection := a + vecteur * t
+	return p.distance_squared_to(projection)
+
+func choses_dans_couloir(depuis: Vector3, vers: Vector3, demi_largeur: float) -> Array:
+	var resultat: Array = []
+	if demi_largeur <= 0.0:
+		return resultat
+	var exposant := _exposant_pour(2.0 * demi_largeur)
+	var niveau := _niveau(exposant)
+	var cases: Dictionary = niveau.cases
+	var arete := _arete(exposant)
+	# BBOX du segment dilate de demi_largeur : borne les cases a visiter au
+	# TUBE seul, jamais toute la sphere de rayon max(distances aux bouts).
+	var minimum := Vector3(
+		minf(depuis.x, vers.x) - demi_largeur,
+		minf(depuis.y, vers.y) - demi_largeur,
+		minf(depuis.z, vers.z) - demi_largeur)
+	var maximum := Vector3(
+		maxf(depuis.x, vers.x) + demi_largeur,
+		maxf(depuis.y, vers.y) + demi_largeur,
+		maxf(depuis.z, vers.z) + demi_largeur)
+	var basse := _case_pour(minimum, exposant)
+	var haute := _case_pour(maximum, exposant)
+	var carre_largeur := demi_largeur * demi_largeur
+	requetes += 1
+	for cx in range(basse.x, haute.x + 1):
+		for cy in range(basse.y, haute.y + 1):
+			for cz in range(basse.z, haute.z + 1):
+				cases_lues += 1
+				var cle := Vector3i(cx, cy, cz)
+				var contenu = cases.get(cle, null)
+				if contenu == null:
+					continue
+				var origine := Vector3(cle) * arete
+				if not _segment_touche_boite(depuis, vers, demi_largeur, origine, arete):
+					continue
+				_collecter_couloir(contenu, origine, arete, depuis, vers, demi_largeur, carre_largeur, resultat)
+	if trier_par_insertion:
+		resultat.sort_custom(_avant)
+	return resultat
+
+# Meme discipline que _collecter, mais teste distance point-segment au lieu de
+# distance point-centre. Descend dans les sous-cases dont l'AABB touche encore
+# le segment epaissi (jamais dans les autres).
+func _collecter_couloir(contenu, origine: Vector3, arete: float, depuis: Vector3, vers: Vector3, demi_largeur: float, carre_largeur: float, out: Array) -> void:
+	if contenu is Array:
+		for id in contenu:
+			var entree: Dictionary = choses[id]
+			var pos_vivante: Vector3 = entree.chose.position
+			candidats_mesures += 1
+			if _distance_carree_point_segment(pos_vivante, depuis, vers) <= carre_largeur:
+				out.append({"chose": entree.chose, "type": entree.type, "position": pos_vivante})
+		return
+	if contenu is Dictionary:
+		var demi := arete * 0.5
+		for sub_key in contenu:
+			var sub_origine: Vector3 = origine + Vector3(sub_key) * demi
+			if not _segment_touche_boite(depuis, vers, demi_largeur, sub_origine, demi):
+				continue
+			cases_lues += 1
+			_collecter_couloir(contenu[sub_key], sub_origine, demi, depuis, vers, demi_largeur, carre_largeur, out)
 
 func _avant(a: Dictionary, b: Dictionary) -> bool:
 	return int(_rang[a.chose.id]) < int(_rang[b.chose.id])

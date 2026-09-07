@@ -4,5 +4,6 @@
 	"type_id": "mobile_test",
 	"mesh_ref": "boite_simple",
 	"demi_zone_spawn": 40.0,
-	"graine_rng": 20260904
+	"graine_rng": 20260904,
+	"actif_releve": true
 }

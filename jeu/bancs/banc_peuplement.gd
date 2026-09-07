@@ -59,6 +59,14 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 @export var mesh_ref: String = "boite_simple"
 @export var demi_zone_spawn: float = 40.0
 @export var graine_rng: int = 20260904
+# RELEVE DE CHRONOS -- instrumentation seule, aucune optimisation (chantier
+# "mesurer avant portage C++"). true : accumule trois postes du hot path
+# (errance, physique+buffer, multimesh_set_buffer) en microsecondes et imprime
+# UNE ligne par seconde ; false : aucune mesure, aucune impression, banc
+# strictement identique. Reprend le patron des compteurs de monde.gd
+# (requetes/cases_lues/candidats_mesures + remise a zero), instances a la place
+# de static.
+@export var actif_releve: bool = true
 
 var _pool: Dictionary = {}
 var _monde = null
@@ -72,6 +80,17 @@ var _rng := RandomNumberGenerator.new()
 # agent est retire (peuplement fait le meme swap-remove sur chaque colonne),
 # ce qui prepare la population dynamique du vrai jeu.
 const GRAVITE_LOT := 18.0
+
+# ACCUMULATEURS DE CHRONOS -- lus par _imprimer_releve_si_seconde_ecoulee et
+# remis a zero apres chaque impression. `_us_*` = microsecondes cumulees sur la
+# seconde en cours, `_frames_accumulees` = nombre de _physics_process compris
+# dans cette meme seconde (pour rendre la moyenne PAR FRAME). `_temps_prochain`
+# = timestamp secondes de la prochaine impression (Time.get_ticks_msec / 1000).
+var _us_errance: int = 0
+var _us_physique_buffer: int = 0
+var _us_multimesh: int = 0
+var _frames_accumulees: int = 0
+var _temps_prochain_ms: int = 0
 
 func _ready() -> void:
 	_charger_reglages_locaux()
@@ -102,6 +121,8 @@ func _charger_reglages_locaux() -> void:
 		demi_zone_spawn = float(donnees.demi_zone_spawn)
 	if donnees.has("graine_rng"):
 		graine_rng = int(donnees.graine_rng)
+	if donnees.has("actif_releve"):
+		actif_releve = bool(donnees.actif_releve)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -249,6 +270,11 @@ func _physics_process(delta: float) -> void:
 	var count: int = (_pool.individus as Array).size()
 	if count == 0:
 		return
+	# CHRONOS -- trois postes du hot path, en microsecondes. Sous actif_releve
+	# false, les trois `Time.get_ticks_usec()` sont EVITES au maximum (une
+	# branche par poste plutot que trois inconditionnels) : instrumenter n'est
+	# pas biaiser la mesure.
+	var chrono_errance_debut: int = Time.get_ticks_usec() if actif_releve else 0
 	# ROUND 11 (revise) : deux passes au lieu de trois.
 	# PASSE 1 -- intention (errance) : reste separee car dans le vrai jeu
 	# elle deviendra une couche IA qui decide hors du tick physique. Optim :
@@ -279,10 +305,48 @@ func _physics_process(delta: float) -> void:
 		cols.direction = directions
 	if repack_desiree:
 		cols.desiree = desirees
+	var chrono_physique_debut: int = 0
+	if actif_releve:
+		chrono_physique_debut = Time.get_ticks_usec()
+		_us_errance += chrono_physique_debut - chrono_errance_debut
 	# PASSE 2 -- physique + buffer fusionnes, dans physique_et_buffer.
 	var buffer: PackedFloat32Array = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
+	var chrono_multimesh_debut: int = 0
+	if actif_releve:
+		chrono_multimesh_debut = Time.get_ticks_usec()
+		_us_physique_buffer += chrono_multimesh_debut - chrono_physique_debut
 	RenderingServer.multimesh_set_buffer((_pool.mm as MultiMesh).get_rid(), buffer)
 	_pool["buffer"] = buffer
+	if actif_releve:
+		_us_multimesh += Time.get_ticks_usec() - chrono_multimesh_debut
+		_frames_accumulees += 1
+		_imprimer_releve_si_seconde_ecoulee(count)
+
+# UNE LIGNE PAR SECONDE, jamais par frame -- format stable, prefixe "[peuplement]",
+# valeurs en microsecondes moyennes PAR FRAME (accumule / frames de la seconde
+# ecoulee). Remet les accumulateurs a zero apres chaque impression (patron
+# monde.gd:remettre_les_compteurs). La toute premiere impression tombe apres la
+# premiere seconde de jeu, jamais a t=0.
+func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
+	var maintenant_ms: int = Time.get_ticks_msec()
+	if _temps_prochain_ms == 0:
+		_temps_prochain_ms = maintenant_ms + 1000
+		return
+	if maintenant_ms < _temps_prochain_ms:
+		return
+	var frames: int = maxi(_frames_accumulees, 1)
+	print("[peuplement] N=%d fps=%d errance=%dus phys+buffer=%dus mm_set=%dus" % [
+		count,
+		int(Engine.get_frames_per_second()),
+		_us_errance / frames,
+		_us_physique_buffer / frames,
+		_us_multimesh / frames,
+	])
+	_us_errance = 0
+	_us_physique_buffer = 0
+	_us_multimesh = 0
+	_frames_accumulees = 0
+	_temps_prochain_ms = maintenant_ms + 1000
 
 
 # PHYSIQUE + BUFFER FUSIONNES (round 11 revise) : une seule boucle sur count qui

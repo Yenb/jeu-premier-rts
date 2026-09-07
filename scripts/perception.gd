@@ -74,6 +74,25 @@ extends RefCounted
 # pour une future vue, absorption_sonore pour ouie --, une notion que monde.gd,
 # contenant spatial generique, n'a aucune raison de connaitre.
 #
+# CANDIDATS-OBSTACLES BORNES AU COULOIR, PAS A LA SPHERE : la liste passee a
+# occlusion.gd pour une source donnee est celle rendue par
+# monde.choses_dans_couloir(percepteur, source, largeur_obstacle) -- pas les n
+# candidats de la sphere brute. Le couloir est PLUS ETROIT que la sphere : un
+# obstacle en dehors de la demi-largeur ne peut GEOMETRIQUEMENT pas occulter
+# ce segment (occlusion.gd le rejetait deja par distance_laterale > largeur,
+# mais apres l'avoir teste). Chaque source paie ainsi un cout qui suit la
+# longueur du segment, jamais la population de la sphere.
+#
+# ZERO WRAPPER PAR CANDIDAT : occlusion.gd:facteur lit obstacle.position,
+# obstacle.get("id", null), obstacle.get("proprietes", {}) -- exactement ce
+# qu'une chose du monde expose (Objet.fabriquer rend {id, position, proprietes,
+# ...}). On passe donc directement les CHOSES VIVANTES (entree.chose de chaque
+# entree du couloir), sans rewrapper dans un Dictionary { id, position,
+# proprietes } par candidat. Une seule Array est allouee par source, avec des
+# references vers les choses ; aucun dict nouveau. Le comportement de facteur()
+# est BIT A BIT identique (verrouille par _parite_couloir_vs_sphere_entiere
+# dans test_banc_occlusion.gd).
+#
 # DEUX LOIS D'ATTENUATION COEXISTENT, deliberement : l'attenuation par la
 # DISTANCE ecrite ici est LINEAIRE et nulle au bord ;
 # occlusion.gd:attenuer_par_distance est une PUISSANCE INVERSE, non bornee par
@@ -104,11 +123,11 @@ extends RefCounted
 # garde ; cone_oriente a angle < 360 et sphere_directionnelle AVEC vent ont
 # chacune leur propre boucle, donc chacune leur propre garde.
 #
-# COUT : O(n) candidats testes par source dans une boucle deja O(n) -- O(n^2)
-# par appel dans le pire cas, aucune structure d'acceleration spatiale. NON
-# OPTIMISE (limite explicite, voir CLAUDE.md -- signaler, pas corriger) : si un
-# appelant reel depasse ~50 candidats par requete, le signaler plutot que
-# d'ajouter une structure d'acceleration en silence.
+# COUT : O(sources) candidats de la sphere brute, PUIS pour chaque source une
+# requete couloir dans monde.gd (cases traversees par le segment percepteur ->
+# source, largeur = largeur_obstacle). Cout par source suit la LONGUEUR du
+# segment, jamais N. Le pire cas O(n^2) est SORTI (voir aussi
+# monde.gd:choses_dans_couloir, ECART FRAMEWORK).
 
 const Vent = preload("res://scripts/vent.gd")
 const Occlusion = preload("res://scripts/occlusion.gd")
@@ -253,18 +272,24 @@ static func _percevoir_propagation_obstacles(entite: Dictionary, monde, params: 
 	var propriete_obstacle: String = params.get("propriete_obstacle", "")
 	var largeur_obstacle: float = params.get("largeur_obstacle", 0.0)
 	var propriete_emission: String = params.get("propriete_emission", "son_emis")
-	# Normalisation des candidats vers la forme attendue par occlusion.gd
-	# ({ id, position, proprietes }), faite UNE SEULE FOIS pour tout l'appel
-	# et non par source : la liste des candidats-obstacles est la MEME pour
-	# les n sources (c'est "brut", voir plus haut), seule la source exclue
-	# change. Court-circuitee quand le canal ne declare aucune occlusion --
-	# aucun cout ajoute a un canal qui n'en veut pas.
-	var obstacles: Array = [] if propriete_obstacle.is_empty() else _obstacles_depuis_candidats(brut)
+	# Gate sur propriete_obstacle vide : aucune requete couloir, cout nul pour
+	# un canal qui ne declare pas d'occlusion. Meme comportement neutre qu'un
+	# facteur d'occlusion de 1.0, sans payer la traversee des cases.
+	var occlusion_active: bool = not propriete_obstacle.is_empty() and largeur_obstacle > 0.0
 	var resultat: Array = []
 	for entree in brut:
 		var force_emission: float = entree.chose.get("proprietes", {}).get(propriete_emission, 0.0)
 		var attenuation_distance: float = 1.0 - entree.distance / portee
-		var facteur_obstacles: float = _facteur_obstacles(entite.position, entree, obstacles, propriete_obstacle, largeur_obstacle)
+		var facteur_obstacles: float = 1.0
+		if occlusion_active:
+			# UNE REQUETE COULOIR PAR SOURCE : cout borne aux cases traversees
+			# par le segment percepteur -> source, largeur = largeur_obstacle
+			# (voir en-tete "CANDIDATS-OBSTACLES BORNES AU COULOIR").
+			var candidats_obstacles: Array = monde.choses_dans_couloir(entite.position, entree.position, largeur_obstacle)
+			var obstacles: Array = []
+			for candidat in candidats_obstacles:
+				obstacles.append(candidat.chose)
+			facteur_obstacles = _facteur_obstacles(entite.position, entree, obstacles, propriete_obstacle, largeur_obstacle)
 		var attenuee: float = force_emission * attenuation_distance * facteur_obstacles
 		if attenuee < seuil:
 			continue
@@ -273,39 +298,16 @@ static func _percevoir_propagation_obstacles(entite: Dictionary, monde, params: 
 
 # Facteur multiplicatif [0.0, 1.0] d'attenuation par obstacles, pour UNE
 # source (entree_source, deja captee par la sphere) percue depuis
-# position_percepteur -- parmi les MEMES candidats que la sphere brute
-# (deja normalises par _obstacles_depuis_candidats, jamais une deuxieme
-# requete spatiale, voir plus haut).
+# position_percepteur -- parmi les candidats du COULOIR percepteur -> source
+# (deja bornes par monde.choses_dans_couloir, jamais toute la sphere).
 #
 # NE CALCULE RIEN LUI-MEME, il delegue : toute la geometrie (projection sur le
 # segment, t dans ]0,1[, distance laterale, cumul multiplicatif, gate sur
 # propriete_obstacle vide, segment degenere) vit dans
 # scripts/occlusion.gd:facteur, PARTAGEE avec champ_occulte.gd. La source
 # elle-meme est exclue PAR SON ID, via ids_exclus -- jamais par une distance.
-#
-# COUT (voir occlusion.gd) : O(n) candidats testes par source, dans une boucle
-# deja O(n) sur les sources -- O(n^2) par appel dans le pire cas, aucune
-# structure d'acceleration spatiale. NON OPTIMISE (limite explicite, voir
-# CLAUDE.md -- signaler, pas corriger) : si un appelant reel depasse ~50
-# candidats par requete, le signaler a Yael plutot que d'ajouter une structure
-# d'acceleration en silence.
 static func _facteur_obstacles(position_percepteur: Vector3, entree_source: Dictionary, obstacles: Array, propriete_obstacle: String, largeur_obstacle: float) -> float:
 	return Occlusion.facteur(position_percepteur, entree_source.position, obstacles, propriete_obstacle, largeur_obstacle, [entree_source.chose.id])
-
-# Traduit les entrees de la sphere brute ({ chose, type, position, distance })
-# vers la forme d'obstacle attendue par occlusion.gd ({ id, position,
-# proprietes }) -- pure mise en forme, AUCUN filtre : tout candidat de la
-# sphere reste candidat obstacle, y compris ceux qui ne portent pas la
-# propriete du canal (ils valent alors 0.0, transparent, voir occlusion.gd).
-static func _obstacles_depuis_candidats(candidats: Array) -> Array:
-	var obstacles: Array = []
-	for entree in candidats:
-		obstacles.append({
-			"id": entree.chose.id,
-			"position": entree.position,
-			"proprietes": entree.chose.get("proprietes", {}),
-		})
-	return obstacles
 
 static func _percevoir_sphere_directionnelle(entite: Dictionary, monde, params: Dictionary, catalogue_vent: Dictionary, temps: float, sources_vent: Array) -> Array:
 	var portee: float = _portee_effective(params)
