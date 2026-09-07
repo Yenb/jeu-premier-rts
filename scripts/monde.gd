@@ -61,6 +61,55 @@ extends RefCounted
 # Ne peut pas attendre le depot framework : les tests de charge en phase 8
 # franchissent le seuil. Meme geste doctrinal que retirer() ci-dessus.
 #
+# ECART AVEC LE DEPOT FRAMEWORK : `structure_simple` (bool, defaut false --
+# comportement historique intact). Sous true, la subdivision adaptative est
+# COURT-CIRCUITEE : ajouter/deplacer/retirer prennent une branche courte
+# (Array<id> par case, swap-remove pour retirer/deplacer, aucun chemin,
+# aucun test SPLIT/MERGE, aucune recursion). deplacer devient O(1) reel
+# (2 acces Dict + 1 comparaison Vector3i + swap-remove + append). Prevu pour
+# une population dont TOUS les individus bougent CHAQUE frame (peuplement
+# generique du jeu, N=100 000 dans les projections). La subdivision existante
+# reste la doctrine par defaut ; verrouillee par test_monde_subdivision qui
+# tourne toujours a structure_simple=false. Test dedie : structure_simple=true
+# rend les MEMES resultats de requete que la subdivision, prouve sur ajouter/
+# deplacer/retirer/choses_dans_rayon.
+#
+# PIEGE : le cout de deplacer a N=100 000 (mesure : ~1.8 us/appel = 180 ms/
+# frame) N'ETAIT PAS dans la subdivision, contrairement a l'hypothese
+# initiale. Il etait dans le CORPS de deplacer lui-meme :
+# - `_case_pour` appelle `_arete` = pow(2.0, exposant) A CHAQUE APPEL (0.77 us)
+#   + 3 divisions + 3 floori.
+# - `niveau.case_de.get(chose.id, [])` alloue un Array vide comme default a
+#   chaque appel (0.91 us).
+# - Les 2 gardes en tete (`chose is Dictionary and has("id")` +
+#   `choses.has(chose.id)`) ~0.5 us.
+# Corrections successives mesurees dans test_profil_deplacer.gd :
+# (1) `_inv_arete` precalcule dans le niveau a `_batir` (elimine pow par appel).
+# (2) `case_de[id]` stocke un Vector3i direct sous structure_simple (elimine
+#     alloc d'Array de taille 1 par appel).
+# (3) Chemin dedie sans gardes sous structure_simple (contrat : appelant a
+#     inscrit via ajouter()).
+# (4) `_niveaux_liste` (Array plat des niveaux ouverts, tenu synchro avec
+#     _niveaux) : le hot path itere l'Array plutot que le Dictionary,
+#     eliminant un lookup `_niveaux[exposant]` par iteration. `_exposant`
+#     stocke DANS le niveau au moment du `_batir`, relu au miss pour appeler
+#     `_ranger` avec le bon exposant.
+# Chute cumulee headless : 2.632 -> 1.457 us/appel (mouvement), 2.437 ->
+# 1.329 us/appel (fast-path) -- soit -45% dans les deux cas. Chiffre en jeu
+# a N=100 000 releve a l'ecran par Yael sur `[peuplement] deplacer=`.
+# PLANCHER GDSCRIPT ATTEINT. Le fast-path a 1.33 us se decompose en dispatch
+# de fonction (~0.35 us), _inv_arete + Vector3i + case_de.get + comparaison
+# (~1.0 us).
+# (5) INLINE DU MISS PATH ESSAYE (retrait + ajout dans deplacer, elimine 2
+#     dispatches _deranger + _ranger). MEME AVEC les caches locaux poses
+#     UNIQUEMENT dans le bloc miss (jamais en tete de boucle), REGRESSION
+#     mesuree : 1.457 -> 1.844 us/appel (+26%), fast-path 1.329 -> 1.749
+#     (+31%). Le bytecode plus long semble ralentir le dispatch de boucle
+#     GDScript meme sur le chemin non pris. ECRIT NOIR SUR BLANC pour ne pas
+#     reproposer.
+# Prochain gain sur ce hot path : portage C++ (ramenerait a ~0.1-0.2 us
+# theoriques), a decider en fonction du budget frame reel.
+#
 # choses : Dictionary indexe PAR ID (id -> { chose, type }), pas un Array --
 # permet par_id() ci-dessous. L'ordre d'insertion est preserve ; un appelant qui
 # veut les choses nues itere `choses.values()`.
@@ -123,6 +172,15 @@ const EXPOSANT_MAXIMAL := 12
 # cherchent un maximum, ou s'arretent au premier trouve.
 var trier_par_insertion: bool = false
 
+# STRUCTURE SIMPLE (voir ECART FRAMEWORK en tete de fichier). Defaut : false --
+# la subdivision adaptative reste le comportement historique. true : chaque
+# case reste un Array<id> a plat, aucun _inserer recursif, aucun SPLIT/MERGE,
+# deplacer O(1). A activer par une population qui bouge tout le temps
+# (peuplement du jeu). Le comportement OBSERVABLE de choses_dans_rayon et
+# choses_dans_couloir est identique dans les deux modes -- verrouille par
+# scripts/test_monde_structure_simple.gd.
+var structure_simple: bool = false
+
 # Sous ce drapeau, chaque requete est rejouee en balayage exhaustif et tout
 # ecart alarme. Pour les tests -- il coute exactement ce que l'index economise.
 var verifier_index: bool = false
@@ -170,6 +228,11 @@ func resolutions_ouvertes() -> Array:
 # depender de la position vivante, qui peut avoir bouge sans que deplacer()
 # ait ete appele (contrat historique du monde).
 var _niveaux: Dictionary = {}
+# Cache LISTE plate des niveaux ouverts, alimente en synchronisation avec
+# `_niveaux` (une entree par exposant ouvert, dans l'ordre d'ouverture).
+# Permet au hot path de deplacer d'iterer un Array plutot que Dictionary --
+# gain mesure : un lookup `_niveaux[exposant]` de moins par appel.
+var _niveaux_liste: Array = []
 
 # SUBDIVISION ADAPTATIVE : voir ECART FRAMEWORK en tete de fichier.
 # Une case terminale au-dela de SEUIL_SPLIT bascule en 8 sous-cases. Une case
@@ -204,6 +267,42 @@ func ajouter(chose, type: String, position: Vector3) -> void:
 # apres toute reassignation de `chose.position` -- sans quoi elle reste
 # trouvable a son ANCIENNE place et introuvable a la nouvelle.
 func deplacer(chose) -> void:
+	# BRANCHE STRUCTURE SIMPLE : chemin dedie taille pour le hot path a
+	# N=100 000. Quatre gains mesures (voir test_profil_deplacer.gd) :
+	# 1) AUCUNE garde en tete (contrat : l'appelant a inscrit via ajouter()).
+	#    Les gardes `chose is Dictionary and has("id")` + `choses.has(id)`
+	#    coutaient ~0.5 us par appel a N=100 000 -- inutile sur un hot path
+	#    dont le contrat est connu.
+	# 2) inv_arete cachee dans le niveau -> zero pow, zero division par arete.
+	# 3) case_de[id] est un Vector3i direct -> aucun alloc d'Array de chemin
+	#    par appel (le .get(id, []) allouait un Array vide comme default).
+	# 4) .get(id) SANS default -> retourne null si absent, un seul lookup au
+	#    lieu de has() + []. Compare Vector3i a Variant : Godot 4 sait le faire.
+	if structure_simple:
+		var pos: Vector3 = chose.position
+		var chose_id = chose.id
+		# ITERE SUR L'ARRAY, PAS SUR LE DICT : chaque itere est deja le niveau
+		# (Dictionary), aucun lookup `_niveaux[exposant]` par iteration.
+		for niveau_s in _niveaux_liste:
+			var inv_a: float = niveau_s._inv_arete
+			var visee_s := Vector3i(
+				floori(pos.x * inv_a),
+				floori(pos.y * inv_a),
+				floori(pos.z * inv_a))
+			var actuelle_v = niveau_s.case_de.get(chose_id)
+			if actuelle_v != null and actuelle_v == visee_s:
+				continue
+			# INLINING DU MISS PATH ESSAYE ET ECARTE : place cases_s/idx_map/
+			# case_de_s + swap-remove + append dans ce bloc (a l'interieur du
+			# `if`, pas en tete de boucle) coute PLUS que les 2 appels
+			# _deranger + _ranger. Mesure : 1.46 -> 1.84 us/appel (+26%),
+			# fast-path 1.33 -> 1.75 (+31%). Le bytecode plus long ralentit
+			# meme le fast-path (le compilateur GDScript alloue plus, la
+			# boucle change son dispatch). Plancher GDScript atteint : le
+			# prochain chantier est C++.
+			_deranger(niveau_s, chose_id)
+			_ranger(niveau_s, int(niveau_s._exposant), chose_id, pos)
+		return
 	if not (chose is Dictionary and chose.has("id")):
 		push_error("monde.gd : deplacer() -- 'chose' sans champ 'id'")
 		return
@@ -441,11 +540,30 @@ func _case_pour(position: Vector3, exposant: int) -> Vector3i:
 # tout un ordre de grandeur de rayon.
 func _niveau(exposant: int) -> Dictionary:
 	if not _niveaux.has(exposant):
-		_niveaux[exposant] = _batir(exposant)
+		var n := _batir(exposant)
+		_niveaux[exposant] = n
+		_niveaux_liste.append(n)
 	return _niveaux[exposant]
 
 func _batir(exposant: int) -> Dictionary:
-	var niveau := {"cases": {}, "case_de": {}}
+	# `_idx_dans_case` sert UNIQUEMENT au mode structure_simple : id -> index
+	# dans l'Array de sa case, pour un swap-remove O(1) au deranger (au lieu
+	# d'un find O(k)). Le dict est cree ici dans tous les cas -- cout memoire
+	# nul quand structure_simple=false (jamais peuple).
+	# `_inv_arete` : precalcul de 1/arete pour eliminer les 3 divisions par
+	# case + le pow(2, exposant) dans le hot path de deplacer (mesure : 0.77
+	# us/appel pour _case_pour, 30% du budget total du deplacer a N=100 000).
+	# Stocke a la CREATION du niveau -- l'arete d'un niveau ne bouge plus
+	# apres, la valeur reste valide pour toute la vie du Monde.
+	var arete := _arete(exposant)
+	var niveau := {
+		"cases": {},
+		"case_de": {},
+		"_idx_dans_case": {},
+		"_arete_cachee": arete,
+		"_inv_arete": 1.0 / arete,
+		"_exposant": exposant,
+	}
 	for id in choses:
 		_ranger(niveau, exposant, id, choses[id].chose.position)
 	return niveau
@@ -455,6 +573,19 @@ func _ranger(niveau: Dictionary, exposant: int, id, position: Vector3) -> void:
 	var case_globale := _case_pour(position, exposant)
 	if not cases.has(case_globale):
 		cases[case_globale] = []
+	# BRANCHE STRUCTURE SIMPLE : append id + index inverse, jamais _inserer
+	# recursif, jamais SPLIT. Le contenu de cases[case_globale] reste TOUJOURS
+	# un Array<id> a plat -- _collecter (choses_dans_rayon / _couloir) gere ce
+	# cas nativement (test `contenu is Array`).
+	# case_de[id] stocke Vector3i DIRECT (pas Array de taille 1) : evite
+	# l'alloc d'un Array par appel de deplacer.get(id, []) -- mesure : 0.91 us
+	# gagnees par appel a N=100 000.
+	if structure_simple:
+		var arr: Array = cases[case_globale]
+		niveau._idx_dans_case[id] = arr.size()
+		arr.append(id)
+		niveau.case_de[id] = case_globale
+		return
 	# Chemin initial = juste la racine. _inserer l'etend au fil de la descente
 	# dans les Dictionary de subdivision, et _splitter l'etend aussi pour l'id
 	# courant s'il declenche un split de la case terminale.
@@ -509,6 +640,31 @@ func _splitter(parent: Dictionary, cle, contenu: Array, origine: Vector3,
 func _deranger(niveau: Dictionary, id) -> void:
 	if not niveau.case_de.has(id):
 		return
+	# BRANCHE STRUCTURE SIMPLE : case_de[id] = Vector3i direct, pas Array de
+	# chemin. Swap-remove O(1). Le voisin qui prend la place liberee voit son
+	# idx mis a jour dans _idx_dans_case. Aucune purge remontante, aucun test
+	# MERGE.
+	if structure_simple:
+		var cle_globale: Vector3i = niveau.case_de[id]
+		niveau.case_de.erase(id)
+		var cases_simple: Dictionary = niveau.cases
+		if not cases_simple.has(cle_globale):
+			return
+		var contenu: Array = cases_simple[cle_globale]
+		var idx: int = int(niveau._idx_dans_case.get(id, -1))
+		niveau._idx_dans_case.erase(id)
+		if idx < 0 or idx >= contenu.size():
+			return
+		var dernier: int = contenu.size() - 1
+		if idx != dernier:
+			var autre_id = contenu[dernier]
+			contenu[idx] = autre_id
+			niveau._idx_dans_case[autre_id] = idx
+		contenu.resize(dernier)
+		if contenu.is_empty():
+			cases_simple.erase(cle_globale)
+		return
+	# ---- Chemin subdivision (structure_simple = false) ----
 	var chemin: Array = niveau.case_de[id]
 	niveau.case_de.erase(id)
 	if chemin.is_empty():
@@ -518,10 +674,10 @@ func _deranger(niveau: Dictionary, id) -> void:
 	# Merge : si la racine de cette colonne est un Dictionary dont le total est
 	# passe sous SEUIL_MERGE, on la reaplatit en Array terminal. Un seul niveau
 	# de merge par retrait : hysteresis 5/20 rend le merge en cascade inutile.
-	var cle_globale = chemin[0]
-	if cases.has(cle_globale) and cases[cle_globale] is Dictionary:
-		if _totaliser(cases[cle_globale]) < SEUIL_MERGE:
-			_merger(cases, cle_globale, niveau)
+	var cle_globale_sd = chemin[0]
+	if cases.has(cle_globale_sd) and cases[cle_globale_sd] is Dictionary:
+		if _totaliser(cases[cle_globale_sd]) < SEUIL_MERGE:
+			_merger(cases, cle_globale_sd, niveau)
 
 # Descend par le chemin, retire l'id de la feuille Array. Rend true si le
 # noeud courant est devenu vide -- le parent le supprime alors de son Dictionary

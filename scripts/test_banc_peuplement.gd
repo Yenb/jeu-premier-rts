@@ -8,7 +8,7 @@ extends SceneTree
 #
 # Godot 4 headless : godot --headless --script scripts/test_banc_peuplement.gd
 #
-# Cinq cas :
+# Six cas :
 # 1. creer_pool(10, mesh, scenario) retourne un Dictionary complet, RIDs
 #    valides, slots_libres = [0..9].
 # 2. spawn(pool, catalogue, "mobile_test", pos, monde) sur un pool vide
@@ -19,6 +19,9 @@ extends SceneTree
 # 5. ecrire_transform(pool, id) apres deplacement de individu.position
 #    n'erre pas et laisse le pool coherent (le rendu headless est un dummy,
 #    on verifie l'absence d'erreur d'API plutot que la valeur affichee).
+# 6. spawn(..., pousser=false) ecrit le slot dans pool.buffer (12 floats) mais
+#    saute le push RS. Suivi de pousser_buffer(pool), l'etat rendu doit etre
+#    identique a un spawn(..., pousser=true).
 
 const Verif = preload("res://scripts/verif.gd")
 const Peuplement = preload("res://scripts/peuplement.gd")
@@ -33,7 +36,7 @@ func _init() -> void:
 func _lancer() -> void:
 	await _executer()
 	if _v.echecs() == 0:
-		print("OK: scripts/peuplement.gd -- 5 cas passes (creer_pool, spawn, saturation, retirer, ecrire_transform)")
+		print("OK: scripts/peuplement.gd -- 6 cas passes (creer_pool, spawn, saturation, retirer, ecrire_transform, spawn en lot sans push)")
 		quit(0)
 	else:
 		printerr("ECHEC: %d assertion(s) fausse(s) -- voir push_error ci-dessus" % _v.echecs())
@@ -128,6 +131,37 @@ func _executer() -> void:
 	# ecrire_transform sur id absent : silencieux.
 	Peuplement.ecrire_transform(pool, "id_qui_n_existe_pas")
 	_v.v((pool.individus as Array).size() == individus_avant - 1, "cas 5 : individus modifie par ecrire_transform d'un id absent")
+
+	# ---- CAS 6 : spawn(..., pousser=false) ----
+	# Verrouille le contrat du chantier "un seul push RS pour tout le lot".
+	# spawn(..., false) doit ecrire le slot dans pool.buffer EXACTEMENT comme
+	# spawn(..., true) mais SANS toucher au RS. Seul le RS n'est pas envoye ;
+	# les colonnes/individus/id_to_index/buffer/slots_libres sont mutes pareil.
+	# Le rendu headless etant dummy, on verifie l'etat cote donnees : buffer
+	# contient les 12 floats attendus au slot rendu, pousser_buffer(pool) apres
+	# coup ne rend pas d'erreur.
+	var pool_lot: Dictionary = Peuplement.creer_pool(5, mesh, scenario)
+	var monde_lot = Monde.new()
+	var id_lot: String = Peuplement.spawn(pool_lot, catalogue, "mobile_test", Vector3(7.0, 12.4, -1.5), monde_lot, false)
+	_v.v(id_lot != "", "cas 6 : spawn(..., pousser=false) doit rendre un id non vide")
+	_v.v((pool_lot.individus as Array).size() == 1, "cas 6 : individus.size() != 1 apres spawn(..., false)")
+	_v.v((pool_lot.slots_libres as Array).size() == 4, "cas 6 : slots_libres.size() != 4 apres spawn(..., false)")
+	var individu_lot: Dictionary = (pool_lot.individus as Array)[0]
+	var slot_lot: int = int((individu_lot.proprietes as Dictionary).get("_slot", -1))
+	_v.v(slot_lot >= 0, "cas 6 : _slot absent apres spawn(..., false)")
+	var buffer_lot: PackedFloat32Array = pool_lot.buffer
+	var base_lot: int = slot_lot * 12
+	# La base identite + position doivent etre ecrites dans pool.buffer, meme
+	# sans push -- c'est justement ce que garantit le contrat du remplissage
+	# en lot (les colonnes et le buffer local sont prets a etre pousses).
+	_v.v(is_equal_approx(buffer_lot[base_lot + 3], 7.0), "cas 6 : buffer[slot*12+3] != position.x")
+	_v.v(is_equal_approx(buffer_lot[base_lot + 7], 12.4), "cas 6 : buffer[slot*12+7] != position.y")
+	_v.v(is_equal_approx(buffer_lot[base_lot + 11], -1.5), "cas 6 : buffer[slot*12+11] != position.z")
+	_v.v(is_equal_approx(buffer_lot[base_lot + 0], 1.0) and is_equal_approx(buffer_lot[base_lot + 5], 1.0) and is_equal_approx(buffer_lot[base_lot + 10], 1.0),
+		"cas 6 : base identite (rows[i][i] = 1.0) non posee dans le buffer apres spawn(..., false)")
+	# pousser_buffer apres coup : le push RS unique final -- doit passer sans erreur.
+	Peuplement.pousser_buffer(pool_lot)
+	Peuplement.detruire_pool(pool_lot)
 
 	# ---- Nettoyage ----
 	Peuplement.detruire_pool(pool)

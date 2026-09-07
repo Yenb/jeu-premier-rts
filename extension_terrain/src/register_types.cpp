@@ -5,6 +5,7 @@
 #include "register_types.h"
 
 #include "mesheur_tuile.h"
+#include "physique_simple_lot.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/godot.hpp>
@@ -17,6 +18,7 @@ void initialize_terrain_module(ModuleInitializationLevel p_level) {
 		return;
 	}
 	GDREGISTER_CLASS(MesheurTuile);
+	GDREGISTER_CLASS(PhysiqueSimpleLot);
 }
 
 void uninitialize_terrain_module(ModuleInitializationLevel p_level) {

@@ -218,7 +218,16 @@ static func _colonne_vide_pour_defaut(defaut) -> Variant:
 			push_error("peuplement.gd : type de defaut de colonne non supporte (%d) -- utiliser Vector3, bool, int ou float" % typeof(defaut))
 			return null
 
-static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, position: Vector3, monde = null) -> String:
+## Contrat : ecrit toujours les 12 floats du slot dans pool.buffer (position +
+## base identite). Le PUSH au RenderingServer (`multimesh_set_buffer`) est
+## conditionnel : `pousser=true` (defaut) l'envoie -- comportement historique,
+## necessaire pour un spawn ISOLE en jeu (l'unite doit apparaitre immediatement).
+## `pousser=false` ecrit le slot sans push : reserve au REMPLISSAGE EN LOT
+## (jeu/bancs/banc_peuplement.gd::_fabriquer_lot), qui appelle
+## `pousser_buffer(pool)` UNE fois a la fin. Sans ce parametre, N spawns
+## poussent N fois le buffer entier au RS, cout O(N^2) mesure a l'ecran :
+## 100 000 unites x 1,2 M floats = interminable.
+static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, position: Vector3, monde = null, pousser: bool = true) -> String:
 	if pool.is_empty():
 		push_error("peuplement.gd : spawn -- pool vide (non initialise)")
 		return ""
@@ -252,7 +261,8 @@ static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, posi
 	if monde != null:
 		monde.ajouter(individu, type_id, position)
 	# TAMPON UNIQUE : pose la base identite + position dans les 12 floats du
-	# slot, puis pousse. CoW : buffer local, muter, reassigner a pool ET a mm.
+	# slot. Le push au RS est CONDITIONNEL (voir contrat de spawn). CoW : buffer
+	# local, muter, reassigner a pool.
 	var buffer: PackedFloat32Array = pool.buffer
 	var base: int = slot * 12
 	buffer[base + 0] = 1.0
@@ -267,8 +277,9 @@ static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, posi
 	buffer[base + 9] = 0.0
 	buffer[base + 10] = 1.0
 	buffer[base + 11] = position.z
-	RenderingServer.multimesh_set_buffer((pool.mm as MultiMesh).get_rid(), buffer)
 	pool["buffer"] = buffer
+	if pousser:
+		RenderingServer.multimesh_set_buffer((pool.mm as MultiMesh).get_rid(), buffer)
 	return id
 
 static func retirer(pool: Dictionary, id: String, monde = null) -> void:

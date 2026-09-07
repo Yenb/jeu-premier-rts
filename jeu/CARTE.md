@@ -999,8 +999,12 @@ en-tête du fichier. Test : `test_combustible.gd`.
 ### `scripts/monde.gd` — requête spatiale
 Le contenant réellement utilisé en jeu : il rend les choses dans un rayon, dans
 un couloir (segment épaissi) ou par son id. `ajouter`, `par_id`,
-`choses_dans_rayon`, `choses_dans_couloir`. Contrat, pièges et frontières :
-en-tête du fichier. Test : `test_monde.gd`.
+`choses_dans_rayon`, `choses_dans_couloir`. Flag `structure_simple` (défaut
+false = subdivision adaptative, comportement historique) : sous true, chaque
+case reste un Array à plat, `deplacer` = swap-remove O(1) — pour une population
+qui bouge TOUTE chaque frame (peuplement massif). Comportement de requête
+identique dans les deux modes, verrouillé par `test_monde_structure_simple.gd`.
+Contrat, pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
 
 ### `scripts/etat_effectif.gd` — un état écrase ou module une propriété
 Les états actifs d'une chose écrasent ou multiplient la valeur de base d'une
@@ -1140,10 +1144,12 @@ veut plusieurs meshes instancie plusieurs peuplements. Pool de slots fixe, LIFO,
 slots inactifs à échelle NULLE (jamais `Transform3D()` identité qui rendrait
 un mesh à l'origine). Ne connaît aucun nom de contenu — `type_id` et `mesh_ref`
 opaques, résolus via `objet.gd:fabriquer` et `mesh_catalogue.gd`. API :
-`creer_pool` / `spawn` / `retirer` / `ecrire_transform(pool, id)` /
-`ecrire_transform_index(pool, index)` (écriture rendu par index direct dans
-`pool.individus`, saute le lookup `id_to_index` pour un banc qui itère par
-index) / `detruire_pool`. Contrat, pièges et frontières : en-tête du fichier.
+`creer_pool` / `spawn(..., pousser=true)` (`pousser=false` en remplissage de
+lot : écrit le slot dans `pool.buffer` sans envoyer au RenderingServer, un seul
+`pousser_buffer` final au lieu de N pushes O(N²)) / `retirer` /
+`ecrire_transform(pool, id)` / `ecrire_transform_index(pool, index)` (écriture
+rendu par index direct dans `pool.individus`, saute le lookup `id_to_index`
+pour un banc qui itère par index) / `pousser_buffer` / `detruire_pool`. Contrat, pièges et frontières : en-tête du fichier.
 ÉCART FRAMEWORK : présent dans cette copie locale de `scripts/`, ABSENT du
 dépôt orion. Profil scaling du pipeline (phases A/B/C par individu à
 N ∈ {100, 500, 1000, 2000, 5000}) : `scripts/test_profil_peuplement.gd`.
