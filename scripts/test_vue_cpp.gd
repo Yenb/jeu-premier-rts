@@ -118,37 +118,32 @@ func _executer() -> void:
 	_v.v(dirs_4[0].distance_to(Vector3(-1.0, 0.0, 0.0)) < 1.0e-4,
 		"cas 4 : direction A/B/C alignes attendue (-1,0,0), obtenu %s" % str(dirs_4[0]))
 
-	# ---- CAS 5 : OCCULTEUR LATERAL avec distance(i,k) > distance(i,j) ----
-	# Contre-exemple geometrique documente dans index_spatial.cpp : un occulteur
-	# k plus loin de i que sa cible j peut quand meme couper le segment i->j.
-	# distance(i,k)^2 = (t*d_j)^2 + L^2, si L est non negligeable devant d_j
-	# alors distance(i,k) > d_j.
+	# ---- CAS 5 : OCCULTEUR PLUS PROCHE QUE LA CIBLE + traverse le segment ----
+	# Modele : OCCLUSION VISUELLE CORPS TRAVERSE. Un voisin J est cache si
+	# le segment percepteur -> J traverse le VOLUME (disque rayon = largeur/2)
+	# d'un corps K PLUS PROCHE que J. Un corps plus loin ne peut jamais
+	# cacher un corps plus proche (physiquement impossible) -- l'ancienne
+	# config (K a 0.652 > d_J=0.6) etait incoherente et acceptee a tort par
+	# le modele "couloir lateral <= largeur" (tolerance r_cible + r_occ). Elle
+	# est retiree ; le nouveau cas encode le modele corps traverse.
 	#
-	# Configuration (avec CONE ETROIT 45 deg pour ce cas, pour que K SORTE du
-	# cone et ne soit pas lui-meme cible -- sinon auto-occlusion mutuelle
-	# donnerait direction nulle, la comparaison serait indistinguable) :
+	# Configuration (cone etroit 45 deg pour que K sorte du cone) :
 	#   A percepteur a (0, 12, 0), regarde +X. cone_5 = 45 deg total.
-	#   J cible a (0.6, 12, 0), distance = 0.6, angle 0 -> DANS le cone.
-	#   K occulteur a (0.55, 12, 0.35), distance ~= 0.652 > 0.6, angle atan(0.35/0.55)
-	#     = 32.5 deg > 22.5 deg (moitie de 45) -> HORS du cone (pas candidat cible).
-	# Segment A->J : v = (0.6, 0, 0), longueur_carre = 0.36.
-	# Projection de K sur AJ : t = (0.55 * 0.6 + 0.35 * 0) / 0.36 = 0.917 dans ]0,1[.
-	# Point sur segment : (0.55, 12, 0). Distance laterale : 0.35 <= largeur 0.5.
-	# K est donc un occulteur LEGITIME de J (t dans ]0,1[ et L <= largeur), MEME
-	# si distance(i,k) > distance(i,j). Un tri par distance croissante placerait K
-	# APRES J -- une boucle occulteurs limitee a `b < a` raterait K et considererait
-	# J comme non-occulte a tort. La boucle actuelle (b != a) doit prendre K.
+	#   J cible a (1.5, 12, 0), d=1.5, angle 0 -> DANS le cone.
+	#   K occulteur a (0.3, 12, 0.2), d=sqrt(0.13)~=0.361 < d_J=1.5 -> PLUS PROCHE.
+	#     angle = atan(0.2/0.3) = 33.7 deg > 22.5 -> HORS cone (pas cible).
+	# Segment A->J = axe X (v = (1.5, 0), |v|^2 = 2.25).
+	# Projection de K sur A->J : t = (0.3 * 1.5)/2.25 = 0.2 dans ]0,1[.
+	# Point du segment = (0.3, 12, 0). Distance laterale de K = 0.2 <= r_corps
+	# = largeur/2 = 0.25 -> K TRAVERSE le segment. K bloque J.
 	#
-	# COMPORTEMENT ATTENDU :
-	#   - Sans le patch (bug b < a) : J vu (non occlus), pousse A vers -X.
-	#     dirs_5[0] proche de (-1, 0, 0).
-	#   - Avec le patch (b != a) : J occlus par K (opaque, dans le couloir), retire.
-	#     K est hors cone donc pas candidat. Aucune poussee. dirs_5[0] = (0, 0, 0).
+	# ATTENDU : J cache par K (corps traverse). K hors cone -> ne pousse pas.
+	# Aucun voisin vu ne contribue a la separation. dirs_5[0] = (0, 0, 0).
 	var cos_moitie_5: float = cos(deg_to_rad(22.5))  # cone 45 deg total
 	var positions_5 := PackedVector3Array([
 		Vector3(0.0, 12.0, 0.0),     # 0 -- A percepteur
-		Vector3(0.6, 12.0, 0.0),     # 1 -- J cible plus proche, dans le cone
-		Vector3(0.55, 12.0, 0.35),   # 2 -- K occulteur plus loin, HORS cone
+		Vector3(1.5, 12.0, 0.0),     # 1 -- J cible plus loin, dans le cone
+		Vector3(0.3, 12.0, 0.2),     # 2 -- K occulteur PLUS PROCHE, hors cone, traverse segment
 	])
 	var orient_5 := PackedVector3Array([
 		Vector3(1.0, 0.0, 0.0),
@@ -161,20 +156,19 @@ func _executer() -> void:
 	index5.ouvrir_niveau_planaire(1)
 	index5.deplacer_lot(positions_5)
 	var dirs_5: PackedVector3Array = index5.vue_lot(positions_5, orient_5, opac_5, rayon, cos_moitie_5, largeur, seuil)
-	# Prealable : distance(A, K) > distance(A, J).
-	_v.v((positions_5[2] - positions_5[0]).length() > (positions_5[1] - positions_5[0]).length(),
-		"cas 5 : prealable geometrique casse (distance(A,K) devrait > distance(A,J))")
-	# Prealable : parite avec Occlusion.facteur -- K doit occulter le segment A->J.
-	var obstacles_5 := [
-		{ "position": Vector3(0.55, 12.0, 0.35), "proprietes": { "opacite": 1.0 } },
-	]
-	var facteur_5: float = Occlusion.facteur(positions_5[0], positions_5[1], obstacles_5, "opacite", largeur, [])
-	_v.v(facteur_5 <= seuil,
-		"cas 5 : Occlusion.facteur(A, J, [K], opacite=1) attendu <= seuil pour prouver K occulteur legitime, obtenu %f" % facteur_5)
-	# CIBLE : direction nulle (J occlus par K, K pas cible car hors cone).
-	# Un bug `b < a` donnerait dirs_5[0] proche de (-1, 0, 0) car J serait retenu.
+	# Prealable : K est bien PLUS PROCHE que J.
+	_v.v((positions_5[2] - positions_5[0]).length() < (positions_5[1] - positions_5[0]).length(),
+		"cas 5 : prealable geometrique -- K doit etre plus proche que J pour occulter")
+	# Prealable : distance laterale de K au segment A->J <= r_corps = largeur/2.
+	var v_aj := positions_5[1] - positions_5[0]
+	var ok := positions_5[2] - positions_5[0]
+	var t_proj: float = ok.dot(v_aj) / v_aj.length_squared()
+	var lat := ok - t_proj * v_aj
+	_v.v(t_proj > 0.0 and t_proj < 1.0 and lat.length() <= 0.5 * largeur,
+		"cas 5 : prealable geometrique -- segment A->J doit traverser le disque de K (t=%f, lat=%f, r_corps=%f)" % [t_proj, lat.length(), 0.5 * largeur])
+	# CIBLE : direction nulle (J cache par K corps traverse, K hors cone).
 	_v.v(dirs_5[0].length() < 1.0e-4,
-		"cas 5 : direction attendue nulle (J occlus par K plus lointain, K hors cone) -- si dir ~= (-1,0,0) c'est le bug b < a qui a rate K comme occulteur ; obtenu %s" % str(dirs_5[0]))
+		"cas 5 : direction attendue nulle (J cache par K corps traverse, K hors cone) -- obtenu %s" % str(dirs_5[0]))
 
 	# ---- CAS 6 : PARTAGE DU VOISINAGE ENTRE UNITES CO-CASE ----
 	# Chantier "collecte voisinage par case" : le voisinage 3x3 est collecte UNE

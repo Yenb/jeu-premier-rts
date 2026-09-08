@@ -275,6 +275,16 @@ var _us_collecte: int = 0
 var _us_filtre: int = 0
 var _us_tri: int = 0
 var _us_occ_sep: int = 0
+# COMPTEURS TEMPORAIRES du voisinage vu par vue_lot -- somme des tailles des
+# listes brutes dans_rayon_case sur toutes les unites d'une frame + nombre
+# d'unites traitees. voisins_moy = total / unites. Lus via
+# _index_cpp.derniers_compteurs_vue().
+var _vue_voisins_total: int = 0
+var _vue_unites_total: int = 0
+# Voisins effectivement VUS apres occlusion (facteur > seuil, atteignent
+# l'accumulation separation). Doit tomber a ~20-30 en foule dense si la
+# barriere d'occlusion mord. vus_moy = vus_total / unites_total.
+var _vue_vus_total: int = 0
 # Catalogue seuils_etat.json charge une fois au _ready. Passe la sur SeuilEtat.avancer.
 var _catalogue_seuils: Dictionary = {}
 # CAPACITE du canal `sommeil` sur mobile_test : lue une fois au _fabriquer_lot depuis
@@ -672,6 +682,10 @@ func _physics_process(delta: float) -> void:
 			_us_filtre += int(chr.get("filtre", 0))
 			_us_tri += int(chr.get("tri", 0))
 			_us_occ_sep += int(chr.get("occ_sep", 0))
+			var cpt: Dictionary = _index_cpp.derniers_compteurs_vue()
+			_vue_voisins_total += int(cpt.get("voisins_total", 0))
+			_vue_unites_total += int(cpt.get("unites_total", 0))
+			_vue_vus_total += int(cpt.get("vus_total", 0))
 	else:
 		if separation_active and _index_cpp == null:
 			push_error("banc_peuplement : separation_active=true mais _index_cpp null (deplacer_cpp=%s, brancher_monde=%s) -- repli sur errance." % [str(deplacer_cpp), str(brancher_monde)])
@@ -764,7 +778,12 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 	# Divisions promues en float pour eviter le warning GDScript "Integer division.
 	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
 	var inv_frames: float = 1.0 / float(frames)
-	print("[peuplement] N=%d fps=%d vue=%dus collecte=%dus filtre=%dus tri=%dus occ_sep=%dus" % [
+	var voisins_moy: float = 0.0
+	var vus_moy: float = 0.0
+	if _vue_unites_total > 0:
+		voisins_moy = float(_vue_voisins_total) / float(_vue_unites_total)
+		vus_moy = float(_vue_vus_total) / float(_vue_unites_total)
+	print("[peuplement] N=%d fps=%d vue=%dus collecte=%dus filtre=%dus tri=%dus occ_sep=%dus voisins_moy=%.1f vus_moy=%.1f" % [
 		count,
 		int(Engine.get_frames_per_second()),
 		int(float(_us_vue) * inv_frames),
@@ -772,12 +791,17 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 		int(float(_us_filtre) * inv_frames),
 		int(float(_us_tri) * inv_frames),
 		int(float(_us_occ_sep) * inv_frames),
+		voisins_moy,
+		vus_moy,
 	])
 	_us_vue = 0
 	_us_collecte = 0
 	_us_filtre = 0
 	_us_tri = 0
 	_us_occ_sep = 0
+	_vue_voisins_total = 0
+	_vue_unites_total = 0
+	_vue_vus_total = 0
 	_frames_accumulees = 0
 	_temps_prochain_ms = maintenant_ms + 1000
 

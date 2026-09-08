@@ -97,6 +97,18 @@ class IndexSpatial : public RefCounted {
 	mutable int64_t _us_tri = 0;
 	mutable int64_t _us_occ_sep = 0;
 
+	// COMPTEURS TEMPORAIRES de vue_lot exposes par derniers_compteurs_vue() :
+	//   _vue_voisins_total : somme des tailles brutes de dans_rayon_case avant
+	//     filtre cone -- densite geometrique. voisins_moy = total / unites.
+	//   _vue_vus_total : nombre de voisins qui atteignent l'accumulation de
+	//     separation (facteur > seuil apres occlusion). Doit tomber a ~20-30
+	//     en foule dense si la barriere d'occlusion mord. vus_moy = total / unites.
+	//   _vue_unites_total : nombre d'unites traitees dans la frame.
+	// A retirer une fois le modele d'occlusion valide et le mur identifie.
+	mutable int64_t _vue_voisins_total = 0;
+	mutable int64_t _vue_unites_total = 0;
+	mutable int64_t _vue_vus_total = 0;
+
 protected:
 	static void _bind_methods();
 
@@ -167,21 +179,50 @@ public:
 	// Aucun niveau planaire ouvert : push_error, retour a directions nulles.
 	//
 	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron Verlet neighbor list,
-	// reconstruit par frame -- aucune structure gardee entre frames, les
-	// positions bougent chaque frame). Pour chaque case occupee, la geometrie
-	// {dx, dz, d} d'une paire (i, j) est SYMETRIQUE et donc mutualisee :
-	//   - Paires INTRA-CASE (i<j parmi unites_case) : calc UNE fois, distribue
-	//     {j, dx, dz, d} dans la liste de i et {i, -dx, -dz, d} dans celle de j.
-	//   - Paires INTER-CASE (i in case courante, k in case adjacente) : calc et
-	//     ecriture UNIQUEMENT dans la liste de i ; la liste de k sera batie
-	//     quand SA case sera visitee comme case courante. Chaque case fait ses
-	//     propres paires inter, aucune coordination entre cases.
-	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id] ou
-	// de la position du percepteur) : cone elargi, cone strict, occlusion,
-	// separation. Ils sont appliques en passe 2 sur la liste deja prete.
+	// reconstruit par frame). dans_rayon_case est indexe par POSITION dans la
+	// case courante et EFFACE a chaque nouvelle case (buffer LOCAL reutilise,
+	// capacite gardee). Deux niveaux de mutualisation :
+	//   - Paires INTRA-CASE (i<j parmi unites_case) : calc UNE fois, ecrit
+	//     {j, dx, dz, d} dans dans_rayon_case[i] et {i, -dx, -dz, d} dans
+	//     dans_rayon_case[j] (demi-paire, distribuee aux deux).
+	//   - Paires INTER-CASE (i in C1, k in C2 adjacente) : calc et ecriture
+	//     UNIQUEMENT dans dans_rayon_case[i] de la case courante ; la liste
+	//     de k sera batie quand SA case sera visitee. Chaque paire inter-case
+	//     est donc recalculee dans la visite de l'autre case, mais les listes
+	//     restent CHAUDES en cache pendant leur construction et consommation
+	//     (indexation par id sur N unites teste et rejetee -- ecritures
+	//     dispersees dans le grand vector faisaient plus mal que le calcul
+	//     economise).
+	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id]) :
+	// tri par distance + occlusion visuelle corps-traversee + accumulation
+	// separation.
+	//
+	// OCCLUSION VISUELLE : CORPS TRAVERSE. Un voisin J est CACHE si le segment
+	// percepteur -> J traverse le VOLUME (disque horizontal rayon =
+	// largeur/2) d'un corps K PLUS PROCHE que J (d_k < d_j). Un corps plus
+	// loin ou lateralement decale sans traverser le segment ne cache JAMAIS
+	// -- physiquement impossible. Modele "premier corps opaque bloque",
+	// binaire (vu ou cache), sans opacite ni cumul. Un bloqueur hors cone
+	// compte quand meme comme obstacle visuel (un corps a cote peut boucher
+	// une ligne de vue), mais ne contribue pas lui-meme a la separation.
+	// La densite fait tomber vus_moy : plus il y a de corps proches, plus
+	// de lignes de vue sont bloquees, moins de voisins sont vus.
+	//
+	// DISTINCT de scripts/occlusion.gd (attenuation multiplicative pour
+	// son/odeur, ou attenuer un signal a du sens). Le modele visuel binaire
+	// ne s'applique JAMAIS aux canaux son/odeur ; scripts/occlusion.gd est
+	// INTACT pour eux. Les parametres `opacites` et `seuil_facteur` restent
+	// dans la signature de vue_lot pour compat mais ne sont plus consommes.
+	//
+	// Etapes de la passe 2 par unite :
+	//   (1) Tri de dans_rayon_case[iu] par distance croissante.
+	//   (2) Parcours proche->loin. Pour chaque J : test segment-disque contre
+	//       chaque bloqueur deja retenu. Cache -> skip. Vu -> retenir comme
+	//       bloqueur, puis (si dans le cone strict) accumuler la separation.
 	//
 	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
-	// scripts/test_vue_cpp.gd contre l'oracle GDScript.
+	// scripts/test_vue_cpp.gd (cas 5 re-verrouille par le modele corps
+	// traverse : K PLUS PROCHE que J + traverse segment -> J cache).
 	PackedVector3Array vue_lot(
 			const PackedVector3Array &positions,
 			const PackedVector3Array &orientations,
@@ -195,8 +236,14 @@ public:
 	// declaration des mutable _us_collecte / _us_filtre / _us_tri / _us_occ_sep
 	// plus haut). Dictionary { "collecte", "filtre", "tri", "occ_sep" }.
 	// Temporaire : outil de diagnostic, a retirer une fois le poste couteux
-	// identifie. Meme patron que derniers_compteurs_vue historique.
+	// identifie.
 	Dictionary derniers_chronos_vue() const;
+
+	// Compteurs internes du dernier vue_lot (voir declaration des mutable
+	// _vue_voisins_total / _vue_unites_total). Dictionary { "voisins_total",
+	// "unites_total" }. Temporaire, a retirer avec les chronos une fois le
+	// vrai mur (calcul de paire vs densite) identifie.
+	Dictionary derniers_compteurs_vue() const;
 };
 
 } // namespace godot
