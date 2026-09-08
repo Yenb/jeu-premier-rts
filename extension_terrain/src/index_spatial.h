@@ -166,6 +166,20 @@ public:
 	// EXIGE UN NIVEAU PLANAIRE (voir ouvrir_niveau_planaire / Niveau::planaire).
 	// Aucun niveau planaire ouvert : push_error, retour a directions nulles.
 	//
+	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron Verlet neighbor list,
+	// reconstruit par frame -- aucune structure gardee entre frames, les
+	// positions bougent chaque frame). Pour chaque case occupee, la geometrie
+	// {dx, dz, d} d'une paire (i, j) est SYMETRIQUE et donc mutualisee :
+	//   - Paires INTRA-CASE (i<j parmi unites_case) : calc UNE fois, distribue
+	//     {j, dx, dz, d} dans la liste de i et {i, -dx, -dz, d} dans celle de j.
+	//   - Paires INTER-CASE (i in case courante, k in case adjacente) : calc et
+	//     ecriture UNIQUEMENT dans la liste de i ; la liste de k sera batie
+	//     quand SA case sera visitee comme case courante. Chaque case fait ses
+	//     propres paires inter, aucune coordination entre cases.
+	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id] ou
+	// de la position du percepteur) : cone elargi, cone strict, occlusion,
+	// separation. Ils sont appliques en passe 2 sur la liste deja prete.
+	//
 	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
 	// scripts/test_vue_cpp.gd contre l'oracle GDScript.
 	PackedVector3Array vue_lot(

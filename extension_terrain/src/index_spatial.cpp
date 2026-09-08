@@ -218,33 +218,28 @@ PackedVector3Array IndexSpatial::vue_lot(
 	const float rayon2 = rayon * rayon;
 	const float largeur2 = largeur * largeur;
 
-	// Voisinage local reutilise entre unites -- evite N=100000 allocations de
-	// vector par frame. clear() garde la capacite acquise.
-	std::vector<int32_t> voisinage;
-	voisinage.reserve(64);
-	// Sous-ensemble du voisinage filtre par DISTANCE (< rayon), avec dx/dz/d
-	// precalcules. Sert de LISTE D'OCCULTEURS pour tester chaque candidat
-	// retenu par le cone : un occulteur est necessairement dans le rayon (le
-	// segment percepteur -> voisin a longueur < rayon, un corps hors du rayon
-	// ne peut pas avoir t dans ]0,1[ sur ce segment sans etre lui-meme dans
-	// le rayon). Chantier "degraissage vue_lot" (2026-09-08) : cette liste
-	// est TYPIQUEMENT 5-10x plus courte que le voisinage brut, l'occlusion
-	// passe donc de nv_brut^2 a nv_r^2 -- gain quadratique.
-	std::vector<VoisinVue> dans_rayon;
-	dans_rayon.reserve(64);
+	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron Verlet neighbor list,
+	// reconstruit par frame -- aucune structure gardee entre frames, les
+	// positions bougent chaque frame). Deux passes IMBRIQUEES par case :
+	//   PASSE 1 (mutualisation) : batit dans_rayon_case[ii] pour chaque unite
+	//     ii de la case courante en calculant chaque PAIRE une seule fois.
+	//     Intra-case : paires (i<j) parmi unites_C1 -- calc dx/dz/d une fois,
+	//     ecrit {j, dx, dz, d} dans la liste de i ET {i, -dx, -dz, d} dans la
+	//     liste de j (distribution aux deux). Inter-case : chaque unite i de
+	//     C1 contre chaque voisin externe k des cases adjacentes -- calc et
+	//     ecrit UNIQUEMENT dans la liste de i (la liste de k sera batie quand
+	//     SA case sera visitee comme case courante). Le calcul intra-case est
+	//     donc partage entre les deux unites concernees (facteur 2), le calcul
+	//     inter-case reste par unite courante.
+	//   PASSE 2 (per-unite) : pour chaque unite de la case, lit dans_rayon_case
+	//     et applique cone elargi + tri + cone strict + occlusion + separation.
+	// dans_rayon_case : buffers reutilises entre cases (clear + capacite gardee),
+	// dimensionnes a |unites_case| par case -- typiquement ~60. Aucune allocation
+	// N=count par frame.
+	std::vector<std::vector<VoisinVue>> dans_rayon_case;
+	std::vector<VoisinVue> filtre_cone;
+	filtre_cone.reserve(64);
 
-	// ITERATION PAR CASE OCCUPEE (chantier "collecte voisinage par case",
-	// 2026-09-08). Le voisinage (2n+1)^2 planaire autour d'une case est le
-	// MEME pour toutes les unites qui vivent dans cette case, tant que
-	// n = ceil(rayon / arete) : une unite au bord de sa case voit au plus
-	// n cases plus loin, donc rester dans [case.x -/+ n, case.z -/+ n] suffit.
-	// Pour arete = 2 et rayon = 2, n = 1 -> 3x3 (identique au comportement
-	// par unite precedent). Pour rayon > arete, n > 1 -- generalise sans
-	// nombre en dur. On collecte donc le voisinage UNE fois par case (find
-	// hashmap divise par nb_unites_dans_case, typiquement ~62 en foule
-	// dense), puis on applique les filtres per-unite (distance / cone /
-	// occlusion / separation) sur le voisinage partage. Le RESULTAT PAR
-	// UNITE est identique -- seul le partage de la collecte change.
 	const int n_cases = (int)std::ceil(rayon * inv_a);
 	// Precalcul du cos du cone ELARGI. Une fois par appel (independant de
 	// l'unite : le cone elargi est calibre sur rayon/largeur, pas sur la
@@ -260,83 +255,130 @@ PackedVector3Array IndexSpatial::vue_lot(
 			cos_moitie_elargi_all = std::cos(elargi);
 		}
 	}
+
 	for (const auto &kv_case : niveau.cases) {
-		const Vector3i &case_courante = kv_case.first;
+		const Vector3i &C1 = kv_case.first;
 		const std::vector<int32_t> &unites_case = kv_case.second;
 		if (unites_case.empty()) {
 			continue;
 		}
-		// COLLECTE UNE FOIS PAR CASE : (2n+1)^2 find hashmap, tous les corps
-		// des cases voisines pousses dans le vector partage. Inclut les unites
-		// de la case courante elles-memes -- filtrees par d2 <= 1e-8f dans le
-		// filtre distance ci-dessous (distance a soi = 0).
-		voisinage.clear();
+		const int n1 = (int)unites_case.size();
+
+		// PASSE 1 : outil de voisinage mutualise par case.
 		auto t_col_debut = std::chrono::steady_clock::now();
-		for (int dcx = -n_cases; dcx <= n_cases; dcx++) {
-			for (int dcz = -n_cases; dcz <= n_cases; dcz++) {
-				Vector3i cle(case_courante.x + dcx, 0, case_courante.z + dcz);
-				auto it = niveau.cases.find(cle);
-				if (it == niveau.cases.end()) {
-					continue;
-				}
-				const std::vector<int32_t> &contenu = it->second;
-				const int n = (int)contenu.size();
-				for (int k = 0; k < n; k++) {
-					voisinage.push_back(contenu[k]);
-				}
-			}
+		if ((int)dans_rayon_case.size() < n1) {
+			dans_rayon_case.resize((size_t)n1);
 		}
-		_us_collecte += std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now() - t_col_debut).count();
-		const int nv = (int)voisinage.size();
-
-		// FILTRES PER-UNITE sur le voisinage partage.
-		for (size_t iu = 0; iu < unites_case.size(); iu++) {
-			int32_t id = unites_case[iu];
-			const Vector3 &p = pos_r[id];
-			const Vector3 &orient = orient_r[id];
-
-			// (1) FILTRES DISTANCE + CONE ELARGI. dans_rayon ne contient que
-			// les voisins qui passent distance ET cone elargi. La distance de
-			// soi a soi = 0 -> filtre par d2 <= 1e-8f exclut naturellement soi.
-			dans_rayon.clear();
-			auto t_filtre_debut = std::chrono::steady_clock::now();
-			for (int a = 0; a < nv; a++) {
-				int32_t k = voisinage[a];
-				const Vector3 &q = pos_r[k];
-				float dx = p.x - q.x;
-				float dz = p.z - q.z;
+		for (int ii = 0; ii < n1; ii++) {
+			dans_rayon_case[(size_t)ii].clear();
+		}
+		// Intra-case : paires (i<j) parmi unites_case, distribuees aux deux.
+		for (int ii = 0; ii < n1; ii++) {
+			int32_t i_id = unites_case[ii];
+			const Vector3 &p_i = pos_r[i_id];
+			for (int jj = ii + 1; jj < n1; jj++) {
+				int32_t j_id = unites_case[jj];
+				const Vector3 &p_j = pos_r[j_id];
+				float dx = p_i.x - p_j.x;
+				float dz = p_i.z - p_j.z;
 				float d2 = dx * dx + dz * dz;
 				if (d2 >= rayon2 || d2 <= 1e-8f) {
 					continue;
 				}
 				float d = std::sqrt(d2);
-				float dot_vers = -(orient.x * dx + orient.z * dz);
-				if (dot_vers < cos_moitie_elargi_all * d) {
+				VoisinVue vi;
+				vi.id = j_id;
+				vi.dx = dx;
+				vi.dz = dz;
+				vi.d = d;
+				dans_rayon_case[(size_t)ii].push_back(vi);
+				VoisinVue vj;
+				vj.id = i_id;
+				vj.dx = -dx;
+				vj.dz = -dz;
+				vj.d = d;
+				dans_rayon_case[(size_t)jj].push_back(vj);
+			}
+		}
+		// Inter-case : chaque unite i de C1 contre chaque voisin externe k des
+		// cases adjacentes. Ecrit UNIQUEMENT dans dans_rayon_case[ii] : la
+		// liste de k sera batie quand SA case sera visitee comme case courante.
+		for (int dcx = -n_cases; dcx <= n_cases; dcx++) {
+			for (int dcz = -n_cases; dcz <= n_cases; dcz++) {
+				if (dcx == 0 && dcz == 0) {
 					continue;
 				}
-				VoisinVue vv;
-				vv.id = k;
-				vv.dx = dx;
-				vv.dz = dz;
-				vv.d = d;
-				dans_rayon.push_back(vv);
+				Vector3i C2(C1.x + dcx, 0, C1.z + dcz);
+				auto it = niveau.cases.find(C2);
+				if (it == niveau.cases.end()) {
+					continue;
+				}
+				const std::vector<int32_t> &unites_C2 = it->second;
+				const int n2 = (int)unites_C2.size();
+				for (int ii = 0; ii < n1; ii++) {
+					int32_t i_id = unites_case[ii];
+					const Vector3 &p_i = pos_r[i_id];
+					std::vector<VoisinVue> &liste_ii = dans_rayon_case[(size_t)ii];
+					for (int jj = 0; jj < n2; jj++) {
+						int32_t k_id = unites_C2[jj];
+						const Vector3 &p_k = pos_r[k_id];
+						float dx = p_i.x - p_k.x;
+						float dz = p_i.z - p_k.z;
+						float d2 = dx * dx + dz * dz;
+						if (d2 >= rayon2 || d2 <= 1e-8f) {
+							continue;
+						}
+						float d = std::sqrt(d2);
+						VoisinVue vv;
+						vv.id = k_id;
+						vv.dx = dx;
+						vv.dz = dz;
+						vv.d = d;
+						liste_ii.push_back(vv);
+					}
+				}
+			}
+		}
+		_us_collecte += std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - t_col_debut).count();
+
+		// PASSE 2 : per-unite (cone elargi + tri + cone strict + occlusion + separation).
+		for (int iu = 0; iu < n1; iu++) {
+			int32_t id = unites_case[iu];
+			const Vector3 &p = pos_r[id];
+			const Vector3 &orient = orient_r[id];
+			std::vector<VoisinVue> &liste = dans_rayon_case[(size_t)iu];
+
+			// Filtre cone elargi -- retire les voisins hors marge angulaire
+			// meme si dans le rayon. Copie in-place vers filtre_cone (petit
+			// vector local reutilise).
+			auto t_filtre_debut = std::chrono::steady_clock::now();
+			filtre_cone.clear();
+			const int nl = (int)liste.size();
+			for (int a = 0; a < nl; a++) {
+				const VoisinVue &vv = liste[a];
+				float dot_vers = -(orient.x * vv.dx + orient.z * vv.dz);
+				if (dot_vers < cos_moitie_elargi_all * vv.d) {
+					continue;
+				}
+				filtre_cone.push_back(vv);
 			}
 			_us_filtre += std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - t_filtre_debut).count();
-			// TRI PAR DISTANCE CROISSANTE (voir docs chantiers precedents :
-			// break precoce facteur + borne d_j + largeur).
+
+			// TRI PAR DISTANCE CROISSANTE (break precoce facteur + borne d_j + largeur).
 			auto t_tri_debut = std::chrono::steady_clock::now();
-			std::sort(dans_rayon.begin(), dans_rayon.end(),
+			std::sort(filtre_cone.begin(), filtre_cone.end(),
 					[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
 			_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - t_tri_debut).count();
+
 			auto t_occ_debut = std::chrono::steady_clock::now();
 			float ax = 0.0f;
 			float az = 0.0f;
-			const int nvr = (int)dans_rayon.size();
+			const int nvr = (int)filtre_cone.size();
 			for (int a = 0; a < nvr; a++) {
-				const VoisinVue &vj = dans_rayon[a];
+				const VoisinVue &vj = filtre_cone[a];
 				// (2) CONE STRICT sur les cibles.
 				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
 				if (dot_vers_voisin < cos_moitie_angle * vj.d) {
@@ -351,7 +393,7 @@ PackedVector3Array IndexSpatial::vue_lot(
 				float d2_j = vj.d * vj.d;
 				float seuil_dist_occulteur = vj.d + largeur;
 				for (int b = 0; b < nvr; b++) {
-					const VoisinVue &vk = dans_rayon[b];
+					const VoisinVue &vk = filtre_cone[b];
 					if (vk.d > seuil_dist_occulteur) {
 						break;
 					}
