@@ -345,10 +345,14 @@ PackedVector3Array IndexSpatial::vue_lot(
 			// a la separation. Verdict final : segment-disque exact (bit-a-bit
 			// identique).
 			//
-			// SELECTION SANS TRI COMPLET : min-heap (make_heap + pop_heap) sur
-			// la distance. On extrait les voisins du plus proche au plus loin
-			// SANS trier les 192 elements -- un pop coute O(log N), et l'arret
-			// (voir plus bas) permet de sortir apres K << N pops.
+			// SELECTION INCREMENTALE DU PLUS PROCHE (pas de tas complet).
+			// Un simple argmin lineaire sur liste[0..reste-1] a chaque tour +
+			// swap-remove en fin. Cout par extraction O(reste), cout total
+			// O(K * N) avec K = voisins parcourus avant l'arret d'occlusion
+			// (petit a densite forte, ~1-2). Pas de passe O(N) de construction
+			// de tas payee AVANT de savoir qu'on s'arretera a K=2. Chrono `tri`
+			// mesure les balayages lineaires. Pire cas K=N (peu d'occlusion) :
+			// O(N^2), acceptable pour cette version simple.
 			//
 			// PRESELECTION ANGULAIRE (heritee, sans perte) : `cos_num >=
 			// base_k * d_j` avec `base_k = sqrt(d2_k - r_corps2)` -- contraposee
@@ -364,16 +368,11 @@ PackedVector3Array IndexSpatial::vue_lot(
 			// contribuent pas a la separation et deviennent inutiles comme
 			// bloqueurs supplementaires (les cibles dans le cone sont deja
 			// couvertes). L'arret est prouvablement sans perte.
-			auto t_filtre_debut = std::chrono::steady_clock::now();
-			auto cmp_max = [](const VoisinVue &a, const VoisinVue &b) { return a.d > b.d; };
-			std::make_heap(liste.begin(), liste.end(), cmp_max);
-			_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now() - t_filtre_debut).count();
 			auto t_occ_debut = std::chrono::steady_clock::now();
 			float ax = 0.0f;
 			float az = 0.0f;
-			// Bloqueurs : copies des VoisinVue (la liste change avec pop_heap,
-			// on ne peut plus indexer). thread_local pour amortir l'alloc.
+			// Bloqueurs : copies des VoisinVue (la liste change avec le
+			// swap-remove, on ne peut plus indexer). thread_local pour amortir.
 			struct Bloqueur {
 				VoisinVue v;
 				float base_k;
@@ -395,10 +394,24 @@ PackedVector3Array IndexSpatial::vue_lot(
 			const float TAU_F = 6.2831853f;
 			int reste = (int)liste.size();
 			while (reste > 0) {
-				// Extraire le plus proche.
-				std::pop_heap(liste.begin(), liste.begin() + reste, cmp_max);
+				// Extraire le plus proche : argmin lineaire sur [0..reste-1] +
+				// swap-remove en fin. Le chrono `tri` couvre ce balayage.
+				auto t_sel_debut = std::chrono::steady_clock::now();
+				int min_idx = 0;
+				float min_d = liste[0].d;
+				for (int s = 1; s < reste; s++) {
+					if (liste[(size_t)s].d < min_d) {
+						min_d = liste[(size_t)s].d;
+						min_idx = s;
+					}
+				}
+				if (min_idx != reste - 1) {
+					std::swap(liste[(size_t)min_idx], liste[(size_t)(reste - 1)]);
+				}
 				reste--;
 				const VoisinVue vj = liste[(size_t)reste];
+				_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
+						std::chrono::steady_clock::now() - t_sel_debut).count();
 				const float d2_j = vj.d * vj.d;
 				// Test cache par un bloqueur plus proche (preselection +
 				// segment-disque exact sur les candidats).

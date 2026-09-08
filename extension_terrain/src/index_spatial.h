@@ -213,11 +213,13 @@ public:
 	// dans la signature de vue_lot pour compat mais ne sont plus consommes.
 	//
 	// Etapes de la passe 2 par unite :
-	//   (1) Min-heap sur dans_rayon_case[iu] par distance croissante
-	//       (make_heap O(N)). PAS de tri complet -- le tri par distance qui
-	//       existait pour l'ancienne occlusion-attenuation est retire.
-	//   (2) Parcours proche->loin par pop_heap (O(log N) par extraction). Pour
-	//       chaque J :
+	//   (1) SELECTION INCREMENTALE DU PLUS PROCHE. Pas de tas construit
+	//       d'avance : a chaque tour, argmin lineaire sur les non traites +
+	//       swap-remove. Cout par extraction O(reste), cout total O(K * N)
+	//       avec K = nombre de voisins parcourus avant l'arret d'occlusion
+	//       (petit a densite forte). Pas de passe O(N) payee AVANT de savoir
+	//       combien on extrait.
+	//   (2) Parcours proche->loin par l'argmin ci-dessus. Pour chaque J :
 	//       (a) Preselection angulaire : pour chaque bloqueur K deja retenu,
 	//           tester `vk . vj >= base_k * d_j` (avec base_k = sqrt(d2_k -
 	//           r_corps2) precalcule). Contraposee sans perte du test segment-
