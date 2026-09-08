@@ -10,6 +10,26 @@
 
 using namespace godot;
 
+namespace {
+// Entree "voisin retenu par filtre distance" pour vue_lot -- id + delta et
+// distance precalcules pour eviter tout recalcul dans les boucles cone et
+// occlusion. Un vector<VoisinVue> local a vue_lot remplace la boucle
+// d'occlusion sur le voisinage brut (chantier "degraissage vue_lot",
+// 2026-09-08) : les seuls corps qui peuvent occulter un voisin retenu sont
+// eux-memes des voisins dans le rayon (un obstacle plus loin ne coupe pas
+// le segment percepteur -> voisin, la geometrie de occlusion.gd::facteur
+// avec t dans ]0,1[ le rejette de facto). Filtrer d'abord par distance rend
+// la liste bien plus petite que le voisinage brut (typiquement 5-10x moins
+// a densite du peuplement mobile_test), donc l'occlusion coute nv_r^2 au
+// lieu de nv_brut^2 -- gain quadratique sur le poste vue.
+struct VoisinVue {
+	int32_t id;
+	float dx; // pos_i.x - pos_k.x
+	float dz; // pos_i.z - pos_k.z
+	float d;  // distance horizontale
+};
+} // namespace anonyme
+
 void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("configurer", "nombre_ids"), &IndexSpatial::configurer);
 	ClassDB::bind_method(D_METHOD("ouvrir_niveau", "exposant"), &IndexSpatial::ouvrir_niveau);
@@ -193,6 +213,16 @@ PackedVector3Array IndexSpatial::vue_lot(
 	// vector par frame. clear() garde la capacite acquise.
 	std::vector<int32_t> voisinage;
 	voisinage.reserve(64);
+	// Sous-ensemble du voisinage filtre par DISTANCE (< rayon), avec dx/dz/d
+	// precalcules. Sert de LISTE D'OCCULTEURS pour tester chaque candidat
+	// retenu par le cone : un occulteur est necessairement dans le rayon (le
+	// segment percepteur -> voisin a longueur < rayon, un corps hors du rayon
+	// ne peut pas avoir t dans ]0,1[ sur ce segment sans etre lui-meme dans
+	// le rayon). Chantier "degraissage vue_lot" (2026-09-08) : cette liste
+	// est TYPIQUEMENT 5-10x plus courte que le voisinage brut, l'occlusion
+	// passe donc de nv_brut^2 a nv_r^2 -- gain quadratique.
+	std::vector<VoisinVue> dans_rayon;
+	dans_rayon.reserve(64);
 
 	for (int32_t id = 0; id < count; id++) {
 		const Vector3 &p = pos_r[id];
@@ -224,61 +254,78 @@ PackedVector3Array IndexSpatial::vue_lot(
 			}
 		}
 
-		float ax = 0.0f;
-		float az = 0.0f;
+		// (1) FILTRE DISTANCE : on ne garde que les voisins dans le rayon,
+		// stockes avec dx/dz/d precalcules. Cette LISTE (dans_rayon) sert a
+		// la fois de source de CANDIDATS (filtre cone applique dessus dans
+		// (2)) ET de liste d'OCCULTEURS pour (3) -- un obstacle plus loin
+		// que rayon ne peut geometriquement pas couper un segment percepteur
+		// -> voisin de longueur < rayon (occlusion.gd rejette t hors ]0,1[).
+		dans_rayon.clear();
 		const int nv = (int)voisinage.size();
 		for (int a = 0; a < nv; a++) {
-			int32_t j = voisinage[a];
-			const Vector3 &q = pos_r[j];
+			int32_t k = voisinage[a];
+			const Vector3 &q = pos_r[k];
 			float dx = p.x - q.x;
 			float dz = p.z - q.z;
 			float d2 = dx * dx + dz * dz;
-			// (1) DISTANCE strictement inferieure au rayon.
 			if (d2 >= rayon2 || d2 <= 1e-8f) {
 				continue;
 			}
-			float d = std::sqrt(d2);
+			VoisinVue vv;
+			vv.id = k;
+			vv.dx = dx;
+			vv.dz = dz;
+			vv.d = std::sqrt(d2);
+			dans_rayon.push_back(vv);
+		}
+		float ax = 0.0f;
+		float az = 0.0f;
+		const int nvr = (int)dans_rayon.size();
+		for (int a = 0; a < nvr; a++) {
+			const VoisinVue &vj = dans_rayon[a];
 			// (2) CONE : cos(angle entre orient et diff_vers_voisin) >=
-			// cos_moitie_angle. diff_vers_voisin = q - p (composantes -dx, -dz),
+			// cos_moitie_angle. diff_vers_voisin = pos_j - pos_i = (-dx, -dz),
 			// orient suppose unitaire horizontal. Comparaison sans acos.
-			float dot_vers_voisin = -(orient.x * dx + orient.z * dz);
-			if (dot_vers_voisin < cos_moitie_angle * d) {
+			float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
+			if (dot_vers_voisin < cos_moitie_angle * vj.d) {
 				continue;
 			}
 			// (3) OCCLUSION : geometrie de scripts/occlusion.gd::facteur portee
-			// mot pour mot. Obstacles = les autres corps du voisinage courant.
-			// vecteur = vers - depuis = q - p (composantes planaires -dx, -dz).
-			// longueur_carre = d2. Pour chaque obstacle k :
+			// mot pour mot, sur la LISTE dans_rayon (jamais sur le voisinage
+			// brut -- chantier "degraissage vue_lot"). vecteur = vers - depuis
+			// = pos_j - pos_i = (-vj.dx, -vj.dz). longueur_carre = vj.d^2.
+			// Pour chaque obstacle k (dans_rayon, != j) :
 			//   t = (pos_k - depuis) . vecteur / longueur_carre
+			//   pos_k - depuis = (-vk.dx, -vk.dz) (deja stocke)
 			//   si t <= 0 ou t >= 1 skip
 			//   point_sur_segment = depuis + vecteur * t
 			//   distance_laterale = |pos_k - point_sur_segment|
 			//   si distance_laterale > largeur skip
 			//   facteur *= (1 - clamp(opacite_k, 0, 1))
 			float facteur = 1.0f;
-			float vx = -dx;
-			float vz = -dz;
-			for (int b = 0; b < nv; b++) {
+			float vx = -vj.dx;
+			float vz = -vj.dz;
+			float d2_j = vj.d * vj.d;
+			for (int b = 0; b < nvr; b++) {
 				if (b == a) {
 					continue;
 				}
-				int32_t k = voisinage[b];
-				const Vector3 &r = pos_r[k];
-				float ok_x = r.x - p.x;
-				float ok_z = r.z - p.z;
-				float t = (ok_x * vx + ok_z * vz) / d2;
+				const VoisinVue &vk = dans_rayon[b];
+				float ok_x = -vk.dx; // pos_k.x - p.x
+				float ok_z = -vk.dz;
+				float t = (ok_x * vx + ok_z * vz) / d2_j;
 				if (t <= 0.0f || t >= 1.0f) {
 					continue;
 				}
 				float sx = p.x + t * vx;
 				float sz = p.z + t * vz;
-				float lat_x = r.x - sx;
-				float lat_z = r.z - sz;
+				float lat_x = (p.x + ok_x) - sx; // pos_k.x - sx = ok_x + p.x - sx
+				float lat_z = (p.z + ok_z) - sz;
 				float lat2 = lat_x * lat_x + lat_z * lat_z;
 				if (lat2 > largeur2) {
 					continue;
 				}
-				float opac = opac_r[k];
+				float opac = opac_r[vk.id];
 				if (opac < 0.0f) opac = 0.0f;
 				if (opac > 1.0f) opac = 1.0f;
 				facteur *= (1.0f - opac);
@@ -290,9 +337,9 @@ PackedVector3Array IndexSpatial::vue_lot(
 				continue;
 			}
 			// (4) SEPARATION : contribution accumulee dans le MEME parcours.
-			float w = (rayon - d) / d;
-			ax += dx * w;
-			az += dz * w;
+			float w = (rayon - vj.d) / vj.d;
+			ax += vj.dx * w;
+			az += vj.dz * w;
 		}
 		// Normalisation en direction unitaire horizontale (Y=0).
 		float len2 = ax * ax + az * az;
