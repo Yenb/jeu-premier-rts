@@ -236,15 +236,55 @@ extends RefCounted
 # facteurs sont DESORMAIS DES CHAMPS REQUIS de la config au meme titre que
 # les cinq deja en place -- absents, meme echec (push_error, rien n'est
 # ecrit).
+# PAQUETS PARTAGES (chantier "partage COW du paquet par defaut", session 2026-09-08).
+# Diagnostic : a N=100 000 mobile_test, la duplication profonde des paquets herites
+# (objet_physique + dynamique, ~20 sous-Dict/Array chacun a cause des reserves 5
+# canaux, deformation_etat, etats, canaux_config...) dominait la memoire statique --
+# ~1 Go pour un plafond 1 Gio. La composition d'un objet est IMMUABLE de sa vie
+# (docs/design.md, "L'entite comme agent complet"), le paquet par defaut n'a donc
+# aucune raison d'exister en 100 000 exemplaires identiques en RAM.
+#
+# CONTRAT : sous `paquets_partages=true`, les sous-Dict/Array de premier niveau
+# du paquet herite sont PARTAGES PAR REFERENCE entre toutes les instances. Le
+# Dict `proprietes` top-level reste PROPRE a chaque instance (merge cree les cles,
+# les VALEURS Dict/Array de premier niveau pointent vers la meme structure). Ecrire
+# `proprietes[cle_top] = X` remplace la reference sans muter le partage. Ecrire
+# `proprietes.sous_dict.champ = X` MUTE LE PARTAGE et contamine toutes les autres
+# instances -- appeler `Objet.detacher(proprietes, "sous_dict")` d'abord.
+#
+# QUAND L'ACTIVER : les populations massives dont les paquets par defaut sont
+# effectivement inertes (mobile_test dans le peuplement -- reserves jamais
+# decrementees faute d'appel a depense.gd, deformation_etat vide, etc.). Le
+# defaut reste `false` pour tous les autres appelants -- comportement historique
+# strictement identique, zero risque de regression sur les bancs qui mutent
+# `.reserves.faim.reserve` etc. sur les colons.
+#
+# CACHE : `_paquets_partages_cache` (statique) indexe par nom de paquet. Un paquet
+# est deep-copie UNE fois au premier appel puis reutilise par reference. Les cles
+# "herite" et "_note" y sont retirees a la mise en cache (une fois, pas par
+# instance). `vider_cache_paquets_partages()` pour les tests qui rechargent
+# des tables differentes. En pratique en jeu, types.json ne change jamais et le
+# cache reste vivant toute la session.
+#
+# ISOLATION VERROUILLEE : scripts/test_objet_isolation.gd fabrique deux mobile_test
+# en mode partage, mute top-level l'un, verifie que l'autre reste vierge.
 const G_CM3_VERS_KG_M3 := 1000.0
 const QuantiteMatiere = preload("res://scripts/quantite_matiere.gd")
 const Conditions = preload("res://scripts/conditions.gd")
 
-static func fabriquer(id: String, type: String, position: Vector3, table: Dictionary, materiaux: Dictionary = {}, proprietes_immuables: Array = [], reserve_combustible: Dictionary = {}, catalogue_emergences: Array = []) -> Dictionary:
+static var _paquets_partages_cache: Dictionary = {}
+
+static func fabriquer(id: String, type: String, position: Vector3, table: Dictionary, materiaux: Dictionary = {}, proprietes_immuables: Array = [], reserve_combustible: Dictionary = {}, catalogue_emergences: Array = [], paquets_partages: bool = false) -> Dictionary:
 	var proprietes_type: Dictionary = table.get(type, {})
 	var proprietes: Dictionary = {}
 	for nom_paquet in proprietes_type.get("herite", []):
-		if table.has(nom_paquet):
+		if paquets_partages:
+			# CHEMIN PARTAGE : merge SHALLOW du paquet canonique (cache). Les sous-
+			# Dict/Array de premier niveau sont partages par reference entre
+			# toutes les instances qui composent ce paquet.
+			var paquet_partage: Dictionary = _obtenir_paquet_partage(nom_paquet, table, type)
+			proprietes.merge(paquet_partage, true)
+		elif table.has(nom_paquet):
 			var paquet: Dictionary = table.get(nom_paquet, {}).duplicate(true)
 			if paquet.has("herite"):
 				push_error("objet.gd : paquet '%s' declare lui-meme heriter de %s -- resolution non recursive, cle ignoree" % [nom_paquet, str(paquet.herite)])
@@ -252,7 +292,13 @@ static func fabriquer(id: String, type: String, position: Vector3, table: Dictio
 			proprietes.merge(paquet, true)
 		else:
 			push_error("objet.gd : type '%s' declare heriter du paquet '%s', absent de la table" % [type, nom_paquet])
-	proprietes.merge(proprietes_type.duplicate(true), true)
+	if paquets_partages:
+		# Le type lui-meme est duplique SHALLOW : ses valeurs Dict/Array de
+		# premier niveau (ex. canaux_config sur colon) restent partagees entre
+		# les instances de ce meme type. Meme contrat que pour les paquets herites.
+		proprietes.merge(proprietes_type.duplicate(false), true)
+	else:
+		proprietes.merge(proprietes_type.duplicate(true), true)
 	proprietes.erase("herite")
 	# Les cles de NOTE sont une convention de commentaire du catalogue, jamais
 	# une propriete du monde : elles sortent au meme endroit que "herite".
@@ -397,3 +443,49 @@ static func _calculer_densite_effective(proprietes: Dictionary, materiaux: Dicti
 	proprietes["densite"] = densite_effective
 	proprietes["masse"] = densite_effective * somme_volume
 	return true
+
+# Voir PAQUETS PARTAGES en tete de fichier. Deep-copie UNE fois le paquet nomme
+# depuis la table, retire "herite" (resolution non recursive, meme regle qu'en
+# mode non partage) et les cles "_note" (conventions de commentaire du catalogue,
+# jamais des proprietes du monde), met en cache et rend. Appels suivants renvoient
+# la MEME reference -- c'est ce qui permet aux instances de partager les sous-
+# structures. Un paquet absent de la table rend {} avec push_error (impossible de
+# construire un cache d'une donnee absente, meme severite qu'en mode non partage).
+static func _obtenir_paquet_partage(nom: String, table: Dictionary, type_appelant: String) -> Dictionary:
+	if _paquets_partages_cache.has(nom):
+		return _paquets_partages_cache[nom]
+	if not table.has(nom):
+		push_error("objet.gd : type '%s' declare heriter du paquet '%s', absent de la table" % [type_appelant, nom])
+		return {}
+	var paquet: Dictionary = table.get(nom, {}).duplicate(true)
+	if paquet.has("herite"):
+		push_error("objet.gd : paquet '%s' declare lui-meme heriter de %s -- resolution non recursive, cle ignoree" % [nom, str(paquet.herite)])
+		paquet.erase("herite")
+	for cle in paquet.keys():
+		if String(cle).begins_with("_"):
+			paquet.erase(cle)
+	_paquets_partages_cache[nom] = paquet
+	return paquet
+
+# Voir PAQUETS PARTAGES en tete de fichier. Detache un sous-Dict/Array de premier
+# niveau : remplace la valeur partagee par une deep-copie propre a cette instance.
+# A appeler AVANT toute mutation d'un sous-Dict/Array de `proprietes` sur une
+# instance fabriquee en mode partage -- sinon la mutation contamine toutes les
+# autres instances qui pointent vers la meme reference. Idempotent : appeler
+# detacher plusieurs fois sur la meme cle recopie a chaque fois (la garantie
+# reste "c'est ma copie", jamais un partage residuel). Silencieux si la cle
+# n'existe pas ou si la valeur n'est ni Dict ni Array (scalaire deja propre).
+static func detacher(proprietes: Dictionary, cle: String) -> void:
+	if not proprietes.has(cle):
+		return
+	var valeur = proprietes[cle]
+	var t: int = typeof(valeur)
+	if t == TYPE_DICTIONARY or t == TYPE_ARRAY:
+		proprietes[cle] = (valeur as Variant).duplicate(true)
+
+# Vide le cache de paquets partages. Utile aux tests qui rechargent des tables
+# differentes entre cas -- sans ca, le cache renverrait le paquet de la premiere
+# table quel que soit son contenu ulterieur. Jamais appele en jeu : types.json ne
+# change pas d'une session a l'autre.
+static func vider_cache_paquets_partages() -> void:
+	_paquets_partages_cache.clear()

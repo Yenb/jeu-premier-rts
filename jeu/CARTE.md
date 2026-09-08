@@ -111,11 +111,26 @@ facultative ».
   d'une table. Le type est un raccourci de fabrication : il charge un paquet
   de propriétés puis disparaît.
 - **Fonction** : `fabriquer(id, type, position, table, materiaux={},
-  proprietes_immuables=[], reserve_combustible={}, catalogue_emergences=[])`.
-- **Rend** : l'objet, `proprietes` copiées en PROFONDEUR (`duplicate(true)`)
-  — sinon muter un objet contaminerait le gabarit partagé. **Rend `{}` si la
-  fabrication est REFUSÉE** (voir ÉCHEC FORT) : tout appelant qui fabrique un
-  type portant `composition` doit vérifier ce retour vide.
+  proprietes_immuables=[], reserve_combustible={}, catalogue_emergences=[],
+  paquets_partages=false)`.
+- **Rend** : l'objet. **Deux régimes** (voir PAQUETS PARTAGÉS en en-tête) :
+  `paquets_partages=false` (défaut) copie les paquets hérités en PROFONDEUR
+  (`duplicate(true)`) — isolation historique, sûr pour tout mutateur ;
+  `paquets_partages=true` merge SHALLOW depuis un cache canonique — les sous-
+  Dict/Array de premier niveau (reserves, deformation_etat, etats,
+  canaux_config…) sont **partagés par référence** entre toutes les instances,
+  seul le Dict `proprietes` top-level est propre. Sous ce régime, écrire
+  `proprietes[cle] = X` reste isolé ; muter `proprietes.sous_dict.champ` mute
+  toutes les instances — appeler `Objet.detacher(proprietes, "sous_dict")`
+  avant. **Rend `{}` si REFUSÉE** (voir ÉCHEC FORT).
+- **`Objet.detacher(proprietes, cle)`** : deep-copie un sous-Dict/Array de
+  premier niveau pour l'isoler du partage. Idempotent, silencieux sur cle
+  absente. **`Objet.vider_cache_paquets_partages()`** : réservé aux tests
+  qui rechargent des tables différentes ; en jeu, jamais appelé.
+- **Isolation verrouillée** : `scripts/test_objet_isolation.gd` (5 cas)
+  prouve le partage effectif, l'isolation des écritures top-level (ce que
+  fait `banc_peuplement` sur mobile_test), le fonctionnement de `detacher`
+  et son idempotence, la non-régression du mode non-partage.
 - **Règle clé** : après fabrication, le cœur lit `objet.proprietes`, JAMAIS
   `table.get(type)`. Tout `catalogue.get(type)` dans une couche est un bug.
 - **COMPOSITION DE PAQUETS, jamais une hiérarchie devinée** : un type ne
@@ -1001,10 +1016,31 @@ Le contenant réellement utilisé en jeu : il rend les choses dans un rayon, dan
 un couloir (segment épaissi) ou par son id. `ajouter`, `par_id`,
 `choses_dans_rayon`, `choses_dans_couloir`. Flag `structure_simple` (défaut
 false = subdivision adaptative, comportement historique) : sous true, chaque
-case reste un Array à plat, `deplacer` = swap-remove O(1) — pour une population
-qui bouge TOUTE chaque frame (peuplement massif). Comportement de requête
-identique dans les deux modes, verrouillé par `test_monde_structure_simple.gd`.
-Contrat, pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
+case reste un Array à plat, index inverse `_idx_dans_case` pour swap-remove
+O(1) — pour une population qui bouge TOUTE chaque frame (peuplement massif).
+**Deux fonctions deux régimes** : `deplacer` (subdivision) et `deplacer_simple`
+(structure_simple) — le choix se fait chez l'appelant, jamais par `if` dans le
+hot path. **Niveau = objet à champs typés** (`scripts/niveau_monde.gd`,
+RefCounted) — structure cible du portage C++ ; le hot path lit `niveau.inv_arete`,
+`niveau.case_de`, `niveau.exposant` par propriété d'objet, plus aucun lookup de
+clé String de Dictionary par appel. **Index spatial C++** :
+`extension_terrain/IndexSpatial` porte le même modèle en natif (`unordered_map<Vector3i,
+vector<int32_t>>`), `deplacer_lot(positions)` en un franchissement de frontière
+par frame — utilisé par `banc_peuplement` sous `@export deplacer_cpp=true`,
+verrouillé par `test_index_spatial_cpp.gd`. **Séparation en lot** :
+`separation_lot(positions, rayon)` lit les cases touchées par le rayon autour
+de chaque unité (voisinage borné, jamais N) et rend une direction horizontale
+unitaire de répulsion par unité — première brique d'IA de masse (perception +
+intention en une passe native), utilisée par `banc_peuplement` sous `@export
+separation_active=true`, verrouillée par `test_separation_cpp.gd` (parité vs
+oracle GDScript O(N²) à ε=1e-4). **Choix du niveau lu (auto)** :
+`separation_lot` prend parmi les niveaux ouverts le plus petit dont l'arête
+est ≥ rayon — l'arête d'un niveau doit suivre le rayon de la requête qui le
+lit, sinon la boucle interne dégénère en quasi-N² local (chaque case ramasse
+des milliers de candidats hors rayon). Le banc ouvre donc un SECOND niveau
+d'exposant `ceil(log2(rayon_separation))` en plus du niveau `deplacer`. Comportement de requête identique dans les deux modes, verrouillé
+par `test_monde_structure_simple.gd`. Contrat, pièges et frontières : en-tête
+du fichier. Test : `test_monde.gd`.
 
 ### `scripts/etat_effectif.gd` — un état écrase ou module une propriété
 Les états actifs d'une chose écrasent ou multiplient la valeur de base d'une

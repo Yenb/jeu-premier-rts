@@ -26,8 +26,20 @@ extends Node
 # un type_id, un mesh_ref -- rien d'autre. Le banc lit ce fichier au _ready
 # pour surcharger ses defauts @export.
 #
-# ERRANCE. Chaque tick physique, pour chaque individu du pool (for-in sur
-# individus, aucun index construit) :
+# INTENTION. Deux chemins pour poser desiree = direction * vitesse :
+#   separation_active=true : UN appel C++ separation_lot(cols.position,
+#     rayon_separation) lit l'index (deja tenu par deplacer_lot) et rend une
+#     direction unitaire de repulsion par unite -- les voisins dans rayon
+#     poussent, sinon direction=0. desiree entierement ecrase. Premiere brique
+#     d'IA de masse : perception + intention en une passe native, aucune
+#     requete par unite. Exige deplacer_cpp=true et brancher_monde=true.
+#   separation_active=false : ERRANCE. Pour chaque individu :
+# 1. cap_horloge -= delta ; a <= 0, tirer une nouvelle direction et nouvelle
+#    horloge dans [3, 8] s.
+# 2. Poser desiree = direction * vitesse (vitesse vient du type mobile_test).
+#
+# ERRANCE (chemin separation_active=false). Chaque tick physique, pour chaque
+# individu du pool (for-in sur individus, aucun index construit) :
 # 1. cap_horloge -= delta ; a <= 0, tirer une nouvelle direction et nouvelle
 #    horloge dans [3, 8] s.
 # 2. Poser velocite_desiree_horizontale = direction * proprietes.vitesse
@@ -93,6 +105,47 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # false : _monde = null, aucun spawn n'inscrit dans l'index, aucun deplacer par
 # frame. Le poste `deplacer` du releve reste imprime a 0 sous false.
 @export var brancher_monde: bool = true
+# INDEX SPATIAL EN C++ (chantier "portage C++ deplacer_lot"). true : la boucle
+# for j: _monde.deplacer_simple(individu) est remplacee par UN appel
+# _index_cpp.deplacer_lot(cols.position) -- UNE traversee de frontiere par
+# frame au lieu de 100 000. false : chemin GDScript (deplacer_simple), garde
+# comme oracle et rollback. Verrouille par test_index_spatial_cpp.gd (parite
+# bit a bit des cases entre index C++ et index GDScript).
+@export var deplacer_cpp: bool = false
+# SEPARATION (premiere brique d'IA de masse). true : la passe errance est
+# remplacee par UN appel _index_cpp.separation_lot(cols.position, rayon_separation)
+# qui rend UNE direction unitaire par unite (repulsion des voisins dans le rayon,
+# lue depuis l'index C++ deja tenu par deplacer_lot). Le resultat ecrase
+# cols.desiree : direction * vitesse. false : passe errance historique (cap
+# horloge + tirage direction), separation ignoree. Exige deplacer_cpp=true et
+# brancher_monde=true (sinon _index_cpp est null, repli automatique sur errance
+# avec push_error). Verrouille par test_separation_cpp.gd (parite du calcul C++
+# vs un oracle GDScript naif O(N^2)).
+@export var separation_active: bool = false
+# Rayon de perception pour la separation, en unites du monde. Le banc ouvre en
+# plus du niveau deplacer (arete 16) un SECOND niveau dedie a la separation,
+# d'exposant `ceil(log2(rayon_separation))` -- la case du niveau separation
+# couvre le rayon sur chaque axe, la boucle interne de separation_lot ne voit
+# qu'une poignee de voisins par case. Sans ce second niveau, la separation
+# lisait le niveau du deplacer (arete 16 pour un rayon 2 : chaque case
+# ramassait des milliers de candidats hors rayon, degeneration quasi-N^2
+# local -- releve en jeu ~1 020 000 us / frame a N=100 000, 1 fps). Voir
+# en-tete de extension_terrain/src/index_spatial.h::separation_lot.
+@export var rayon_separation: float = 2.0
+# PAQUETS PARTAGES (chantier "partage COW du paquet par defaut", 2026-09-08).
+# true : Peuplement.spawn passe paquets_partages=true a Objet.fabriquer -- les
+# sous-Dict/Array de premier niveau des paquets herites (objet_physique +
+# dynamique pour mobile_test : reserves 5 canaux, deformation_etat, etats,
+# engagement, canaux_config sur les types qui composent percevant...) sont
+# PARTAGES PAR REFERENCE entre toutes les instances au lieu d'etre dupliques.
+# A N=100 000, ce chantier vise la chute nette de la memoire statique (auparavant
+# ~1 Go, plafond 1 Gio). Les ecritures que ce banc pose sur proprietes
+# (profil/cadence_tick/velocite/velocite_desiree_horizontale/au_sol/gravite/
+# errance_direction/errance_cap_horloge/_slot) sont TOUTES top-level : elles
+# creent/remplacent des cles du Dict top-level neuf, elles ne mutent jamais un
+# sous-Dict partage. Isolation verrouillee par scripts/test_objet_isolation.gd.
+# false : comportement historique (deep copy complete a chaque fabrication).
+@export var paquets_partages: bool = true
 
 var _pool: Dictionary = {}
 var _monde = null
@@ -115,6 +168,13 @@ const VITESSE_TERMINALE_ABS := 55.0
 # chemin C++ n'est jamais active OU si la classe n'est pas disponible (extension
 # non chargee -- push_error, repli automatique sur GDScript).
 var _physique_cpp: RefCounted = null
+# INDEX SPATIAL C++ (chantier deplacer_cpp). Instance unique creee au
+# _monter_pool si deplacer_cpp=true et brancher_monde=true. Un seul niveau
+# ouvert a EXPOSANT_INDEX_CPP (arete 2^n) -- correspond au rayon de perception
+# typique du peuplement (choses_dans_rayon eventuel restera GDScript pour ce
+# chantier, cf. en-tete de scripts/index_spatial.h).
+const EXPOSANT_INDEX_CPP := 4  # arete = 2^4 = 16
+var _index_cpp: RefCounted = null
 
 # ACCUMULATEURS DE CHRONOS -- lus par _imprimer_releve_si_seconde_ecoulee et
 # remis a zero apres chaque impression. `_us_*` = microsecondes cumulees sur la
@@ -122,6 +182,7 @@ var _physique_cpp: RefCounted = null
 # dans cette meme seconde (pour rendre la moyenne PAR FRAME). `_temps_prochain`
 # = timestamp secondes de la prochaine impression (Time.get_ticks_msec / 1000).
 var _us_errance: int = 0
+var _us_separation: int = 0
 var _us_physique_buffer: int = 0
 var _us_multimesh: int = 0
 # Poste `deplacer` : passe individu.position <- cols.position + N appels
@@ -165,6 +226,14 @@ func _charger_reglages_locaux() -> void:
 		utilise_cpp = bool(donnees.utilise_cpp)
 	if donnees.has("brancher_monde"):
 		brancher_monde = bool(donnees.brancher_monde)
+	if donnees.has("deplacer_cpp"):
+		deplacer_cpp = bool(donnees.deplacer_cpp)
+	if donnees.has("separation_active"):
+		separation_active = bool(donnees.separation_active)
+	if donnees.has("rayon_separation"):
+		rayon_separation = float(donnees.rayon_separation)
+	if donnees.has("paquets_partages"):
+		paquets_partages = bool(donnees.paquets_partages)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -209,6 +278,35 @@ func _monter_pool() -> void:
 		_monde.structure_simple = true
 	else:
 		_monde = null
+	# INDEX SPATIAL EN C++ (chantier "portage C++ deplacer_lot"). Instancie
+	# UNE fois, configure a la taille pool. Deux niveaux ouverts sous
+	# separation_active :
+	#   - EXPOSANT_INDEX_CPP (arete 16) : niveau du deplacer, grand pour
+	#     amortir le nombre de re-affectations de case par frame.
+	#   - exposant_separation = ceil(log2(rayon_separation)) : niveau lu par
+	#     separation_lot, arete du meme ordre que le rayon pour que la case
+	#     couvre le voisinage sur chaque axe (regle arete <= rayon rejetee,
+	#     c'est le piege documente). Sans ce second niveau, la separation
+	#     lisait le niveau du deplacer et degenerait en quasi-N^2 local a
+	#     N=100 000.
+	# deplacer_lot met a jour TOUS les niveaux ouverts (patron IndexSpatial).
+	# L'appelant garde le Ref vivant tant qu'il en a besoin (RefCounted, pas Node).
+	if deplacer_cpp and brancher_monde:
+		if not ClassDB.class_exists("IndexSpatial"):
+			push_error("banc_peuplement : classe C++ 'IndexSpatial' introuvable -- extension_terrain non chargee ? Repli GDScript pour ce banc.")
+			deplacer_cpp = false
+		else:
+			_index_cpp = ClassDB.instantiate("IndexSpatial")
+			_index_cpp.configurer(nombre_individus * 2)
+			_index_cpp.ouvrir_niveau(EXPOSANT_INDEX_CPP)
+			if separation_active:
+				# exposant tel que 2^exposant >= rayon_separation, minimal. Pour
+				# rayon 2.0 : ceil(log2(2)) = 1 -> arete 2. Pour rayon 3.0 :
+				# ceil(log2(3)) = 2 -> arete 4. Le C++ auto-selectionne ce
+				# niveau via separation_lot (plus petit exposant tel que arete
+				# >= rayon).
+				var exposant_sep: int = int(ceil(log(maxf(rayon_separation, 1.0e-3)) / log(2.0)))
+				_index_cpp.ouvrir_niveau(exposant_sep)
 	# Le banc charge le catalogue types.json et le passe au mecanisme --
 	# Peuplement lui-meme n'ouvre jamais un fichier.
 	_catalogue = _charger_types()
@@ -261,7 +359,7 @@ func _fabriquer_lot() -> void:
 		var position := Vector3(x, float(y_sol_v) + 0.4, z)
 		# pousser=false : le push RS unique se fait apres la boucle, jamais par
 		# unite (sinon O(N^2) sur le buffer entier).
-		var id: String = Peuplement.spawn(_pool, _catalogue, type_id, position, _monde, false)
+		var id: String = Peuplement.spawn(_pool, _catalogue, type_id, position, _monde, false, paquets_partages)
 		if id.is_empty():
 			push_error("banc_peuplement : Peuplement.spawn a echoue a la tentative %d" % tentatives)
 			return
@@ -291,6 +389,14 @@ func _fabriquer_lot() -> void:
 	# (spawn(..., false) les ecrit sans pousser). Un seul envoi au serveur de rendu
 	# pour tout le lot -- N=100 000, coup unique au lieu de N.
 	Peuplement.pousser_buffer(_pool)
+	# SEED DE L'INDEX C++ : sous separation_active, la separation lit l'index a la
+	# frame N pour ecrire desiree, AVANT que la physique ne bouge et que deplacer_lot
+	# ne soit rappele en queue. Sans ce seed, la frame 0 lirait un index vide et
+	# rendrait direction=0 partout. Une passe de C++ ici, une fois pour toute la vie
+	# du banc -- cout amorti a zero.
+	if _index_cpp != null:
+		var cols_seed: Dictionary = _pool.colonnes
+		_index_cpp.deplacer_lot(cols_seed.position)
 	if actif_releve:
 		var duree_us: int = Time.get_ticks_usec() - chrono_creation_debut
 		print("[peuplement] creation N=%d en %d us (push RS unique final)" % [poses, duree_us])
@@ -344,41 +450,63 @@ func _physics_process(delta: float) -> void:
 	# false, les trois `Time.get_ticks_usec()` sont EVITES au maximum (une
 	# branche par poste plutot que trois inconditionnels) : instrumenter n'est
 	# pas biaiser la mesure.
-	var chrono_errance_debut: int = Time.get_ticks_usec() if actif_releve else 0
+	var chrono_intention_debut: int = Time.get_ticks_usec() if actif_releve else 0
 	# ROUND 11 (revise) : deux passes au lieu de trois.
-	# PASSE 1 -- intention (errance) : reste separee car dans le vrai jeu
-	# elle deviendra une couche IA qui decide hors du tick physique. Optim :
-	# desiree[i] n'est reecrit QUE quand l'horloge expire (direction change) --
-	# les autres frames, desiree conserve sa valeur, identique par definition.
+	# PASSE 1 -- intention. Deux chemins :
+	#   separation_active=true : UN appel C++ separation_lot(cols.position, rayon)
+	#     rend une direction unitaire de repulsion par unite (voisinage lu dans
+	#     l'index deja tenu). desiree[i] = direction * vitesse[i], ecrase
+	#     entierement l'errance. Exige _index_cpp != null (deplacer_cpp + brancher_monde) ;
+	#     sinon push_error et repli sur l'errance (le poste separation reste a 0).
+	#   separation_active=false : errance historique. desiree[i] n'est reecrit QUE
+	#     quand l'horloge expire (direction change) -- les autres frames, desiree
+	#     conserve sa valeur.
 	var cols: Dictionary = _pool.colonnes
-	var directions: PackedVector3Array = cols.direction
-	var cap_horloges: PackedFloat32Array = cols.cap_horloge
 	var vitesses: PackedFloat32Array = cols.vitesse
 	var desirees: PackedVector3Array = cols.desiree
-	var repack_desiree: bool = false
-	var repack_direction: bool = false
-	var i: int = 0
-	while i < count:
-		var horloge: float = cap_horloges[i] - delta
-		if horloge <= 0.0:
-			var angle: float = _rng.randf() * TAU
-			var direction := Vector3(cos(angle), 0.0, sin(angle))
-			directions[i] = direction
-			repack_direction = true
-			horloge = _rng.randf_range(3.0, 8.0)
-			desirees[i] = direction * vitesses[i]
-			repack_desiree = true
-		cap_horloges[i] = horloge
-		i += 1
-	cols.cap_horloge = cap_horloges
-	if repack_direction:
-		cols.direction = directions
-	if repack_desiree:
+	var chrono_intention_fin: int = 0
+	if separation_active and _index_cpp != null:
+		# UN appel, tout le lot. Le C++ tient son index natif (unordered_map) et
+		# lit les cases voisines touchees par rayon_separation. Sortie : direction
+		# horizontale unitaire (Y=0) ou Vector3.ZERO si aucun voisin dans rayon.
+		var directions_sep: PackedVector3Array = _index_cpp.separation_lot(cols.position, rayon_separation)
+		var k: int = 0
+		while k < count:
+			desirees[k] = directions_sep[k] * vitesses[k]
+			k += 1
 		cols.desiree = desirees
-	var chrono_physique_debut: int = 0
-	if actif_releve:
-		chrono_physique_debut = Time.get_ticks_usec()
-		_us_errance += chrono_physique_debut - chrono_errance_debut
+		if actif_releve:
+			chrono_intention_fin = Time.get_ticks_usec()
+			_us_separation += chrono_intention_fin - chrono_intention_debut
+	else:
+		if separation_active and _index_cpp == null:
+			push_error("banc_peuplement : separation_active=true mais _index_cpp null (deplacer_cpp=%s, brancher_monde=%s) -- repli sur errance." % [str(deplacer_cpp), str(brancher_monde)])
+		var directions: PackedVector3Array = cols.direction
+		var cap_horloges: PackedFloat32Array = cols.cap_horloge
+		var repack_desiree: bool = false
+		var repack_direction: bool = false
+		var i: int = 0
+		while i < count:
+			var horloge: float = cap_horloges[i] - delta
+			if horloge <= 0.0:
+				var angle: float = _rng.randf() * TAU
+				var direction := Vector3(cos(angle), 0.0, sin(angle))
+				directions[i] = direction
+				repack_direction = true
+				horloge = _rng.randf_range(3.0, 8.0)
+				desirees[i] = direction * vitesses[i]
+				repack_desiree = true
+			cap_horloges[i] = horloge
+			i += 1
+		cols.cap_horloge = cap_horloges
+		if repack_direction:
+			cols.direction = directions
+		if repack_desiree:
+			cols.desiree = desirees
+		if actif_releve:
+			chrono_intention_fin = Time.get_ticks_usec()
+			_us_errance += chrono_intention_fin - chrono_intention_debut
+	var chrono_physique_debut: int = chrono_intention_fin
 	# PASSE 2 -- physique + buffer fusionnes. Deux chemins : C++ (chantier
 	# "portage C++ du poste physique") derriere @export utilise_cpp, GDScript
 	# sinon (chemin oracle, verrouille par test_tick_fusionne + test de parite
@@ -402,15 +530,22 @@ func _physics_process(delta: float) -> void:
 	# Duplication transitoire, une frame, aucun autre code ne lit
 	# individu.position entre-temps. Sous brancher_monde=false, cette passe est
 	# integralement sautee (aucune recopie, aucun deplacer, poste = 0).
-	if brancher_monde and _monde != null:
-		var positions_apres: PackedVector3Array = cols.position
-		var individus: Array = _pool.individus
-		var j: int = 0
-		while j < count:
-			var individu: Dictionary = individus[j]
-			individu.position = positions_apres[j]
-			_monde.deplacer(individu)
-			j += 1
+	if brancher_monde:
+		if deplacer_cpp and _index_cpp != null:
+			# UN appel, tout le lot. Le C++ tient son index natif (unordered_map)
+			# et met a jour les 100 000 unites en une passe (aucun franchissement
+			# de frontiere par unite). L'index GDScript de _monde n'est plus tenu
+			# a jour sous ce chemin -- voir en-tete scripts/index_spatial.h.
+			_index_cpp.deplacer_lot(cols.position)
+		elif _monde != null:
+			var positions_apres: PackedVector3Array = cols.position
+			var individus: Array = _pool.individus
+			var j: int = 0
+			while j < count:
+				var individu: Dictionary = individus[j]
+				individu.position = positions_apres[j]
+				_monde.deplacer_simple(individu)
+				j += 1
 	var chrono_multimesh_debut: int = 0
 	if actif_releve:
 		chrono_multimesh_debut = Time.get_ticks_usec()
@@ -435,15 +570,20 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 	if maintenant_ms < _temps_prochain_ms:
 		return
 	var frames: int = maxi(_frames_accumulees, 1)
-	print("[peuplement] N=%d fps=%d errance=%dus phys+buffer=%dus deplacer=%dus mm_set=%dus" % [
+	# Divisions promues en float pour eviter le warning GDScript "Integer division.
+	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
+	var inv_frames: float = 1.0 / float(frames)
+	print("[peuplement] N=%d fps=%d errance=%dus separation=%dus phys+buffer=%dus deplacer=%dus mm_set=%dus" % [
 		count,
 		int(Engine.get_frames_per_second()),
-		_us_errance / frames,
-		_us_physique_buffer / frames,
-		_us_deplacer / frames,
-		_us_multimesh / frames,
+		int(float(_us_errance) * inv_frames),
+		int(float(_us_separation) * inv_frames),
+		int(float(_us_physique_buffer) * inv_frames),
+		int(float(_us_deplacer) * inv_frames),
+		int(float(_us_multimesh) * inv_frames),
 	])
 	_us_errance = 0
+	_us_separation = 0
 	_us_physique_buffer = 0
 	_us_deplacer = 0
 	_us_multimesh = 0

@@ -227,7 +227,15 @@ static func _colonne_vide_pour_defaut(defaut) -> Variant:
 ## `pousser_buffer(pool)` UNE fois a la fin. Sans ce parametre, N spawns
 ## poussent N fois le buffer entier au RS, cout O(N^2) mesure a l'ecran :
 ## 100 000 unites x 1,2 M floats = interminable.
-static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, position: Vector3, monde = null, pousser: bool = true) -> String:
+##
+## `paquets_partages` (defaut false, comportement historique) : propage a
+## Objet.fabriquer -- voir objet.gd:PAQUETS PARTAGES pour le contrat complet.
+## A activer pour les populations massives (mobile_test) dont les sous-Dict
+## par defaut (reserves, deformation_etat, etats...) sont inertes en regime.
+## Sous true, TOUTES les instances du meme type partagent les sous-Dict/Array
+## du paquet par reference -- ecritures top-level sur `proprietes` sures,
+## mutations d'un sous-Dict interdites sans Objet.detacher au prealable.
+static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, position: Vector3, monde = null, pousser: bool = true, paquets_partages: bool = false) -> String:
 	if pool.is_empty():
 		push_error("peuplement.gd : spawn -- pool vide (non initialise)")
 		return ""
@@ -240,7 +248,7 @@ static func spawn(pool: Dictionary, catalogue: Dictionary, type_id: String, posi
 	# Objet.fabriquer contrat : (id, type, position, table, materiaux, proprietes_immuables, reserve_combustible, catalogue_emergences).
 	# Les quatre catalogues facultatifs restent au defaut vide -- un objet mobile
 	# generique n'utilise ni composition, ni combustible, ni emergences.
-	var individu: Dictionary = Objet.fabriquer(id, type_id, position, catalogue, {}, [], {}, [])
+	var individu: Dictionary = Objet.fabriquer(id, type_id, position, catalogue, {}, [], {}, [], paquets_partages)
 	if individu.is_empty():
 		push_error("peuplement.gd : spawn -- Objet.fabriquer('%s', '%s') a echoue (voir push_error precedent)" % [id, type_id])
 		(pool.slots_libres as Array).push_back(slot)

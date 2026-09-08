@@ -7,5 +7,9 @@
 	"graine_rng": 20260904,
 	"actif_releve": true,
 	"utilise_cpp": true,
-	"brancher_monde": true
+	"brancher_monde": true,
+	"deplacer_cpp": true,
+	"separation_active": true,
+	"rayon_separation": 2.0,
+	"paquets_partages": true
 }
