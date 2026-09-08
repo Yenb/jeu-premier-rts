@@ -30,6 +30,18 @@ struct VoisinVue {
 	float dz; // pos_i.z - pos_k.z
 	float d;  // distance horizontale
 };
+// Voisinage BRUT d'une case (patron boids : liste de voisinage batie une fois
+// par cellule, partagee entre tous les agents de la cellule). Contient
+// {id, x, z} de chaque corps du bloc (2*n_cases+1)^2 autour de la case, sans
+// dedoublonnage necessaire (chaque case adjacente ne contient qu'une fois un
+// id donne). Chaque unite de la case courante lit ce voisinage commun pour
+// calculer SES propres dx/dz/d (soustraction depuis sa position + sqrt) --
+// la LISTE DES CORPS a considerer n'est etablie qu'une fois par case.
+struct VoisinBrut {
+	int32_t id;
+	float x;
+	float z;
+};
 } // namespace anonyme
 
 void IndexSpatial::_bind_methods() {
@@ -249,80 +261,67 @@ PackedVector3Array IndexSpatial::vue_lot(
 		}
 		const int n1 = (int)unites_case.size();
 
-		// PASSE 1 : outil de voisinage mutualise par case (buffer local reutilise).
+		// PASSE 1a : voisinage BRUT de la case, etabli UNE FOIS.
+		// La liste des corps du bloc (2*n_cases+1)^2 autour de la case est
+		// commune aux unites de la case -- seul le calcul dx/dz/d depuis leur
+		// position est per-unite. Patron boids : liste de voisinage batie une
+		// fois par cellule, partagee entre tous les agents. Reutilise entre
+		// cases via un thread_local (clear + capacite gardee).
 		auto t_col_debut = std::chrono::steady_clock::now();
-		if ((int)dans_rayon_case.size() < n1) {
-			dans_rayon_case.resize((size_t)n1);
-		}
-		for (int ii = 0; ii < n1; ii++) {
-			dans_rayon_case[(size_t)ii].clear();
-		}
-		// Intra-case : paires (i<j) parmi unites_case, distribuees aux deux
-		// listes (demi-paire correcte -- une seule paire de cases (C1, C1)).
-		for (int ii = 0; ii < n1; ii++) {
-			int32_t i_id = unites_case[ii];
-			const Vector3 &p_i = pos_r[i_id];
-			for (int jj = ii + 1; jj < n1; jj++) {
-				int32_t j_id = unites_case[jj];
-				const Vector3 &p_j = pos_r[j_id];
-				float dx = p_i.x - p_j.x;
-				float dz = p_i.z - p_j.z;
-				float d2 = dx * dx + dz * dz;
-				if (d2 >= rayon2 || d2 <= 1e-8f) {
-					continue;
-				}
-				float d = std::sqrt(d2);
-				VoisinVue vi;
-				vi.id = j_id;
-				vi.dx = dx;
-				vi.dz = dz;
-				vi.d = d;
-				dans_rayon_case[(size_t)ii].push_back(vi);
-				VoisinVue vj;
-				vj.id = i_id;
-				vj.dx = -dx;
-				vj.dz = -dz;
-				vj.d = d;
-				dans_rayon_case[(size_t)jj].push_back(vj);
-			}
-		}
-		// Inter-case : chaque unite i de C1 contre chaque voisin externe k des
-		// cases adjacentes. Ecrit UNIQUEMENT dans dans_rayon_case[ii] (la
-		// liste de k sera batie quand SA case sera visitee comme case courante).
+		static thread_local std::vector<VoisinBrut> voisinage_case;
+		voisinage_case.clear();
 		for (int dcx = -n_cases; dcx <= n_cases; dcx++) {
 			for (int dcz = -n_cases; dcz <= n_cases; dcz++) {
-				if (dcx == 0 && dcz == 0) {
-					continue;
-				}
-				Vector3i C2(C1.x + dcx, 0, C1.z + dcz);
-				auto it = niveau.cases.find(C2);
+				Vector3i Cadj(C1.x + dcx, 0, C1.z + dcz);
+				auto it = niveau.cases.find(Cadj);
 				if (it == niveau.cases.end()) {
 					continue;
 				}
-				const std::vector<int32_t> &unites_C2 = it->second;
-				const int n2 = (int)unites_C2.size();
-				for (int ii = 0; ii < n1; ii++) {
-					int32_t i_id = unites_case[ii];
-					const Vector3 &p_i = pos_r[i_id];
-					std::vector<VoisinVue> &liste_ii = dans_rayon_case[(size_t)ii];
-					for (int jj = 0; jj < n2; jj++) {
-						int32_t k_id = unites_C2[jj];
-						const Vector3 &p_k = pos_r[k_id];
-						float dx = p_i.x - p_k.x;
-						float dz = p_i.z - p_k.z;
-						float d2 = dx * dx + dz * dz;
-						if (d2 >= rayon2 || d2 <= 1e-8f) {
-							continue;
-						}
-						float d = std::sqrt(d2);
-						VoisinVue vv;
-						vv.id = k_id;
-						vv.dx = dx;
-						vv.dz = dz;
-						vv.d = d;
-						liste_ii.push_back(vv);
-					}
+				const std::vector<int32_t> &unites_adj = it->second;
+				const int na = (int)unites_adj.size();
+				for (int jj = 0; jj < na; jj++) {
+					int32_t k_id = unites_adj[jj];
+					const Vector3 &p_k = pos_r[k_id];
+					VoisinBrut vb;
+					vb.id = k_id;
+					vb.x = p_k.x;
+					vb.z = p_k.z;
+					voisinage_case.push_back(vb);
 				}
+			}
+		}
+		// PASSE 1b : chaque unite de la case lit le voisinage commun pour
+		// calculer SES propres dx/dz/d et remplir sa liste. Le sqrt et le
+		// filtre distance restent per-unite (dependent de la position de
+		// l'unite -- irreductible), mais la LISTE DES CORPS n'est plus
+		// re-etablie 60 fois.
+		if ((int)dans_rayon_case.size() < n1) {
+			dans_rayon_case.resize((size_t)n1);
+		}
+		const int nvb = (int)voisinage_case.size();
+		for (int ii = 0; ii < n1; ii++) {
+			int32_t i_id = unites_case[ii];
+			const Vector3 &p_i = pos_r[i_id];
+			std::vector<VoisinVue> &liste_ii = dans_rayon_case[(size_t)ii];
+			liste_ii.clear();
+			for (int a = 0; a < nvb; a++) {
+				const VoisinBrut &vb = voisinage_case[(size_t)a];
+				if (vb.id == i_id) {
+					continue;  // exclure soi
+				}
+				float dx = p_i.x - vb.x;
+				float dz = p_i.z - vb.z;
+				float d2 = dx * dx + dz * dz;
+				if (d2 >= rayon2) {
+					continue;
+				}
+				float d = std::sqrt(d2);
+				VoisinVue vv;
+				vv.id = vb.id;
+				vv.dx = dx;
+				vv.dz = dz;
+				vv.d = d;
+				liste_ii.push_back(vv);
 			}
 		}
 		_us_collecte += std::chrono::duration_cast<std::chrono::microseconds>(
@@ -344,59 +343,77 @@ PackedVector3Array IndexSpatial::vue_lot(
 			// VOLUME (disque horizontal rayon = largeur/2) d'un corps K PLUS
 			// PROCHE. Bloqueurs hors cone bouchent quand meme sans contribuer
 			// a la separation. Verdict final : segment-disque exact (bit-a-bit
-			// identique a la version precedente).
+			// identique).
 			//
-			// ACCELERATION SANS PERTE (preselection angulaire) : le test
-			// segment-disque `lat2 <= r_corps2` equivaut mathematiquement a
-			//   (vk . vj)^2 >= (d2_k - r_corps2) * d2_j  ET  vk . vj > 0
-			// (developpement de lat2 en fonction de vk.vj et d2_j, cf. carnet
-			// de calcul). Autrement dit K cache J ssi le vecteur A->J tombe
-			// dans le SECTEUR ANGULAIRE de K (demi-largeur asin(r/d_k)). On
-			// stocke donc pour chaque bloqueur `base_k = sqrt(d2_k - r_corps2)`,
-			// et pour chaque cible on eliminie sans test segment-disque tout
-			// bloqueur dont `vk . vj < base_k * d_j` (contraposee du critere
-			// exact). Les rares bloqueurs qui passent la preselection sont
-			// re-verifies par le segment-disque exact -- verdict inchange.
-			// La liste testee tombe de "tous les vus" a "ceux dont le secteur
-			// couvre l'angle de la cible" (typiquement 0-2 au lieu de dizaines).
+			// SELECTION SANS TRI COMPLET : min-heap (make_heap + pop_heap) sur
+			// la distance. On extrait les voisins du plus proche au plus loin
+			// SANS trier les 192 elements -- un pop coute O(log N), et l'arret
+			// (voir plus bas) permet de sortir apres K << N pops.
+			//
+			// PRESELECTION ANGULAIRE (heritee, sans perte) : `cos_num >=
+			// base_k * d_j` avec `base_k = sqrt(d2_k - r_corps2)` -- contraposee
+			// exacte du critere segment-disque. Les rares bloqueurs qui passent
+			// la preselection sont re-verifies par le segment-disque exact.
+			//
+			// ARRET SANS PERTE quand le CONE de vue est bouche : l'union des
+			// secteurs angulaires clampes au cone (par bloqueur ajoute) est
+			// tenue trie. Des qu'elle recouvre [-demi_cone, +demi_cone], tous
+			// les voisins restants dans le cone ont leur angle dans un secteur
+			// ferme -> ils sont caches (le segment-disque tranche de toute
+			// facon par equivalence). Les voisins hors cone restants ne
+			// contribuent pas a la separation et deviennent inutiles comme
+			// bloqueurs supplementaires (les cibles dans le cone sont deja
+			// couvertes). L'arret est prouvablement sans perte.
 			auto t_filtre_debut = std::chrono::steady_clock::now();
-			std::sort(liste.begin(), liste.end(),
-					[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
+			auto cmp_max = [](const VoisinVue &a, const VoisinVue &b) { return a.d > b.d; };
+			std::make_heap(liste.begin(), liste.end(), cmp_max);
 			_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - t_filtre_debut).count();
 			auto t_occ_debut = std::chrono::steady_clock::now();
 			float ax = 0.0f;
 			float az = 0.0f;
-			// Bloqueurs : {index dans liste, base_k}. thread_local pour amortir
-			// l'allocation entre unites et frames.
+			// Bloqueurs : copies des VoisinVue (la liste change avec pop_heap,
+			// on ne peut plus indexer). thread_local pour amortir l'alloc.
 			struct Bloqueur {
-				int idx;
+				VoisinVue v;
 				float base_k;
 			};
 			static thread_local std::vector<Bloqueur> bloqueurs;
 			bloqueurs.clear();
-			const int nl = (int)liste.size();
-			for (int a = 0; a < nl; a++) {
-				const VoisinVue &vj = liste[a];
+			// Secteurs angulaires fermes, TOUS clampes a [-demi_cone, +demi_cone].
+			// Tri par borne min, fusion des chevauchants. Cone bouche quand
+			// l'union = un seul intervalle qui couvre [-demi_cone, +demi_cone].
+			static thread_local std::vector<std::pair<float, float>> secteurs;
+			secteurs.clear();
+			// Angle de l'orientation de l'unite + demi-cone (en rad). Precalc.
+			const float angle_orient = std::atan2(orient.z, orient.x);
+			float cos_clamp = cos_moitie_angle;
+			if (cos_clamp < -1.0f) cos_clamp = -1.0f;
+			if (cos_clamp > 1.0f) cos_clamp = 1.0f;
+			const float demi_cone = std::acos(cos_clamp);
+			const float PI_F = 3.14159265f;
+			const float TAU_F = 6.2831853f;
+			int reste = (int)liste.size();
+			while (reste > 0) {
+				// Extraire le plus proche.
+				std::pop_heap(liste.begin(), liste.begin() + reste, cmp_max);
+				reste--;
+				const VoisinVue vj = liste[(size_t)reste];
 				const float d2_j = vj.d * vj.d;
-				// Test caché par un bloqueur plus proche (preselection puis
+				// Test cache par un bloqueur plus proche (preselection +
 				// segment-disque exact sur les candidats).
 				bool cache = false;
 				const int nb = (int)bloqueurs.size();
 				for (int b = 0; b < nb; b++) {
 					const Bloqueur &bc = bloqueurs[(size_t)b];
-					const VoisinVue &vk = liste[(size_t)bc.idx];
+					const VoisinVue &vk = bc.v;
 					float cos_num = vj.dx * vk.dx + vj.dz * vk.dz;
-					// PRESELECTION ANGULAIRE : contraposee du critere exact.
-					// cos_num < 0 : K derriere A -> ne bloque pas.
-					// cos_num < base_k * d_j : angle A->J hors secteur de K -> ne bloque pas.
 					if (cos_num <= 0.0f) {
 						continue;
 					}
 					if (cos_num < bc.base_k * vj.d) {
 						continue;
 					}
-					// Candidat. Verdict final segment-disque exact.
 					float t_proj = cos_num / d2_j;
 					if (t_proj <= 0.0f || t_proj >= 1.0f) {
 						continue;
@@ -414,18 +431,69 @@ PackedVector3Array IndexSpatial::vue_lot(
 				}
 				// J vu -- devient bloqueur pour les voisins suivants.
 				Bloqueur bc;
-				bc.idx = a;
+				bc.v = vj;
 				bc.base_k = std::sqrt(std::max(d2_j - r_corps2, 0.0f));
 				bloqueurs.push_back(bc);
-				// Cone strict : J contribue a la separation SEULEMENT dans le cone.
-				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
-				if (dot_vers_voisin < cos_moitie_angle * vj.d) {
-					continue;
+				// Mise a jour de l'union des secteurs (clampes au cone).
+				float angle_v = std::atan2(-vj.dz, -vj.dx) - angle_orient;
+				while (angle_v > PI_F) angle_v -= TAU_F;
+				while (angle_v < -PI_F) angle_v += TAU_F;
+				float sin_arg = rayon_corps / vj.d;
+				if (sin_arg > 1.0f) sin_arg = 1.0f;
+				float demi_v = std::asin(sin_arg);
+				// Un secteur [angle - demi, angle + demi] est eclate en deux si
+				// il deborde de [-PI, PI]. Chaque morceau est clampe a
+				// [-demi_cone, +demi_cone] puis fusionne dans `secteurs`.
+				float morceaux[2][2];
+				int nb_morceaux = 0;
+				float lo_v = angle_v - demi_v;
+				float hi_v = angle_v + demi_v;
+				if (hi_v > PI_F) {
+					morceaux[nb_morceaux][0] = lo_v; morceaux[nb_morceaux][1] = PI_F; nb_morceaux++;
+					morceaux[nb_morceaux][0] = -PI_F; morceaux[nb_morceaux][1] = hi_v - TAU_F; nb_morceaux++;
+				} else if (lo_v < -PI_F) {
+					morceaux[nb_morceaux][0] = -PI_F; morceaux[nb_morceaux][1] = hi_v; nb_morceaux++;
+					morceaux[nb_morceaux][0] = lo_v + TAU_F; morceaux[nb_morceaux][1] = PI_F; nb_morceaux++;
+				} else {
+					morceaux[nb_morceaux][0] = lo_v; morceaux[nb_morceaux][1] = hi_v; nb_morceaux++;
 				}
-				_vue_vus_total += 1;
-				float w = (rayon - vj.d) / vj.d;
-				ax += vj.dx * w;
-				az += vj.dz * w;
+				for (int m = 0; m < nb_morceaux; m++) {
+					float lo = morceaux[m][0];
+					float hi = morceaux[m][1];
+					// Clamp au cone.
+					if (hi < -demi_cone || lo > demi_cone) continue;
+					if (lo < -demi_cone) lo = -demi_cone;
+					if (hi > demi_cone) hi = demi_cone;
+					// Fusion avec les chevauchants existants.
+					auto it = secteurs.begin();
+					while (it != secteurs.end()) {
+						if (it->second < lo || it->first > hi) {
+							++it;
+						} else {
+							if (it->first < lo) lo = it->first;
+							if (it->second > hi) hi = it->second;
+							it = secteurs.erase(it);
+						}
+					}
+					// Insertion triee par borne min.
+					auto pos = secteurs.begin();
+					while (pos != secteurs.end() && pos->first < lo) ++pos;
+					secteurs.insert(pos, std::make_pair(lo, hi));
+				}
+				// Contribution separation si J dans le cone strict.
+				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
+				if (dot_vers_voisin >= cos_moitie_angle * vj.d) {
+					_vue_vus_total += 1;
+					float w = (rayon - vj.d) / vj.d;
+					ax += vj.dx * w;
+					az += vj.dz * w;
+				}
+				// ARRET SANS PERTE : union recouvre tout le cone.
+				if (secteurs.size() == 1
+						&& secteurs[0].first <= -demi_cone + 1e-4f
+						&& secteurs[0].second >= demi_cone - 1e-4f) {
+					break;
+				}
 			}
 			float len2 = ax * ax + az * az;
 			if (len2 > 1e-8f) {

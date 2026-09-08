@@ -178,21 +178,19 @@ public:
 	// EXIGE UN NIVEAU PLANAIRE (voir ouvrir_niveau_planaire / Niveau::planaire).
 	// Aucun niveau planaire ouvert : push_error, retour a directions nulles.
 	//
-	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron Verlet neighbor list,
-	// reconstruit par frame). dans_rayon_case est indexe par POSITION dans la
-	// case courante et EFFACE a chaque nouvelle case (buffer LOCAL reutilise,
-	// capacite gardee). Deux niveaux de mutualisation :
-	//   - Paires INTRA-CASE (i<j parmi unites_case) : calc UNE fois, ecrit
-	//     {j, dx, dz, d} dans dans_rayon_case[i] et {i, -dx, -dz, d} dans
-	//     dans_rayon_case[j] (demi-paire, distribuee aux deux).
-	//   - Paires INTER-CASE (i in C1, k in C2 adjacente) : calc et ecriture
-	//     UNIQUEMENT dans dans_rayon_case[i] de la case courante ; la liste
-	//     de k sera batie quand SA case sera visitee. Chaque paire inter-case
-	//     est donc recalculee dans la visite de l'autre case, mais les listes
-	//     restent CHAUDES en cache pendant leur construction et consommation
-	//     (indexation par id sur N unites teste et rejetee -- ecritures
-	//     dispersees dans le grand vector faisaient plus mal que le calcul
-	//     economise).
+	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron boids : liste de voisinage
+	// batie une fois par cellule, partagee entre tous les agents de la cellule).
+	// Deux etapes par case :
+	//   - PASSE 1a : voisinage BRUT etabli UNE fois. La liste {id, x, z} des
+	//     corps du bloc (2*n_cases+1)^2 autour de la case est commune aux
+	//     unites de la case courante. Un thread_local reutilise entre cases
+	//     (clear + capacite gardee), aucune allocation par frame.
+	//   - PASSE 1b : chaque unite de la case parcourt ce voisinage commun,
+	//     calcule SES propres dx/dz/d (soustraction depuis sa position + sqrt)
+	//     et remplit dans_rayon_case[iu]. Le sqrt et le filtre distance
+	//     restent per-unite (irreductibles -- dependent de la position de
+	//     l'unite), mais la LISTE DES CORPS a considerer n'est plus etablie
+	//     60 fois par case.
 	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id]) :
 	// tri par distance + occlusion visuelle corps-traversee + accumulation
 	// separation.
@@ -215,17 +213,26 @@ public:
 	// dans la signature de vue_lot pour compat mais ne sont plus consommes.
 	//
 	// Etapes de la passe 2 par unite :
-	//   (1) Tri de dans_rayon_case[iu] par distance croissante.
-	//   (2) Parcours proche->loin. Pour chaque J :
+	//   (1) Min-heap sur dans_rayon_case[iu] par distance croissante
+	//       (make_heap O(N)). PAS de tri complet -- le tri par distance qui
+	//       existait pour l'ancienne occlusion-attenuation est retire.
+	//   (2) Parcours proche->loin par pop_heap (O(log N) par extraction). Pour
+	//       chaque J :
 	//       (a) Preselection angulaire : pour chaque bloqueur K deja retenu,
 	//           tester `vk . vj >= base_k * d_j` (avec base_k = sqrt(d2_k -
 	//           r_corps2) precalcule). Contraposee sans perte du test segment-
 	//           disque : ecarte les bloqueurs dont le secteur angulaire de
 	//           demi-largeur asin(r_corps/d_k) ne couvre pas l'axe A->J.
 	//       (b) Sur les candidats retenus, verdict final segment-disque exact
-	//           -- verdict bit-a-bit identique a la version sans preselection.
+	//           -- verdict bit-a-bit identique.
 	//   (3) J cache -> skip. J vu -> retenir comme bloqueur (avec son base_j),
 	//       puis (si dans le cone strict) accumuler la separation.
+	//   (4) MAJ union des secteurs angulaires clampes a [-demi_cone, +demi_cone].
+	//       ARRET SANS PERTE quand l'union recouvre tout le cone : tous les
+	//       voisins restants ont leur angle dans un secteur ferme, sont donc
+	//       cachés (equivalence angulaire du segment-disque) ; les voisins
+	//       hors cone restants ne contribuent pas et deviennent inutiles.
+	//       C'est le levier qui realise "plus dense = moins cher".
 	//
 	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
 	// scripts/test_vue_cpp.gd (cas 5 re-verrouille par le modele corps
