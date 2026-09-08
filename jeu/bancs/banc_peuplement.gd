@@ -380,7 +380,14 @@ func _monter_pool() -> void:
 				# niveau via separation_lot (plus petit exposant tel que arete
 				# >= rayon).
 				var exposant_sep: int = int(ceil(log(maxf(rayon_separation, 1.0e-3)) / log(2.0)))
-				_index_cpp.ouvrir_niveau(exposant_sep)
+				# PLANAIRE (chantier "degraissage separation_lot", 2026-09-08) :
+				# separation_lot lit ce niveau sans jamais balayer l'axe Y.
+				# deplacer_lot y insere avec y=0 dans la clef -- toutes les unites
+				# d'une meme colonne (fx, fz) dans la meme entree unordered_map,
+				# quelle que soit leur altitude. Le niveau du deplacer (arete 16)
+				# reste 3D. Voir extension_terrain/src/index_spatial.h §
+				# Niveau::planaire et separation_lot.
+				_index_cpp.ouvrir_niveau_planaire(exposant_sep)
 	# Le banc charge le catalogue types.json et le passe au mecanisme --
 	# Peuplement lui-meme n'ouvre jamais un fichier.
 	_catalogue = _charger_types()
