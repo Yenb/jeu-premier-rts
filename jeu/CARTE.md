@@ -1180,12 +1180,27 @@ veut plusieurs meshes instancie plusieurs peuplements. Pool de slots fixe, LIFO,
 slots inactifs à échelle NULLE (jamais `Transform3D()` identité qui rendrait
 un mesh à l'origine). Ne connaît aucun nom de contenu — `type_id` et `mesh_ref`
 opaques, résolus via `objet.gd:fabriquer` et `mesh_catalogue.gd`. API :
-`creer_pool` / `spawn(..., pousser=true)` (`pousser=false` en remplissage de
-lot : écrit le slot dans `pool.buffer` sans envoyer au RenderingServer, un seul
-`pousser_buffer` final au lieu de N pushes O(N²)) / `retirer` /
-`ecrire_transform(pool, id)` / `ecrire_transform_index(pool, index)` (écriture
-rendu par index direct dans `pool.individus`, saute le lookup `id_to_index`
-pour un banc qui itère par index) / `pousser_buffer` / `detruire_pool`. Contrat, pièges et frontières : en-tête du fichier.
+`creer_pool` / `spawn(..., pousser=true, paquets_partages=false)` (`pousser=false`
+en remplissage de lot : écrit le slot dans `pool.buffer` sans envoyer au
+RenderingServer, un seul `pousser_buffer` final au lieu de N pushes O(N²) ;
+`paquets_partages=true` propage à `Objet.fabriquer` — sous-Dict par défaut
+partagés par référence) / `retirer` / `ecrire_transform(pool, id)` /
+`ecrire_transform_index(pool, index)` (écriture rendu par index direct dans
+`pool.individus`, saute le lookup `id_to_index` pour un banc qui itère par
+index) / `pousser_buffer` / `detruire_pool`. **RÉGIME DE MASSE** (chantier
+2026-09-08, `spawn_masse` + `activer`) : `spawn_masse(pool, position, vitesse,
+direction, cap_horloge)` crée UNE ligne de colonnes SANS fabriquer de
+`Dictionary` individu — le paquet dynamique (reserves 5 canaux,
+deformation_etat, etats…) n'existe simplement pas en mémoire pour une unité
+dormante. `activer(pool, catalogue, type_id, index, monde)` fabrique le
+paquet complet à la demande (`Objet.fabriquer` avec `paquets_partages=true`),
+l'attache au `pool.individus`, pose `_slot`, inscrit au monde. L'invariant
+`individus.size() == cols.size()` est rompu exprès sous masse : la population
+vit dans les colonnes, `individus` porte seulement les unités activées.
+`pool.taille_max - pool.slots_libres.size()` (ou `cols.position.size()`) remplace
+`individus.size()` comme compte d'unités vivantes. Aller simple (désactivation
+hors scope). Verrouillé par `scripts/test_peuplement_masse.gd` (6 cas).
+Contrat, pièges et frontières : en-tête du fichier.
 ÉCART FRAMEWORK : présent dans cette copie locale de `scripts/`, ABSENT du
 dépôt orion. Profil scaling du pipeline (phases A/B/C par individu à
 N ∈ {100, 500, 1000, 2000, 5000}) : `scripts/test_profil_peuplement.gd`.

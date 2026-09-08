@@ -121,6 +121,60 @@ extends RefCounted
 # CARTE.md est amendee en consequence dans le meme commit. Peuplement.retirer
 # l'utilise donc sans reserve.
 #
+# ---- REGIME DE MASSE : PAQUET DYNAMIQUE FABRIQUE A LA DEMANDE ----
+# Chantier 2026-09-08. Le partage COW du paquet par defaut (voir objet.gd
+# § PAQUETS PARTAGES) a fait tomber la memoire de ~1 Go a 569 Mo a
+# N=100 000. Reste un poids mort : chaque unite portait quand meme un
+# Dictionary `individu` complet (proprietes fusionnees, id String,
+# position Vector3) alors que le hot path (physique_et_buffer,
+# separation_lot, deplacer_lot C++) ne lit RIEN de ce Dictionary --
+# tout passe par les colonnes paralleles. Une unite de foule qui ne
+# decremente pas ses reserves n'a besoin que de ses colonnes.
+#
+# DOCTRINE (docs/design.md, deux regimes presence complete / activation
+# variable) appliquee ICI a la MEMOIRE, pas seulement a la simulation :
+# une barre faim/soif/sommeil EXISTE et compte quand elle est active,
+# mais une barre qui dort n'a pas a etre materialisee 100 000 fois en
+# RAM. L'information n'est jamais perdue -- elle est DIFFEREE, fabriquee
+# a la demande quand l'unite s'active.
+#
+# DEUX REGIMES DU PEUPLEMENT :
+# (1) MASSE (spawn_masse) : ne cree QUE la ligne de colonnes (position,
+#     velocite, desiree, direction, cap_horloge, au_sol, vitesse, slot).
+#     Aucun Dictionary `individu`, aucune fabrication d'objet, aucune
+#     inscription au monde. `pool.individus` reste vide, la population
+#     n'existe que dans les colonnes.
+# (2) ACTIVATION (activer) : fabrique le Dictionary complet a la demande
+#     -- Objet.fabriquer avec `paquets_partages=true` produit un individu
+#     comme si on avait spawn en regime normal, positionne a la ligne de
+#     colonnes deja posee. L'individu rejoint `pool.individus`, `_slot`
+#     pointe sur le slot MultiMesh preexistant (colonne slot[index]).
+#     Le paquet dynamique arrive intact -- reserves.faim.reserve=100.0
+#     par defaut, tout ce qu'un colon normal aurait.
+#
+# INVARIANT ROMPU EXPRES SOUS MASSE : `individus.size() == cols.size()`
+# ne tient PLUS. Les activations ne sont pas alignees avec les colonnes,
+# elles sont un tableau clairseme (peut etre vide, ou porter quelques
+# unites activees pendant que les 99 990 autres restent en colonnes).
+# `pool.taille_max - pool.slots_libres.size()` remplace `individus.size()`
+# comme "compte d'unites vivantes dans les colonnes" -- valable dans les
+# deux regimes. Le banc lit `cols.position.size()` (equivalent, plus
+# direct) pour la borne d'iteration du hot path.
+#
+# CONTRAINTE : le regime masse EXIGE `deplacer_cpp=true` cote banc, car
+# la passe deplacer GDScript oracle (`_monde.deplacer_simple(individu)`)
+# lit `individus[j].position` -- vide sous masse. L'index C++
+# `deplacer_lot(cols.position)` reste seule voie.
+#
+# ACTIVATION ALLER SIMPLE (choix documente pour ce chantier) : desactiver
+# une unite (retirer son individu tout en gardant sa ligne de colonnes)
+# n'est pas implemente ici -- la question "quand une unite peut-elle
+# redormir" est un chantier de gameplay a part. Ce qui est implemente :
+# spawn_masse (dormant) -> activer (reveil) est un aller simple. `retirer`
+# fonctionne pour les unites ACTIVEES et retire aussi leur ligne de
+# colonnes ; retirer une unite MASSE sans activation prealable n'est pas
+# expose ici, l'appelant peut compacter les colonnes lui-meme si besoin.
+#
 # ---- ECART AVEC LE DEPOT FRAMEWORK ----
 # Ce fichier est NEUF dans cette copie de scripts/ ; le depot orion ne le
 # porte pas encore. Divergence assumee par Yael faute d'un mecanisme partage
@@ -374,3 +428,133 @@ static func detruire_pool(pool: Dictionary) -> void:
 	(pool.id_to_index as Dictionary).clear()
 	(pool.slots_libres as Array).clear()
 	(pool.colonnes as Dictionary).clear()
+
+# ============================================================================
+# REGIME MASSE -- voir en-tete § "REGIME DE MASSE" pour la doctrine complete.
+# ============================================================================
+
+## spawn_masse : cree UNE ligne de colonnes (position + vitesse + init errance),
+## ecrit le buffer du slot, ne fabrique AUCUN Dictionary individu et n'inscrit
+## rien dans le monde. `individus` / `id_to_index` restent vides. Rend l'INDEX
+## dans les colonnes (= slot MultiMesh sous regime sequentiel sans retrait
+## anterieur ; l'appelant peut lire `cols.slot[index]` s'il a besoin du slot
+## explicitement). Le buffer n'est PAS pousse au RS -- l'appelant appelle
+## pousser_buffer(pool) UNE fois en fin de lot (meme patron que spawn(..., false)).
+##
+## Chaque colonne connue est initialisee ici : position au parametre, velocite/
+## desiree/au_sol/cap_horloge/direction au defaut neutre (Vector3.ZERO / 0.0 /
+## false), vitesse au parametre, slot au slot alloue. Colonne inconnue au module
+## (nom que le consommateur a passe a creer_pool mais que peuplement ne
+## connait pas nominalement) : append la valeur par defaut declaree au colonnes[nom]
+## de creer_pool -- meme geste que spawn.
+##
+## Rend -1 si le pool est vide ou sature (jamais un slot invalide).
+static func spawn_masse(pool: Dictionary, position: Vector3, vitesse: float, direction_errance: Vector3 = Vector3.ZERO, cap_horloge: float = 0.0) -> int:
+	if pool.is_empty():
+		push_error("peuplement.gd : spawn_masse -- pool vide (non initialise)")
+		return -1
+	if (pool.slots_libres as Array).is_empty():
+		push_error("peuplement.gd : spawn_masse -- pool sature (%d slots occupes), refuse" % int(pool.taille_max))
+		return -1
+	var slot: int = int((pool.slots_libres as Array).pop_back())
+	# TAMPON : pose la base identite + position dans les 12 floats du slot. CoW.
+	var buffer: PackedFloat32Array = pool.buffer
+	var base: int = slot * 12
+	buffer[base + 0] = 1.0
+	buffer[base + 1] = 0.0
+	buffer[base + 2] = 0.0
+	buffer[base + 3] = position.x
+	buffer[base + 4] = 0.0
+	buffer[base + 5] = 1.0
+	buffer[base + 6] = 0.0
+	buffer[base + 7] = position.y
+	buffer[base + 8] = 0.0
+	buffer[base + 9] = 0.0
+	buffer[base + 10] = 1.0
+	buffer[base + 11] = position.z
+	pool["buffer"] = buffer
+	# COLONNES : peuplement connait nominalement position/velocite/desiree/
+	# direction/au_sol/cap_horloge/vitesse/slot (les colonnes que le banc
+	# declare). Toute autre colonne recoit son defaut de creer_pool.
+	var cols: Dictionary = pool.colonnes
+	var defauts: Dictionary = pool._defauts_colonnes
+	for nom in cols.keys():
+		var col = cols[nom]
+		var valeur = _valeur_masse_pour_colonne(String(nom), position, vitesse, direction_errance, cap_horloge, slot, defauts.get(nom, null))
+		col.push_back(valeur)
+		cols[nom] = col
+	return slot
+
+# Extraction du switch de defauts par nom de colonne, pour ne pas dupliquer entre
+# spawn_masse et un futur activer_par_lots. `defaut` (declare a creer_pool) est
+# la voie de repli sur toute colonne dont le nom n'est pas connu ici -- meme
+# principe que _colonne_vide_pour_defaut : peuplement ne nomme aucune categorie,
+# la liste ci-dessous est un raccourci pratique du CABLAGE que fait deja
+# banc_peuplement (les huit colonnes universelles au peuplement mobile).
+static func _valeur_masse_pour_colonne(nom: String, position: Vector3, vitesse: float, direction: Vector3, cap_horloge: float, slot: int, defaut) -> Variant:
+	match nom:
+		"position":
+			return position
+		"velocite":
+			return Vector3.ZERO
+		"desiree":
+			return direction * vitesse
+		"direction":
+			return direction
+		"au_sol":
+			return false
+		"cap_horloge":
+			return cap_horloge
+		"vitesse":
+			return vitesse
+		"slot":
+			return slot
+		_:
+			return defaut
+
+## activer : fabrique le Dictionary `individu` complet (Objet.fabriquer avec
+## `paquets_partages=true`) pour la ligne de colonnes `index`, l'inscrit dans
+## `pool.individus` / `pool.id_to_index`, pose `_slot` a `cols.slot[index]`,
+## inscrit dans le monde si non null. Le Dictionary porte le paquet dynamique
+## complet -- reserves.faim.reserve=100.0 par defaut, tout ce qu'un colon normal
+## aurait recu au spawn. La ligne de colonnes reste EN PLACE : la position lue
+## est `cols.position[index]` (pas le parametre), pour que activer n'introduise
+## pas de discordance entre la position du Dictionary et la position tenue par
+## la physique.
+##
+## Rend l'id String de l'unite activee, ou "" en cas d'echec (index hors bornes,
+## fabrication refusee par Objet.fabriquer, pool vide).
+##
+## L'INVARIANT `individus.size() == cols.size()` est ROMPU expres apres cet appel
+## sous regime masse (voir en-tete). Le hot path lit `cols.position.size()` pour
+## la borne d'iteration, pas `individus.size()`.
+static func activer(pool: Dictionary, catalogue: Dictionary, type_id: String, index: int, monde = null) -> String:
+	if pool.is_empty():
+		push_error("peuplement.gd : activer -- pool vide (non initialise)")
+		return ""
+	var cols: Dictionary = pool.colonnes
+	var positions: PackedVector3Array = cols.position
+	if index < 0 or index >= positions.size():
+		push_error("peuplement.gd : activer(index=%d) hors bornes (0..%d)" % [index, positions.size() - 1])
+		return ""
+	var slots_col: PackedInt32Array = cols.slot
+	var slot: int = int(slots_col[index])
+	var position: Vector3 = positions[index]
+	pool["_counter"] = int(pool._counter) + 1
+	var id: String = "%s_%d" % [type_id, int(pool._counter)]
+	# paquets_partages=true : les sous-Dict/Array de premier niveau (reserves,
+	# deformation_etat, canaux_config si le type compose percevant, etc.) sont
+	# partages avec les autres activations du meme type -- meme contrat que
+	# spawn(..., paquets_partages=true) : ecritures top-level sures, mutations
+	# de sous-Dict a proteger avec Objet.detacher.
+	var individu: Dictionary = Objet.fabriquer(id, type_id, position, catalogue, {}, [], {}, [], true)
+	if individu.is_empty():
+		push_error("peuplement.gd : activer -- Objet.fabriquer('%s', '%s') a echoue (voir push_error precedent)" % [id, type_id])
+		pool["_counter"] = int(pool._counter) - 1
+		return ""
+	(individu.proprietes as Dictionary)["_slot"] = slot
+	(pool.individus as Array).append(individu)
+	(pool.id_to_index as Dictionary)[id] = (pool.individus as Array).size() - 1
+	if monde != null:
+		monde.ajouter(individu, type_id, position)
+	return id

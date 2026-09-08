@@ -11,5 +11,6 @@
 	"deplacer_cpp": true,
 	"separation_active": true,
 	"rayon_separation": 2.0,
-	"paquets_partages": true
+	"paquets_partages": true,
+	"regime_masse": true
 }

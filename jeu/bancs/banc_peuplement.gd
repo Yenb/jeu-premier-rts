@@ -146,6 +146,19 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # sous-Dict partage. Isolation verrouillee par scripts/test_objet_isolation.gd.
 # false : comportement historique (deep copy complete a chaque fabrication).
 @export var paquets_partages: bool = true
+# REGIME MASSE (chantier "regime de masse en colonnes", 2026-09-08). true :
+# `_fabriquer_lot` appelle Peuplement.spawn_masse (colonnes seules, aucun Dict
+# `individu` fabrique). Les paquets par defaut (reserves 5 canaux,
+# deformation_etat, etats...) ne sont MEME PLUS FABRIQUES pour les unites
+# dormantes -- ils naitront a l'activation via `Peuplement.activer(pool, ..., index)`
+# quand un mecanisme reveillera une unite (aller simple pour ce chantier).
+# Le hot path continue de lire les colonnes uniquement -- rien ne bouge a l'ecran.
+# EXIGE deplacer_cpp=true : la passe deplacer GDScript oracle (`_monde.deplacer_simple(individu)`)
+# lit `individus[j]` qui reste vide sous masse ; le C++ (`deplacer_lot(cols.position)`)
+# est la seule voie viable. false : comportement du chantier COW precedent
+# (spawn regulier, un Dict individu par unite, paquets_partages=true partage
+# les sous-Dict).
+@export var regime_masse: bool = false
 
 var _pool: Dictionary = {}
 var _monde = null
@@ -234,6 +247,8 @@ func _charger_reglages_locaux() -> void:
 		rayon_separation = float(donnees.rayon_separation)
 	if donnees.has("paquets_partages"):
 		paquets_partages = bool(donnees.paquets_partages)
+	if donnees.has("regime_masse"):
+		regime_masse = bool(donnees.regime_masse)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -264,6 +279,15 @@ func _monter_scene() -> void:
 	camera.look_at(Vector3(0.0, 12.0, 0.0), Vector3.UP)
 
 func _monter_pool() -> void:
+	# GARDE : regime_masse EXIGE deplacer_cpp=true. La passe deplacer GDScript
+	# oracle (`_monde.deplacer_simple(individu)`) lit `individus[j].position` --
+	# `individus` est vide sous masse, la passe deplacer historique ne verrait
+	# aucune unite. L'index C++ (`deplacer_lot(cols.position)`) est la seule voie
+	# qui lit uniquement les colonnes. Push_error + repli sur regime_masse=false
+	# pour ne pas casser la simulation silencieusement.
+	if regime_masse and not deplacer_cpp:
+		push_error("banc_peuplement : regime_masse=true exige deplacer_cpp=true -- repli sur regime_masse=false.")
+		regime_masse = false
 	# brancher_monde=false : aucun Monde n'est cree, `null` circule aux spawns,
 	# `_monde.deplacer` n'est jamais appele (voir en-tete du banc, section MONDE).
 	# structure_simple=true : la subdivision adaptative est court-circuitee dans
@@ -345,6 +369,13 @@ func _fabriquer_lot() -> void:
 	# chrono prouvera le gain a l'ecran. Actif seulement sous actif_releve, meme
 	# gate que les chronos par frame.
 	var chrono_creation_debut: int = Time.get_ticks_usec() if actif_releve else 0
+	# La vitesse du type (types.json:mobile_test.vitesse) est lue UNE fois : sous
+	# regime masse, aucun Dict individu ne porte cette valeur (colonne vitesse
+	# alimentee directement au spawn_masse) ; sous regime normal, l'ancien chemin
+	# la posait dans proprietes puis _remplir_colonnes_depuis_individus la lisait.
+	# UN seul emplacement source dans les deux regimes -- le catalogue.
+	var proprietes_type: Dictionary = _catalogue.get(type_id, {})
+	var vitesse_type: float = float(proprietes_type.get("vitesse", 1.0))
 	var poses := 0
 	var tentatives := 0
 	while poses < nombre_individus and tentatives < nombre_individus * 10:
@@ -357,34 +388,49 @@ func _fabriquer_lot() -> void:
 		# +0.4 = demi-hauteur d'une boite_simple (0.8), reglage porte ici et pas
 		# dans peuplement.gd (agnostique du mesh).
 		var position := Vector3(x, float(y_sol_v) + 0.4, z)
-		# pousser=false : le push RS unique se fait apres la boucle, jamais par
-		# unite (sinon O(N^2) sur le buffer entier).
-		var id: String = Peuplement.spawn(_pool, _catalogue, type_id, position, _monde, false, paquets_partages)
-		if id.is_empty():
-			push_error("banc_peuplement : Peuplement.spawn a echoue a la tentative %d" % tentatives)
-			return
-		# Contrat Mouvement + Tick pose apres spawn (le banc decide du profil et
-		# de la politique -- Peuplement les ignore par doctrine).
-		var individu: Dictionary = _pool.individus[_pool.id_to_index[id]]
-		var p: Dictionary = individu.proprietes
-		p["profil"] = "simple"
-		p["cadence_tick"] = 1
-		p["velocite"] = Vector3.ZERO
-		p["velocite_desiree_horizontale"] = Vector3.ZERO
-		p["au_sol"] = false
-		p["gravite"] = 18.0
-		# Etat d'errance dans proprietes : direction horizontale + horloge de cap.
-		# Meme ordre de tirage RNG que l'ancien code (direction puis horloge) --
-		# le determinisme de la graine est preserve.
-		p["errance_direction"] = _nouvelle_direction()
-		p["errance_cap_horloge"] = _rng.randf_range(3.0, 8.0)
+		# ORDRE DE TIRAGE RNG identique dans les deux regimes (direction puis
+		# horloge) -- le determinisme de la graine est preserve tel qu'avant le
+		# chantier "regime de masse".
+		var direction_init: Vector3 = _nouvelle_direction()
+		var cap_horloge_init: float = _rng.randf_range(3.0, 8.0)
+		if regime_masse:
+			# Colonnes seules -- aucun Dict individu ne naitra tant qu'un mecanisme
+			# n'active pas cette unite (Peuplement.activer(pool, ..., index)).
+			# spawn_masse ecrit les 8 colonnes du peuplement en un push_back par
+			# colonne, sans allocation Dict individu ni fabrication Objet.
+			var slot: int = Peuplement.spawn_masse(_pool, position, vitesse_type, direction_init, cap_horloge_init)
+			if slot < 0:
+				push_error("banc_peuplement : Peuplement.spawn_masse a echoue a la tentative %d" % tentatives)
+				return
+		else:
+			# pousser=false : le push RS unique se fait apres la boucle, jamais par
+			# unite (sinon O(N^2) sur le buffer entier).
+			var id: String = Peuplement.spawn(_pool, _catalogue, type_id, position, _monde, false, paquets_partages)
+			if id.is_empty():
+				push_error("banc_peuplement : Peuplement.spawn a echoue a la tentative %d" % tentatives)
+				return
+			# Contrat Mouvement + Tick pose apres spawn (le banc decide du profil et
+			# de la politique -- Peuplement les ignore par doctrine).
+			var individu: Dictionary = _pool.individus[_pool.id_to_index[id]]
+			var p: Dictionary = individu.proprietes
+			p["profil"] = "simple"
+			p["cadence_tick"] = 1
+			p["velocite"] = Vector3.ZERO
+			p["velocite_desiree_horizontale"] = Vector3.ZERO
+			p["au_sol"] = false
+			p["gravite"] = 18.0
+			p["errance_direction"] = direction_init
+			p["errance_cap_horloge"] = cap_horloge_init
 		poses += 1
 	if poses < nombre_individus:
 		push_error("banc_peuplement : seulement %d/%d individus poses (%d tentatives)" % [poses, nombre_individus, tentatives])
-	# Remplir les colonnes du pool en batch (peuplement les a appendees vides
-	# a chaque spawn ; le banc y ecrit les vraies valeurs). Depack / mute /
-	# repack par colonne (CoW). Ordre = ordre de _pool.individus.
-	_remplir_colonnes_depuis_individus()
+	if not regime_masse:
+		# Remplir les colonnes du pool en batch (peuplement les a appendees vides
+		# a chaque spawn ; le banc y ecrit les vraies valeurs). Depack / mute /
+		# repack par colonne (CoW). Ordre = ordre de _pool.individus.
+		# Sous regime_masse : deja rempli directement au spawn_masse, cette passe
+		# est integralement sautee.
+		_remplir_colonnes_depuis_individus()
 	# PUSH RS UNIQUE : le buffer contient les 12 floats de chaque slot pose ci-dessus
 	# (spawn(..., false) les ecrit sans pousser). Un seul envoi au serveur de rendu
 	# pour tout le lot -- N=100 000, coup unique au lieu de N.
@@ -443,7 +489,13 @@ func _remplir_colonnes_depuis_individus() -> void:
 func _physics_process(delta: float) -> void:
 	if _pool.is_empty():
 		return
-	var count: int = (_pool.individus as Array).size()
+	# count = nombre d'unites VIVANTES dans les colonnes, valable dans les deux
+	# regimes. Sous regime normal, individus.size() == cols.position.size() (les
+	# colonnes sont maintenues alignees avec individus par le swap-remove). Sous
+	# regime masse, individus reste vide et cols.position porte toute la
+	# population -- lire cols.position.size() traite les deux uniformement.
+	var cols_positions_ref: PackedVector3Array = _pool.colonnes.position
+	var count: int = cols_positions_ref.size()
 	if count == 0:
 		return
 	# CHRONOS -- trois postes du hot path, en microsecondes. Sous actif_releve
