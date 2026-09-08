@@ -183,22 +183,39 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # 'epuise'. 0.4 = ralentit a 40% de sa vitesse nominale, visible a l'oeil. Retour a
 # 1.0 quand 'epuise' est retire (franchissement descendant).
 @export var vitesse_epuise_facteur: float = 0.4
-# ---- PASSE CANDIDATS (chantier "perception de masse en flux, fondation
-# GDScript", 2026-09-08). Une seule passe par frame lit l'index planaire
-# (cases_pour_niveau) et produit, pour chaque unite, la liste de ses voisins
-# REELLEMENT dans le rayon (le rouge, pas la case entiere). Structure de sortie :
-#   { offsets: PackedInt32Array (count+1), voisins: PackedInt32Array (total),
-#     distances: PackedFloat32Array (total, parallele a voisins) }
-# offsets[i]..offsets[i+1] delimite les voisins de l'unite i dans `voisins`.
-# `distances` porte deja la vraie distance (sqrt calcule UNE fois par paire) --
-# une future separation branchee sur cette structure evitera de resqrt.
-# La sortie est reutilisable par plusieurs comportements (separation, occlusion,
-# collision futures) au lieu que chacun rouvre les cases -- c'est ce que le
-# chantier prepare. AUCUN BRANCHEMENT ACTUEL : la separation existante
-# (separation_lot C++) reste en place et VERT tant que rien ne casse. Ce
-# chantier AJOUTE la passe + la mesure + le test de parite, il ne remplace pas.
-# candidats_actif=false coupe la passe (le poste candidats reste a 0).
-@export var candidats_actif: bool = true
+# ---- VUE (cone_oriente) + OCCLUSION en C++ (chantier "vue avec occlusion en
+# C++", 2026-09-08). vue_lot(positions, orientations, opacites, rayon,
+# cos_moitie_angle, largeur, seuil) fait TOUT en un seul parcours du voisinage
+# planaire : (1) voisins dans le rayon, (2) filtres par le cone d'angle
+# autour de l'orientation de chaque unite (patron perception.gd::_percevoir_cone_oriente),
+# (3) test d'occlusion contre les autres corps du meme voisinage 3x3 (jamais
+# une requete spatiale par paire, contrat prompt), (4) accumulation de la
+# separation dans le MEME parcours -- les voisins vus sont deja la. Sortie :
+# direction unitaire horizontale (Y=0) par unite. Un seul poste de chrono,
+# une seule frontiere.
+# La geometrie d'occlusion (t dans ]0,1[, distance laterale <= largeur, cumul
+# multiplicatif) est portee mot pour mot depuis scripts/occlusion.gd::facteur.
+# largeur_occlusion : tolerance laterale au segment percepteur -> voisin. Un
+# obstacle plus lateralement eloigne que ca ne compte pas.
+@export var largeur_occlusion: float = 0.5
+# Seuil du facteur d'occlusion sous lequel un voisin est retire du percu.
+# Convention historique du depot (test_banc_p1 : 0.001) : un facteur nul serait
+# trivialement rejete, 0.001 laisse passer un obstacle transparent tout en
+# refusant un obstacle opaque (facteur == 0.0).
+@export var seuil_facteur_occlusion: float = 0.001
+# Opacite uniforme des unites du peuplement : chaque unite est ce
+# corps-obstacle pour les autres. 1.0 = totalement opaque (blocage total).
+# Cablage local du banc, jamais un nom en dur en C++ (le C++ recoit un
+# PackedFloat32Array indexe par id, aveugle au nom de propriete).
+@export var opacite_unite: float = 1.0
+# Angle TOTAL du cone de vue en degres (patron scripts/perception.gd:
+# _percevoir_cone_oriente qui prend l'angle total puis divise par deux pour
+# comparer au cosinus de la moitie). 120.0 par defaut = un cone de vision
+# large. >= 360.0 degenere en sphere pure -- l'angle ne peut plus exclure
+# aucun voisin, comportement identique a un canal sans reglage d'angle. Le
+# C++ recoit le COSINUS de la moitie (calcule une fois cote banc), aucun acos
+# en boucle sur la masse.
+@export var angle_vue_deg: float = 120.0
 
 var _pool: Dictionary = {}
 var _monde = null
@@ -240,7 +257,6 @@ var _exposant_planaire: int = -1
 # dans cette meme seconde (pour rendre la moyenne PAR FRAME). `_temps_prochain`
 # = timestamp secondes de la prochaine impression (Time.get_ticks_msec / 1000).
 var _us_errance: int = 0
-var _us_separation: int = 0
 var _us_physique_buffer: int = 0
 var _us_multimesh: int = 0
 # Poste `deplacer` : passe individu.position <- cols.position + N appels
@@ -251,17 +267,12 @@ var _us_deplacer: int = 0
 # se declenche pas (quotient sur les frames accumulees dans la seconde) -- c'est
 # meme le point de la cadence lente. Voir passe_fatigue().
 var _us_fatigue: int = 0
-# Poste `candidats` (chantier "perception de masse en flux"). Chrono de la passe
-# candidats (voir @export candidats_actif). Reste 0 sous candidats_actif=false ou
-# quand aucun niveau planaire n'est ouvert (separation_active=false).
-var _us_candidats: int = 0
-# DERNIERS CANDIDATS. Sortie de la passe candidats de la frame courante :
-#   { offsets: PackedInt32Array, voisins: PackedInt32Array, distances: PackedFloat32Array }
-# Reste {} tant que la passe n'a jamais tourne. Structure PARTAGEE entre futurs
-# consommateurs (separation rebranchee dessus, occlusion, collision). Ce chantier
-# la produit mais ne la consomme pas -- la separation existante (separation_lot
-# C++) reste en place et intacte.
-var _derniers_candidats: Dictionary = {}
+# Poste `vue` (chantier "vue avec occlusion en C++"). Chrono du seul parcours
+# du voisinage par frame -- vue_lot lit l'index planaire, filtre les voisins
+# par (rayon + cone d'angle autour de l'orientation), applique l'occlusion
+# sur les voisins retenus, ET accumule la separation dans le MEME parcours.
+# Un seul poste, une seule frontiere.
+var _us_vue: int = 0
 # Catalogue seuils_etat.json charge une fois au _ready. Passe la sur SeuilEtat.avancer.
 var _catalogue_seuils: Dictionary = {}
 # CAPACITE du canal `sommeil` sur mobile_test : lue une fois au _fabriquer_lot depuis
@@ -331,8 +342,14 @@ func _charger_reglages_locaux() -> void:
 		cout_base_sommeil_demo = float(donnees.cout_base_sommeil_demo)
 	if donnees.has("vitesse_epuise_facteur"):
 		vitesse_epuise_facteur = float(donnees.vitesse_epuise_facteur)
-	if donnees.has("candidats_actif"):
-		candidats_actif = bool(donnees.candidats_actif)
+	if donnees.has("largeur_occlusion"):
+		largeur_occlusion = float(donnees.largeur_occlusion)
+	if donnees.has("seuil_facteur_occlusion"):
+		seuil_facteur_occlusion = float(donnees.seuil_facteur_occlusion)
+	if donnees.has("opacite_unite"):
+		opacite_unite = float(donnees.opacite_unite)
+	if donnees.has("angle_vue_deg"):
+		angle_vue_deg = float(donnees.angle_vue_deg)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -449,6 +466,12 @@ func _monter_pool() -> void:
 		"cap_horloge": 0.0,
 		"vitesse": 1.0,
 		"slot": 0,
+		# Opacite de chaque unite pour le test d'occlusion de perception_lot.
+		# Uniforme sur ce peuplement (opacite_unite comme defaut) -- l'appelant
+		# du C++ (perception_lot) lit cette colonne indexee par id, aveugle au
+		# nom de propriete. Le nom "opacite" est un choix local du banc (patron
+		# CLAUDE.md § ADN : un banc peut nommer une categorie).
+		"opacite": opacite_unite,
 	}
 	_pool = Peuplement.creer_pool(nombre_individus * 2, mesh, get_viewport().get_world_3d().scenario, colonnes)
 
@@ -595,25 +618,36 @@ func _physics_process(delta: float) -> void:
 	# branche par poste plutot que trois inconditionnels) : instrumenter n'est
 	# pas biaiser la mesure.
 	var chrono_intention_debut: int = Time.get_ticks_usec() if actif_releve else 0
-	# ROUND 11 (revise) : deux passes au lieu de trois.
-	# PASSE 1 -- intention. Deux chemins :
-	#   separation_active=true : UN appel C++ separation_lot(cols.position, rayon)
-	#     rend une direction unitaire de repulsion par unite (voisinage lu dans
-	#     l'index deja tenu). desiree[i] = direction * vitesse[i], ecrase
-	#     entierement l'errance. Exige _index_cpp != null (deplacer_cpp + brancher_monde) ;
-	#     sinon push_error et repli sur l'errance (le poste separation reste a 0).
-	#   separation_active=false : errance historique. desiree[i] n'est reecrit QUE
-	#     quand l'horloge expire (direction change) -- les autres frames, desiree
-	#     conserve sa valeur.
+	# INTENTION. Deux chemins :
+	#   separation_active=true : UN SEUL APPEL C++ -- vue_lot(positions,
+	#     orientations, opacites, rayon, cos_moitie_angle, largeur, seuil).
+	#     UN SEUL PARCOURS DU VOISINAGE PAR FRAME. Pour chaque unite : voisins
+	#     dans le rayon ET dans le cone d'angle autour de son orientation, PUIS
+	#     filtrage occlusion (obstacles = les autres corps du meme voisinage
+	#     3x3 planaire, jamais une requete spatiale par paire), PUIS accumulation
+	#     de la separation dans le MEME parcours (les voisins vus sont deja la).
+	#     Sortie : direction unitaire horizontale (Y=0) de repulsion par unite.
+	#     Un seul poste `vue`, une seule frontiere.
+	#   separation_active=false : errance historique. desiree[i] n'est reecrit
+	#     QUE quand l'horloge expire.
 	var cols: Dictionary = _pool.colonnes
 	var vitesses: PackedFloat32Array = cols.vitesse
 	var desirees: PackedVector3Array = cols.desiree
 	var chrono_intention_fin: int = 0
 	if separation_active and _index_cpp != null:
-		# UN appel, tout le lot. Le C++ tient son index natif (unordered_map) et
-		# lit les cases voisines touchees par rayon_separation. Sortie : direction
-		# horizontale unitaire (Y=0) ou Vector3.ZERO si aucun voisin dans rayon.
-		var directions_sep: PackedVector3Array = _index_cpp.separation_lot(cols.position, rayon_separation)
+		# Cos de la moitie de l'angle total, calcule UNE fois. Cone_oriente
+		# (perception.gd) compare orientation.dot(direction_vers_voisin) a ce
+		# cos ; angle >= 360 -> cos_moitie = -1.0 (sphere pure, accepte tout).
+		var demi_angle_rad: float = deg_to_rad(angle_vue_deg * 0.5)
+		var cos_moitie_angle: float = -1.0 if angle_vue_deg >= 360.0 else cos(demi_angle_rad)
+		var directions_sep: PackedVector3Array = _index_cpp.vue_lot(
+			cols.position,
+			cols.direction,
+			cols.opacite,
+			rayon_separation,
+			cos_moitie_angle,
+			largeur_occlusion,
+			seuil_facteur_occlusion)
 		var k: int = 0
 		while k < count:
 			desirees[k] = directions_sep[k] * vitesses[k]
@@ -621,7 +655,7 @@ func _physics_process(delta: float) -> void:
 		cols.desiree = desirees
 		if actif_releve:
 			chrono_intention_fin = Time.get_ticks_usec()
-			_us_separation += chrono_intention_fin - chrono_intention_debut
+			_us_vue += chrono_intention_fin - chrono_intention_debut
 	else:
 		if separation_active and _index_cpp == null:
 			push_error("banc_peuplement : separation_active=true mais _index_cpp null (deplacer_cpp=%s, brancher_monde=%s) -- repli sur errance." % [str(deplacer_cpp), str(brancher_monde)])
@@ -690,25 +724,10 @@ func _physics_process(delta: float) -> void:
 				individu.position = positions_apres[j]
 				_monde.deplacer_simple(individu)
 				j += 1
-	# PASSE CANDIDATS (chantier "perception de masse en flux", 2026-09-08).
-	# Fondation partagee : cette passe produit, pour chaque unite, ses voisins
-	# reellement dans le rayon (pas juste les corps de la case). La sortie CSR
-	# reste dans _derniers_candidats -- ce chantier ne la CONSOMME PAS (la
-	# separation existante separation_lot C++ reste en place et intacte). Un
-	# chantier ulterieur rebranchera separation, occlusion, collision dessus.
-	var chrono_candidats_debut: int = 0
-	if actif_releve:
-		chrono_candidats_debut = Time.get_ticks_usec()
-		_us_deplacer += chrono_candidats_debut - chrono_deplacer_debut
-	if candidats_actif and _index_cpp != null and _exposant_planaire >= 0:
-		var cases_planaires: Dictionary = _index_cpp.cases_pour_niveau(_exposant_planaire)
-		var arete_planaire: float = pow(2.0, float(_exposant_planaire))
-		var inv_arete_planaire: float = 1.0 / arete_planaire
-		_derniers_candidats = passe_candidats(cases_planaires, cols.position, inv_arete_planaire, rayon_separation)
 	var chrono_fatigue_debut: int = 0
 	if actif_releve:
 		chrono_fatigue_debut = Time.get_ticks_usec()
-		_us_candidats += chrono_fatigue_debut - chrono_candidats_debut
+		_us_deplacer += chrono_fatigue_debut - chrono_deplacer_debut
 	# PASSE FATIGUE, cadence lente : n'agit QUE toutes les cadence_fatigue_frames
 	# images. Uniforme pour toutes les unites, jamais fonction de la distance au
 	# joueur (LOD par distance INTERDIT dans ce depot). Delta effectif = cadence *
@@ -746,22 +765,20 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 	# Divisions promues en float pour eviter le warning GDScript "Integer division.
 	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
 	var inv_frames: float = 1.0 / float(frames)
-	print("[peuplement] N=%d fps=%d errance=%dus separation=%dus phys+buffer=%dus deplacer=%dus candidats=%dus fatigue=%dus mm_set=%dus" % [
+	print("[peuplement] N=%d fps=%d errance=%dus vue=%dus phys+buffer=%dus deplacer=%dus fatigue=%dus mm_set=%dus" % [
 		count,
 		int(Engine.get_frames_per_second()),
 		int(float(_us_errance) * inv_frames),
-		int(float(_us_separation) * inv_frames),
+		int(float(_us_vue) * inv_frames),
 		int(float(_us_physique_buffer) * inv_frames),
 		int(float(_us_deplacer) * inv_frames),
-		int(float(_us_candidats) * inv_frames),
 		int(float(_us_fatigue) * inv_frames),
 		int(float(_us_multimesh) * inv_frames),
 	])
 	_us_errance = 0
-	_us_separation = 0
+	_us_vue = 0
 	_us_physique_buffer = 0
 	_us_deplacer = 0
-	_us_candidats = 0
 	_us_fatigue = 0
 	_us_multimesh = 0
 	_frames_accumulees = 0
@@ -1253,136 +1270,6 @@ func _passe_fatigue(delta_cadence: float, vitesse_type: float) -> void:
 		else:
 			vitesses[slot] = vitesse_type
 	cols.vitesse = vitesses
-
-## PASSE CANDIDATS (chantier "perception de masse en flux, fondation GDScript",
-## 2026-09-08). STATIC : testable independamment du banc, l'appelant fournit
-## le tableau `cases` (Vector3i -> PackedInt32Array), `positions`,
-## `inv_arete` (= 1 / arete du niveau planaire) et `rayon`. Rend une structure
-## CSR (Compressed Sparse Row) reutilisable :
-##
-##   {
-##     "offsets"   : PackedInt32Array de taille count+1 (offsets[i]..offsets[i+1]
-##                   delimite les voisins de i dans `voisins`),
-##     "voisins"   : PackedInt32Array de taille total (concatenation),
-##     "distances" : PackedFloat32Array de meme taille (parallele -- la distance
-##                   deja calculee, evite un re-sqrt pour tout consommateur),
-##   }
-##
-## SEMANTIQUE. Un id j apparait dans les voisins de i (et reciproquement)
-## quand la distance HORIZONTALE (dx, dz) entre positions[i] et positions[j]
-## est STRICTEMENT positive ET STRICTEMENT inferieure au rayon. Auto-paire
-## (i == j) exclue. Le filtre porte sur la vraie distance, jamais sur la
-## simple appartenance a la case (rejet du "orange" hors-rayon).
-##
-## PATRON DEMI-PAIRE, DEUX PASSES. Chaque paire (a, b) avec a < b est
-## visitee UNE fois via le filtre `voisin > id`. Passe 1 : denombrement
-## (nb_voisins[i] et nb_voisins[j] incrementes ensemble). Prefix sum sur les
-## offsets. Passe 2 : remplissage symetrique (voisins de i recoivent j,
-## voisins de j recoivent i -- meme distance). Deux hashmap lookups par
-## paire au lieu d'un, mais on evite l'allocation d'Array par unite
-## (l'alternative Array-of-Arrays coute une allocation par unite en
-## GDScript et scale mal a N=100 000).
-##
-## CASES PLANAIRES. La clef lue est Vector3i(cx, 0, cz) -- l'index passe en
-## parametre doit avoir ete ecrase Y=0 lors de l'insertion (voir
-## IndexSpatial::ouvrir_niveau_planaire et Niveau::planaire). Sur un niveau
-## 3D, deux unites de meme (x, z) mais altitudes differentes se rateraient.
-static func passe_candidats(cases: Dictionary, positions: PackedVector3Array, inv_arete: float, rayon: float) -> Dictionary:
-	var count: int = positions.size()
-	var nb_voisins := PackedInt32Array()
-	nb_voisins.resize(count)
-	var offsets := PackedInt32Array()
-	offsets.resize(count + 1)
-	var voisins := PackedInt32Array()
-	var distances := PackedFloat32Array()
-	if count <= 0 or rayon <= 0.0:
-		return { "offsets": offsets, "voisins": voisins, "distances": distances }
-	var rayon2: float = rayon * rayon
-	# PASSE 1 -- denombrement demi-paire.
-	var i: int = 0
-	while i < count:
-		var p: Vector3 = positions[i]
-		var cx_min: int = floori((p.x - rayon) * inv_arete)
-		var cx_max: int = floori((p.x + rayon) * inv_arete)
-		var cz_min: int = floori((p.z - rayon) * inv_arete)
-		var cz_max: int = floori((p.z + rayon) * inv_arete)
-		var cx: int = cx_min
-		while cx <= cx_max:
-			var cz: int = cz_min
-			while cz <= cz_max:
-				var cle := Vector3i(cx, 0, cz)
-				if cases.has(cle):
-					var contenu: PackedInt32Array = cases[cle]
-					var n: int = contenu.size()
-					var k: int = 0
-					while k < n:
-						var j: int = contenu[k]
-						if j > i:
-							var q: Vector3 = positions[j]
-							var dx: float = p.x - q.x
-							var dz: float = p.z - q.z
-							var d2: float = dx * dx + dz * dz
-							if d2 < rayon2 and d2 > 1.0e-8:
-								nb_voisins[i] += 1
-								nb_voisins[j] += 1
-						k += 1
-				cz += 1
-			cx += 1
-		i += 1
-	# PREFIX SUM.
-	var total: int = 0
-	i = 0
-	while i < count:
-		offsets[i] = total
-		total += nb_voisins[i]
-		i += 1
-	offsets[count] = total
-	voisins.resize(total)
-	distances.resize(total)
-	# CURSOR par unite pour la passe 2.
-	var cursor := PackedInt32Array()
-	cursor.resize(count)
-	# PASSE 2 -- remplissage. Meme parcours de paires (a, b > a), meme test
-	# de distance -- deterministe : la meme paire est retenue ou rejetee
-	# comme en passe 1, offsets/nb_voisins restent coherents.
-	i = 0
-	while i < count:
-		var p2: Vector3 = positions[i]
-		var cx_min2: int = floori((p2.x - rayon) * inv_arete)
-		var cx_max2: int = floori((p2.x + rayon) * inv_arete)
-		var cz_min2: int = floori((p2.z - rayon) * inv_arete)
-		var cz_max2: int = floori((p2.z + rayon) * inv_arete)
-		var cx2: int = cx_min2
-		while cx2 <= cx_max2:
-			var cz2: int = cz_min2
-			while cz2 <= cz_max2:
-				var cle2 := Vector3i(cx2, 0, cz2)
-				if cases.has(cle2):
-					var contenu2: PackedInt32Array = cases[cle2]
-					var n2: int = contenu2.size()
-					var k2: int = 0
-					while k2 < n2:
-						var j2: int = contenu2[k2]
-						if j2 > i:
-							var q2: Vector3 = positions[j2]
-							var dx2: float = p2.x - q2.x
-							var dz2: float = p2.z - q2.z
-							var d22: float = dx2 * dx2 + dz2 * dz2
-							if d22 < rayon2 and d22 > 1.0e-8:
-								var d: float = sqrt(d22)
-								var pos_i: int = offsets[i] + cursor[i]
-								voisins[pos_i] = j2
-								distances[pos_i] = d
-								cursor[i] += 1
-								var pos_j: int = offsets[j2] + cursor[j2]
-								voisins[pos_j] = i
-								distances[pos_j] = d
-								cursor[j2] += 1
-						k2 += 1
-				cz2 += 1
-			cx2 += 1
-		i += 1
-	return { "offsets": offsets, "voisins": voisins, "distances": distances }
 
 func _exit_tree() -> void:
 	Peuplement.detruire_pool(_pool)

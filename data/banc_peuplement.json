@@ -17,5 +17,7 @@
 	"cadence_fatigue_frames": 30,
 	"cout_base_sommeil_demo": 20.0,
 	"vitesse_epuise_facteur": 0.4,
-	"candidats_actif": true
+	"largeur_occlusion": 0.5,
+	"seuil_facteur_occlusion": 0.001,
+	"opacite_unite": 1.0
 }

@@ -16,7 +16,7 @@ void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("ouvrir_niveau_planaire", "exposant"), &IndexSpatial::ouvrir_niveau_planaire);
 	ClassDB::bind_method(D_METHOD("deplacer_lot", "positions"), &IndexSpatial::deplacer_lot);
 	ClassDB::bind_method(D_METHOD("cases_pour_niveau", "exposant"), &IndexSpatial::cases_pour_niveau);
-	ClassDB::bind_method(D_METHOD("separation_lot", "positions", "rayon"), &IndexSpatial::separation_lot);
+	ClassDB::bind_method(D_METHOD("vue_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::vue_lot);
 }
 
 IndexSpatial::IndexSpatial() {}
@@ -126,32 +126,31 @@ void IndexSpatial::deplacer_lot(const PackedVector3Array &positions) {
 	}
 }
 
-PackedVector3Array IndexSpatial::separation_lot(const PackedVector3Array &positions, float rayon) const {
+PackedVector3Array IndexSpatial::vue_lot(
+		const PackedVector3Array &positions,
+		const PackedVector3Array &orientations,
+		const PackedFloat32Array &opacites,
+		float rayon,
+		float cos_moitie_angle,
+		float largeur,
+		float seuil_facteur) const {
 	PackedVector3Array out;
 	int count = positions.size();
 	out.resize(count);
 	Vector3 *out_w = out.ptrw();
-	// Init a zero -- neutre si aucun niveau planaire, rayon nul, count nul,
-	// et base de l'accumulation par paires ci-dessous (chaque paire ajoute
-	// une contribution a out_w[id] et l'opposee a out_w[voisin]).
 	for (int i = 0; i < count; i++) {
 		out_w[i] = Vector3();
 	}
 	if (count <= 0 || _niveaux.empty() || rayon <= 0.0f) {
 		return out;
 	}
-	// CHOIX DU NIVEAU LU. La separation EXIGE un niveau PLANAIRE (voir
-	// Niveau::planaire) -- balayer l'axe Y sur un niveau 3D interrogerait
-	// hashmap.find pour rien sur des plans Y quasi tous vides
-	// (piege verifie : ~330 000 us/frame a N=100 000 entasses). Sur un
-	// niveau planaire, toutes les unites d'une meme colonne (fx, fz) sont
-	// dans la meme case, une seule find par case-colonne. En plus : l'arete
-	// du niveau doit rester du meme ordre que le rayon -- sinon chaque
-	// case ramasse plus de candidats que le rayon n'en couvre et la boucle
-	// interne degenere en quasi-N^2 local. On prend donc le plus petit
-	// exposant PLANAIRE dont l'arete est >= rayon. Aucun niveau planaire
-	// ouvert -> push_error + retour a zero (contrat clair, un seul chemin,
-	// l'appelant doit ouvrir un ouvrir_niveau_planaire dedie).
+	if (orientations.size() != count || opacites.size() != count) {
+		ERR_PRINT("IndexSpatial::vue_lot : orientations/opacites de taille differente de positions. Retour a zero.");
+		return out;
+	}
+	// CHOIX DU NIVEAU PLANAIRE, meme regle qu'auparavant : plus petit exposant
+	// planaire dont l'arete est >= rayon, sinon plus grande arete planaire en
+	// repli, sinon push_error + zero (contrat un seul chemin).
 	const Niveau *choisi = nullptr;
 	float meilleure_arete = 0.0f;
 	for (const Niveau &n : _niveaux) {
@@ -167,8 +166,6 @@ PackedVector3Array IndexSpatial::separation_lot(const PackedVector3Array &positi
 		}
 	}
 	if (choisi == nullptr) {
-		// Repli : plus grande arete PLANAIRE ouverte. Si aucune, l'appelant
-		// n'a pas respecte le contrat -- alarme et retour a zero.
 		for (const Niveau &n : _niveaux) {
 			if (!n.planaire) {
 				continue;
@@ -181,24 +178,35 @@ PackedVector3Array IndexSpatial::separation_lot(const PackedVector3Array &positi
 		}
 	}
 	if (choisi == nullptr) {
-		ERR_PRINT("IndexSpatial::separation_lot : aucun niveau PLANAIRE ouvert -- appeler ouvrir_niveau_planaire(exposant) avant. Retour a zero.");
+		ERR_PRINT("IndexSpatial::vue_lot : aucun niveau PLANAIRE ouvert -- appeler ouvrir_niveau_planaire(exposant) avant. Retour a zero.");
 		return out;
 	}
 	const Niveau &niveau = *choisi;
 	const float inv_a = niveau.inv_arete;
 	const Vector3 *pos_r = positions.ptr();
+	const Vector3 *orient_r = orientations.ptr();
+	const float *opac_r = opacites.ptr();
 	const float rayon2 = rayon * rayon;
-	// DEMI-PAIRE : chaque paire (id, voisin > id) est visitee UNE fois. La
-	// contribution est symetrique -- dx*w ajoute a id, -dx*w ajoute a voisin.
-	// Puis normalisation en seconde passe courte. Resultat mathematique
-	// identique a l'ancienne version qui accumulait par id dans des locales
-	// ax/az (verrouille par scripts/test_separation_cpp.gd).
+	const float largeur2 = largeur * largeur;
+
+	// Voisinage local reutilise entre unites -- evite N=100000 allocations de
+	// vector par frame. clear() garde la capacite acquise.
+	std::vector<int32_t> voisinage;
+	voisinage.reserve(64);
+
 	for (int32_t id = 0; id < count; id++) {
 		const Vector3 &p = pos_r[id];
+		const Vector3 &orient = orient_r[id];
 		int cx_min = (int)std::floor((p.x - rayon) * inv_a);
 		int cx_max = (int)std::floor((p.x + rayon) * inv_a);
 		int cz_min = (int)std::floor((p.z - rayon) * inv_a);
 		int cz_max = (int)std::floor((p.z + rayon) * inv_a);
+
+		// COLLECTE du voisinage 3x3 planaire (tous corps sauf id). Sert a la
+		// fois pour l'iteration candidats ET pour la liste d'obstacles du test
+		// d'occlusion -- jamais une requete spatiale supplementaire par paire
+		// (c'est le n^2 a eviter, contrat prompt).
+		voisinage.clear();
 		for (int cx = cx_min; cx <= cx_max; cx++) {
 			for (int cz = cz_min; cz <= cz_max; cz++) {
 				auto it = niveau.cases.find(Vector3i(cx, 0, cz));
@@ -208,47 +216,89 @@ PackedVector3Array IndexSpatial::separation_lot(const PackedVector3Array &positi
 				const std::vector<int32_t> &contenu = it->second;
 				const int n = (int)contenu.size();
 				for (int k = 0; k < n; k++) {
-					int32_t voisin = contenu[k];
-					if (voisin <= id) {
-						// Filtre demi-paire : la paire (id, voisin<id) a deja
-						// ete traitee quand id iterait sur voisin (ou l'auto-
-						// comparaison id==id, sautee).
-						continue;
+					int32_t v = contenu[k];
+					if (v != id) {
+						voisinage.push_back(v);
 					}
-					const Vector3 &q = pos_r[voisin];
-					float dx = p.x - q.x;
-					float dz = p.z - q.z;
-					float d2 = dx * dx + dz * dz;
-					if (d2 > rayon2 || d2 <= 1e-8f) {
-						continue;
-					}
-					float d = std::sqrt(d2);
-					float w = (rayon - d) / d;
-					float wx = dx * w;
-					float wz = dz * w;
-					// Contribution symetrique : force sur id = (p - q) * w,
-					// force sur voisin = (q - p) * w = -force sur id.
-					out_w[id].x += wx;
-					out_w[id].z += wz;
-					out_w[voisin].x -= wx;
-					out_w[voisin].z -= wz;
 				}
 			}
 		}
-	}
-	// SECONDE PASSE : normaliser chaque accumulateur en direction unitaire
-	// horizontale (Y=0). N sqrt supplementaires -- negligeables devant les
-	// N*voisins sqrt evites dans la boucle principale (une paire = un sqrt
-	// contre deux avant).
-	for (int32_t id = 0; id < count; id++) {
-		float x = out_w[id].x;
-		float z = out_w[id].z;
-		float len2 = x * x + z * z;
+
+		float ax = 0.0f;
+		float az = 0.0f;
+		const int nv = (int)voisinage.size();
+		for (int a = 0; a < nv; a++) {
+			int32_t j = voisinage[a];
+			const Vector3 &q = pos_r[j];
+			float dx = p.x - q.x;
+			float dz = p.z - q.z;
+			float d2 = dx * dx + dz * dz;
+			// (1) DISTANCE strictement inferieure au rayon.
+			if (d2 >= rayon2 || d2 <= 1e-8f) {
+				continue;
+			}
+			float d = std::sqrt(d2);
+			// (2) CONE : cos(angle entre orient et diff_vers_voisin) >=
+			// cos_moitie_angle. diff_vers_voisin = q - p (composantes -dx, -dz),
+			// orient suppose unitaire horizontal. Comparaison sans acos.
+			float dot_vers_voisin = -(orient.x * dx + orient.z * dz);
+			if (dot_vers_voisin < cos_moitie_angle * d) {
+				continue;
+			}
+			// (3) OCCLUSION : geometrie de scripts/occlusion.gd::facteur portee
+			// mot pour mot. Obstacles = les autres corps du voisinage courant.
+			// vecteur = vers - depuis = q - p (composantes planaires -dx, -dz).
+			// longueur_carre = d2. Pour chaque obstacle k :
+			//   t = (pos_k - depuis) . vecteur / longueur_carre
+			//   si t <= 0 ou t >= 1 skip
+			//   point_sur_segment = depuis + vecteur * t
+			//   distance_laterale = |pos_k - point_sur_segment|
+			//   si distance_laterale > largeur skip
+			//   facteur *= (1 - clamp(opacite_k, 0, 1))
+			float facteur = 1.0f;
+			float vx = -dx;
+			float vz = -dz;
+			for (int b = 0; b < nv; b++) {
+				if (b == a) {
+					continue;
+				}
+				int32_t k = voisinage[b];
+				const Vector3 &r = pos_r[k];
+				float ok_x = r.x - p.x;
+				float ok_z = r.z - p.z;
+				float t = (ok_x * vx + ok_z * vz) / d2;
+				if (t <= 0.0f || t >= 1.0f) {
+					continue;
+				}
+				float sx = p.x + t * vx;
+				float sz = p.z + t * vz;
+				float lat_x = r.x - sx;
+				float lat_z = r.z - sz;
+				float lat2 = lat_x * lat_x + lat_z * lat_z;
+				if (lat2 > largeur2) {
+					continue;
+				}
+				float opac = opac_r[k];
+				if (opac < 0.0f) opac = 0.0f;
+				if (opac > 1.0f) opac = 1.0f;
+				facteur *= (1.0f - opac);
+				if (facteur <= seuil_facteur) {
+					break;
+				}
+			}
+			if (facteur <= seuil_facteur) {
+				continue;
+			}
+			// (4) SEPARATION : contribution accumulee dans le MEME parcours.
+			float w = (rayon - d) / d;
+			ax += dx * w;
+			az += dz * w;
+		}
+		// Normalisation en direction unitaire horizontale (Y=0).
+		float len2 = ax * ax + az * az;
 		if (len2 > 1e-8f) {
 			float inv_len = 1.0f / std::sqrt(len2);
-			out_w[id] = Vector3(x * inv_len, 0.0f, z * inv_len);
-		} else {
-			out_w[id] = Vector3();
+			out_w[id] = Vector3(ax * inv_len, 0.0f, az * inv_len);
 		}
 	}
 	return out;

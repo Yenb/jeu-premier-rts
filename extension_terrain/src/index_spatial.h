@@ -114,70 +114,50 @@ public:
 	// avec l'index GDScript. Reserve aux tests, pas au hot path.
 	Dictionary cases_pour_niveau(int exposant) const;
 
-	// SEPARATION EN LOT -- premiere brique d'IA de masse (perception +
-	// intention en une passe C++). Pour chaque id, lit les cases touchees
-	// par `rayon` autour de sa position (l'index est fait pour ca : voisinage
-	// borne par le rayon sur chaque axe, JAMAIS de scan global) et rend une
-	// direction horizontale UNITAIRE de repulsion (Y = 0). Vecteur nul si
-	// aucun voisin dans rayon.
+	// VUE (cone_oriente) + OCCLUSION EN LOT (chantier "vue avec occlusion en
+	// C++", 2026-09-08). UN SEUL PARCOURS DU VOISINAGE PAR FRAME, fait tout :
+	// (1) voisins dans le rayon (distance horizontale strictement inferieure a
+	// ), (2) filtre par cone d'angle autour de l'orientation de chaque
+	// unite (cos(diff, orient) >= cos_moitie_angle, patron
+	// scripts/perception.gd::_percevoir_cone_oriente), (3) test d'occlusion
+	// contre les autres corps du meme voisinage 3x3 planaire (geometrie de
+	// scripts/occlusion.gd::facteur portee mot pour mot -- t dans ]0,1[,
+	// distance laterale <= largeur, cumul multiplicatif de (1 - opacite)), un
+	// voisin dont le facteur final <=  est RETIRE, (4)
+	// accumulation de la separation dans le MEME parcours -- les voisins vus
+	// sont deja la, aucun re-parcours. Sortie normalisee en direction unitaire
+	// horizontale (Y=0) par unite.
 	//
-	// EXIGE UN NIVEAU PLANAIRE (voir ouvrir_niveau_planaire et
-	// Niveau::planaire) : la separation est planaire, elle NE BALAIE JAMAIS
-	// l'axe Y. Sur un niveau 3D, deplacer_lot insererait chaque unite avec
-	// son propre cy = floor(y * inv_a) -- deux unites de meme (x, z) mais
-	// altitudes differentes tomberaient dans des cases distinctes et se
-	// louperaient. Le niveau planaire force cy=0 dans la clef d'insertion,
-	// separation_lot lit UNE case cases[(cx, 0, cz)] par colonne autour de
-	// l'id -- gain massif de hashmap.find (chantier "degraissage
-	// separation_lot", 2026-09-08 : ~330 000 us/frame avec balayage Y ->
-	// nettement moins sur un niveau planaire, releve en jeu).
-	// Aucun niveau planaire ouvert : push_error, retour a zero (contrat
-	// clair, un seul chemin -- l'appelant doit ouvrir explicitement un
-	// niveau planaire dedie a la separation).
+	// OBSTACLES = voisinage courant : JAMAIS une requete spatiale par paire
+	// percepteur-voisin (ce serait le piege n^2 documente dans le prompt). Les
+	// obstacles sont les corps deja lus dans les cases 3x3 planaires visitees.
 	//
-	// DEMI-PAIRE (meme chantier) : la force de separation est SYMETRIQUE
-	// (poussee A->B = -(poussee B->A)). La passe visite chaque paire (id,
-	// voisin > id) UNE fois, calcule le poids UNE fois (un sqrt au lieu de
-	// deux), accumule dans out_w[id] ET (avec signe oppose) dans
-	// out_w[voisin]. La normalisation, qui vivait dans des locales par id,
-	// est deportee en SECONDE PASSE courte sur les count sorties -- N sqrt
-	// finaux, negligeables devant N*voisins sqrt evites dans la boucle. Le
-	// resultat mathematique final est identique (verrouille par
-	// scripts/test_separation_cpp.gd contre l'oracle O(N^2)).
+	// OPACITE PAR-ID :  est un PackedFloat32Array de meme taille que
+	// , opacites[k] est l'opacite de l'id k. Aveugle au nom de la
+	// propriete du monde -- c'est l'appelant (banc) qui aplatit la propriete
+	// en colonne AVANT l'appel. Ce fichier ne connait aucun nom de propriete.
 	//
-	// Voisinage : sur chaque axe, cases visitees = floor((p - rayon)/arete)
-	// a floor((p + rayon)/arete). Pour un rayon < arete, c'est la case de
-	// l'id + jusqu'a 27 voisines (3 x 3 x 3 en 3D), typiquement 4 a 8. Le
-	// choix documente le contrat : le rayon doit rester inferieur ou egal a
-	// l'arete du niveau pour rester dans le regime borne ; au-dela le nombre
-	// de cases visitees croit en cube. L'appelant fixe le rayon en connaissance.
+	// ORIENTATION PAR-ID :  est un PackedVector3Array de meme
+	// taille, orientations[k] est le vecteur unitaire (horizontal) que l'id k
+	// regarde. Le banc alimente cette colonne (typiquement la direction de
+	// deplacement d'errance).
 	//
-	// CHOIX DU NIVEAU LU (auto). separation_lot cherche parmi les niveaux
-	// ouverts le PLUS PETIT dont l'arete est >= rayon -- une case couvre
-	// alors le rayon sur chaque axe, la boucle interne ne voit qu'une
-	// poignee de voisins. Sinon (aucun niveau assez fin ouvert) : plus
-	// grande arete disponible en repli. REGLE STRUCTURELLE : l'arete d'un
-	// niveau doit suivre le rayon de la requete qui le lit ; une requete
-	// sur un niveau d'arete >> rayon degenere en quasi-N^2 local (chaque
-	// case ramasse des milliers de candidats hors rayon). L'appelant qui
-	// veut de la separation ouvre donc un niveau d'exposant adapte au
-	// rayon EN PLUS du niveau du deplacer (deplacer_lot itere tous les
-	// niveaux ouverts, chacun coute une passe -- prix acceptable pour la
-	// baisse de la separation qui domine autrement).
+	// COS_MOITIE_ANGLE : precalcule cote banc (cos(deg2rad(angle_deg/2))),
+	// -1.0 pour un cone > 360 degres (sphere pure). Aucun acos en boucle.
 	//
-	// Distance : horizontale seule (dx, dz), y ignore -- les unites du
-	// peuplement vivent au sol, un ecart vertical de quelques cellules
-	// n'entre pas dans la separation d'un tapis d'unites. Poids classique
-	// boid : diff * (rayon - d) / d, sommes puis normalisation finale.
+	// EXIGE UN NIVEAU PLANAIRE (voir ouvrir_niveau_planaire / Niveau::planaire).
+	// Aucun niveau planaire ouvert : push_error, retour a directions nulles.
 	//
-	// Utilise le PREMIER niveau ouvert (le peuplement n'en ouvre qu'un). NE
-	// MODIFIE PAS l'index (const). L'appelant a du appeler deplacer_lot avec
-	// les memes positions avant cet appel pour que l'index soit a jour --
-	// sinon la separation lit des voisinages d'une frame en retard.
-	//
-	// UNE frontiere par appel : entree PackedVector3Array, sortie
-	// PackedVector3Array (une direction par id). Aucun appel par unite.
-	PackedVector3Array separation_lot(const PackedVector3Array &positions, float rayon) const;
+	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
+	// scripts/test_vue_cpp.gd contre l'oracle GDScript.
+	PackedVector3Array vue_lot(
+			const PackedVector3Array &positions,
+			const PackedVector3Array &orientations,
+			const PackedFloat32Array &opacites,
+			float rayon,
+			float cos_moitie_angle,
+			float largeur,
+			float seuil_facteur) const;
 };
 
 } // namespace godot
