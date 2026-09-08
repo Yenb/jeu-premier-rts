@@ -38,6 +38,7 @@ void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("deplacer_lot", "positions"), &IndexSpatial::deplacer_lot);
 	ClassDB::bind_method(D_METHOD("cases_pour_niveau", "exposant"), &IndexSpatial::cases_pour_niveau);
 	ClassDB::bind_method(D_METHOD("vue_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::vue_lot);
+	ClassDB::bind_method(D_METHOD("derniers_compteurs_vue"), &IndexSpatial::derniers_compteurs_vue);
 }
 
 IndexSpatial::IndexSpatial() {}
@@ -209,6 +210,11 @@ PackedVector3Array IndexSpatial::vue_lot(
 	const float *opac_r = opacites.ptr();
 	const float rayon2 = rayon * rayon;
 	const float largeur2 = largeur * largeur;
+	// Reset compteurs temporaires (chantier "mesurer gain reel").
+	_vue_cibles_totales = 0;
+	_vue_breaks_dist = 0;
+	_vue_tests_faits = 0;
+	_vue_tests_evites = 0;
 
 	// Voisinage local reutilise entre unites -- evite N=100000 allocations de
 	// vector par frame. clear() garde la capacite acquise.
@@ -225,200 +231,171 @@ PackedVector3Array IndexSpatial::vue_lot(
 	std::vector<VoisinVue> dans_rayon;
 	dans_rayon.reserve(64);
 
-	for (int32_t id = 0; id < count; id++) {
-		const Vector3 &p = pos_r[id];
-		const Vector3 &orient = orient_r[id];
-		int cx_min = (int)std::floor((p.x - rayon) * inv_a);
-		int cx_max = (int)std::floor((p.x + rayon) * inv_a);
-		int cz_min = (int)std::floor((p.z - rayon) * inv_a);
-		int cz_max = (int)std::floor((p.z + rayon) * inv_a);
-
-		// COLLECTE du voisinage 3x3 planaire (tous corps sauf id). Sert a la
-		// fois pour l'iteration candidats ET pour la liste d'obstacles du test
-		// d'occlusion -- jamais une requete spatiale supplementaire par paire
-		// (c'est le n^2 a eviter, contrat prompt).
+	// ITERATION PAR CASE OCCUPEE (chantier "collecte voisinage par case",
+	// 2026-09-08). Le voisinage (2n+1)^2 planaire autour d'une case est le
+	// MEME pour toutes les unites qui vivent dans cette case, tant que
+	// n = ceil(rayon / arete) : une unite au bord de sa case voit au plus
+	// n cases plus loin, donc rester dans [case.x -/+ n, case.z -/+ n] suffit.
+	// Pour arete = 2 et rayon = 2, n = 1 -> 3x3 (identique au comportement
+	// par unite precedent). Pour rayon > arete, n > 1 -- generalise sans
+	// nombre en dur. On collecte donc le voisinage UNE fois par case (find
+	// hashmap divise par nb_unites_dans_case, typiquement ~62 en foule
+	// dense), puis on applique les filtres per-unite (distance / cone /
+	// occlusion / separation) sur le voisinage partage. Le RESULTAT PAR
+	// UNITE est identique -- seul le partage de la collecte change.
+	const int n_cases = (int)std::ceil(rayon * inv_a);
+	// Precalcul du cos du cone ELARGI. Une fois par appel (independant de
+	// l'unite : le cone elargi est calibre sur rayon/largeur, pas sur la
+	// position). acos + atan + cos hors boucle par unite.
+	float cos_moitie_elargi_all = cos_moitie_angle;
+	if (cos_moitie_angle > -1.0f + 1e-6f) {
+		float demi_angle = std::acos(cos_moitie_angle);
+		float extra = std::atan2(largeur, rayon);
+		float elargi = demi_angle + extra;
+		if (elargi >= 3.14159265f) {
+			cos_moitie_elargi_all = -1.0f;
+		} else {
+			cos_moitie_elargi_all = std::cos(elargi);
+		}
+	}
+	for (const auto &kv_case : niveau.cases) {
+		const Vector3i &case_courante = kv_case.first;
+		const std::vector<int32_t> &unites_case = kv_case.second;
+		if (unites_case.empty()) {
+			continue;
+		}
+		// COLLECTE UNE FOIS PAR CASE : (2n+1)^2 find hashmap, tous les corps
+		// des cases voisines pousses dans le vector partage. Inclut les unites
+		// de la case courante elles-memes -- filtrees par d2 <= 1e-8f dans le
+		// filtre distance ci-dessous (distance a soi = 0).
 		voisinage.clear();
-		for (int cx = cx_min; cx <= cx_max; cx++) {
-			for (int cz = cz_min; cz <= cz_max; cz++) {
-				auto it = niveau.cases.find(Vector3i(cx, 0, cz));
+		for (int dcx = -n_cases; dcx <= n_cases; dcx++) {
+			for (int dcz = -n_cases; dcz <= n_cases; dcz++) {
+				Vector3i cle(case_courante.x + dcx, 0, case_courante.z + dcz);
+				auto it = niveau.cases.find(cle);
 				if (it == niveau.cases.end()) {
 					continue;
 				}
 				const std::vector<int32_t> &contenu = it->second;
 				const int n = (int)contenu.size();
 				for (int k = 0; k < n; k++) {
-					int32_t v = contenu[k];
-					if (v != id) {
-						voisinage.push_back(v);
+					voisinage.push_back(contenu[k]);
+				}
+			}
+		}
+		const int nv = (int)voisinage.size();
+
+		// FILTRES PER-UNITE sur le voisinage partage.
+		for (size_t iu = 0; iu < unites_case.size(); iu++) {
+			int32_t id = unites_case[iu];
+			const Vector3 &p = pos_r[id];
+			const Vector3 &orient = orient_r[id];
+
+			// (1) FILTRES DISTANCE + CONE ELARGI. dans_rayon ne contient que
+			// les voisins qui passent distance ET cone elargi. La distance de
+			// soi a soi = 0 -> filtre par d2 <= 1e-8f exclut naturellement soi.
+			dans_rayon.clear();
+			for (int a = 0; a < nv; a++) {
+				int32_t k = voisinage[a];
+				const Vector3 &q = pos_r[k];
+				float dx = p.x - q.x;
+				float dz = p.z - q.z;
+				float d2 = dx * dx + dz * dz;
+				if (d2 >= rayon2 || d2 <= 1e-8f) {
+					continue;
+				}
+				float d = std::sqrt(d2);
+				float dot_vers = -(orient.x * dx + orient.z * dz);
+				if (dot_vers < cos_moitie_elargi_all * d) {
+					continue;
+				}
+				VoisinVue vv;
+				vv.id = k;
+				vv.dx = dx;
+				vv.dz = dz;
+				vv.d = d;
+				dans_rayon.push_back(vv);
+			}
+			// TRI PAR DISTANCE CROISSANTE (voir docs chantiers precedents :
+			// break precoce facteur + borne d_j + largeur).
+			std::sort(dans_rayon.begin(), dans_rayon.end(),
+					[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
+			float ax = 0.0f;
+			float az = 0.0f;
+			const int nvr = (int)dans_rayon.size();
+			for (int a = 0; a < nvr; a++) {
+				const VoisinVue &vj = dans_rayon[a];
+				// (2) CONE STRICT sur les cibles.
+				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
+				if (dot_vers_voisin < cos_moitie_angle * vj.d) {
+					continue;
+				}
+				// (3) OCCLUSION -- geometrie de occlusion.gd::facteur mot pour
+				// mot, boucle occulteurs bornee par distance (vk.d > vj.d + largeur
+				// -> break, tri croissant).
+				_vue_cibles_totales++;
+				float facteur = 1.0f;
+				float vx = -vj.dx;
+				float vz = -vj.dz;
+				float d2_j = vj.d * vj.d;
+				float seuil_dist_occulteur = vj.d + largeur;
+				for (int b = 0; b < nvr; b++) {
+					const VoisinVue &vk = dans_rayon[b];
+					if (vk.d > seuil_dist_occulteur) {
+						_vue_breaks_dist++;
+						_vue_tests_evites += (int64_t)(nvr - b);
+						break;
+					}
+					if (b == a) {
+						continue;
+					}
+					_vue_tests_faits++;
+					float ok_x = -vk.dx;
+					float ok_z = -vk.dz;
+					float t = (ok_x * vx + ok_z * vz) / d2_j;
+					if (t <= 0.0f || t >= 1.0f) {
+						continue;
+					}
+					float sx = p.x + t * vx;
+					float sz = p.z + t * vz;
+					float lat_x = (p.x + ok_x) - sx;
+					float lat_z = (p.z + ok_z) - sz;
+					float lat2 = lat_x * lat_x + lat_z * lat_z;
+					if (lat2 > largeur2) {
+						continue;
+					}
+					float opac = opac_r[vk.id];
+					if (opac < 0.0f) opac = 0.0f;
+					if (opac > 1.0f) opac = 1.0f;
+					facteur *= (1.0f - opac);
+					if (facteur <= seuil_facteur) {
+						break;
 					}
 				}
-			}
-		}
-
-		// (1) FILTRES DISTANCE + CONE ELARGI. On ne garde que les voisins :
-		//  - a distance strictement < rayon,
-		//  - dans un CONE ELARGI par atan(largeur / rayon) par rapport au
-		//    cone strict des cibles.
-		// Le cone elargi couvre TOUS les occulteurs legitimes des cibles :
-		// un occulteur K d'une cible J dans le cone strict a angle(K, orient)
-		// ≤ angle(J, orient) + atan(L / distance_projetee_de_K_sur_AJ), avec
-		// L ≤ largeur. En prenant distance_projetee ~= rayon (borne haute
-		// realiste dans le regime peuplement), l'ecart angulaire max est
-		// atan(largeur / rayon) -- l'ecart le plus large qu'un occulteur
-		// legitime puisse avoir par rapport a l'axe de sa cible. Pour un
-		// occulteur tres proche de A (distance projetee << largeur), l'ecart
-		// theorique peut monter au-dela ; cas limite accepte, un occulteur
-		// quasiment collé au percepteur qui sortirait du cone elargi n'est
-		// pas geometriquement realiste dans le regime peuplement.
-		//
-		// La liste dans_rayon sert ainsi a la fois de SOURCE DE CANDIDATS
-		// (filtre cone strict re-applique dans (3)) ET de LISTE D'OCCULTEURS
-		// pour (4). Les voisins DERRIERE l'unite (angle > cone elargi) --
-		// typiquement ~190 sur ~250 en foule dense -- sont ecartes des le
-		// remplissage : tri et boucle occlusion portent sur ~60 corps au lieu
-		// de ~250. Gain quadratique.
-		dans_rayon.clear();
-		const int nv = (int)voisinage.size();
-		// Precalcul du cos du cone ELARGI. acos(cos_moitie_angle) donne
-		// l'angle moitie du cone strict ; on ajoute atan(largeur/rayon) puis
-		// on reprend le cos. Une trigo par frame par unite, negligeable
-		// devant le voisinage. cos_moitie_angle <= -1 (sphere pure demandee
-		// par l'appelant) : garder tel quel, pas d'elargissement -- accepte
-		// deja tout.
-		float cos_moitie_elargi = cos_moitie_angle;
-		if (cos_moitie_angle > -1.0f + 1e-6f) {
-			float demi_angle = std::acos(cos_moitie_angle);
-			float extra = std::atan2(largeur, rayon);
-			float elargi = demi_angle + extra;
-			if (elargi >= 3.14159265f) {
-				cos_moitie_elargi = -1.0f;
-			} else {
-				cos_moitie_elargi = std::cos(elargi);
-			}
-		}
-		for (int a = 0; a < nv; a++) {
-			int32_t k = voisinage[a];
-			const Vector3 &q = pos_r[k];
-			float dx = p.x - q.x;
-			float dz = p.z - q.z;
-			float d2 = dx * dx + dz * dz;
-			if (d2 >= rayon2 || d2 <= 1e-8f) {
-				continue;
-			}
-			float d = std::sqrt(d2);
-			// Filtre cone ELARGI applique au REMPLISSAGE. diff_vers_voisin =
-			// pos_k - pos_i = (-dx, -dz). dot . orient / d = cos(angle).
-			float dot_vers = -(orient.x * dx + orient.z * dz);
-			if (dot_vers < cos_moitie_elargi * d) {
-				continue;
-			}
-			VoisinVue vv;
-			vv.id = k;
-			vv.dx = dx;
-			vv.dz = dz;
-			vv.d = d;
-			dans_rayon.push_back(vv);
-		}
-		// TRI PAR DISTANCE CROISSANTE des CANDIDATS. Sert au COURT-CIRCUIT
-		// PRECOCE : quand un candidat cible est cache par un occulteur proche
-		// opaque (opacite ~ 1), le facteur tombe a 0.0 <= seuil des le premier
-		// obstacle aligne et la boucle occulteurs sort par `break`. Traiter
-		// les cibles du plus proche au plus loin maximise les chances que ce
-		// break tombe tot pour chaque candidat cache.
-		//
-		// ATTENTION -- LA BOUCLE OCCULTEURS RESTE SUR TOUS LES CORPS (b != a),
-		// PAS SUR LES PLUS PROCHES SEULEMENT. Un premier jet de ce chantier
-		// bornait la boucle a `b < a` avec l'argument "l'occulteur est plus
-		// proche que sa cible". CET ARGUMENT EST FAUX en regime largeur non
-		// negligeable devant la distance : un occulteur k a distance(i, k)^2 =
-		// (t * d_j)^2 + L^2, et pour L <= largeur non nul, distance(i, k) peut
-		// depasser d_j (contre-exemple concret : d_j = 0.6, k a (0.55, 12,
-		// 0.35), largeur = 0.5 -- t = 0.917 dans ]0,1[, L = 0.35 <= 0.5,
-		// distance(i, k) = 0.652 > 0.6). Un tel k etait un occulteur legitime
-		// silencieusement ignore par b < a. Le tri est donc gardE pour le
-		// break precoce, mais la boucle occulteurs teste bien tous les corps
-		// du voisinage (les corps hors segment sont rejetes par t hors ]0,1[
-		// ou L > largeur, comme avant).
-		std::sort(dans_rayon.begin(), dans_rayon.end(),
-				[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
-		float ax = 0.0f;
-		float az = 0.0f;
-		const int nvr = (int)dans_rayon.size();
-		for (int a = 0; a < nvr; a++) {
-			const VoisinVue &vj = dans_rayon[a];
-			// (2) CONE : cos(angle entre orient et diff_vers_voisin) >=
-			// cos_moitie_angle. diff_vers_voisin = pos_j - pos_i = (-dx, -dz),
-			// orient suppose unitaire horizontal. Comparaison sans acos.
-			float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
-			if (dot_vers_voisin < cos_moitie_angle * vj.d) {
-				continue;
-			}
-			// (3) OCCLUSION : geometrie de scripts/occlusion.gd::facteur portee
-			// mot pour mot, contre TOUS les corps de dans_rayon (b != a). Le
-			// tri par distance croissante des CIBLES sert au court-circuit
-			// precoce : en foule dense, un corps proche opaque (opacite ~ 1)
-			// donne facteur = 0 <= seuil des le premier occulteur aligne, la
-			// boucle sort par break -- une direction bouchee est ecartee sans
-			// examen supplementaire. La boucle occulteurs teste tous les corps
-			// du voisinage (pas seulement les plus proches -- un occulteur k a
-			// distance(i, k)^2 = (t * d_j)^2 + L^2 et peut avoir distance > d_j
-			// quand L est non negligeable, contre-exemple d_j = 0.6, L = 0.35,
-			// distance = 0.652 > d_j -- verrouille par test_vue_cpp cas 5).
-			// vecteur = pos_j - pos_i = (-vj.dx, -vj.dz). longueur_carre = vj.d^2.
-			// Pour chaque obstacle k :
-			//   t = (pos_k - depuis) . vecteur / longueur_carre
-			//   pos_k - depuis = (-vk.dx, -vk.dz) (deja stocke)
-			//   si t <= 0 ou t >= 1 skip
-			//   point_sur_segment = depuis + vecteur * t
-			//   distance_laterale = |pos_k - point_sur_segment|
-			//   si distance_laterale > largeur skip
-			//   facteur *= (1 - clamp(opacite_k, 0, 1))
-			float facteur = 1.0f;
-			float vx = -vj.dx;
-			float vz = -vj.dz;
-			float d2_j = vj.d * vj.d;
-			for (int b = 0; b < nvr; b++) {
-				if (b == a) {
-					continue;
-				}
-				const VoisinVue &vk = dans_rayon[b];
-				float ok_x = -vk.dx; // pos_k.x - p.x
-				float ok_z = -vk.dz;
-				float t = (ok_x * vx + ok_z * vz) / d2_j;
-				if (t <= 0.0f || t >= 1.0f) {
-					continue;
-				}
-				float sx = p.x + t * vx;
-				float sz = p.z + t * vz;
-				float lat_x = (p.x + ok_x) - sx; // pos_k.x - sx = ok_x + p.x - sx
-				float lat_z = (p.z + ok_z) - sz;
-				float lat2 = lat_x * lat_x + lat_z * lat_z;
-				if (lat2 > largeur2) {
-					continue;
-				}
-				float opac = opac_r[vk.id];
-				if (opac < 0.0f) opac = 0.0f;
-				if (opac > 1.0f) opac = 1.0f;
-				facteur *= (1.0f - opac);
 				if (facteur <= seuil_facteur) {
-					break;
+					continue;
 				}
+				// (4) SEPARATION dans le meme parcours.
+				float w = (rayon - vj.d) / vj.d;
+				ax += vj.dx * w;
+				az += vj.dz * w;
 			}
-			if (facteur <= seuil_facteur) {
-				continue;
+			float len2 = ax * ax + az * az;
+			if (len2 > 1e-8f) {
+				float inv_len = 1.0f / std::sqrt(len2);
+				out_w[id] = Vector3(ax * inv_len, 0.0f, az * inv_len);
 			}
-			// (4) SEPARATION : contribution accumulee dans le MEME parcours.
-			float w = (rayon - vj.d) / vj.d;
-			ax += vj.dx * w;
-			az += vj.dz * w;
-		}
-		// Normalisation en direction unitaire horizontale (Y=0).
-		float len2 = ax * ax + az * az;
-		if (len2 > 1e-8f) {
-			float inv_len = 1.0f / std::sqrt(len2);
-			out_w[id] = Vector3(ax * inv_len, 0.0f, az * inv_len);
 		}
 	}
+	return out;
+}
+
+Dictionary IndexSpatial::derniers_compteurs_vue() const {
+	Dictionary out;
+	out["cibles_totales"] = (int)_vue_cibles_totales;
+	out["breaks_dist"] = (int)_vue_breaks_dist;
+	out["tests_faits"] = (int)_vue_tests_faits;
+	out["tests_evites"] = (int)_vue_tests_evites;
 	return out;
 }
 

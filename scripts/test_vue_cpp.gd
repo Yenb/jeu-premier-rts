@@ -28,7 +28,7 @@ func _init() -> void:
 		return
 	_executer()
 	if _v.echecs() == 0:
-		print("OK: IndexSpatial C++ vue_lot -- 5 cas passes : voisin devant vu et pousse, voisin derriere ignore, voisin cache retire, parite du facteur d'occlusion avec occlusion.gd::facteur, occulteur lateral plus lointain que sa cible reste occulteur legitime (couverture boucle occlusion = tous les corps, pas seulement les plus proches)")
+		print("OK: IndexSpatial C++ vue_lot -- 6 cas passes : cas 1-5 comportement, cas 6 partage voisinage co-case (unites B et C au bord de leurs cases voient bien la case adjacente via le 3x3 partage)")
 		quit(0)
 	else:
 		printerr("ECHEC: %d assertion(s) fausse(s)" % _v.echecs())
@@ -175,3 +175,56 @@ func _executer() -> void:
 	# Un bug `b < a` donnerait dirs_5[0] proche de (-1, 0, 0) car J serait retenu.
 	_v.v(dirs_5[0].length() < 1.0e-4,
 		"cas 5 : direction attendue nulle (J occlus par K plus lointain, K hors cone) -- si dir ~= (-1,0,0) c'est le bug b < a qui a rate K comme occulteur ; obtenu %s" % str(dirs_5[0]))
+
+	# ---- CAS 6 : PARTAGE DU VOISINAGE ENTRE UNITES CO-CASE ----
+	# Chantier "collecte voisinage par case" : le voisinage 3x3 est collecte UNE
+	# fois par case et partage par toutes les unites de la case. Chaque unite
+	# obtient le meme resultat qu'avant (collecte par unite). Ce cas pose 4
+	# unites reparties sur 2 cases (arete 2 : case (0,0,0) couvre [0,2[ x [0,2[
+	# en X-Z, case (1,0,0) couvre [2,4[).
+	#
+	# Positions (Y=12 constant, ecart Z=0.5 pour cases (0,0,0) et (1,0,0)) :
+	#   A a (0.5, 12, 0.5) -- case (0,0,0), orient +X.
+	#   B a (1.5, 12, 0.5) -- case (0,0,0) MEME que A, orient +X.
+	#   C a (2.5, 12, 0.5) -- case (1,0,0), orient +X.
+	#   D a (3.5, 12, 0.5) -- case (1,0,0) MEME que C, orient +X.
+	# Distances : A-B = 1, B-C = 1, C-D = 1, A-C = 2 (strict > rayon 2 exclu),
+	# B-D = 2 (exclu), A-D = 3 (exclu).
+	#
+	# ATTENDU :
+	#   A voit B (d=1, devant, dans cone). Aucun obstacle. Pousse -X. dir ~= (-1,0,0).
+	#   B voit A (d=1, derriere B qui regarde +X -> HORS cone) et C (d=1, devant,
+	#     dans cone). Seule C compte. Pousse -X. dir ~= (-1,0,0).
+	#   C voit B (d=1, derriere -> HORS cone) et D (d=1, devant, dans cone).
+	#     Pousse -X. dir ~= (-1,0,0).
+	#   D voit C (d=1, derriere -> HORS cone). Aucun voisin devant. dir = zero.
+	# Le fait que A et B (case commune) aient des dir differentes prouve que le
+	# voisinage PARTAGE est correctement filtre PAR UNITE (chaque orient, chaque
+	# position appliquent leurs propres filtres). B au bord de sa case (x=1.5)
+	# voit bien C (case adjacente x=2.5) via le voisinage 3x3.
+	var positions_6 := PackedVector3Array([
+		Vector3(0.5, 12.0, 0.5),  # 0 -- A
+		Vector3(1.5, 12.0, 0.5),  # 1 -- B (meme case que A)
+		Vector3(2.5, 12.0, 0.5),  # 2 -- C
+		Vector3(3.5, 12.0, 0.5),  # 3 -- D (meme case que C)
+	])
+	var orient_6 := PackedVector3Array([
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, 0.0, 0.0),
+	])
+	var opac_6 := PackedFloat32Array([1.0, 1.0, 1.0, 1.0])
+	var index6: RefCounted = ClassDB.instantiate("IndexSpatial")
+	index6.configurer(positions_6.size())
+	index6.ouvrir_niveau_planaire(1)
+	index6.deplacer_lot(positions_6)
+	var dirs_6: PackedVector3Array = index6.vue_lot(positions_6, orient_6, opac_6, rayon, cos_moitie, largeur, seuil)
+	_v.v(dirs_6[0].distance_to(Vector3(-1.0, 0.0, 0.0)) < 1.0e-4,
+		"cas 6 : dir_A attendue (-1,0,0), obtenu %s" % str(dirs_6[0]))
+	_v.v(dirs_6[1].distance_to(Vector3(-1.0, 0.0, 0.0)) < 1.0e-4,
+		"cas 6 : dir_B attendue (-1,0,0) (B au bord de sa case voit C dans case adjacente), obtenu %s" % str(dirs_6[1]))
+	_v.v(dirs_6[2].distance_to(Vector3(-1.0, 0.0, 0.0)) < 1.0e-4,
+		"cas 6 : dir_C attendue (-1,0,0), obtenu %s" % str(dirs_6[2]))
+	_v.v(dirs_6[3].length() < 1.0e-4,
+		"cas 6 : dir_D attendue nulle (aucun voisin dans le cone devant D), obtenu %s" % str(dirs_6[3]))

@@ -775,6 +775,19 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 		int(float(_us_fatigue) * inv_frames),
 		int(float(_us_multimesh) * inv_frames),
 	])
+	# COMPTEURS TEMPORAIRES borne distance (chantier "verifier gain reel borne").
+	# Lus depuis IndexSpatial.derniers_compteurs_vue apres le dernier vue_lot.
+	# A retirer une fois le gain mesure. Instantanes de la DERNIERE frame, pas
+	# une moyenne sur la seconde.
+	if _index_cpp != null and _index_cpp.has_method("derniers_compteurs_vue"):
+		var comp: Dictionary = _index_cpp.derniers_compteurs_vue()
+		var cibles: int = int(comp.get("cibles_totales", 0))
+		var breaks: int = int(comp.get("breaks_dist", 0))
+		var faits: int = int(comp.get("tests_faits", 0))
+		var evites: int = int(comp.get("tests_evites", 0))
+		var total: int = faits + evites
+		var pct_evites: int = 0 if total == 0 else int(float(evites) * 100.0 / float(total))
+		print("[peuplement] BORNE cibles=%d breaks=%d tests_faits=%d tests_evites=%d (%d%% economises)" % [cibles, breaks, faits, evites, pct_evites])
 	_us_errance = 0
 	_us_vue = 0
 	_us_physique_buffer = 0
