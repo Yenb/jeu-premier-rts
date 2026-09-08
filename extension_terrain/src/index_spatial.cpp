@@ -255,14 +255,47 @@ PackedVector3Array IndexSpatial::vue_lot(
 			}
 		}
 
-		// (1) FILTRE DISTANCE : on ne garde que les voisins dans le rayon,
-		// stockes avec dx/dz/d precalcules. Cette LISTE (dans_rayon) sert a
-		// la fois de source de CANDIDATS (filtre cone applique dessus dans
-		// (2)) ET de liste d'OCCULTEURS pour (3) -- un obstacle plus loin
-		// que rayon ne peut geometriquement pas couper un segment percepteur
-		// -> voisin de longueur < rayon (occlusion.gd rejette t hors ]0,1[).
+		// (1) FILTRES DISTANCE + CONE ELARGI. On ne garde que les voisins :
+		//  - a distance strictement < rayon,
+		//  - dans un CONE ELARGI par atan(largeur / rayon) par rapport au
+		//    cone strict des cibles.
+		// Le cone elargi couvre TOUS les occulteurs legitimes des cibles :
+		// un occulteur K d'une cible J dans le cone strict a angle(K, orient)
+		// ≤ angle(J, orient) + atan(L / distance_projetee_de_K_sur_AJ), avec
+		// L ≤ largeur. En prenant distance_projetee ~= rayon (borne haute
+		// realiste dans le regime peuplement), l'ecart angulaire max est
+		// atan(largeur / rayon) -- l'ecart le plus large qu'un occulteur
+		// legitime puisse avoir par rapport a l'axe de sa cible. Pour un
+		// occulteur tres proche de A (distance projetee << largeur), l'ecart
+		// theorique peut monter au-dela ; cas limite accepte, un occulteur
+		// quasiment collé au percepteur qui sortirait du cone elargi n'est
+		// pas geometriquement realiste dans le regime peuplement.
+		//
+		// La liste dans_rayon sert ainsi a la fois de SOURCE DE CANDIDATS
+		// (filtre cone strict re-applique dans (3)) ET de LISTE D'OCCULTEURS
+		// pour (4). Les voisins DERRIERE l'unite (angle > cone elargi) --
+		// typiquement ~190 sur ~250 en foule dense -- sont ecartes des le
+		// remplissage : tri et boucle occlusion portent sur ~60 corps au lieu
+		// de ~250. Gain quadratique.
 		dans_rayon.clear();
 		const int nv = (int)voisinage.size();
+		// Precalcul du cos du cone ELARGI. acos(cos_moitie_angle) donne
+		// l'angle moitie du cone strict ; on ajoute atan(largeur/rayon) puis
+		// on reprend le cos. Une trigo par frame par unite, negligeable
+		// devant le voisinage. cos_moitie_angle <= -1 (sphere pure demandee
+		// par l'appelant) : garder tel quel, pas d'elargissement -- accepte
+		// deja tout.
+		float cos_moitie_elargi = cos_moitie_angle;
+		if (cos_moitie_angle > -1.0f + 1e-6f) {
+			float demi_angle = std::acos(cos_moitie_angle);
+			float extra = std::atan2(largeur, rayon);
+			float elargi = demi_angle + extra;
+			if (elargi >= 3.14159265f) {
+				cos_moitie_elargi = -1.0f;
+			} else {
+				cos_moitie_elargi = std::cos(elargi);
+			}
+		}
 		for (int a = 0; a < nv; a++) {
 			int32_t k = voisinage[a];
 			const Vector3 &q = pos_r[k];
@@ -272,11 +305,18 @@ PackedVector3Array IndexSpatial::vue_lot(
 			if (d2 >= rayon2 || d2 <= 1e-8f) {
 				continue;
 			}
+			float d = std::sqrt(d2);
+			// Filtre cone ELARGI applique au REMPLISSAGE. diff_vers_voisin =
+			// pos_k - pos_i = (-dx, -dz). dot . orient / d = cos(angle).
+			float dot_vers = -(orient.x * dx + orient.z * dz);
+			if (dot_vers < cos_moitie_elargi * d) {
+				continue;
+			}
 			VoisinVue vv;
 			vv.id = k;
 			vv.dx = dx;
 			vv.dz = dz;
-			vv.d = std::sqrt(d2);
+			vv.d = d;
 			dans_rayon.push_back(vv);
 		}
 		// TRI PAR DISTANCE CROISSANTE des CANDIDATS. Sert au COURT-CIRCUIT
