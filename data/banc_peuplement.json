@@ -12,5 +12,9 @@
 	"separation_active": true,
 	"rayon_separation": 2.0,
 	"paquets_partages": true,
-	"regime_masse": true
+	"regime_masse": true,
+	"nombre_actives": 100,
+	"cadence_fatigue_frames": 30,
+	"cout_base_sommeil_demo": 20.0,
+	"vitesse_epuise_facteur": 0.4
 }

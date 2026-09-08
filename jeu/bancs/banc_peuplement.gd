@@ -74,6 +74,8 @@ const Monde = preload("res://scripts/monde.gd")
 const Peuplement = preload("res://scripts/peuplement.gd")
 const MeshCatalogue = preload("res://scripts/mesh_catalogue.gd")
 const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
+const Depense = preload("res://scripts/depense.gd")
+const SeuilEtat = preload("res://scripts/seuil_etat.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 
@@ -159,6 +161,28 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # (spawn regulier, un Dict individu par unite, paquets_partages=true partage
 # les sous-Dict).
 @export var regime_masse: bool = false
+# ---- DEMO FATIGUE (chantier "fatigue en cadence lente sur charge/seuil", 2026-09-08).
+# Une passe cadencee decremente le canal `sommeil` (herite de `dynamique`), pose un
+# miroir plat `manque_sommeil = capacite - reserve`, et delegue a scripts/seuil_etat.gd
+# qui compare a l'entree "epuisement" de data/seuils_etat.json (seuil=70, etat='epuise').
+# Au FRANCHISSEMENT (pas par frame), le banc ajuste cols.vitesse -- entre deux bascules,
+# rien n'est recalcule (contrat evenementiel).
+# `nombre_actives` : combien d'unites reoivent leur paquet dynamique via Peuplement.activer.
+# Les autres restent en regime masse (colonnes seules, aucune fatigue materialisee).
+@export var nombre_actives: int = 100
+# Cadence UNIFORME de la passe fatigue, en frames. 30 a 60 fps = 0.5 s -- un mecanisme
+# lent, jamais chaque frame. Reglable, jamais fonction de la distance au joueur (LOD
+# par distance INTERDIT par le prompt : temps du monde uniforme).
+@export var cadence_fatigue_frames: int = 30
+# DEMO : cout_base pose sur le canal sommeil des unites activees, plus grand que le
+# defaut de `dynamique` (0.3/s), pour que le franchissement du seuil "epuise" soit
+# visible sur une echelle de secondes en jeu. Reste un cablage de banc, jamais une
+# valeur en dur dans le moteur.
+@export var cout_base_sommeil_demo: float = 20.0
+# DEMO : facteur multiplicatif applique a cols.vitesse quand une unite bascule sur
+# 'epuise'. 0.4 = ralentit a 40% de sa vitesse nominale, visible a l'oeil. Retour a
+# 1.0 quand 'epuise' est retire (franchissement descendant).
+@export var vitesse_epuise_facteur: float = 0.4
 
 var _pool: Dictionary = {}
 var _monde = null
@@ -201,6 +225,22 @@ var _us_multimesh: int = 0
 # Poste `deplacer` : passe individu.position <- cols.position + N appels
 # monde.deplacer(individu). Sous brancher_monde=false, reste a 0.
 var _us_deplacer: int = 0
+# Poste `fatigue` : passe cadencee sur les unites ACTIVEES qui decremente sommeil,
+# pose le miroir plat, et applique seuil_etat. Reste 0 les frames ou la cadence ne
+# se declenche pas (quotient sur les frames accumulees dans la seconde) -- c'est
+# meme le point de la cadence lente. Voir passe_fatigue().
+var _us_fatigue: int = 0
+# Catalogue seuils_etat.json charge une fois au _ready. Passe la sur SeuilEtat.avancer.
+var _catalogue_seuils: Dictionary = {}
+# CAPACITE du canal `sommeil` sur mobile_test : lue une fois au _fabriquer_lot depuis
+# le paquet dynamique deja fabrique (paquet.reserves.sommeil.reserve initial). Sert
+# a poser le miroir plat `manque_sommeil = capacite - reserve.sommeil.reserve`. Pas
+# une constante en dur -- si dynamique.reserves.sommeil.reserve change dans
+# data/types.json, la capacite suit.
+var _capacite_sommeil: float = 100.0
+# Compteur de frames depuis la derniere passe fatigue. La passe se declenche quand
+# ce compteur atteint `cadence_fatigue_frames`, puis se remet a zero.
+var _frames_depuis_fatigue: int = 0
 var _frames_accumulees: int = 0
 var _temps_prochain_ms: int = 0
 
@@ -209,7 +249,9 @@ func _ready() -> void:
 	_rng.seed = graine_rng
 	_monter_scene()
 	_monter_pool()
+	_catalogue_seuils = _charger_seuils_etat()
 	_fabriquer_lot()
+	_activer_lot()
 
 func _charger_reglages_locaux() -> void:
 	if not FileAccess.file_exists(CHEMIN_CATALOGUE_LOCAL):
@@ -249,6 +291,14 @@ func _charger_reglages_locaux() -> void:
 		paquets_partages = bool(donnees.paquets_partages)
 	if donnees.has("regime_masse"):
 		regime_masse = bool(donnees.regime_masse)
+	if donnees.has("nombre_actives"):
+		nombre_actives = int(donnees.nombre_actives)
+	if donnees.has("cadence_fatigue_frames"):
+		cadence_fatigue_frames = int(donnees.cadence_fatigue_frames)
+	if donnees.has("cout_base_sommeil_demo"):
+		cout_base_sommeil_demo = float(donnees.cout_base_sommeil_demo)
+	if donnees.has("vitesse_epuise_facteur"):
+		vitesse_epuise_facteur = float(donnees.vitesse_epuise_facteur)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -598,10 +648,24 @@ func _physics_process(delta: float) -> void:
 				individu.position = positions_apres[j]
 				_monde.deplacer_simple(individu)
 				j += 1
+	var chrono_fatigue_debut: int = 0
+	if actif_releve:
+		chrono_fatigue_debut = Time.get_ticks_usec()
+		_us_deplacer += chrono_fatigue_debut - chrono_deplacer_debut
+	# PASSE FATIGUE, cadence lente : n'agit QUE toutes les cadence_fatigue_frames
+	# images. Uniforme pour toutes les unites, jamais fonction de la distance au
+	# joueur (LOD par distance INTERDIT dans ce depot). Delta effectif = cadence *
+	# delta_frame (la duree du monde reellement ecoulee depuis la derniere passe).
+	_frames_depuis_fatigue += 1
+	if _frames_depuis_fatigue >= cadence_fatigue_frames:
+		var delta_cadence: float = float(cadence_fatigue_frames) * delta
+		var vitesse_type: float = float((_catalogue.get(type_id, {}) as Dictionary).get("vitesse", 1.0))
+		_passe_fatigue(delta_cadence, vitesse_type)
+		_frames_depuis_fatigue = 0
 	var chrono_multimesh_debut: int = 0
 	if actif_releve:
 		chrono_multimesh_debut = Time.get_ticks_usec()
-		_us_deplacer += chrono_multimesh_debut - chrono_deplacer_debut
+		_us_fatigue += chrono_multimesh_debut - chrono_fatigue_debut
 	RenderingServer.multimesh_set_buffer((_pool.mm as MultiMesh).get_rid(), buffer)
 	_pool["buffer"] = buffer
 	if actif_releve:
@@ -625,19 +689,21 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 	# Divisions promues en float pour eviter le warning GDScript "Integer division.
 	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
 	var inv_frames: float = 1.0 / float(frames)
-	print("[peuplement] N=%d fps=%d errance=%dus separation=%dus phys+buffer=%dus deplacer=%dus mm_set=%dus" % [
+	print("[peuplement] N=%d fps=%d errance=%dus separation=%dus phys+buffer=%dus deplacer=%dus fatigue=%dus mm_set=%dus" % [
 		count,
 		int(Engine.get_frames_per_second()),
 		int(float(_us_errance) * inv_frames),
 		int(float(_us_separation) * inv_frames),
 		int(float(_us_physique_buffer) * inv_frames),
 		int(float(_us_deplacer) * inv_frames),
+		int(float(_us_fatigue) * inv_frames),
 		int(float(_us_multimesh) * inv_frames),
 	])
 	_us_errance = 0
 	_us_separation = 0
 	_us_physique_buffer = 0
 	_us_deplacer = 0
+	_us_fatigue = 0
 	_us_multimesh = 0
 	_frames_accumulees = 0
 	_temps_prochain_ms = maintenant_ms + 1000
@@ -1012,6 +1078,122 @@ func _charger_types() -> Dictionary:
 		push_error("banc_peuplement : data/types.json invalide")
 		return {}
 	return donnees
+
+func _charger_seuils_etat() -> Dictionary:
+	if not FileAccess.file_exists("res://data/seuils_etat.json"):
+		push_error("banc_peuplement : data/seuils_etat.json introuvable -- passe fatigue inerte")
+		return {}
+	var texte := FileAccess.get_file_as_string("res://data/seuils_etat.json")
+	var donnees = JSON.parse_string(texte)
+	if not (donnees is Dictionary):
+		push_error("banc_peuplement : data/seuils_etat.json invalide")
+		return {}
+	return donnees
+
+# ACTIVATION DU LOT DE DEMO. Active `nombre_actives` unites via Peuplement.activer :
+# chacune recoit son paquet dynamique complet (reserves 5 canaux, deformation_etat,
+# etats, canaux_config si le type compose percevant, etc.). Les autres unites du
+# pool restent en regime masse -- colonnes seules, aucune materialisation, aucune
+# fatigue -- coherent avec la doctrine "presence complete / activation variable"
+# appliquee a la memoire (chantier 2026-09-08 precedent). Puis surcharge le cout_base
+# du canal sommeil (`cout_base_sommeil_demo`) pour que le franchissement du seuil
+# "epuise" (seuil=70 sur manque_sommeil, entree "epuisement" de data/seuils_etat.json)
+# se produise sur une echelle de secondes VISIBLE en jeu.
+func _activer_lot() -> void:
+	if _pool.is_empty():
+		return
+	if not regime_masse:
+		# En regime normal, toutes les unites ont deja un Dictionary individu depuis
+		# _fabriquer_lot ; l'activation supplementaire ne sert a rien, la passe
+		# fatigue tournera sur pool.individus telles quelles.
+		# On ecrit quand meme cout_base_sommeil_demo pour que la demo soit visible.
+		var individus_normaux: Array = _pool.individus
+		for individu in individus_normaux:
+			_appliquer_cout_base_sommeil_demo(individu)
+		return
+	var nb_a_activer: int = mini(nombre_actives, (_pool.colonnes.position as PackedVector3Array).size())
+	var i: int = 0
+	while i < nb_a_activer:
+		var id: String = Peuplement.activer(_pool, _catalogue, type_id, i, _monde)
+		if id.is_empty():
+			push_error("banc_peuplement : Peuplement.activer a echoue a l'index %d" % i)
+			return
+		var individu: Dictionary = (_pool.individus as Array)[(_pool.id_to_index as Dictionary)[id]]
+		_appliquer_cout_base_sommeil_demo(individu)
+		i += 1
+	# Lire la capacite du canal sommeil sur la premiere unite activee : c'est la
+	# valeur qui servira de reference au miroir plat `manque_sommeil = capacite -
+	# reserve` (voir _passe_fatigue). Toutes les unites activees partagent la MEME
+	# capacite (le cache canonique de `dynamique` avant detache).
+	if (_pool.individus as Array).size() > 0:
+		var premier: Dictionary = (_pool.individus as Array)[0]
+		var p: Dictionary = premier.proprietes
+		if p.has("reserves") and p.reserves.has("sommeil"):
+			_capacite_sommeil = float(p.reserves.sommeil.reserve)
+
+# Le canal `reserves` a ete detache par Peuplement.activer -- muter sommeil.cout_base
+# est isole a cette instance. Sur regime normal (spawn), le canal etait deja unique
+# a l'instance (paquets_partages=true fait le detacher a la fabrication -- non, il
+# ne le fait PAS : c'est le partage COW qui laisse reserves partage. Ici on force
+# le detacher au cas ou l'unite provient du chemin regime normal ou l'activation
+# n'a pas eu lieu et le paquet peut etre partage.
+func _appliquer_cout_base_sommeil_demo(individu: Dictionary) -> void:
+	var Objet = load("res://scripts/objet.gd")
+	Objet.detacher(individu.proprietes, "reserves")
+	individu.proprietes.reserves.sommeil.cout_base = cout_base_sommeil_demo
+
+# PASSE FATIGUE, cadence lente uniforme (voir @export cadence_fatigue_frames en tete
+# de fichier). Ne s'execute PAS a chaque frame : compte les frames et ne declenche
+# qu'a l'expiration de la cadence. Delta effectif = cadence * delta_frame (la vraie
+# duree du monde ecoulee depuis la derniere passe). Trois etapes strictement
+# lineaires :
+#   1. Depense.avancer(individus, delta_cadence, {}) : decrement du canal sommeil
+#      (cout_base ecrit par _appliquer_cout_base_sommeil_demo). Chaque unite a son
+#      propre reserves (detache par Peuplement.activer), aucune contamination.
+#   2. Miroir plat : proprietes.manque_sommeil = capacite - reserves.sommeil.reserve.
+#      Necessaire car seuil_etat.gd ne lit que des cles PLATES (contrainte structurelle
+#      documentee dans son en-tete).
+#   3. SeuilEtat.avancer(individus, catalogue_seuils) : compare `manque_sommeil > 70`
+#      et pose/retire l'etat 'epuise' au franchissement (memoire par entree, jamais
+#      un recalcul). Rend les ids qui ont bascule.
+#   4. Comportement DEMO : pour chaque id bascule, lire etats_actifs.has('epuise') UNE
+#      fois et ecrire cols.vitesse a `vitesse_nominale * facteur` ou `vitesse_nominale`.
+#      La colonne vitesse alimente desiree = direction * vitesse dans la passe errance,
+#      et separation_lot la lit aussi. La vitesse s'applique au tick suivant sans jamais
+#      re-tester la jauge.
+func _passe_fatigue(delta_cadence: float, vitesse_type: float) -> void:
+	var individus: Array = _pool.individus
+	if individus.is_empty() or _catalogue_seuils.is_empty():
+		return
+	Depense.avancer(individus, delta_cadence, {})
+	# Miroir plat sur chaque unite : c'est ce miroir qui permet a seuil_etat.gd
+	# (aveugle aux sous-Dict) de lire la reserve.
+	for individu in individus:
+		var p: Dictionary = individu.proprietes
+		var reserve_sommeil: float = float(p.reserves.sommeil.reserve)
+		p["manque_sommeil"] = _capacite_sommeil - reserve_sommeil
+	var bascules: Array = SeuilEtat.avancer(individus, _catalogue_seuils)
+	if bascules.is_empty():
+		return
+	# COMPORTEMENT DEMO A LA BASCULE. Pour chaque id bascule, ajuster cols.vitesse.
+	# Lire etats_actifs UNE fois pour savoir dans quel sens on va -- la memoire par
+	# entree de seuil_etat.gd garantit que ce fut un VRAI franchissement.
+	var cols: Dictionary = _pool.colonnes
+	var vitesses: PackedFloat32Array = cols.vitesse
+	var id_to_index: Dictionary = _pool.id_to_index
+	for id in bascules:
+		if not id_to_index.has(id):
+			continue
+		var individu: Dictionary = individus[int(id_to_index[id])]
+		var slot: int = int(individu.proprietes.get("_slot", -1))
+		if slot < 0 or slot >= vitesses.size():
+			continue
+		var etats: Array = individu.proprietes.get("etats_actifs", [])
+		if etats.has("epuise"):
+			vitesses[slot] = vitesse_type * vitesse_epuise_facteur
+		else:
+			vitesses[slot] = vitesse_type
+	cols.vitesse = vitesses
 
 func _exit_tree() -> void:
 	Peuplement.detruire_pool(_pool)

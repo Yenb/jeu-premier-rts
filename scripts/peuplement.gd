@@ -553,6 +553,16 @@ static func activer(pool: Dictionary, catalogue: Dictionary, type_id: String, in
 		pool["_counter"] = int(pool._counter) - 1
 		return ""
 	(individu.proprietes as Dictionary)["_slot"] = slot
+	# PRESENCE COMPLETE (activation = materialisation reelle) : une unite activee a
+	# SON PROPRE etat interne mutable. Sans ce detacher, muter reserves.sommeil.reserve
+	# sur l'unite A muterait AUSSI l'unite B qui pointait vers la meme reference via
+	# le cache canonique du chantier COW (objet.gd:PAQUETS PARTAGES). Detacher
+	# `reserves` UNIQUEMENT : c'est le seul sous-Dict que ce depot mute couramment
+	# sur une entite vivante (depense.gd:avancer / flux.gd). Les autres sous-Dict
+	# (deformation_etat, etats de charge, canaux_config...) restent partages ; un
+	# banc qui veut les muter appellera Objet.detacher lui-meme sur la cle voulue
+	# (contrat CARTE.md §objet.gd).
+	Objet.detacher(individu.proprietes as Dictionary, "reserves")
 	(pool.individus as Array).append(individu)
 	(pool.id_to_index as Dictionary)[id] = (pool.individus as Array).size() - 1
 	if monde != null:

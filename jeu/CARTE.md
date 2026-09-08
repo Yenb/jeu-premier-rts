@@ -1194,7 +1194,9 @@ direction, cap_horloge)` crée UNE ligne de colonnes SANS fabriquer de
 deformation_etat, etats…) n'existe simplement pas en mémoire pour une unité
 dormante. `activer(pool, catalogue, type_id, index, monde)` fabrique le
 paquet complet à la demande (`Objet.fabriquer` avec `paquets_partages=true`),
-l'attache au `pool.individus`, pose `_slot`, inscrit au monde. L'invariant
+l'attache au `pool.individus`, pose `_slot`, **détache `reserves`** (matérialisation
+= présence complète : l'unité activée peut décrémenter son propre canal
+sommeil/faim/soif sans contaminer les autres, contrat COW), inscrit au monde. L'invariant
 `individus.size() == cols.size()` est rompu exprès sous masse : la population
 vit dans les colonnes, `individus` porte seulement les unités activées.
 `pool.taille_max - pool.slots_libres.size()` (ou `cols.position.size()`) remplace
