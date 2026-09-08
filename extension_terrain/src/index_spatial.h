@@ -216,9 +216,16 @@ public:
 	//
 	// Etapes de la passe 2 par unite :
 	//   (1) Tri de dans_rayon_case[iu] par distance croissante.
-	//   (2) Parcours proche->loin. Pour chaque J : test segment-disque contre
-	//       chaque bloqueur deja retenu. Cache -> skip. Vu -> retenir comme
-	//       bloqueur, puis (si dans le cone strict) accumuler la separation.
+	//   (2) Parcours proche->loin. Pour chaque J :
+	//       (a) Preselection angulaire : pour chaque bloqueur K deja retenu,
+	//           tester `vk . vj >= base_k * d_j` (avec base_k = sqrt(d2_k -
+	//           r_corps2) precalcule). Contraposee sans perte du test segment-
+	//           disque : ecarte les bloqueurs dont le secteur angulaire de
+	//           demi-largeur asin(r_corps/d_k) ne couvre pas l'axe A->J.
+	//       (b) Sur les candidats retenus, verdict final segment-disque exact
+	//           -- verdict bit-a-bit identique a la version sans preselection.
+	//   (3) J cache -> skip. J vu -> retenir comme bloqueur (avec son base_j),
+	//       puis (si dans le cone strict) accumuler la separation.
 	//
 	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
 	// scripts/test_vue_cpp.gd (cas 5 re-verrouille par le modele corps

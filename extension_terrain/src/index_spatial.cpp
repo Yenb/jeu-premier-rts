@@ -339,24 +339,26 @@ PackedVector3Array IndexSpatial::vue_lot(
 			_vue_unites_total += 1;
 
 			// MODULE OCCLUSION VISUELLE CORPS-TRAVERSE + SEPARATION.
-			// Modele : la vue s'arrete au premier corps opaque. Un voisin J
-			// est CACHE si le segment percepteur->J traverse le VOLUME (disque
-			// horizontal rayon = largeur/2) d'un corps K PLUS PROCHE (d_k <
-			// d_j garanti par tri + iteration sur les seuls "vus" deja retenus).
-			// Un corps plus loin ou lateralement decale sans traverser le
-			// segment ne cache jamais. Distinct de scripts/occlusion.gd
-			// (attenuation multiplicative pour son/odeur) : ici la vue est
-			// binaire (vu ou cache), sans opacite, sans cumul. Les bloqueurs
-			// hors cone comptent quand meme comme obstacles visuels (un
-	   // corps a cote peut boucher la ligne de vue), mais ils ne
-	   // contribuent pas eux-memes a la separation.
-			// Etapes :
-			//   (1) Tri de dans_rayon_case[iu] par distance croissante.
-			//   (2) Parcours proche->loin. Pour chaque J : test segment-disque
-			//       contre chaque bloqueur deja retenu. Si J traverse un
-			//       bloqueur -> cache, skip. Sinon -> retenir comme bloqueur
-			//       pour les suivants ET, si J est dans le cone strict,
-			//       accumuler la separation.
+			// Modele inchange : la vue s'arrete au premier corps opaque, un
+			// voisin J est CACHE si le segment percepteur->J traverse le
+			// VOLUME (disque horizontal rayon = largeur/2) d'un corps K PLUS
+			// PROCHE. Bloqueurs hors cone bouchent quand meme sans contribuer
+			// a la separation. Verdict final : segment-disque exact (bit-a-bit
+			// identique a la version precedente).
+			//
+			// ACCELERATION SANS PERTE (preselection angulaire) : le test
+			// segment-disque `lat2 <= r_corps2` equivaut mathematiquement a
+			//   (vk . vj)^2 >= (d2_k - r_corps2) * d2_j  ET  vk . vj > 0
+			// (developpement de lat2 en fonction de vk.vj et d2_j, cf. carnet
+			// de calcul). Autrement dit K cache J ssi le vecteur A->J tombe
+			// dans le SECTEUR ANGULAIRE de K (demi-largeur asin(r/d_k)). On
+			// stocke donc pour chaque bloqueur `base_k = sqrt(d2_k - r_corps2)`,
+			// et pour chaque cible on eliminie sans test segment-disque tout
+			// bloqueur dont `vk . vj < base_k * d_j` (contraposee du critere
+			// exact). Les rares bloqueurs qui passent la preselection sont
+			// re-verifies par le segment-disque exact -- verdict inchange.
+			// La liste testee tombe de "tous les vus" a "ceux dont le secteur
+			// couvre l'angle de la cible" (typiquement 0-2 au lieu de dizaines).
 			auto t_filtre_debut = std::chrono::steady_clock::now();
 			std::sort(liste.begin(), liste.end(),
 					[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
@@ -365,28 +367,40 @@ PackedVector3Array IndexSpatial::vue_lot(
 			auto t_occ_debut = std::chrono::steady_clock::now();
 			float ax = 0.0f;
 			float az = 0.0f;
-			// Indices dans `liste` des voisins retenus comme bloqueurs (vus).
-			// thread_local pour amortir l'allocation entre unites et frames.
-			static thread_local std::vector<int> bloqueurs;
+			// Bloqueurs : {index dans liste, base_k}. thread_local pour amortir
+			// l'allocation entre unites et frames.
+			struct Bloqueur {
+				int idx;
+				float base_k;
+			};
+			static thread_local std::vector<Bloqueur> bloqueurs;
 			bloqueurs.clear();
 			const int nl = (int)liste.size();
 			for (int a = 0; a < nl; a++) {
 				const VoisinVue &vj = liste[a];
-				// Test segment percepteur->J traverse un bloqueur plus proche ?
-				bool cache = false;
 				const float d2_j = vj.d * vj.d;
+				// Test caché par un bloqueur plus proche (preselection puis
+				// segment-disque exact sur les candidats).
+				bool cache = false;
 				const int nb = (int)bloqueurs.size();
 				for (int b = 0; b < nb; b++) {
-					const VoisinVue &vk = liste[(size_t)bloqueurs[(size_t)b]];
-					// direction A->J : v = (-vj.dx, -vj.dz), |v|^2 = d2_j.
-					// ok = pos_k - pos_a = (-vk.dx, -vk.dz).
-					// t = (ok . v) / (v . v) = (vk.dx*vj.dx + vk.dz*vj.dz)/d2_j
-					float dot_num = vj.dx * vk.dx + vj.dz * vk.dz;
-					float t_proj = dot_num / d2_j;
+					const Bloqueur &bc = bloqueurs[(size_t)b];
+					const VoisinVue &vk = liste[(size_t)bc.idx];
+					float cos_num = vj.dx * vk.dx + vj.dz * vk.dz;
+					// PRESELECTION ANGULAIRE : contraposee du critere exact.
+					// cos_num < 0 : K derriere A -> ne bloque pas.
+					// cos_num < base_k * d_j : angle A->J hors secteur de K -> ne bloque pas.
+					if (cos_num <= 0.0f) {
+						continue;
+					}
+					if (cos_num < bc.base_k * vj.d) {
+						continue;
+					}
+					// Candidat. Verdict final segment-disque exact.
+					float t_proj = cos_num / d2_j;
 					if (t_proj <= 0.0f || t_proj >= 1.0f) {
 						continue;
 					}
-					// Distance laterale : ok - t_proj * v.
 					float lat_x = -vk.dx - t_proj * (-vj.dx);
 					float lat_z = -vk.dz - t_proj * (-vj.dz);
 					float lat2 = lat_x * lat_x + lat_z * lat_z;
@@ -399,7 +413,10 @@ PackedVector3Array IndexSpatial::vue_lot(
 					continue;
 				}
 				// J vu -- devient bloqueur pour les voisins suivants.
-				bloqueurs.push_back(a);
+				Bloqueur bc;
+				bc.idx = a;
+				bc.base_k = std::sqrt(std::max(d2_j - r_corps2, 0.0f));
+				bloqueurs.push_back(bc);
 				// Cone strict : J contribue a la separation SEULEMENT dans le cone.
 				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
 				if (dot_vers_voisin < cos_moitie_angle * vj.d) {
