@@ -28,7 +28,7 @@ func _init() -> void:
 		return
 	_executer()
 	if _v.echecs() == 0:
-		print("OK: IndexSpatial C++ vue_lot -- voisin devant vu et pousse, voisin derriere ignore, voisin cache retire, parite du facteur d'occlusion avec occlusion.gd::facteur")
+		print("OK: IndexSpatial C++ vue_lot -- 5 cas passes : voisin devant vu et pousse, voisin derriere ignore, voisin cache retire, parite du facteur d'occlusion avec occlusion.gd::facteur, occulteur lateral plus lointain que sa cible reste occulteur legitime (couverture boucle occlusion = tous les corps, pas seulement les plus proches)")
 		quit(0)
 	else:
 		printerr("ECHEC: %d assertion(s) fausse(s)" % _v.echecs())
@@ -117,3 +117,61 @@ func _executer() -> void:
 		"cas 4 : direction avec obstacle attenue attendue unitaire Y=0, obtenu %s" % str(dirs_4[0]))
 	_v.v(dirs_4[0].distance_to(Vector3(-1.0, 0.0, 0.0)) < 1.0e-4,
 		"cas 4 : direction A/B/C alignes attendue (-1,0,0), obtenu %s" % str(dirs_4[0]))
+
+	# ---- CAS 5 : OCCULTEUR LATERAL avec distance(i,k) > distance(i,j) ----
+	# Contre-exemple geometrique documente dans index_spatial.cpp : un occulteur
+	# k plus loin de i que sa cible j peut quand meme couper le segment i->j.
+	# distance(i,k)^2 = (t*d_j)^2 + L^2, si L est non negligeable devant d_j
+	# alors distance(i,k) > d_j.
+	#
+	# Configuration (avec CONE ETROIT 45 deg pour ce cas, pour que K SORTE du
+	# cone et ne soit pas lui-meme cible -- sinon auto-occlusion mutuelle
+	# donnerait direction nulle, la comparaison serait indistinguable) :
+	#   A percepteur a (0, 12, 0), regarde +X. cone_5 = 45 deg total.
+	#   J cible a (0.6, 12, 0), distance = 0.6, angle 0 -> DANS le cone.
+	#   K occulteur a (0.55, 12, 0.35), distance ~= 0.652 > 0.6, angle atan(0.35/0.55)
+	#     = 32.5 deg > 22.5 deg (moitie de 45) -> HORS du cone (pas candidat cible).
+	# Segment A->J : v = (0.6, 0, 0), longueur_carre = 0.36.
+	# Projection de K sur AJ : t = (0.55 * 0.6 + 0.35 * 0) / 0.36 = 0.917 dans ]0,1[.
+	# Point sur segment : (0.55, 12, 0). Distance laterale : 0.35 <= largeur 0.5.
+	# K est donc un occulteur LEGITIME de J (t dans ]0,1[ et L <= largeur), MEME
+	# si distance(i,k) > distance(i,j). Un tri par distance croissante placerait K
+	# APRES J -- une boucle occulteurs limitee a `b < a` raterait K et considererait
+	# J comme non-occulte a tort. La boucle actuelle (b != a) doit prendre K.
+	#
+	# COMPORTEMENT ATTENDU :
+	#   - Sans le patch (bug b < a) : J vu (non occlus), pousse A vers -X.
+	#     dirs_5[0] proche de (-1, 0, 0).
+	#   - Avec le patch (b != a) : J occlus par K (opaque, dans le couloir), retire.
+	#     K est hors cone donc pas candidat. Aucune poussee. dirs_5[0] = (0, 0, 0).
+	var cos_moitie_5: float = cos(deg_to_rad(22.5))  # cone 45 deg total
+	var positions_5 := PackedVector3Array([
+		Vector3(0.0, 12.0, 0.0),     # 0 -- A percepteur
+		Vector3(0.6, 12.0, 0.0),     # 1 -- J cible plus proche, dans le cone
+		Vector3(0.55, 12.0, 0.35),   # 2 -- K occulteur plus loin, HORS cone
+	])
+	var orient_5 := PackedVector3Array([
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, 0.0, 0.0),
+		Vector3(1.0, 0.0, 0.0),
+	])
+	var opac_5 := PackedFloat32Array([1.0, 1.0, 1.0])
+	var index5: RefCounted = ClassDB.instantiate("IndexSpatial")
+	index5.configurer(positions_5.size())
+	index5.ouvrir_niveau_planaire(1)
+	index5.deplacer_lot(positions_5)
+	var dirs_5: PackedVector3Array = index5.vue_lot(positions_5, orient_5, opac_5, rayon, cos_moitie_5, largeur, seuil)
+	# Prealable : distance(A, K) > distance(A, J).
+	_v.v((positions_5[2] - positions_5[0]).length() > (positions_5[1] - positions_5[0]).length(),
+		"cas 5 : prealable geometrique casse (distance(A,K) devrait > distance(A,J))")
+	# Prealable : parite avec Occlusion.facteur -- K doit occulter le segment A->J.
+	var obstacles_5 := [
+		{ "position": Vector3(0.55, 12.0, 0.35), "proprietes": { "opacite": 1.0 } },
+	]
+	var facteur_5: float = Occlusion.facteur(positions_5[0], positions_5[1], obstacles_5, "opacite", largeur, [])
+	_v.v(facteur_5 <= seuil,
+		"cas 5 : Occlusion.facteur(A, J, [K], opacite=1) attendu <= seuil pour prouver K occulteur legitime, obtenu %f" % facteur_5)
+	# CIBLE : direction nulle (J occlus par K, K pas cible car hors cone).
+	# Un bug `b < a` donnerait dirs_5[0] proche de (-1, 0, 0) car J serait retenu.
+	_v.v(dirs_5[0].length() < 1.0e-4,
+		"cas 5 : direction attendue nulle (J occlus par K plus lointain, K hors cone) -- si dir ~= (-1,0,0) c'est le bug b < a qui a rate K comme occulteur ; obtenu %s" % str(dirs_5[0]))

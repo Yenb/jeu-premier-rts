@@ -5,6 +5,7 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -278,6 +279,28 @@ PackedVector3Array IndexSpatial::vue_lot(
 			vv.d = std::sqrt(d2);
 			dans_rayon.push_back(vv);
 		}
+		// TRI PAR DISTANCE CROISSANTE des CANDIDATS. Sert au COURT-CIRCUIT
+		// PRECOCE : quand un candidat cible est cache par un occulteur proche
+		// opaque (opacite ~ 1), le facteur tombe a 0.0 <= seuil des le premier
+		// obstacle aligne et la boucle occulteurs sort par `break`. Traiter
+		// les cibles du plus proche au plus loin maximise les chances que ce
+		// break tombe tot pour chaque candidat cache.
+		//
+		// ATTENTION -- LA BOUCLE OCCULTEURS RESTE SUR TOUS LES CORPS (b != a),
+		// PAS SUR LES PLUS PROCHES SEULEMENT. Un premier jet de ce chantier
+		// bornait la boucle a `b < a` avec l'argument "l'occulteur est plus
+		// proche que sa cible". CET ARGUMENT EST FAUX en regime largeur non
+		// negligeable devant la distance : un occulteur k a distance(i, k)^2 =
+		// (t * d_j)^2 + L^2, et pour L <= largeur non nul, distance(i, k) peut
+		// depasser d_j (contre-exemple concret : d_j = 0.6, k a (0.55, 12,
+		// 0.35), largeur = 0.5 -- t = 0.917 dans ]0,1[, L = 0.35 <= 0.5,
+		// distance(i, k) = 0.652 > 0.6). Un tel k etait un occulteur legitime
+		// silencieusement ignore par b < a. Le tri est donc gardE pour le
+		// break precoce, mais la boucle occulteurs teste bien tous les corps
+		// du voisinage (les corps hors segment sont rejetes par t hors ]0,1[
+		// ou L > largeur, comme avant).
+		std::sort(dans_rayon.begin(), dans_rayon.end(),
+				[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
 		float ax = 0.0f;
 		float az = 0.0f;
 		const int nvr = (int)dans_rayon.size();
@@ -291,10 +314,18 @@ PackedVector3Array IndexSpatial::vue_lot(
 				continue;
 			}
 			// (3) OCCLUSION : geometrie de scripts/occlusion.gd::facteur portee
-			// mot pour mot, sur la LISTE dans_rayon (jamais sur le voisinage
-			// brut -- chantier "degraissage vue_lot"). vecteur = vers - depuis
-			// = pos_j - pos_i = (-vj.dx, -vj.dz). longueur_carre = vj.d^2.
-			// Pour chaque obstacle k (dans_rayon, != j) :
+			// mot pour mot, contre TOUS les corps de dans_rayon (b != a). Le
+			// tri par distance croissante des CIBLES sert au court-circuit
+			// precoce : en foule dense, un corps proche opaque (opacite ~ 1)
+			// donne facteur = 0 <= seuil des le premier occulteur aligne, la
+			// boucle sort par break -- une direction bouchee est ecartee sans
+			// examen supplementaire. La boucle occulteurs teste tous les corps
+			// du voisinage (pas seulement les plus proches -- un occulteur k a
+			// distance(i, k)^2 = (t * d_j)^2 + L^2 et peut avoir distance > d_j
+			// quand L est non negligeable, contre-exemple d_j = 0.6, L = 0.35,
+			// distance = 0.652 > d_j -- verrouille par test_vue_cpp cas 5).
+			// vecteur = pos_j - pos_i = (-vj.dx, -vj.dz). longueur_carre = vj.d^2.
+			// Pour chaque obstacle k :
 			//   t = (pos_k - depuis) . vecteur / longueur_carre
 			//   pos_k - depuis = (-vk.dx, -vk.dz) (deja stocke)
 			//   si t <= 0 ou t >= 1 skip
