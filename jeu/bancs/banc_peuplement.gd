@@ -266,6 +266,15 @@ var _exposant_planaire: int = -1
 # releve sur la vue", 2026-09-08). Chronos internes de leurs branches
 # supprimes aussi -- ils ne sont plus calcules.
 var _us_vue: int = 0
+# Sous-chronos temporaires du vue_lot C++ (chantier "decouper le poste vue en
+# collecte/filtre/tri/occ_sep", diagnostic seul -- a retirer une fois le poste
+# couteux identifie). Lus via _index_cpp.derniers_chronos_vue() apres chaque
+# appel vue_lot, cumules sur la seconde comme _us_vue. La somme des quatre
+# doit approcher _us_vue (a l'arrondi des microsecondes pres).
+var _us_collecte: int = 0
+var _us_filtre: int = 0
+var _us_tri: int = 0
+var _us_occ_sep: int = 0
 # Catalogue seuils_etat.json charge une fois au _ready. Passe la sur SeuilEtat.avancer.
 var _catalogue_seuils: Dictionary = {}
 # CAPACITE du canal `sommeil` sur mobile_test : lue une fois au _fabriquer_lot depuis
@@ -658,6 +667,11 @@ func _physics_process(delta: float) -> void:
 		if actif_releve:
 			chrono_intention_fin = Time.get_ticks_usec()
 			_us_vue += chrono_intention_fin - chrono_intention_debut
+			var chr: Dictionary = _index_cpp.derniers_chronos_vue()
+			_us_collecte += int(chr.get("collecte", 0))
+			_us_filtre += int(chr.get("filtre", 0))
+			_us_tri += int(chr.get("tri", 0))
+			_us_occ_sep += int(chr.get("occ_sep", 0))
 	else:
 		if separation_active and _index_cpp == null:
 			push_error("banc_peuplement : separation_active=true mais _index_cpp null (deplacer_cpp=%s, brancher_monde=%s) -- repli sur errance." % [str(deplacer_cpp), str(brancher_monde)])
@@ -750,12 +764,20 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 	# Divisions promues en float pour eviter le warning GDScript "Integer division.
 	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
 	var inv_frames: float = 1.0 / float(frames)
-	print("[peuplement] N=%d fps=%d vue=%dus" % [
+	print("[peuplement] N=%d fps=%d vue=%dus collecte=%dus filtre=%dus tri=%dus occ_sep=%dus" % [
 		count,
 		int(Engine.get_frames_per_second()),
 		int(float(_us_vue) * inv_frames),
+		int(float(_us_collecte) * inv_frames),
+		int(float(_us_filtre) * inv_frames),
+		int(float(_us_tri) * inv_frames),
+		int(float(_us_occ_sep) * inv_frames),
 	])
 	_us_vue = 0
+	_us_collecte = 0
+	_us_filtre = 0
+	_us_tri = 0
+	_us_occ_sep = 0
 	_frames_accumulees = 0
 	_temps_prochain_ms = maintenant_ms + 1000
 

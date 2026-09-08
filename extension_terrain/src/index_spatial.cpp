@@ -6,6 +6,7 @@
 #include <godot_cpp/variant/vector3.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -38,6 +39,7 @@ void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("deplacer_lot", "positions"), &IndexSpatial::deplacer_lot);
 	ClassDB::bind_method(D_METHOD("cases_pour_niveau", "exposant"), &IndexSpatial::cases_pour_niveau);
 	ClassDB::bind_method(D_METHOD("vue_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::vue_lot);
+	ClassDB::bind_method(D_METHOD("derniers_chronos_vue"), &IndexSpatial::derniers_chronos_vue);
 }
 
 IndexSpatial::IndexSpatial() {}
@@ -162,6 +164,12 @@ PackedVector3Array IndexSpatial::vue_lot(
 	for (int i = 0; i < count; i++) {
 		out_w[i] = Vector3();
 	}
+	// Reset des sous-chronos temporaires (voir en-tete). La somme des quatre
+	// couvre tout le corps de vue_lot.
+	_us_collecte = 0;
+	_us_filtre = 0;
+	_us_tri = 0;
+	_us_occ_sep = 0;
 	if (count <= 0 || _niveaux.empty() || rayon <= 0.0f) {
 		return out;
 	}
@@ -263,6 +271,7 @@ PackedVector3Array IndexSpatial::vue_lot(
 		// de la case courante elles-memes -- filtrees par d2 <= 1e-8f dans le
 		// filtre distance ci-dessous (distance a soi = 0).
 		voisinage.clear();
+		auto t_col_debut = std::chrono::steady_clock::now();
 		for (int dcx = -n_cases; dcx <= n_cases; dcx++) {
 			for (int dcz = -n_cases; dcz <= n_cases; dcz++) {
 				Vector3i cle(case_courante.x + dcx, 0, case_courante.z + dcz);
@@ -277,6 +286,8 @@ PackedVector3Array IndexSpatial::vue_lot(
 				}
 			}
 		}
+		_us_collecte += std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - t_col_debut).count();
 		const int nv = (int)voisinage.size();
 
 		// FILTRES PER-UNITE sur le voisinage partage.
@@ -289,6 +300,7 @@ PackedVector3Array IndexSpatial::vue_lot(
 			// les voisins qui passent distance ET cone elargi. La distance de
 			// soi a soi = 0 -> filtre par d2 <= 1e-8f exclut naturellement soi.
 			dans_rayon.clear();
+			auto t_filtre_debut = std::chrono::steady_clock::now();
 			for (int a = 0; a < nv; a++) {
 				int32_t k = voisinage[a];
 				const Vector3 &q = pos_r[k];
@@ -310,10 +322,16 @@ PackedVector3Array IndexSpatial::vue_lot(
 				vv.d = d;
 				dans_rayon.push_back(vv);
 			}
+			_us_filtre += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - t_filtre_debut).count();
 			// TRI PAR DISTANCE CROISSANTE (voir docs chantiers precedents :
 			// break precoce facteur + borne d_j + largeur).
+			auto t_tri_debut = std::chrono::steady_clock::now();
 			std::sort(dans_rayon.begin(), dans_rayon.end(),
 					[](const VoisinVue &a, const VoisinVue &b) { return a.d < b.d; });
+			_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - t_tri_debut).count();
+			auto t_occ_debut = std::chrono::steady_clock::now();
 			float ax = 0.0f;
 			float az = 0.0f;
 			const int nvr = (int)dans_rayon.size();
@@ -375,8 +393,19 @@ PackedVector3Array IndexSpatial::vue_lot(
 				float inv_len = 1.0f / std::sqrt(len2);
 				out_w[id] = Vector3(ax * inv_len, 0.0f, az * inv_len);
 			}
+			_us_occ_sep += std::chrono::duration_cast<std::chrono::microseconds>(
+					std::chrono::steady_clock::now() - t_occ_debut).count();
 		}
 	}
+	return out;
+}
+
+Dictionary IndexSpatial::derniers_chronos_vue() const {
+	Dictionary out;
+	out["collecte"] = (int64_t)_us_collecte;
+	out["filtre"] = (int64_t)_us_filtre;
+	out["tri"] = (int64_t)_us_tri;
+	out["occ_sep"] = (int64_t)_us_occ_sep;
 	return out;
 }
 

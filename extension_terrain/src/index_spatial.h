@@ -79,6 +79,24 @@ class IndexSpatial : public RefCounted {
 	int _nombre_ids = 0;
 	std::vector<Niveau> _niveaux;
 
+	// SOUS-CHRONOS TEMPORAIRES de vue_lot (a retirer une fois identifie le
+	// poste couteux). Le releve global `vue=` du banc enveloppe tout le corps
+	// de vue_lot ; ces quatre compteurs decoupent ce corps en :
+	//   _us_collecte : la boucle (2n+1)^2 de niveau.cases.find par case qui
+	//                  remplit `voisinage`.
+	//   _us_filtre   : le remplissage de `dans_rayon` (filtre distance +
+	//                  cone elargi) par unite.
+	//   _us_tri      : le std::sort de `dans_rayon` par distance croissante,
+	//                  par unite.
+	//   _us_occ_sep  : la double boucle occlusion + accumulation separation,
+	//                  par unite.
+	// La somme des quatre couvre tout le corps de vue_lot sans trou. Exposes
+	// par derniers_chronos_vue() -- lus par le banc, imprimes a cote de vue=.
+	mutable int64_t _us_collecte = 0;
+	mutable int64_t _us_filtre = 0;
+	mutable int64_t _us_tri = 0;
+	mutable int64_t _us_occ_sep = 0;
+
 protected:
 	static void _bind_methods();
 
@@ -158,6 +176,13 @@ public:
 			float cos_moitie_angle,
 			float largeur,
 			float seuil_facteur) const;
+
+	// Sous-chronos internes du dernier vue_lot, en microsecondes (voir
+	// declaration des mutable _us_collecte / _us_filtre / _us_tri / _us_occ_sep
+	// plus haut). Dictionary { "collecte", "filtre", "tri", "occ_sep" }.
+	// Temporaire : outil de diagnostic, a retirer une fois le poste couteux
+	// identifie. Meme patron que derniers_compteurs_vue historique.
+	Dictionary derniers_chronos_vue() const;
 };
 
 } // namespace godot
