@@ -195,9 +195,16 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # une seule frontiere.
 # La geometrie d'occlusion (t dans ]0,1[, distance laterale <= largeur, cumul
 # multiplicatif) est portee mot pour mot depuis scripts/occlusion.gd::facteur.
-# largeur_occlusion : tolerance laterale au segment percepteur -> voisin. Un
-# obstacle plus lateralement eloigne que ca ne compte pas.
-@export var largeur_occlusion: float = 0.5
+# largeur_occlusion : DERIVEE de la taille du corps (chantier "occlusion a
+# hauteur de la taille reelle", 2026-09-08). Un corps de rayon r occulte au
+# maximum a distance laterale r+r = taille horizontale du corps (peuplement
+# homogene : occulteur et cible font la meme taille). Calculee au _monter_pool
+# depuis data/mesh.json[mesh_ref].taille -- aucun nombre en dur, aucun
+# @export. Un premier jet avait pose 0.5 pour un corps de 0.8 : le couloir
+# etait plus etroit que les corps, un occulteur latteralement decale de 0.6
+# n'etait pas compte alors que geometriquement il bouche encore la ligne de
+# vue -> ~64 cibles/unite au releve BORNE au lieu de la poignee attendue.
+var _largeur_occlusion: float = 0.0
 # Seuil du facteur d'occlusion sous lequel un voisin est retire du percu.
 # Convention historique du depot (test_banc_p1 : 0.001) : un facteur nul serait
 # trivialement rejete, 0.001 laisse passer un obstacle transparent tout en
@@ -251,27 +258,13 @@ var _index_cpp: RefCounted = null
 # Lu par la passe candidats pour choisir le niveau a interroger.
 var _exposant_planaire: int = -1
 
-# ACCUMULATEURS DE CHRONOS -- lus par _imprimer_releve_si_seconde_ecoulee et
-# remis a zero apres chaque impression. `_us_*` = microsecondes cumulees sur la
-# seconde en cours, `_frames_accumulees` = nombre de _physics_process compris
-# dans cette meme seconde (pour rendre la moyenne PAR FRAME). `_temps_prochain`
-# = timestamp secondes de la prochaine impression (Time.get_ticks_msec / 1000).
-var _us_errance: int = 0
-var _us_physique_buffer: int = 0
-var _us_multimesh: int = 0
-# Poste `deplacer` : passe individu.position <- cols.position + N appels
-# monde.deplacer(individu). Sous brancher_monde=false, reste a 0.
-var _us_deplacer: int = 0
-# Poste `fatigue` : passe cadencee sur les unites ACTIVEES qui decremente sommeil,
-# pose le miroir plat, et applique seuil_etat. Reste 0 les frames ou la cadence ne
-# se declenche pas (quotient sur les frames accumulees dans la seconde) -- c'est
-# meme le point de la cadence lente. Voir passe_fatigue().
-var _us_fatigue: int = 0
-# Poste `vue` (chantier "vue avec occlusion en C++"). Chrono du seul parcours
-# du voisinage par frame -- vue_lot lit l'index planaire, filtre les voisins
-# par (rayon + cone d'angle autour de l'orientation), applique l'occlusion
-# sur les voisins retenus, ET accumule la separation dans le MEME parcours.
-# Un seul poste, une seule frontiere.
+# CHRONO -- lus par _imprimer_releve_si_seconde_ecoulee. UN SEUL POSTE : vue
+# (le seul qui pese en foule dense a N=100 000, ~600 000 us contre <10 000 us
+# pour tous les autres postes cumules). Les autres postes historiques
+# (errance/phys+buffer/deplacer/fatigue/mm_set) ont ete retires du releve
+# comme inutilises pour l'optimisation en cours (chantier "concentre le
+# releve sur la vue", 2026-09-08). Chronos internes de leurs branches
+# supprimes aussi -- ils ne sont plus calcules.
 var _us_vue: int = 0
 # Catalogue seuils_etat.json charge une fois au _ready. Passe la sur SeuilEtat.avancer.
 var _catalogue_seuils: Dictionary = {}
@@ -342,8 +335,6 @@ func _charger_reglages_locaux() -> void:
 		cout_base_sommeil_demo = float(donnees.cout_base_sommeil_demo)
 	if donnees.has("vitesse_epuise_facteur"):
 		vitesse_epuise_facteur = float(donnees.vitesse_epuise_facteur)
-	if donnees.has("largeur_occlusion"):
-		largeur_occlusion = float(donnees.largeur_occlusion)
 	if donnees.has("seuil_facteur_occlusion"):
 		seuil_facteur_occlusion = float(donnees.seuil_facteur_occlusion)
 	if donnees.has("opacite_unite"):
@@ -452,6 +443,17 @@ func _monter_pool() -> void:
 	if mesh == null:
 		push_error("banc_peuplement : MeshCatalogue.fabriquer_mesh('%s') a rendu null" % mesh_ref)
 		return
+	# LARGEUR D'OCCLUSION DERIVEE DE LA TAILLE DU CORPS (chantier "occlusion a
+	# hauteur de la taille reelle"). En peuplement homogene (occulteur et cible
+	# de meme taille), la distance laterale maximale d'un occulteur pour boucher
+	# entierement le corps derriere = r_occulteur + r_cible = 2 * (taille/2) =
+	# taille. La geometrie horizontale se lit sur max(taille.x, taille.z). Aucun
+	# nombre en dur : la valeur vient de data/mesh.json[mesh_ref].taille.
+	var fiche_mesh: Dictionary = catalogue_mesh[mesh_ref]
+	var t_mesh: Dictionary = fiche_mesh.get("taille", {})
+	_largeur_occlusion = maxf(float(t_mesh.get("x", 0.0)), float(t_mesh.get("z", 0.0)))
+	if _largeur_occlusion <= 0.0:
+		push_error("banc_peuplement : taille horizontale du mesh '%s' introuvable ou nulle (%s) -- occlusion inerte" % [mesh_ref, str(t_mesh)])
 	# Taille du pool = capacite avec un peu de marge -- des chantiers ulterieurs
 	# pourront spawn/kill dynamiquement sans re-allouer.
 	# Node (pas Node3D) : pas de get_world_3d() direct. Passer par le Viewport.
@@ -646,7 +648,7 @@ func _physics_process(delta: float) -> void:
 			cols.opacite,
 			rayon_separation,
 			cos_moitie_angle,
-			largeur_occlusion,
+			_largeur_occlusion,
 			seuil_facteur_occlusion)
 		var k: int = 0
 		while k < count:
@@ -681,10 +683,6 @@ func _physics_process(delta: float) -> void:
 			cols.direction = directions
 		if repack_desiree:
 			cols.desiree = desirees
-		if actif_releve:
-			chrono_intention_fin = Time.get_ticks_usec()
-			_us_errance += chrono_intention_fin - chrono_intention_debut
-	var chrono_physique_debut: int = chrono_intention_fin
 	# PASSE 2 -- physique + buffer fusionnes. Deux chemins : C++ (chantier
 	# "portage C++ du poste physique") derriere @export utilise_cpp, GDScript
 	# sinon (chemin oracle, verrouille par test_tick_fusionne + test de parite
@@ -697,10 +695,6 @@ func _physics_process(delta: float) -> void:
 		buffer = _physique_et_buffer_cpp(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
 	else:
 		buffer = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
-	var chrono_deplacer_debut: int = 0
-	if actif_releve:
-		chrono_deplacer_debut = Time.get_ticks_usec()
-		_us_physique_buffer += chrono_deplacer_debut - chrono_physique_debut
 	# PASSE DEPLACER (chantier "rebrancher l'index spatial") : la physique a
 	# mute cols.position (verite tenue par la boucle physique) mais PAS
 	# individu.position (les Dictionary du pool). monde.gd:deplacer lit
@@ -724,10 +718,6 @@ func _physics_process(delta: float) -> void:
 				individu.position = positions_apres[j]
 				_monde.deplacer_simple(individu)
 				j += 1
-	var chrono_fatigue_debut: int = 0
-	if actif_releve:
-		chrono_fatigue_debut = Time.get_ticks_usec()
-		_us_deplacer += chrono_fatigue_debut - chrono_deplacer_debut
 	# PASSE FATIGUE, cadence lente : n'agit QUE toutes les cadence_fatigue_frames
 	# images. Uniforme pour toutes les unites, jamais fonction de la distance au
 	# joueur (LOD par distance INTERDIT dans ce depot). Delta effectif = cadence *
@@ -738,14 +728,9 @@ func _physics_process(delta: float) -> void:
 		var vitesse_type: float = float((_catalogue.get(type_id, {}) as Dictionary).get("vitesse", 1.0))
 		_passe_fatigue(delta_cadence, vitesse_type)
 		_frames_depuis_fatigue = 0
-	var chrono_multimesh_debut: int = 0
-	if actif_releve:
-		chrono_multimesh_debut = Time.get_ticks_usec()
-		_us_fatigue += chrono_multimesh_debut - chrono_fatigue_debut
 	RenderingServer.multimesh_set_buffer((_pool.mm as MultiMesh).get_rid(), buffer)
 	_pool["buffer"] = buffer
 	if actif_releve:
-		_us_multimesh += Time.get_ticks_usec() - chrono_multimesh_debut
 		_frames_accumulees += 1
 		_imprimer_releve_si_seconde_ecoulee(count)
 
@@ -765,35 +750,12 @@ func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
 	# Divisions promues en float pour eviter le warning GDScript "Integer division.
 	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
 	var inv_frames: float = 1.0 / float(frames)
-	print("[peuplement] N=%d fps=%d errance=%dus vue=%dus phys+buffer=%dus deplacer=%dus fatigue=%dus mm_set=%dus" % [
+	print("[peuplement] N=%d fps=%d vue=%dus" % [
 		count,
 		int(Engine.get_frames_per_second()),
-		int(float(_us_errance) * inv_frames),
 		int(float(_us_vue) * inv_frames),
-		int(float(_us_physique_buffer) * inv_frames),
-		int(float(_us_deplacer) * inv_frames),
-		int(float(_us_fatigue) * inv_frames),
-		int(float(_us_multimesh) * inv_frames),
 	])
-	# COMPTEURS TEMPORAIRES borne distance (chantier "verifier gain reel borne").
-	# Lus depuis IndexSpatial.derniers_compteurs_vue apres le dernier vue_lot.
-	# A retirer une fois le gain mesure. Instantanes de la DERNIERE frame, pas
-	# une moyenne sur la seconde.
-	if _index_cpp != null and _index_cpp.has_method("derniers_compteurs_vue"):
-		var comp: Dictionary = _index_cpp.derniers_compteurs_vue()
-		var cibles: int = int(comp.get("cibles_totales", 0))
-		var breaks: int = int(comp.get("breaks_dist", 0))
-		var faits: int = int(comp.get("tests_faits", 0))
-		var evites: int = int(comp.get("tests_evites", 0))
-		var total: int = faits + evites
-		var pct_evites: int = 0 if total == 0 else int(float(evites) * 100.0 / float(total))
-		print("[peuplement] BORNE cibles=%d breaks=%d tests_faits=%d tests_evites=%d (%d%% economises)" % [cibles, breaks, faits, evites, pct_evites])
-	_us_errance = 0
 	_us_vue = 0
-	_us_physique_buffer = 0
-	_us_deplacer = 0
-	_us_fatigue = 0
-	_us_multimesh = 0
 	_frames_accumulees = 0
 	_temps_prochain_ms = maintenant_ms + 1000
 

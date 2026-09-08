@@ -79,16 +79,6 @@ class IndexSpatial : public RefCounted {
 	int _nombre_ids = 0;
 	std::vector<Niveau> _niveaux;
 
-	// COMPTEURS TEMPORAIRES POUR MESURER LA BORNE DISTANCE dans vue_lot
-	// (chantier "verifier gain reel de la borne d_j + largeur", 2026-09-08).
-	// Reinitialises a chaque appel de vue_lot(), lus par GDScript via
-	// derniers_compteurs_vue(). Mutable car vue_lot est const. A retirer une
-	// fois le gain mesure en jeu.
-	mutable int64_t _vue_cibles_totales = 0;   // nb de candidats cibles (b apres cone strict)
-	mutable int64_t _vue_breaks_dist = 0;      // nb de fois ou le break distance a coupe la boucle occulteurs
-	mutable int64_t _vue_tests_faits = 0;      // nb de tests occulteurs effectivement fait
-	mutable int64_t _vue_tests_evites = 0;     // nb de tests occulteurs epargnes par le break (=nvr-b apres break)
-
 protected:
 	static void _bind_methods();
 
@@ -168,11 +158,6 @@ public:
 			float cos_moitie_angle,
 			float largeur,
 			float seuil_facteur) const;
-
-	// COMPTEURS TEMPORAIRES du dernier vue_lot. Rend un Dictionary
-	// { cibles_totales, breaks_dist, tests_faits, tests_evites }. A retirer
-	// une fois le gain mesure en jeu.
-	Dictionary derniers_compteurs_vue() const;
 };
 
 } // namespace godot

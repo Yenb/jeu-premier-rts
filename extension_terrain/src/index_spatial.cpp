@@ -38,7 +38,6 @@ void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("deplacer_lot", "positions"), &IndexSpatial::deplacer_lot);
 	ClassDB::bind_method(D_METHOD("cases_pour_niveau", "exposant"), &IndexSpatial::cases_pour_niveau);
 	ClassDB::bind_method(D_METHOD("vue_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::vue_lot);
-	ClassDB::bind_method(D_METHOD("derniers_compteurs_vue"), &IndexSpatial::derniers_compteurs_vue);
 }
 
 IndexSpatial::IndexSpatial() {}
@@ -210,11 +209,6 @@ PackedVector3Array IndexSpatial::vue_lot(
 	const float *opac_r = opacites.ptr();
 	const float rayon2 = rayon * rayon;
 	const float largeur2 = largeur * largeur;
-	// Reset compteurs temporaires (chantier "mesurer gain reel").
-	_vue_cibles_totales = 0;
-	_vue_breaks_dist = 0;
-	_vue_tests_faits = 0;
-	_vue_tests_evites = 0;
 
 	// Voisinage local reutilise entre unites -- evite N=100000 allocations de
 	// vector par frame. clear() garde la capacite acquise.
@@ -333,7 +327,6 @@ PackedVector3Array IndexSpatial::vue_lot(
 				// (3) OCCLUSION -- geometrie de occlusion.gd::facteur mot pour
 				// mot, boucle occulteurs bornee par distance (vk.d > vj.d + largeur
 				// -> break, tri croissant).
-				_vue_cibles_totales++;
 				float facteur = 1.0f;
 				float vx = -vj.dx;
 				float vz = -vj.dz;
@@ -342,14 +335,11 @@ PackedVector3Array IndexSpatial::vue_lot(
 				for (int b = 0; b < nvr; b++) {
 					const VoisinVue &vk = dans_rayon[b];
 					if (vk.d > seuil_dist_occulteur) {
-						_vue_breaks_dist++;
-						_vue_tests_evites += (int64_t)(nvr - b);
 						break;
 					}
 					if (b == a) {
 						continue;
 					}
-					_vue_tests_faits++;
 					float ok_x = -vk.dx;
 					float ok_z = -vk.dz;
 					float t = (ok_x * vx + ok_z * vz) / d2_j;
@@ -387,15 +377,6 @@ PackedVector3Array IndexSpatial::vue_lot(
 			}
 		}
 	}
-	return out;
-}
-
-Dictionary IndexSpatial::derniers_compteurs_vue() const {
-	Dictionary out;
-	out["cibles_totales"] = (int)_vue_cibles_totales;
-	out["breaks_dist"] = (int)_vue_breaks_dist;
-	out["tests_faits"] = (int)_vue_tests_faits;
-	out["tests_evites"] = (int)_vue_tests_evites;
 	return out;
 }
 
