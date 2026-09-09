@@ -451,16 +451,18 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 	# les Packed*Array pesent en memoire). 1M cases = 8 Mo pour counts+offsets.
 	if total > 1000000:
 		push_error("collision.gd: grille locale > 1M cases (Nx=%d Ny=%d Nz=%d)" % [Nx, Ny, Nz])
-	# cell_id lineaire par entite, base 0.
+	# cell_id lineaire par entite + counts par cell FUSIONNES en UNE passe : cid
+	# tenu en variable locale, pas relu depuis cell_ids apres l'ecriture. counts
+	# resize (PackedInt32Array initialise a 0) avant la boucle. Ordre preserve :
+	# cell_ids+counts, PUIS offsets prefix-sum, PUIS sorted_idx.
 	var cell_ids: PackedInt32Array = PackedInt32Array()
 	cell_ids.resize(N)
-	for i in N:
-		cell_ids[i] = (cx_arr[i] - cx_min) + (cy_arr[i] - cy_min) * Nx + (cz_arr[i] - cz_min) * NxNy
-	# counts par cell (PackedInt32Array.resize initialise a 0).
 	var counts: PackedInt32Array = PackedInt32Array()
 	counts.resize(total)
 	for i in N:
-		counts[cell_ids[i]] += 1
+		var cid: int = (cx_arr[i] - cx_min) + (cy_arr[i] - cy_min) * Nx + (cz_arr[i] - cz_min) * NxNy
+		cell_ids[i] = cid
+		counts[cid] += 1
 	# offsets = prefix sum. Taille total+1 pour lire offsets[c+1].
 	var offsets: PackedInt32Array = PackedInt32Array()
 	offsets.resize(total + 1)
