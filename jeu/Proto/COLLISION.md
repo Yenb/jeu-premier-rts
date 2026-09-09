@@ -42,18 +42,33 @@ Dispatch par type UNIQUEMENT dans `_support_local` (un 5e type = un `case`).
 
 ## Broadphase
 
-Groupée par case : les entités du `tick` sont regroupées par case virtuelle
-(arête = 2 × rayon max), et `monde.choses_dans_rayon(centre_case, r_agr +
-demi_diag_case)` est appelé UNE FOIS par case, `r_agr = max` du rayon des
-occupants (`demi-diagonale AABB + rayon max + vitesse*delta`). Chaque driver
-de la case filtre ensuite le voisinage partagé par `dist(x, y) ≤ r_x` — même
-filtre que la version per-entity, parité stricte du set de paires atteignant
-le narrowphase. Puis filtre `masque_collision` et recouvrement des AABB
-**balayées**.
+**100 % locale, aucun appel à `monde.gd`**. Le tick construit sa propre grille
+par **counting sort** à partir du cache colonnes : `cell_id` linéaire par
+entité, `PackedInt32Array` d'indices triés par cell + `offsets` (start par
+cell). Voisinage d'une cell = elle-même + les 26 cases adjacentes (3×3×3),
+lecture directe dans `sorted_idx[offsets[vc]..offsets[vc+1]]`. C'est la
+structure exacte du portage C++ à venir (cell-id array + sorted index +
+start/end offsets).
 
-Limite : `monde.gd` indexe un POINT, pas une AABB. Valable tant que les tailles
-restent comparables. Des entités de tailles très différentes exigeraient
-d'étendre `monde.gd` (chantier framework, Orion) — hors de ce prototype.
+**Arête** = `max r_i × 1.0001` avec `r_i = demi-diagonale AABB + rayon max +
+vitesse × delta`. La marge 1.0001 garantit que la sphère de rayon `r_i` autour
+d'une entité tient dans 3×3×3 cases (sans la marge, cas dégénéré `r_i = arete`
+et `p` au bord d'une case → `case(q)` peut être `case(p)+2`).
+
+**Contrat** : toutes les entités collisionnables doivent être dans `entites`.
+Le tick ne regarde plus le monde — une entité présente dans `monde` mais
+absente d'`entites` n'apparaît jamais comme candidat.
+
+**Filtres per-paire** dans l'ordre : distance (`dist ≤ r_a`, reproduit
+l'ancien filtre `choses_dans_rayon`), dédup (`vus[cle]`), masque
+(`masque_a & masque_b`), AABB **balayée**, narrowphase.
+
+**Garde case saturée** (plat, sans subdivision) : masque et AABB balayée
+AVANT le narrowphase — même sur une case avec beaucoup d'occupants, gjk/epa
+ne tourne que sur les paires qui ont passé le filtre AABB. Pas de recursion.
+
+Limite : grille dense de plus de 1M cases (Nx × Ny × Nz) → `push_error`. Signe
+d'une position aberrante ; la broadphase reste correcte mais consomme.
 
 ## Cache en colonnes
 

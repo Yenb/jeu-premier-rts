@@ -1218,7 +1218,7 @@ Tout statique, aucun état interne. Aucune physique Godot
 (`PhysicsServer3D`/`StaticBody3D`/`CollisionShape3D`) : une forme est un
 `Dictionary`, une entité est un `Dictionary`, la collision se calcule sur ces
 données, hors rendu comme dans le rendu. Système complet : SUPPORT unifié, AABB
-par forme, GJK, EPA, `tick` (broadphase `monde.gd` + narrowphase + swept),
+par forme, GJK, EPA, `tick` (broadphase LOCALE par counting sort, plus aucun appel à `monde.gd` + narrowphase + swept),
 `resoudre` (séparation en donnée pure). Quatre types de forme : `sphere`,
 `boite`, `capsule` (axe Y), `hull`. Le dispatch par type vit UNIQUEMENT dans
 `_support_local` — cinquième type = un `case` de plus, rien d'autre ailleurs.

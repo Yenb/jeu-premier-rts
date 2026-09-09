@@ -274,29 +274,32 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 	aretes.append([i, j])
 
 # --- TICK : liste des contacts pour un ensemble d'entites ---
-# Broadphase par monde.gd (une requete par entite, rayon = demi-diagonale de son
-# AABB + demi-diagonale MAX du voisinage + deplacement swept, ce qui garantit de
-# ne rater aucune paire dont les AABB balayees se touchent). Filtre par
-# masque_collision puis recouvrement d'AABB balayees. Narrowphase GJK->EPA par
-# paire de formes, avec SWEPT (sous-pas si le deplacement d'une entite depasse
-# la moitie de sa plus petite dimension). Rend un Array de contacts
-# { a, b, normale (A->B), profondeur }.
+# BROADPHASE 100% LOCALE : le tick construit UNE grille par counting sort a
+# partir du cache colonnes -- plus aucun appel a monde.choses_dans_rayon. Pour
+# chaque case non vide, le voisinage lu est les occupants de la case + ceux des
+# 26 cases adjacentes (3x3x3), directement dans la grille locale. `monde` reste
+# dans la signature pour compat externe mais n'est plus interroge. Le filtre
+# distance per-driver `dist(a, b) <= r_a` reproduit le filtre de l'ancienne
+# broadphase per-entity : parite stricte du set de paires. Narrowphase GJK->EPA
+# par paire de formes, avec SWEPT.
+# Rend un Array de contacts { a, b, normale (A->B), profondeur, a_reponse,
+# b_reponse, a_masque_r, b_masque_r, a_vel_nz, b_vel_nz }.
 #
-# ENTITE : position (Vector3, top-level, requis par monde.gd) ; le reste dans
-# proprietes : formes (Array { type, transform_locale, parametres }), velocite
-# (Vector3), orientation (Basis), masque_collision (int), masque_reponse (int),
-# reponse (String), aabb_cache (rafraichie ici). transform monde d'une forme =
+# ENTITE : position (Vector3, top-level) ; le reste dans proprietes : formes
+# (Array { type, transform_locale, parametres }), velocite (Vector3),
+# orientation (Basis), masque_collision (int), masque_reponse (int), reponse
+# (String), aabb_cache (rafraichie ici). transform monde d'une forme =
 # Transform3D(orientation, position) * transform_locale.
+#
+# CONTRAT : toutes les entites collisionnables doivent etre dans `entites` --
+# le tick ne va plus chercher dans le monde ce qui n'y est pas. Sans quoi la
+# paire (driver, exterieur) n'est jamais testee.
 static func tick(monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
 	if entites.is_empty():
 		return contacts
 	# CACHE EN COLONNES : un Array par champ, indexe par la position dans entites.
-	# Plus aucun Dictionary de 11 clefs par entite (l'ancien _construire_cache
-	# allouait 1 dict par entite + un keyage par String(id) a chaque acces). Ici
-	# _pousser_cache remplit 13 Arrays paralleles a la volee. id_to_idx (Dict
-	# String -> int) sert au fallback "o vu par la broadphase mais absent
-	# d'entites" : construit une fois par tick, indexe par id unique.
+	# _pousser_cache remplit 13 Arrays paralleles a la volee.
 	var col_ent: Array = []
 	var col_vel: Array = []
 	var col_vel_len: Array = []
@@ -309,91 +312,156 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 	var col_reponse: Array = []
 	var col_formes: Array = []
 	var col_taille_min: Array = []
-	var id_to_idx: Dictionary = {}
 	var rayon_max := 0.0
 	for e in entites:
 		var idx: int = col_ent.size()
 		_pousser_cache(e, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
 			col_orient, col_aabb, col_swept, col_masque_c, col_masque_r,
 			col_reponse, col_formes, col_taille_min)
-		id_to_idx[String(e.get("id", ""))] = idx
 		e.proprietes["aabb_cache"] = col_aabb[idx]
 		rayon_max = maxf(rayon_max, (col_aabb[idx] as AABB).size.length() * 0.5)
-	# BROADPHASE PAR CASE : au lieu d'un choses_dans_rayon PAR entite (N appels,
-	# 35% du tick au profiler), grouper les drivers par case et appeler UNE fois
-	# par case-groupe. Voisinage partage = tout ce qui est dans le rayon max des
-	# occupants (r_agr = max_i r_i), depuis le centre de la case, elargi de la
-	# demi-diagonale de la case. Chaque driver de la case filtre ensuite par
-	# dist(x, y) <= r_x -- meme filtre que choses_dans_rayon per-entity. Parite
-	# stricte : la paire (x, y) est retenue ssi dist(x, y) <= r_x, comme avant.
-	# ARETE virtuelle : 2 * rayon_max. Assez petite pour que le voisinage ne soit
-	# pas ridiculement grand quand les entites sont espacees, assez grande pour
-	# grouper les entites proches. C'est un decoupage LOCAL a tick, sans lien
-	# avec l'arete des niveaux de monde.gd -- on ne touche pas monde.gd.
-	var arete: float = maxf(rayon_max * 2.0, 0.001)
+	var N: int = col_ent.size()
+	# GRILLE LOCALE PAR COUNTING SORT : indice de case lineaire par entite,
+	# sorted_idx tri par cell + offsets (start par cell) -- structure exacte
+	# du portage C++ a venir (cell-id array + sorted index + start/end offsets).
+	# ARETE : max r_i * 1.0001, avec r_i = hd_i + rayon_max + vel_len_i*delta.
+	# Pour que la sphere de rayon r_i autour d'une entite tienne dans 3x3x3
+	# cases, il faut arete > r_i strict (p au bord d'une case, r_i = arete,
+	# case(q) peut = case(p)+2 -- prouve par decoupage entier). La marge 1.0001
+	# ferme ce cas degenere sans grossir sensiblement les cases.
+	var r_par_i: PackedFloat32Array = PackedFloat32Array()
+	r_par_i.resize(N)
+	var arete: float = 0.0
+	for i in N:
+		var hd: float = (col_aabb[i] as AABB).size.length() * 0.5
+		var r_i: float = hd + rayon_max + float(col_vel_len[i]) * delta
+		r_par_i[i] = r_i
+		if r_i > arete:
+			arete = r_i
+	arete = maxf(arete * 1.0001, 1e-6)
 	var inv_arete: float = 1.0 / arete
-	var demi_diag_case: float = arete * sqrt(3.0) * 0.5
-	var cases_drivers: Dictionary = {}
-	for i in range(col_ent.size()):
+	# Coordonnees de case (base globale) + min/max pour linearisation.
+	var cx_arr: PackedInt32Array = PackedInt32Array()
+	var cy_arr: PackedInt32Array = PackedInt32Array()
+	var cz_arr: PackedInt32Array = PackedInt32Array()
+	cx_arr.resize(N)
+	cy_arr.resize(N)
+	cz_arr.resize(N)
+	var cx_min: int = 0x7fffffff
+	var cx_max: int = -0x7fffffff - 1
+	var cy_min: int = 0x7fffffff
+	var cy_max: int = -0x7fffffff - 1
+	var cz_min: int = 0x7fffffff
+	var cz_max: int = -0x7fffffff - 1
+	for i in N:
 		var pos: Vector3 = (col_ent[i] as Dictionary).position
-		var cle_case := Vector3i(
-			floori(pos.x * inv_arete),
-			floori(pos.y * inv_arete),
-			floori(pos.z * inv_arete))
-		if not cases_drivers.has(cle_case):
-			cases_drivers[cle_case] = []
-		(cases_drivers[cle_case] as Array).append(i)
+		var cx: int = floori(pos.x * inv_arete)
+		var cy: int = floori(pos.y * inv_arete)
+		var cz: int = floori(pos.z * inv_arete)
+		cx_arr[i] = cx
+		cy_arr[i] = cy
+		cz_arr[i] = cz
+		if cx < cx_min: cx_min = cx
+		if cx > cx_max: cx_max = cx
+		if cy < cy_min: cy_min = cy
+		if cy > cy_max: cy_max = cy
+		if cz < cz_min: cz_min = cz
+		if cz > cz_max: cz_max = cz
+	var Nx: int = cx_max - cx_min + 1
+	var Ny: int = cy_max - cy_min + 1
+	var Nz: int = cz_max - cz_min + 1
+	var NxNy: int = Nx * Ny
+	var total: int = Nx * Ny * Nz
+	# Garde-fou : etendue de grille bornee. Au-dela, on continue mais on avertit
+	# (probablement une position aberrante, la broadphase reste correcte mais
+	# les Packed*Array pesent en memoire). 1M cases = 8 Mo pour counts+offsets.
+	if total > 1000000:
+		push_error("collision.gd: grille locale > 1M cases (Nx=%d Ny=%d Nz=%d)" % [Nx, Ny, Nz])
+	# cell_id lineaire par entite, base 0.
+	var cell_ids: PackedInt32Array = PackedInt32Array()
+	cell_ids.resize(N)
+	for i in N:
+		cell_ids[i] = (cx_arr[i] - cx_min) + (cy_arr[i] - cy_min) * Nx + (cz_arr[i] - cz_min) * NxNy
+	# counts par cell (PackedInt32Array.resize initialise a 0).
+	var counts: PackedInt32Array = PackedInt32Array()
+	counts.resize(total)
+	for i in N:
+		counts[cell_ids[i]] += 1
+	# offsets = prefix sum. Taille total+1 pour lire offsets[c+1].
+	var offsets: PackedInt32Array = PackedInt32Array()
+	offsets.resize(total + 1)
+	var acc: int = 0
+	for c in total:
+		offsets[c] = acc
+		acc += counts[c]
+	offsets[total] = acc
+	# Bucket : sorted_idx[offsets[c]..offsets[c+1]] = les indices de la cell c.
+	var sorted_idx: PackedInt32Array = PackedInt32Array()
+	sorted_idx.resize(N)
+	var cursor: PackedInt32Array = PackedInt32Array()
+	cursor.resize(total)
+	for i in N:
+		var cid: int = cell_ids[i]
+		sorted_idx[offsets[cid] + cursor[cid]] = i
+		cursor[cid] += 1
+	# ITERATION PAR CELL, VOISINAGE 3x3x3. Ordre des filtres : distance (le moins
+	# cher, rejette gros), vus (dedup), masque (bitand), AABB balayee, narrowphase.
+	# GARDE case saturee (implicite) : chaque paire subit masque et AABB balayee
+	# AVANT gjk/epa -- meme sur une case saturee, gjk/epa ne tourne que sur les
+	# paires qui ont deja passe le filtre AABB. Pas de subdivision recursive.
 	var vus: Dictionary = {}
-	for cle_case in cases_drivers:
-		var drivers_idx: Array = cases_drivers[cle_case]
-		# r_agr = max sur les drivers de la case de leur rayon de requete.
-		var r_agr := 0.0
-		for i in drivers_idx:
-			var hd: float = (col_aabb[i] as AABB).size.length() * 0.5
-			r_agr = maxf(r_agr, hd + rayon_max + float(col_vel_len[i]) * delta)
-		var centre_case: Vector3 = Vector3(cle_case) * arete + Vector3(arete, arete, arete) * 0.5
-		var voisinage: Array = monde.choses_dans_rayon(centre_case, r_agr + demi_diag_case)
-		for i in drivers_idx:
+	for c in total:
+		var start_c: int = offsets[c]
+		var end_c: int = offsets[c + 1]
+		if start_c == end_c:
+			continue
+		var lcz: int = c / NxNy
+		var reste: int = c - lcz * NxNy
+		var lcy: int = reste / Nx
+		var lcx: int = reste - lcy * Nx
+		for pi in range(start_c, end_c):
+			var i: int = sorted_idx[pi]
 			var a = col_ent[i]
 			var pos_a: Vector3 = a.position
-			var hd_a: float = (col_aabb[i] as AABB).size.length() * 0.5
-			var r_a: float = hd_a + rayon_max + float(col_vel_len[i]) * delta
+			var r_a: float = float(r_par_i[i])
 			var r_a_sq: float = r_a * r_a
 			var masque_a: int = int(col_masque_c[i])
 			var swept_a: AABB = col_swept[i]
-			for entree in voisinage:
-				var b = entree.chose
-				if b == a:
+			for dx in range(-1, 2):
+				var vcx: int = lcx + dx
+				if vcx < 0 or vcx >= Nx:
 					continue
-				if not (b is Dictionary and (b.get("proprietes", {}) as Dictionary).has("formes")):
-					continue
-				# Filtre distance per-driver : equivalent bit-pour-bit au filtre
-				# de choses_dans_rayon(a, r_a) qu'utilisait la version per-entity.
-				if pos_a.distance_squared_to(entree.position as Vector3) > r_a_sq:
-					continue
-				var cle: String = _cle_paire(a, b)
-				if vus.has(cle):
-					continue
-				vus[cle] = true
-				var bid: String = String(b.get("id", ""))
-				var j: int
-				if id_to_idx.has(bid):
-					j = int(id_to_idx[bid])
-				else:
-					j = col_ent.size()
-					_pousser_cache(b, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
-						col_orient, col_aabb, col_swept, col_masque_c, col_masque_r,
-						col_reponse, col_formes, col_taille_min)
-					id_to_idx[bid] = j
-				if (masque_a & int(col_masque_c[j])) == 0:
-					continue
-				if not swept_a.intersects(col_swept[j] as AABB):
-					continue
-				var c: Dictionary = _contact_paire(a, i, b, j, delta,
-					col_vel, col_vel_len, col_vel_nz, col_orient, col_formes,
-					col_taille_min, col_reponse, col_masque_r)
-				if not c.is_empty():
-					contacts.append(c)
+				for dy in range(-1, 2):
+					var vcy: int = lcy + dy
+					if vcy < 0 or vcy >= Ny:
+						continue
+					for dz in range(-1, 2):
+						var vcz: int = lcz + dz
+						if vcz < 0 or vcz >= Nz:
+							continue
+						var vc: int = vcx + vcy * Nx + vcz * NxNy
+						var vs: int = offsets[vc]
+						var ve: int = offsets[vc + 1]
+						for pj in range(vs, ve):
+							var j: int = sorted_idx[pj]
+							if j == i:
+								continue
+							var b = col_ent[j]
+							if pos_a.distance_squared_to((b as Dictionary).position) > r_a_sq:
+								continue
+							var cle: String = _cle_paire(a, b)
+							if vus.has(cle):
+								continue
+							vus[cle] = true
+							if (masque_a & int(col_masque_c[j])) == 0:
+								continue
+							if not swept_a.intersects(col_swept[j] as AABB):
+								continue
+							var contact: Dictionary = _contact_paire(a, i, b, j, delta,
+								col_vel, col_vel_len, col_vel_nz, col_orient, col_formes,
+								col_taille_min, col_reponse, col_masque_r)
+							if not contact.is_empty():
+								contacts.append(contact)
 	return contacts
 
 # Empile UNE entree dans les 13 Arrays paralleles du cache colonnes. Lit chaque

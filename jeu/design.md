@@ -2231,7 +2231,7 @@ parametres }` (quatre types : `sphere`, `boite`, `capsule` axe Y,
 `hull`), une entité est un `Dictionary`, la collision se calcule sur ces
 données, hors rendu comme dans le rendu. Système complet : SUPPORT unifié
 par la fonction `support`, AABB par forme, GJK et EPA en algorithmes de
-référence, `tick` (broadphase `monde.gd:choses_dans_rayon` + narrowphase
+référence, `tick` (broadphase LOCALE counting sort, plus d'appel à `monde.gd` + narrowphase
 + swept), `resoudre` (séparation le long de la normale, en donnée). Le
 DISPATCH par type vit UNIQUEMENT dans `_support_local` : un cinquième
 type = un `case` de plus, rien d'autre ailleurs — même règle que le
