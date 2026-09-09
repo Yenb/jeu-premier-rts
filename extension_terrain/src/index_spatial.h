@@ -144,19 +144,33 @@ public:
 	// avec l'index GDScript. Reserve aux tests, pas au hot path.
 	Dictionary cases_pour_niveau(int exposant) const;
 
-	// VUE (cone_oriente) + OCCLUSION EN LOT (chantier "vue avec occlusion en
-	// C++", 2026-09-08). UN SEUL PARCOURS DU VOISINAGE PAR FRAME, fait tout :
+	// VUE = PERCEPTION (ce que l'agent voit : rayon + cone oriente + occlusion
+	// visuelle corps-traversee). Portage de scripts/perception.gd::_percevoir_cone_oriente
+	// sur la masse en C++. La sortie est CE QUE CHAQUE AGENT VOIT (liste d'ids
+	// par agent), jamais une direction de repulsion : la separation est un
+	// CONSOMMATEUR distinct (voir separation_depuis_perception plus bas).
+	//
+	// Selection identique a l'ancienne (rayon + cone oriente + occlusion corps
+	// traverse, chaque etape verrouillee par test_vue_cpp.gd) :
 	// (1) voisins dans le rayon (distance horizontale strictement inferieure a
 	// ), (2) filtre par cone d'angle autour de l'orientation de chaque
 	// unite (cos(diff, orient) >= cos_moitie_angle, patron
 	// scripts/perception.gd::_percevoir_cone_oriente), (3) test d'occlusion
 	// contre les autres corps du meme voisinage 3x3 planaire (geometrie de
 	// scripts/occlusion.gd::facteur portee mot pour mot -- t dans ]0,1[,
-	// distance laterale <= largeur, cumul multiplicatif de (1 - opacite)), un
-	// voisin dont le facteur final <=  est RETIRE, (4)
-	// accumulation de la separation dans le MEME parcours -- les voisins vus
-	// sont deja la, aucun re-parcours. Sortie normalisee en direction unitaire
-	// horizontale (Y=0) par unite.
+	// distance laterale <= largeur), un voisin cache par un corps plus proche
+	// est RETIRE. (4) Ce qui reste dans le cone strict et non cache est ce que
+	// l'agent VOIT -- son id est enregistre dans la perception.
+	//
+	// Sortie CSR (Compressed Sparse Row), format compact plat -- une seule
+	// allocation par lot, jamais N listes :
+	//   Dictionary {
+	//     "offsets": PackedInt32Array de taille count+1,
+	//                offsets[i]..offsets[i+1] delimite les vus de l'agent i.
+	//     "vus":     PackedInt32Array concatene, ids des voisins vus.
+	//   }
+	// Un agent qui ne voit personne a offsets[i] == offsets[i+1] (liste vide).
+	// A vus_moy ~1 en foule dense, N=100 000 -> vus ~400 Ko + offsets ~400 Ko.
 	//
 	// OBSTACLES = voisinage courant : JAMAIS une requete spatiale par paire
 	// percepteur-voisin (ce serait le piege n^2 documente dans le prompt). Les
@@ -192,8 +206,8 @@ public:
 	//     l'unite), mais la LISTE DES CORPS a considerer n'est plus etablie
 	//     60 fois par case.
 	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id]) :
-	// tri par distance + occlusion visuelle corps-traversee + accumulation
-	// separation.
+	// selection par distance + occlusion visuelle corps-traversee + collecte
+	// des ids vus (la separation est un consommateur separe, cf separation_lot).
 	//
 	// OCCLUSION VISUELLE : CORPS TRAVERSE. Un voisin J est CACHE si le segment
 	// percepteur -> J traverse le VOLUME (disque horizontal rayon =
@@ -210,7 +224,7 @@ public:
 	// son/odeur, ou attenuer un signal a du sens). Le modele visuel binaire
 	// ne s'applique JAMAIS aux canaux son/odeur ; scripts/occlusion.gd est
 	// INTACT pour eux. Les parametres `opacites` et `seuil_facteur` restent
-	// dans la signature de vue_lot pour compat mais ne sont plus consommes.
+	// dans la signature de perception_lot pour compat mais ne sont plus consommes.
 	//
 	// Etapes de la passe 2 par unite :
 	//   (1) SELECTION INCREMENTALE DU PLUS PROCHE. Pas de tas construit
@@ -228,7 +242,7 @@ public:
 	//       (b) Sur les candidats retenus, verdict final segment-disque exact
 	//           -- verdict bit-a-bit identique.
 	//   (3) J cache -> skip. J vu -> retenir comme bloqueur (avec son base_j),
-	//       puis (si dans le cone strict) accumuler la separation.
+	//       puis (si dans le cone strict) l'ajouter a la liste des vus de i.
 	//   (4) MAJ union des secteurs angulaires clampes a [-demi_cone, +demi_cone].
 	//       ARRET SANS PERTE quand l'union recouvre tout le cone : tous les
 	//       voisins restants ont leur angle dans un secteur ferme, sont donc
@@ -239,7 +253,13 @@ public:
 	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
 	// scripts/test_vue_cpp.gd (cas 5 re-verrouille par le modele corps
 	// traverse : K PLUS PROCHE que J + traverse segment -> J cache).
-	PackedVector3Array vue_lot(
+	// PERCEPTION_LOT (ex-vue_lot) : rend, par agent, la liste des voisins VUS
+	// (ceux qui passent rayon strict + cone strict + occlusion visuelle
+	// corps-traverse). Sortie Dictionary { "ids", "offsets" } : voisins de
+	// l'agent i = ids[offsets[i]..offsets[i+1]]. C'est de la PERCEPTION pure --
+	// aucun calcul de repulsion, aucune direction. La separation devient un
+	// consommateur separe (separation_lot).
+	Dictionary perception_lot(
 			const PackedVector3Array &positions,
 			const PackedVector3Array &orientations,
 			const PackedFloat32Array &opacites,
@@ -247,6 +267,18 @@ public:
 			float cos_moitie_angle,
 			float largeur,
 			float seuil_facteur) const;
+
+	// SEPARATION_LOT : consomme une perception (ids + offsets) et rend une
+	// direction unitaire horizontale de repulsion par agent. Somme ponderee
+	// w = (rayon - d) / d sur ses voisins vus, normalisee. Le sqrt est
+	// recalcule depuis positions -- structure compacte, pas de duplication
+	// de dx/dz/d. Chaque consommateur de la perception (fuite, ciblage, ...)
+	// est un cousin de cette fonction.
+	PackedVector3Array separation_lot(
+			const PackedVector3Array &positions,
+			const PackedInt32Array &ids,
+			const PackedInt32Array &offsets,
+			float rayon) const;
 
 	// Sous-chronos internes du dernier vue_lot, en microsecondes (voir
 	// declaration des mutable _us_collecte / _us_filtre / _us_tri / _us_occ_sep

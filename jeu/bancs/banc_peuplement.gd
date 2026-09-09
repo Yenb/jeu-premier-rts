@@ -661,7 +661,7 @@ func _physics_process(delta: float) -> void:
 		# cos ; angle >= 360 -> cos_moitie = -1.0 (sphere pure, accepte tout).
 		var demi_angle_rad: float = deg_to_rad(angle_vue_deg * 0.5)
 		var cos_moitie_angle: float = -1.0 if angle_vue_deg >= 360.0 else cos(demi_angle_rad)
-		var directions_sep: PackedVector3Array = _index_cpp.vue_lot(
+		var perception: Dictionary = _index_cpp.perception_lot(
 			cols.position,
 			cols.direction,
 			cols.opacite,
@@ -669,6 +669,11 @@ func _physics_process(delta: float) -> void:
 			cos_moitie_angle,
 			_largeur_occlusion,
 			seuil_facteur_occlusion)
+		var directions_sep: PackedVector3Array = _index_cpp.separation_lot(
+			cols.position,
+			perception["ids"],
+			perception["offsets"],
+			rayon_separation)
 		var k: int = 0
 		while k < count:
 			desirees[k] = directions_sep[k] * vitesses[k]

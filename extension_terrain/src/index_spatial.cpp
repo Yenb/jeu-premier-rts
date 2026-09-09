@@ -50,7 +50,8 @@ void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("ouvrir_niveau_planaire", "exposant"), &IndexSpatial::ouvrir_niveau_planaire);
 	ClassDB::bind_method(D_METHOD("deplacer_lot", "positions"), &IndexSpatial::deplacer_lot);
 	ClassDB::bind_method(D_METHOD("cases_pour_niveau", "exposant"), &IndexSpatial::cases_pour_niveau);
-	ClassDB::bind_method(D_METHOD("vue_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::vue_lot);
+	ClassDB::bind_method(D_METHOD("perception_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::perception_lot);
+	ClassDB::bind_method(D_METHOD("separation_lot", "positions", "ids", "offsets", "rayon"), &IndexSpatial::separation_lot);
 	ClassDB::bind_method(D_METHOD("derniers_chronos_vue"), &IndexSpatial::derniers_chronos_vue);
 	ClassDB::bind_method(D_METHOD("derniers_compteurs_vue"), &IndexSpatial::derniers_compteurs_vue);
 }
@@ -162,7 +163,7 @@ void IndexSpatial::deplacer_lot(const PackedVector3Array &positions) {
 	}
 }
 
-PackedVector3Array IndexSpatial::vue_lot(
+Dictionary IndexSpatial::perception_lot(
 		const PackedVector3Array &positions,
 		const PackedVector3Array &orientations,
 		const PackedFloat32Array &opacites,
@@ -170,24 +171,30 @@ PackedVector3Array IndexSpatial::vue_lot(
 		float cos_moitie_angle,
 		float largeur,
 		float seuil_facteur) const {
-	PackedVector3Array out;
+	Dictionary out;
+	PackedInt32Array offsets;
+	PackedInt32Array ids_plat;
 	int count = positions.size();
-	out.resize(count);
-	Vector3 *out_w = out.ptrw();
-	for (int i = 0; i < count; i++) {
-		out_w[i] = Vector3();
+	offsets.resize(count + 1);
+	int32_t *off_w = offsets.ptrw();
+	for (int i = 0; i <= count; i++) {
+		off_w[i] = 0;
 	}
 	// Reset des sous-chronos temporaires (voir en-tete). La somme des quatre
-	// couvre tout le corps de vue_lot.
+	// couvre tout le corps de perception_lot.
 	_us_collecte = 0;
 	_us_filtre = 0;
 	_us_tri = 0;
 	_us_occ_sep = 0;
 	if (count <= 0 || _niveaux.empty() || rayon <= 0.0f) {
+		out["ids"] = ids_plat;
+		out["offsets"] = offsets;
 		return out;
 	}
 	if (orientations.size() != count || opacites.size() != count) {
-		ERR_PRINT("IndexSpatial::vue_lot : orientations/opacites de taille differente de positions. Retour a zero.");
+		ERR_PRINT("IndexSpatial::perception_lot : orientations/opacites de taille differente de positions. Retour a zero.");
+		out["ids"] = ids_plat;
+		out["offsets"] = offsets;
 		return out;
 	}
 	// CHOIX DU NIVEAU PLANAIRE, meme regle qu'auparavant : plus petit exposant
@@ -220,7 +227,9 @@ PackedVector3Array IndexSpatial::vue_lot(
 		}
 	}
 	if (choisi == nullptr) {
-		ERR_PRINT("IndexSpatial::vue_lot : aucun niveau PLANAIRE ouvert -- appeler ouvrir_niveau_planaire(exposant) avant. Retour a zero.");
+		ERR_PRINT("IndexSpatial::perception_lot : aucun niveau PLANAIRE ouvert -- appeler ouvrir_niveau_planaire(exposant) avant. Retour a zero.");
+		out["ids"] = ids_plat;
+		out["offsets"] = offsets;
 		return out;
 	}
 	const Niveau &niveau = *choisi;
@@ -238,15 +247,20 @@ PackedVector3Array IndexSpatial::vue_lot(
 
 	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron Verlet neighbor list,
 	// reconstruit par frame). dans_rayon_case est indexe par POSITION dans la
-	// case courante et EFFACE a chaque nouvelle case (buffer reutilise +
-	// capacite gardee, jamais N allocations par frame). Intra-case en demi-
-	// paire (i<j distribuee aux deux), inter-case ecrit uniquement dans la
-	// liste de l'unite courante.
+	// case courante et EFFACE a chaque nouvelle case.
 	std::vector<std::vector<VoisinVue>> dans_rayon_case;
-	// Compteurs TEMPORAIRES : voisins bruts (rayon), voisins VUS (rayon + cone),
-	// unites traitees. Sans occlusion-attenuation dans la vue, vus_moy ~= la
-	// fraction dans le cone -- il tomberait avec un vrai filtre visuel
-	// (balayage angulaire, chantier suivant).
+	// PERCEPTION MATERIALISEE : `vus_par_id` accumule pendant la passe 2 les
+	// ids vus par chaque agent, puis serialise en `ids_plat` + `offsets` a la
+	// fin. thread_local pour amortir l'allocation entre frames.
+	static thread_local std::vector<std::vector<int32_t>> vus_par_id;
+	if ((int)vus_par_id.size() < count) {
+		vus_par_id.resize((size_t)count);
+	}
+	for (int i = 0; i < count; i++) {
+		vus_par_id[(size_t)i].clear();
+	}
+	// Compteurs TEMPORAIRES : voisins bruts (rayon), voisins VUS (rayon + cone
+	// + occlusion), unites traitees.
 	_vue_voisins_total = 0;
 	_vue_unites_total = 0;
 	_vue_vus_total = 0;
@@ -369,8 +383,7 @@ PackedVector3Array IndexSpatial::vue_lot(
 			// bloqueurs supplementaires (les cibles dans le cone sont deja
 			// couvertes). L'arret est prouvablement sans perte.
 			auto t_occ_debut = std::chrono::steady_clock::now();
-			float ax = 0.0f;
-			float az = 0.0f;
+			std::vector<int32_t> &vus_ids_i = vus_par_id[(size_t)id];
 			// Bloqueurs : copies des VoisinVue (la liste change avec le
 			// swap-remove, on ne peut plus indexer). thread_local pour amortir.
 			struct Bloqueur {
@@ -493,13 +506,13 @@ PackedVector3Array IndexSpatial::vue_lot(
 					while (pos != secteurs.end() && pos->first < lo) ++pos;
 					secteurs.insert(pos, std::make_pair(lo, hi));
 				}
-				// Contribution separation si J dans le cone strict.
+				// Contribution PERCEPTION si J dans le cone strict : ajouter
+				// son id a la liste des vus de l'agent. La separation (et tout
+				// autre consommateur) lira cette liste hors de perception_lot.
 				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
 				if (dot_vers_voisin >= cos_moitie_angle * vj.d) {
 					_vue_vus_total += 1;
-					float w = (rayon - vj.d) / vj.d;
-					ax += vj.dx * w;
-					az += vj.dz * w;
+					vus_ids_i.push_back(vj.id);
 				}
 				// ARRET SANS PERTE : union recouvre tout le cone.
 				if (secteurs.size() == 1
@@ -508,13 +521,82 @@ PackedVector3Array IndexSpatial::vue_lot(
 					break;
 				}
 			}
-			float len2 = ax * ax + az * az;
-			if (len2 > 1e-8f) {
-				float inv_len = 1.0f / std::sqrt(len2);
-				out_w[id] = Vector3(ax * inv_len, 0.0f, az * inv_len);
-			}
 			_us_occ_sep += std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now() - t_occ_debut).count();
+		}
+	}
+	// SERIALISATION de vus_par_id -> ids_plat + offsets. Deux passes :
+	// (1) offsets[i+1] = offsets[i] + vus_par_id[i].size(). (2) copie plate.
+	int total = 0;
+	for (int i = 0; i < count; i++) {
+		offsets.set(i, total);
+		total += (int)vus_par_id[(size_t)i].size();
+	}
+	offsets.set(count, total);
+	ids_plat.resize(total);
+	int32_t *ids_w = ids_plat.ptrw();
+	int pos = 0;
+	for (int i = 0; i < count; i++) {
+		const std::vector<int32_t> &v = vus_par_id[(size_t)i];
+		const int n = (int)v.size();
+		for (int k = 0; k < n; k++) {
+			ids_w[pos++] = v[(size_t)k];
+		}
+	}
+	out["ids"] = ids_plat;
+	out["offsets"] = offsets;
+	return out;
+}
+
+PackedVector3Array IndexSpatial::separation_lot(
+		const PackedVector3Array &positions,
+		const PackedInt32Array &ids,
+		const PackedInt32Array &offsets,
+		float rayon) const {
+	PackedVector3Array out;
+	int count = offsets.size() - 1;
+	if (count <= 0) {
+		return out;
+	}
+	out.resize(count);
+	Vector3 *out_w = out.ptrw();
+	for (int i = 0; i < count; i++) {
+		out_w[i] = Vector3();
+	}
+	if (positions.size() < count) {
+		ERR_PRINT("IndexSpatial::separation_lot : positions trop petit vs offsets. Retour a zero.");
+		return out;
+	}
+	const Vector3 *pos_r = positions.ptr();
+	const int32_t *ids_r = ids.ptr();
+	const int32_t *off_r = offsets.ptr();
+	for (int i = 0; i < count; i++) {
+		int debut = off_r[i];
+		int fin = off_r[i + 1];
+		if (debut == fin) {
+			continue;
+		}
+		const Vector3 &p_i = pos_r[i];
+		float ax = 0.0f;
+		float az = 0.0f;
+		for (int j = debut; j < fin; j++) {
+			int32_t id_k = ids_r[j];
+			const Vector3 &p_k = pos_r[id_k];
+			float dx = p_i.x - p_k.x;
+			float dz = p_i.z - p_k.z;
+			float d2 = dx * dx + dz * dz;
+			if (d2 <= 1e-8f) {
+				continue;
+			}
+			float d = std::sqrt(d2);
+			float w = (rayon - d) / d;
+			ax += dx * w;
+			az += dz * w;
+		}
+		float len2 = ax * ax + az * az;
+		if (len2 > 1e-8f) {
+			float inv_len = 1.0f / std::sqrt(len2);
+			out_w[i] = Vector3(ax * inv_len, 0.0f, az * inv_len);
 		}
 	}
 	return out;
