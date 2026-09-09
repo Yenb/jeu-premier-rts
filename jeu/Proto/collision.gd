@@ -71,7 +71,16 @@ static func _support_local(type: String, p: Dictionary, d: Vector3) -> Vector3:
 
 # AABB monde d'une forme, par 6 supports (±X ±Y ±Z). Generique : aucune formule
 # analytique par type, donc un nouveau type n'a rien a ajouter ici.
+#
+# RACCOURCI boite-alignee : quand la forme est "boite" ET que le transform monde
+# n'a pas de rotation (basis == IDENTITY), l'AABB est directe -- centre =
+# transform.origin, demi-taille = demi_taille -- sans passer par les 6 supports
+# (chaque support = 1 basis.inverse + 1 _support_local + 1 transform). Une boite
+# tournee ou tout autre type retombe sur la boucle generique inchangee.
 static func aabb_forme(forme: Dictionary, transform_monde: Transform3D) -> AABB:
+	if String(forme.get("type", "")) == "boite" and transform_monde.basis == Basis.IDENTITY:
+		var h: Vector3 = forme.get("parametres", {}).get("demi_taille", Vector3.ZERO)
+		return AABB(transform_monde.origin - h, h * 2.0)
 	var axes: Array = [Vector3.RIGHT, Vector3.LEFT, Vector3.UP, Vector3.DOWN, Vector3.BACK, Vector3.FORWARD]
 	var premier: Vector3 = support(forme, transform_monde, axes[0])
 	var mn: Vector3 = premier
