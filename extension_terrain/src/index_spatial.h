@@ -200,11 +200,15 @@ public:
 	//     unites de la case courante. Un thread_local reutilise entre cases
 	//     (clear + capacite gardee), aucune allocation par frame.
 	//   - PASSE 1b : chaque unite de la case parcourt ce voisinage commun,
-	//     calcule SES propres dx/dz/d (soustraction depuis sa position + sqrt)
-	//     et remplit dans_rayon_case[iu]. Le sqrt et le filtre distance
-	//     restent per-unite (irreductibles -- dependent de la position de
-	//     l'unite), mais la LISTE DES CORPS a considerer n'est plus etablie
-	//     60 fois par case.
+	//     calcule SES propres dx/dz (soustraction depuis sa position), teste
+	//     d2<rayon2 puis PRE-FILTRE PAR LE CONE ELARGI (dot vs cos_elargi
+	//     sur d2, SANS sqrt : ce qui est derriere l'agent ou hors marge sort
+	//     avant tout sqrt). Le sqrt n'est paye que pour les voisins qui
+	//     peuvent etre vus OU servir d'occulteur en passe 2. Le cone elargi
+	//     = demi_cone_strict + atan2(largeur, rayon) garantit qu'aucun
+	//     bloqueur legitime n'est perdu (un occulteur de taille `largeur` a
+	//     distance `rayon` reste dans le cone elargi meme s'il est hors cone
+	//     strict).
 	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id]) :
 	// selection par distance + occlusion visuelle corps-traversee + collecte
 	// des ids vus (la separation est un consommateur separe, cf separation_lot).

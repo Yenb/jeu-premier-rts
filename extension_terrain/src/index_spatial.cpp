@@ -267,6 +267,26 @@ Dictionary IndexSpatial::perception_lot(
 
 	const int n_cases = (int)std::ceil(rayon * inv_a);
 
+	// PRE-FILTRE CONE ELARGI (avant sqrt en passe 1b). demi_cone_elargi =
+	// demi_cone_strict + atan2(largeur, rayon). La marge atan2(largeur, rayon)
+	// garantit qu'aucun bloqueur legitime n'est perdu : un occulteur de taille
+	// `largeur` a distance `rayon` reste dans le cone elargi meme s'il est hors
+	// cone strict. Le verdict final (cone strict + occlusion) reste en passe 2.
+	float cos_moitie_elargi = cos_moitie_angle;
+	if (cos_moitie_angle > -1.0f + 1e-6f) {
+		float demi_angle = std::acos(cos_moitie_angle);
+		float extra = std::atan2(largeur, rayon);
+		float elargi = demi_angle + extra;
+		if (elargi >= 3.14159265f) {
+			cos_moitie_elargi = -1.0f;
+		} else {
+			cos_moitie_elargi = std::cos(elargi);
+		}
+	}
+	const float cos_elargi_sq = cos_moitie_elargi * cos_moitie_elargi;
+	const bool cos_elargi_positif = (cos_moitie_elargi >= 0.0f);
+	const bool cone_ferme = (cos_moitie_elargi > -1.0f + 1e-6f);
+
 	for (const auto &kv_case : niveau.cases) {
 		const Vector3i &C1 = kv_case.first;
 		const std::vector<int32_t> &unites_case = kv_case.second;
@@ -305,10 +325,10 @@ Dictionary IndexSpatial::perception_lot(
 			}
 		}
 		// PASSE 1b : chaque unite de la case lit le voisinage commun pour
-		// calculer SES propres dx/dz/d et remplir sa liste. Le sqrt et le
-		// filtre distance restent per-unite (dependent de la position de
-		// l'unite -- irreductible), mais la LISTE DES CORPS n'est plus
-		// re-etablie 60 fois.
+		// calculer SES propres dx/dz/d et remplir sa liste. Le CONE ELARGI
+		// filtre AVANT le sqrt : voisin derriere ou hors marge angulaire
+		// sort immediatement, sans distance calculee. La liste finale ne
+		// contient que ce qui peut etre vu OU servir d'occulteur en passe 2.
 		if ((int)dans_rayon_case.size() < n1) {
 			dans_rayon_case.resize((size_t)n1);
 		}
@@ -316,6 +336,7 @@ Dictionary IndexSpatial::perception_lot(
 		for (int ii = 0; ii < n1; ii++) {
 			int32_t i_id = unites_case[ii];
 			const Vector3 &p_i = pos_r[i_id];
+			const Vector3 &orient_i = orient_r[i_id];
 			std::vector<VoisinVue> &liste_ii = dans_rayon_case[(size_t)ii];
 			liste_ii.clear();
 			for (int a = 0; a < nvb; a++) {
@@ -328,6 +349,22 @@ Dictionary IndexSpatial::perception_lot(
 				float d2 = dx * dx + dz * dz;
 				if (d2 >= rayon2) {
 					continue;
+				}
+				// PRE-FILTRE CONE ELARGI (sans sqrt). Test dot_vers >=
+				// cos_moitie_elargi * d. dot_vers = orient . (percepteur->voisin)
+				// = -(orient.x * dx + orient.z * dz).
+				// Cas cos_elargi_positif : rejeter si dot <= 0 (voisin derriere)
+				//   OU dot^2 < cos_elargi_sq * d2 (hors cone). Sans racine.
+				// Cas cos_elargi < 0 (cone > 180 deg) : accepte tout (le pre-
+				// filtre serait trop complique pour peu d'economie).
+				if (cone_ferme && cos_elargi_positif) {
+					float dot_vers = -(orient_i.x * dx + orient_i.z * dz);
+					if (dot_vers <= 0.0f) {
+						continue;
+					}
+					if (dot_vers * dot_vers < cos_elargi_sq * d2) {
+						continue;
+					}
 				}
 				float d = std::sqrt(d2);
 				VoisinVue vv;
