@@ -472,9 +472,16 @@ static func _pousser_cache(e, delta: float,
 		col_orient: Array, col_aabb: Array, col_swept: Array,
 		col_masque_c: Array, col_masque_r: Array, col_reponse: Array,
 		col_formes: Array, col_taille_min: Array) -> void:
+	# LECTURE DIRECTE pr.get au lieu de _prop : les 5 champs (velocite, orientation,
+	# masque_collision, masque_reponse, reponse) sont TOUJOURS poses dans
+	# proprietes par tous les callers du depot (banc_peuplement, manager_proto_2,
+	# ennemis, tests). Le fallback top-level de _prop (e.has/e[cle]) ne sert
+	# jamais ici -- verifie au grep. Une entree top-level d'un de ces champs
+	# serait invisible pour le tick : c'est la meme frontiere que _prop, exprimee
+	# plus directement.
 	var pr: Dictionary = e.get("proprietes", {})
-	var vel: Vector3 = _prop(e, "velocite", Vector3.ZERO)
-	var orient: Basis = _prop(e, "orientation", Basis.IDENTITY)
+	var vel: Vector3 = pr.get("velocite", Vector3.ZERO)
+	var orient: Basis = pr.get("orientation", Basis.IDENTITY)
 	var formes: Array = pr.get("formes", [])
 	var aabb: AABB = _aabb_from(orient, formes, e.position)
 	var vel_len: float = vel.length()
@@ -489,9 +496,9 @@ static func _pousser_cache(e, delta: float,
 	col_orient.append(orient)
 	col_aabb.append(aabb)
 	col_swept.append(swept)
-	col_masque_c.append(int(_prop(e, "masque_collision", 0)))
-	col_masque_r.append(int(_prop(e, "masque_reponse", 0)))
-	col_reponse.append(String(_prop(e, "reponse", "")))
+	col_masque_c.append(int(pr.get("masque_collision", 0)))
+	col_masque_r.append(int(pr.get("masque_reponse", 0)))
+	col_reponse.append(String(pr.get("reponse", "")))
 	col_formes.append(formes)
 	col_taille_min.append(_taille_min_formes(formes))
 

@@ -77,9 +77,12 @@ d'une position aberrante ; la broadphase reste correcte mais consomme.
 `col_taille_min`, `col_vel_len`, `col_vel_nz`, `col_ent`), indexés par la
 position dans `entites`. `id_to_idx` (Dict String→int) résout un `o` retourné
 par la broadphase mais absent d'`entites` — cache construit à la volée, une
-fois par tick. `_pousser_cache` fait UNE lecture par champ (via `_prop`) et
-empile ; le hot path lit `col_x[i]` (Array par int), plus aucun Dict par
-entité ni keyage string.
+fois par tick. `_pousser_cache` fait UNE lecture par champ en `pr.get(cle, defaut)` direct
+(pr = `e.proprietes` tenu en local), sans passer par `_prop` — les 5 champs
+`velocite`/`orientation`/`masque_collision`/`masque_reponse`/`reponse` sont
+toujours dans `proprietes` chez les callers, le fallback top-level de `_prop`
+ne sert pas dans le tick. Le hot path lit `col_x[i]` (Array par int), plus
+aucun Dict par entité ni keyage string.
 
 ## GJK
 
