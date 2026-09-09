@@ -289,22 +289,28 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 # Transform3D(orientation, position) * transform_locale.
 static func tick(monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
-	# PRE-PASSE aabb_cache : chaque entite qui entre dans tick voit son cache
-	# reecrit AVANT la broadphase. _aabb_balayee peut alors lire aabb_cache sans
-	# risque de le trouver obsolete (ecrit au tick precedent) ni absent (o vu par
-	# broadphase avant que son iteration principale ait tourne). Une entite
-	# trouvee par choses_dans_rayon qui n'aurait pas de cache retombe sur
-	# _aabb_entite (voir _aabb_cachee).
+	# PRE-PASSE aabb_cache + swept_cache : chaque entite qui entre dans tick voit
+	# son aabb_cache reecrit AVANT la broadphase, et son AABB balayee (aabb_cache
+	# etendue par -velocite*delta) memorisee dans swept_cache, clef = reference
+	# entite. Le filtre AABB de la boucle interne lit swept_cache au lieu de
+	# rappeler _aabb_balayee : un seul calcul par entite, pas un par paire. Une
+	# entite trouvee par choses_dans_rayon mais absente d'entites (donc absente
+	# des deux caches) retombe sur _aabb_balayee (fallback safe, meme esprit que
+	# _aabb_cachee).
 	var rayon_max := 0.0
 	for e in entites:
 		var aabb_e := _aabb_entite(e)
 		e.proprietes["aabb_cache"] = aabb_e
 		rayon_max = maxf(rayon_max, aabb_e.size.length() * 0.5)
+	var swept_cache: Dictionary = {}
+	for e in entites:
+		swept_cache[e] = _aabb_balayee(e, delta)
 	var vus: Dictionary = {}
 	for e in entites:
 		var aabb_e2: AABB = e.proprietes["aabb_cache"]
 		var hd_e: float = aabb_e2.size.length() * 0.5
 		var r: float = hd_e + rayon_max + _velocite(e).length() * delta
+		var swept_e: AABB = swept_cache[e]
 		for entree in monde.choses_dans_rayon(e.position, r):
 			var o = entree.chose
 			if o == e:
@@ -317,7 +323,12 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 			vus[cle] = true
 			if (int(_prop(e, "masque_collision", 0)) & int(_prop(o, "masque_collision", 0))) == 0:
 				continue
-			if not _aabb_balayee(e, delta).intersects(_aabb_balayee(o, delta)):
+			var swept_o: AABB
+			if swept_cache.has(o):
+				swept_o = swept_cache[o]
+			else:
+				swept_o = _aabb_balayee(o, delta)
+			if not swept_e.intersects(swept_o):
 				continue
 			var c: Dictionary = _contact_paire(e, o, delta)
 			if not c.is_empty():
