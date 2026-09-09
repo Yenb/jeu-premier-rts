@@ -40,18 +40,21 @@ Dispatch par type UNIQUEMENT dans `_support_local` (un 5e type = un `case`).
   ramenée en local par `basis.inverse()`, point remis en monde).
 - `aabb_forme(forme, tf_monde)` → AABB par 6 supports (±X ±Y ±Z), générique.
 
-**Cache AABB locale par forme** : `_aabb_locale_de_forme(forme)` calcule
-`aabb_forme(forme, forme.transform_locale)` UNE fois et l'indexe dans
-`_cache_aabb_locale` (Array plat) via un id INT injecté dans la forme
-(`forme["_aabb_id"]`). Une population qui partage la même instance de forme
-(1600 unités du peuplement, même boîte) ne recalcule l'AABB locale qu'une
-fois. `_aabb_from` : orient IDENTITY (cas dominant) → translation de l'AABB
-locale cachée ; orient tournée → recalcul complet par `aabb_forme` (l'AABB
-monde d'une AABB locale tournée n'est PAS la translation).
+**Caches par-forme (AABB locale + taille min)** : `_cacher_forme(forme)`
+calcule `aabb_forme(forme, forme.transform_locale)` ET `_taille_min_forme(forme)`
+UNE fois, les indexe dans `_cache_aabb_locale: Array[AABB]` et
+`_cache_taille_min_forme: PackedFloat32Array` (parallèles, même id) via un id
+INT injecté dans la forme (`forme["_aabb_id"]`). Une population qui partage la
+même instance de forme (1600 unités du peuplement, même boîte) ne recalcule ni
+l'AABB locale ni la taille min. `_aabb_from` : orient IDENTITY (cas dominant)
+→ translation de l'AABB locale cachée ; orient tournée → recalcul complet par
+`aabb_forme` (l'AABB monde d'une AABB locale tournée n'est PAS la
+translation). `_taille_min_formes_cache(formes)` : `min` sur les tailles
+cachées.
 
 Point noir : cache jamais invalidé. Si une forme change de contenu en gardant
-la référence (hitbox d'animation, morph), le cache reste sur l'ancien AABB
-local. Formes stables pour l'instant, invalidation hors scope.
+la référence (hitbox d'animation, morph), les deux caches restent sur les
+anciennes valeurs. Formes stables pour l'instant, invalidation hors scope.
 
 ## Broadphase
 

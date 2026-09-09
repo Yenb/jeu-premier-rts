@@ -470,7 +470,12 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 							var b = col_ent[j]
 							if pos_a.distance_squared_to((b as Dictionary).position) > r_a_sq:
 								continue
-							var cle: String = _cle_paire(a, b)
+							# Dedup par clef ENTIERE (mini*N + maxi, N = entites.size()) : les
+							# indices i, j du cache colonnes sont deja en main, plus besoin
+							# d'allouer une String "ida|idb" ni de la hacher. Dict a clef int.
+							var lo: int = i if i < j else j
+							var hi: int = j if i < j else i
+							var cle: int = lo * N + hi
 							if vus.has(cle):
 								continue
 							vus[cle] = true
@@ -524,7 +529,7 @@ static func _ecrire_cache(idx: int, e: Dictionary, delta: float,
 	col_masque_r[idx] = int(pr.get("masque_reponse", 0))
 	col_reponse[idx] = String(pr.get("reponse", ""))
 	col_formes[idx] = formes
-	col_taille_min[idx] = _taille_min_formes(formes)
+	col_taille_min[idx] = _taille_min_formes_cache(formes)
 
 # Narrowphase avec swept : echantillonne le trajet parcouru [position -
 # velocite*delta, position] en N sous-pas (N grandit si le deplacement depasse
@@ -640,16 +645,46 @@ static func _aabb_entite(e) -> AABB:
 # l'ancien AABB local -- il faudra ajouter une invalidation (bump d'id ou
 # horloge de version). Formes STABLES pour l'instant, hors scope.
 static var _cache_aabb_locale: Array[AABB] = []
+# Cache parallele SYNCHRONISE avec _cache_aabb_locale par le meme _aabb_id :
+# une entree par forme distincte, meme id que dans _cache_aabb_locale. Rempli
+# par _cacher_forme -- toujours meme longueur que _cache_aabb_locale.
+static var _cache_taille_min_forme: PackedFloat32Array = PackedFloat32Array()
+
+# Alloue un id INT a une forme (mute forme["_aabb_id"]) et remplit les deux
+# caches par-forme (AABB locale et taille_min). Une seule facon d'ajouter une
+# entree aux caches -- garantit que _cache_aabb_locale et
+# _cache_taille_min_forme restent alignes. Sans effet si l'id existe deja.
+static func _cacher_forme(forme: Dictionary) -> int:
+	var id: int = int(forme.get("_aabb_id", -1))
+	if id >= 0:
+		return id
+	var a: AABB = aabb_forme(forme, forme.get("transform_locale", Transform3D.IDENTITY))
+	var t: float = _taille_min_forme(forme)
+	id = _cache_aabb_locale.size()
+	_cache_aabb_locale.append(a)
+	_cache_taille_min_forme.append(t)
+	forme["_aabb_id"] = id
+	return id
 
 static func _aabb_locale_de_forme(forme: Dictionary) -> AABB:
 	var id: int = int(forme.get("_aabb_id", -1))
 	if id >= 0:
 		return _cache_aabb_locale[id]
-	var a: AABB = aabb_forme(forme, forme.get("transform_locale", Transform3D.IDENTITY))
-	id = _cache_aabb_locale.size()
-	_cache_aabb_locale.append(a)
-	forme["_aabb_id"] = id
-	return a
+	return _cache_aabb_locale[_cacher_forme(forme)]
+
+# Somme min des tailles min de chaque forme, via le cache par-forme. Retombe
+# sur _taille_min_forme (calcul complet) pour une forme jamais vue -- meme
+# esprit que _aabb_locale_de_forme.
+static func _taille_min_formes_cache(formes: Array) -> float:
+	var m: float = INF
+	for f in formes:
+		var id: int = int((f as Dictionary).get("_aabb_id", -1))
+		if id < 0:
+			id = _cacher_forme(f)
+		var t: float = _cache_taille_min_forme[id]
+		if t < m:
+			m = t
+	return 0.0 if m == INF else m
 
 # AABB monde d'un ensemble de formes deja resolues (orient + formes + position
 # passes directement). Utilise par _aabb_entite et par _ecrire_cache.
@@ -741,10 +776,6 @@ static func _velocite(e) -> Vector3:
 static func _orientation(e) -> Basis:
 	return _prop(e, "orientation", Basis.IDENTITY)
 
-static func _cle_paire(e, o) -> String:
-	var ia: String = String(e.get("id", ""))
-	var ib: String = String(o.get("id", ""))
-	return ia + "|" + ib if ia < ib else ib + "|" + ia
 
 # --- RESOLUTION : separe les paires qui se bloquent ---
 # Pour chaque contact ou les deux entites ont reponse == "bloque" ET des
