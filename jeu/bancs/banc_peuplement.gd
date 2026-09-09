@@ -573,18 +573,16 @@ func _physics_process(delta: float) -> void:
 		buffer = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
 	# PASSE COLLISION -- port de jeu/Proto/collision.gd (GJK/EPA en donnee pure,
 	# aucune physique Godot). Sync cols.position -> _entites_collision[i].position,
-	# maj _monde pour la broadphase, Collision.tick + Collision.resoudre
-	# (mutations directes sur entite.position), sync retour vers cols.position.
-	# La position corrigee devient la verite des colonnes ; la passe deplacer qui
-	# suit met a jour l'index sur cette position corrigee.
+	# Collision.tick + Collision.resoudre (mutations directes sur entite.position),
+	# sync retour vers cols.position. La broadphase construit sa propre grille
+	# locale par counting sort, ne lit plus _monde -- pas de deplacer_simple
+	# prealable.
 	if brancher_monde and _monde != null and not _entites_collision.is_empty():
 		var n_coll: int = _entites_collision.size()
 		var cols_pos: PackedVector3Array = cols.position
 		var kk: int = 0
 		while kk < n_coll and kk < count:
-			var ent_k: Dictionary = _entites_collision[kk]
-			ent_k.position = cols_pos[kk]
-			_monde.deplacer_simple(ent_k)
+			(_entites_collision[kk] as Dictionary).position = cols_pos[kk]
 			kk += 1
 		var contacts: Array = Collision.tick(_monde, _entites_collision, delta)
 		Collision.resoudre(contacts, _entites_collision)
@@ -593,21 +591,15 @@ func _physics_process(delta: float) -> void:
 			cols_pos[kk] = (_entites_collision[kk] as Dictionary).position
 			kk += 1
 		cols.position = cols_pos
-	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) OU du Monde GDScript
-	# (deplacer_simple par unite) avec cols.position corrige. Sous
-	# brancher_monde=false, cette passe est integralement sautee.
-	if brancher_monde:
-		if deplacer_cpp and _index_cpp != null:
-			_index_cpp.deplacer_lot(cols.position)
-		elif _monde != null:
-			var positions_apres: PackedVector3Array = cols.position
-			var individus: Array = _pool.individus
-			var j: int = 0
-			while j < count:
-				var individu: Dictionary = individus[j]
-				individu.position = positions_apres[j]
-				_monde.deplacer_simple(individu)
-				j += 1
+	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) avec cols.position
+	# corrige. La branche GDScript _monde.deplacer_simple est retiree : plus
+	# aucun lecteur de l'index _monde n'existe dans ce banc depuis que
+	# Collision.tick a sa propre grille locale (verifie au grep :
+	# choses_dans_rayon, par_id, resolutions_ouvertes). Rebrancher la maj
+	# ici si un futur mecanisme (perception, chasse, ...) redemande a lire
+	# l'index de _monde. Chemin deplacer_cpp conserve tel quel.
+	if brancher_monde and deplacer_cpp and _index_cpp != null:
+		_index_cpp.deplacer_lot(cols.position)
 	# PASSE FATIGUE, cadence lente : n'agit QUE toutes les cadence_fatigue_frames
 	# images. Uniforme pour toutes les unites, jamais fonction de la distance au
 	# joueur (LOD par distance INTERDIT dans ce depot). Delta effectif = cadence *
