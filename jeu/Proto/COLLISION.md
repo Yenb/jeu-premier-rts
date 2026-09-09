@@ -165,9 +165,15 @@ scalaires temporaires en `double` avec promotion explicite `(double)vec.dot()`
 aux mêmes points que GDScript. Frontière SoA (le hot path évite tout boxing
 Variant) : positions/velocites/orientations aplaties/masques/reponses + pool
 de formes plat `formes_debut/formes_type/formes_tf_locale/formes_params` +
-`hull_points`. Chronos temporaires `derniers_chronos() → {broadphase,
-narrowphase, resoudre}` en microsecondes. Mono-thread. Multithread : morceau
-ultérieur.
+`hull_points`. Chronos temporaires `derniers_chronos() → {prepasse, tri, parcours,
+narrowphase, resoudre}` en microsecondes — cinq postes qui couvrent tout le
+corps sans chevauchement ni trou. `now()` pris aux bornes de bloc uniquement,
+JAMAIS par paire : le parcours pousse les paires retenues dans un batch, le
+narrowphase les consomme après. Compteurs temporaires `derniers_compteurs() →
+{paires_distance, paires_dedup, appels_nf, contacts}` — disent si le coût
+vient du nombre de paires ou du coût par paire. `banc_peuplement.gd` imprime
+ces mesures toutes `CADENCE_RELEVE_COLLISION_FRAMES` frames sous
+`actif_releve`. Mono-thread. Multithread : morceau ultérieur.
 
 ## Ce que le système NE fait PAS
 

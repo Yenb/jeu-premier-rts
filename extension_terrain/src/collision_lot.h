@@ -33,14 +33,43 @@ namespace godot {
 class CollisionLot : public RefCounted {
 	GDCLASS(CollisionLot, RefCounted)
 
-	// CHRONOS TEMPORAIRES par appel, exposes par derniers_chronos(). Trois postes :
-	// broadphase (counting sort + iteration 3x3x3 + filtres AABB/masque/dedup),
-	// narrowphase (contact_forme_paire, GJK/EPA/raccourci), resoudre.
-	// Somme = temps total detecter + resoudre. A retirer une fois le poste
-	// dominant identifie.
-	mutable int64_t _us_broadphase = 0;
+	// CHRONOS TEMPORAIRES par appel, exposes par derniers_chronos(). Cinq postes
+	// qui couvrent tout le corps de detecter+resoudre sans chevauchement ni trou :
+	//   us_prepasse    : cache par forme + pre-passe colonnes (AABB monde/swept/
+	//                    taille_min/vel_nz/vel_len/orient, rayon_max).
+	//   us_tri         : counting sort broadphase (cell_ids, counts, offsets,
+	//                    sorted_idx, cursor).
+	//   us_parcours    : boucle par cellule 3x3x3 + filtres distance/dedup/masque
+	//                    /swept + accumulation du batch de paires.
+	//   us_narrowphase : boucle sur le batch, sub-stepping + contact_forme_paire.
+	//   us_resoudre    : resoudre (mutation position).
+	// A retirer une fois le poste dominant identifie.
+	//
+	// CHOIX DE MESURE : now() n'est pris QUE aux bornes de bloc, jamais par paire.
+	// L'extraction us_parcours vs us_narrowphase se fait par batch : la boucle
+	// par cellule pousse chaque paire retenue dans _batch_paires (pas d'appel
+	// contact_forme_paire dans le parcours), puis une seule boucle post-parcours
+	// consomme le batch et appelle contact_forme_paire. 2 appels now() par pas,
+	// pas par paire -- des centaines de milliers d'appels now() par frame
+	// fausseraient la mesure.
+	mutable int64_t _us_prepasse = 0;
+	mutable int64_t _us_tri = 0;
+	mutable int64_t _us_parcours = 0;
 	mutable int64_t _us_narrowphase = 0;
 	mutable int64_t _us_resoudre = 0;
+
+	// COMPTEURS TEMPORAIRES exposes par derniers_compteurs(). Disent si le cout
+	// vient du NOMBRE de paires ou du cout PAR paire.
+	//   n_paires_distance : paires (i,j) qui passent le filtre distance carre.
+	//   n_paires_dedup    : paires apres dedup vus (une fois par paire non-ordonnee).
+	//   n_appels_nf       : appels effectifs a contact_forme_paire (paires * sous-pas
+	//                       * formes_a * formes_b jusqu'au premier contact trouve).
+	//   n_contacts        : contacts finaux retenus (= contacts_a.size()).
+	// A retirer avec les chronos.
+	mutable int64_t _n_paires_distance = 0;
+	mutable int64_t _n_paires_dedup = 0;
+	mutable int64_t _n_appels_nf = 0;
+	mutable int64_t _n_contacts = 0;
 
 protected:
 	static void _bind_methods();
@@ -98,10 +127,14 @@ public:
 	//   "positions"           PackedVector3Array (N) -- positions mutees
 	Dictionary resoudre(const Dictionary &entree) const;
 
-	// Chronos du dernier appel (broadphase + narrowphase venant du dernier
-	// detecter, resoudre venant du dernier resoudre). Dictionary { "broadphase",
-	// "narrowphase", "resoudre" } en microsecondes.
+	// Chronos du dernier appel (prepasse/tri/parcours/narrowphase du dernier
+	// detecter, resoudre du dernier resoudre). Dictionary { "prepasse", "tri",
+	// "parcours", "narrowphase", "resoudre" } en microsecondes.
 	Dictionary derniers_chronos() const;
+
+	// Compteurs de paires du dernier detecter. Dictionary { "paires_distance",
+	// "paires_dedup", "appels_nf", "contacts" }.
+	Dictionary derniers_compteurs() const;
 };
 
 } // namespace godot

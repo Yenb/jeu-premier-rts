@@ -202,6 +202,11 @@ var _collision_cpp: RefCounted = null
 # positions est POSEE chaque frame (assignation Packed, CoW) avant l'appel
 # CollisionLot.detecter -- jamais recomposee.
 var _soa_collision_stable: Dictionary = {}
+# Cadence du releve collision imprime en jeu. 60 frames a 60 fps = 1 ligne/sec.
+# Constante -- pas un @export, un reglage d'affichage sans impact hors debug.
+# Ne s'imprime QUE sous actif_releve (meme gate que le chrono creation).
+const CADENCE_RELEVE_COLLISION_FRAMES := 60
+var _frames_depuis_releve_collision: int = 0
 # DEMI-TAILLE derivee de data/mesh.json[mesh_ref].taille (aucun nombre en dur,
 # aucun @export). Calculee au _monter_pool depuis la meme source que le mesh
 # visuel -- collision et rendu suivent le meme reglage.
@@ -632,6 +637,22 @@ func _physics_process(delta: float) -> void:
 			(_entites_collision[kk] as Dictionary).position = positions_mutees[kk]
 			kk += 1
 		cols.position = cols_pos
+		# RELEVE COLLISION cadence, gate actif_releve. Cinq postes chronometres
+		# qui couvrent tout le corps de detecter+resoudre sans trou (voir
+		# collision_lot.h) + compteurs de paires. Sert a identifier le poste
+		# dominant AVANT toute optimisation. Une ligne par CADENCE_RELEVE_
+		# COLLISION_FRAMES frames -- limite le spam en jeu.
+		_frames_depuis_releve_collision += 1
+		if actif_releve and _frames_depuis_releve_collision >= CADENCE_RELEVE_COLLISION_FRAMES:
+			_frames_depuis_releve_collision = 0
+			var chronos: Dictionary = _collision_cpp.derniers_chronos()
+			var compteurs: Dictionary = _collision_cpp.derniers_compteurs()
+			print("[peuplement] collision N=%d contacts=%d prepasse=%d us tri=%d us parcours=%d us narrowphase=%d us resoudre=%d us | paires_dist=%d paires_dedup=%d appels_nf=%d" % [
+				n_coll, int(compteurs.contacts),
+				int(chronos.prepasse), int(chronos.tri), int(chronos.parcours),
+				int(chronos.narrowphase), int(chronos.resoudre),
+				int(compteurs.paires_distance), int(compteurs.paires_dedup), int(compteurs.appels_nf),
+			])
 	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) avec cols.position
 	# corrige. La branche GDScript _monde.deplacer_simple est retiree : plus
 	# aucun lecteur de l'index _monde n'existe dans ce banc depuis que

@@ -536,6 +536,7 @@ void CollisionLot::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("detecter", "entree"), &CollisionLot::detecter);
 	ClassDB::bind_method(D_METHOD("resoudre", "entree"), &CollisionLot::resoudre);
 	ClassDB::bind_method(D_METHOD("derniers_chronos"), &CollisionLot::derniers_chronos);
+	ClassDB::bind_method(D_METHOD("derniers_compteurs"), &CollisionLot::derniers_compteurs);
 }
 
 CollisionLot::CollisionLot() {}
@@ -543,9 +544,20 @@ CollisionLot::~CollisionLot() {}
 
 Dictionary CollisionLot::derniers_chronos() const {
 	Dictionary out;
-	out["broadphase"] = (int64_t)_us_broadphase;
+	out["prepasse"] = (int64_t)_us_prepasse;
+	out["tri"] = (int64_t)_us_tri;
+	out["parcours"] = (int64_t)_us_parcours;
 	out["narrowphase"] = (int64_t)_us_narrowphase;
 	out["resoudre"] = (int64_t)_us_resoudre;
+	return out;
+}
+
+Dictionary CollisionLot::derniers_compteurs() const {
+	Dictionary out;
+	out["paires_distance"] = (int64_t)_n_paires_distance;
+	out["paires_dedup"] = (int64_t)_n_paires_dedup;
+	out["appels_nf"] = (int64_t)_n_appels_nf;
+	out["contacts"] = (int64_t)_n_contacts;
 	return out;
 }
 
@@ -559,8 +571,14 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 	PackedVector3Array contacts_normale;
 	PackedFloat32Array contacts_profondeur;
 
-	_us_broadphase = 0;
+	_us_prepasse = 0;
+	_us_tri = 0;
+	_us_parcours = 0;
 	_us_narrowphase = 0;
+	_n_paires_distance = 0;
+	_n_paires_dedup = 0;
+	_n_appels_nf = 0;
+	_n_contacts = 0;
 
 	PackedVector3Array positions = entree["positions"];
 	PackedVector3Array velocites = entree["velocites"];
@@ -596,7 +614,7 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 	const float *formes_params_r = formes_params.ptr();
 	const Vector3 *hull_points_ptr = hull_points.ptr();
 
-	auto t_bp_debut = std::chrono::steady_clock::now();
+	auto t_prepasse_debut = std::chrono::steady_clock::now();
 
 	// --- Cache par forme (calcule une fois par appel) ---
 	// AABB LOCALE : forme placee a orient=IDENTITY, pos=ZERO, avec tf_locale
@@ -678,6 +696,10 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 		if (demi_diag > rayon_max) rayon_max = demi_diag;
 	}
 
+	_us_prepasse = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - t_prepasse_debut).count();
+	auto t_tri_debut = std::chrono::steady_clock::now();
+
 	// --- Broadphase : counting sort par cellule ---
 	std::vector<double> r_par_i((size_t)N);
 	double arete_max = 0.0;
@@ -744,14 +766,25 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 		cursor[(size_t)cid]++;
 	}
 
-	_us_broadphase += std::chrono::duration_cast<std::chrono::microseconds>(
-			std::chrono::steady_clock::now() - t_bp_debut).count();
+	_us_tri = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - t_tri_debut).count();
 
-	// --- Iteration par cellule 3x3x3, filtres + narrowphase ---
+	// --- Parcours par cellule 3x3x3, filtres, batch de paires ---
 	// Dedup par clef entiere : lo * N + hi, meme convention que GDScript.
+	// LA BOUCLE N'APPELLE PAS contact_forme_paire : les paires retenues sont
+	// poussees dans _batch_paires, consommees juste apres par le narrowphase.
+	// C'est ce qui permet de mesurer us_parcours ET us_narrowphase SEPAREMENT
+	// avec un seul now() par pas, jamais par paire (voir en-tete .h : « CHOIX
+	// DE MESURE »).
 	std::unordered_map<int64_t, uint8_t> vus;
+	struct PaireCandidat {
+		int32_t i;
+		int32_t j;
+	};
+	std::vector<PaireCandidat> batch_paires;
+	batch_paires.reserve((size_t)N * 4);  // reserve conservateur, evite reallocs sur peuplement dense
 
-	auto t_np_total_debut = std::chrono::steady_clock::now();
+	auto t_parcours_debut = std::chrono::steady_clock::now();
 
 	for (int64_t c = 0; c < total; c++) {
 		int32_t start_c = offsets[(size_t)c];
@@ -786,80 +819,102 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 							Vector3 pos_b = pos_r[j];
 							double d2 = (double)pos_a.distance_squared_to(pos_b);
 							if (d2 > r_a_sq) continue;
+							_n_paires_distance++;
 							int32_t lo = i < j ? i : j;
 							int32_t hi = j > i ? j : i;
 							int64_t cle = (int64_t)lo * (int64_t)N + (int64_t)hi;
 							if (vus.find(cle) != vus.end()) continue;
 							vus[cle] = 1;
+							_n_paires_dedup++;
 							if ((masque_a & masques_c_r[j]) == 0) continue;
 							if (!swept_a.intersects(col_swept[(size_t)j])) continue;
-
-							// --- Narrowphase avec swept ---
-							auto t_np_debut = std::chrono::steady_clock::now();
-							Vector3 vel_a = vel_r[i];
-							Vector3 vel_b = vel_r[j];
-							Basis orient_a = col_orient[(size_t)i];
-							Basis orient_b = col_orient[(size_t)j];
-							double tm_a = col_taille_min[(size_t)i];
-							double tm_b = col_taille_min[(size_t)j];
-							double vla = col_vel_len[(size_t)i];
-							double vlb = col_vel_len[(size_t)j];
-							int n_sub = 1;
-							if (tm_a > 0.0 && vla * (double)delta > tm_a * 0.5) {
-								int nn = (int)std::ceil(vla * (double)delta / (tm_a * 0.5));
-								if (nn > n_sub) n_sub = nn;
-							}
-							if (tm_b > 0.0 && vlb * (double)delta > tm_b * 0.5) {
-								int nn = (int)std::ceil(vlb * (double)delta / (tm_b * 0.5));
-								if (nn > n_sub) n_sub = nn;
-							}
-							int fd_a = formes_debut_r[i];
-							int ff_a = formes_debut_r[i + 1];
-							int fd_b = formes_debut_r[j];
-							int ff_b = formes_debut_r[j + 1];
-							bool trouve = false;
-							Vector3 n_hit(0, 0, 0);
-							double prof_hit = 0.0;
-							for (int k = 0; k <= n_sub && !trouve; k++) {
-								double frac = (double)k / (double)n_sub;
-								Vector3 pe = pos_a - vel_a * (real_t)(delta * frac);
-								Vector3 po = pos_b - vel_b * (real_t)(delta * frac);
-								for (int fa_idx = fd_a; fa_idx < ff_a && !trouve; fa_idx++) {
-									Transform3D tf_la = lire_transform(formes_tf_r + fa_idx * 12);
-									int type_a = formes_type_r[fa_idx];
-									const float *params_a = formes_params_r + fa_idx * 4;
-									Transform3D ta = tf_monde_forme(orient_a, pe, tf_la);
-									for (int fb_idx = fd_b; fb_idx < ff_b && !trouve; fb_idx++) {
-										Transform3D tf_lb = lire_transform(formes_tf_r + fb_idx * 12);
-										int type_b = formes_type_r[fb_idx];
-										const float *params_b = formes_params_r + fb_idx * 4;
-										Transform3D tb = tf_monde_forme(orient_b, po, tf_lb);
-										Vector3 n_pair(0, 0, 0);
-										double prof_pair = 0.0;
-										if (contact_forme_paire(type_a, params_a, ta,
-												type_b, params_b, tb, hull_points_ptr,
-												n_pair, prof_pair)) {
-											trouve = true;
-											n_hit = n_pair;
-											prof_hit = prof_pair;
-										}
-									}
-								}
-							}
-							_us_narrowphase += std::chrono::duration_cast<std::chrono::microseconds>(
-									std::chrono::steady_clock::now() - t_np_debut).count();
-							if (trouve) {
-								contacts_a.push_back(i);
-								contacts_b.push_back(j);
-								contacts_normale.push_back(n_hit);
-								contacts_profondeur.push_back((float)prof_hit);
-							}
+							// Paire retenue : pousse dans le batch, narrowphase apres
+							// la boucle par cellule. Preserve l'ordre du parcours ->
+							// parite bit-a-bit de la sortie contacts_a/contacts_b.
+							PaireCandidat pc;
+							pc.i = i;
+							pc.j = j;
+							batch_paires.push_back(pc);
 						}
 					}
 				}
 			}
 		}
 	}
+
+	_us_parcours = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - t_parcours_debut).count();
+
+	// --- Narrowphase batch : consomme les paires retenues dans l'ordre pousse ---
+	// Un seul now() debut, un seul now() fin -- jamais un now() par paire.
+	auto t_np_debut = std::chrono::steady_clock::now();
+	const size_t n_batch = batch_paires.size();
+	for (size_t bp = 0; bp < n_batch; bp++) {
+		int32_t i = batch_paires[bp].i;
+		int32_t j = batch_paires[bp].j;
+		Vector3 pos_a = pos_r[i];
+		Vector3 pos_b = pos_r[j];
+		Vector3 vel_a = vel_r[i];
+		Vector3 vel_b = vel_r[j];
+		Basis orient_a = col_orient[(size_t)i];
+		Basis orient_b = col_orient[(size_t)j];
+		double tm_a = col_taille_min[(size_t)i];
+		double tm_b = col_taille_min[(size_t)j];
+		double vla = col_vel_len[(size_t)i];
+		double vlb = col_vel_len[(size_t)j];
+		int n_sub = 1;
+		if (tm_a > 0.0 && vla * (double)delta > tm_a * 0.5) {
+			int nn = (int)std::ceil(vla * (double)delta / (tm_a * 0.5));
+			if (nn > n_sub) n_sub = nn;
+		}
+		if (tm_b > 0.0 && vlb * (double)delta > tm_b * 0.5) {
+			int nn = (int)std::ceil(vlb * (double)delta / (tm_b * 0.5));
+			if (nn > n_sub) n_sub = nn;
+		}
+		int fd_a = formes_debut_r[i];
+		int ff_a = formes_debut_r[i + 1];
+		int fd_b = formes_debut_r[j];
+		int ff_b = formes_debut_r[j + 1];
+		bool trouve = false;
+		Vector3 n_hit(0, 0, 0);
+		double prof_hit = 0.0;
+		for (int k = 0; k <= n_sub && !trouve; k++) {
+			double frac = (double)k / (double)n_sub;
+			Vector3 pe = pos_a - vel_a * (real_t)(delta * frac);
+			Vector3 po = pos_b - vel_b * (real_t)(delta * frac);
+			for (int fa_idx = fd_a; fa_idx < ff_a && !trouve; fa_idx++) {
+				Transform3D tf_la = lire_transform(formes_tf_r + fa_idx * 12);
+				int type_a = formes_type_r[fa_idx];
+				const float *params_a = formes_params_r + fa_idx * 4;
+				Transform3D ta = tf_monde_forme(orient_a, pe, tf_la);
+				for (int fb_idx = fd_b; fb_idx < ff_b && !trouve; fb_idx++) {
+					Transform3D tf_lb = lire_transform(formes_tf_r + fb_idx * 12);
+					int type_b = formes_type_r[fb_idx];
+					const float *params_b = formes_params_r + fb_idx * 4;
+					Transform3D tb = tf_monde_forme(orient_b, po, tf_lb);
+					Vector3 n_pair(0, 0, 0);
+					double prof_pair = 0.0;
+					_n_appels_nf++;
+					if (contact_forme_paire(type_a, params_a, ta,
+							type_b, params_b, tb, hull_points_ptr,
+							n_pair, prof_pair)) {
+						trouve = true;
+						n_hit = n_pair;
+						prof_hit = prof_pair;
+					}
+				}
+			}
+		}
+		if (trouve) {
+			contacts_a.push_back(i);
+			contacts_b.push_back(j);
+			contacts_normale.push_back(n_hit);
+			contacts_profondeur.push_back((float)prof_hit);
+		}
+	}
+	_us_narrowphase = std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - t_np_debut).count();
+	_n_contacts = (int64_t)contacts_a.size();
 
 	(void)reponses_r;
 	(void)masques_r_r;
