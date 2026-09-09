@@ -289,66 +289,121 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 # Transform3D(orientation, position) * transform_locale.
 static func tick(monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
-	# PRE-PASSE cache : pour chaque entite, UNE SEULE lecture des champs
-	# proprietes (velocite, orientation, formes, masques, reponse) et calcul
-	# de l'AABB courante + AABB balayee. Tout est empile dans un Dictionary
-	# local (clef = reference entite). Le hot path (boucle broadphase,
-	# _contact_paire, resoudre) lit ce cache -- plus aucun appel a
-	# _prop/_velocite/_orientation, qui font 2 lookups Dictionary chacun.
-	# aabb_cache est aussi ecrit dans e.proprietes pour les lectures
-	# externes (manager_proto_2 s'en sert). Une entite trouvee par
-	# choses_dans_rayon mais absente d'entites est cachee A LA VOLEE
-	# (une seule construction par tick, meme esprit que le fallback
-	# precedent).
-	# Cache keye par id (string) : GDScript hashe les Dictionary par contenu,
-	# donc muter e.proprietes entre l'ecriture et la lecture casserait un
-	# `cache[e]`. L'id joue le meme role que dans _cle_paire, unique par entite.
-	var cache: Dictionary = {}
+	if entites.is_empty():
+		return contacts
+	# CACHE EN COLONNES : un Array par champ, indexe par la position dans entites.
+	# Plus aucun Dictionary de 11 clefs par entite (l'ancien _construire_cache
+	# allouait 1 dict par entite + un keyage par String(id) a chaque acces). Ici
+	# _pousser_cache remplit 13 Arrays paralleles a la volee. id_to_idx (Dict
+	# String -> int) sert au fallback "o vu par la broadphase mais absent
+	# d'entites" : construit une fois par tick, indexe par id unique.
+	var col_ent: Array = []
+	var col_vel: Array = []
+	var col_vel_len: Array = []
+	var col_vel_nz: Array = []
+	var col_orient: Array = []
+	var col_aabb: Array = []
+	var col_swept: Array = []
+	var col_masque_c: Array = []
+	var col_masque_r: Array = []
+	var col_reponse: Array = []
+	var col_formes: Array = []
+	var col_taille_min: Array = []
+	var id_to_idx: Dictionary = {}
 	var rayon_max := 0.0
 	for e in entites:
-		var ce: Dictionary = _construire_cache(e, delta)
-		cache[String(e.get("id", ""))] = ce
-		e.proprietes["aabb_cache"] = ce.aabb
-		rayon_max = maxf(rayon_max, (ce.aabb as AABB).size.length() * 0.5)
+		var idx: int = col_ent.size()
+		_pousser_cache(e, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
+			col_orient, col_aabb, col_swept, col_masque_c, col_masque_r,
+			col_reponse, col_formes, col_taille_min)
+		id_to_idx[String(e.get("id", ""))] = idx
+		e.proprietes["aabb_cache"] = col_aabb[idx]
+		rayon_max = maxf(rayon_max, (col_aabb[idx] as AABB).size.length() * 0.5)
+	# BROADPHASE PAR CASE : au lieu d'un choses_dans_rayon PAR entite (N appels,
+	# 35% du tick au profiler), grouper les drivers par case et appeler UNE fois
+	# par case-groupe. Voisinage partage = tout ce qui est dans le rayon max des
+	# occupants (r_agr = max_i r_i), depuis le centre de la case, elargi de la
+	# demi-diagonale de la case. Chaque driver de la case filtre ensuite par
+	# dist(x, y) <= r_x -- meme filtre que choses_dans_rayon per-entity. Parite
+	# stricte : la paire (x, y) est retenue ssi dist(x, y) <= r_x, comme avant.
+	# ARETE virtuelle : 2 * rayon_max. Assez petite pour que le voisinage ne soit
+	# pas ridiculement grand quand les entites sont espacees, assez grande pour
+	# grouper les entites proches. C'est un decoupage LOCAL a tick, sans lien
+	# avec l'arete des niveaux de monde.gd -- on ne touche pas monde.gd.
+	var arete: float = maxf(rayon_max * 2.0, 0.001)
+	var inv_arete: float = 1.0 / arete
+	var demi_diag_case: float = arete * sqrt(3.0) * 0.5
+	var cases_drivers: Dictionary = {}
+	for i in range(col_ent.size()):
+		var pos: Vector3 = (col_ent[i] as Dictionary).position
+		var cle_case := Vector3i(
+			floori(pos.x * inv_arete),
+			floori(pos.y * inv_arete),
+			floori(pos.z * inv_arete))
+		if not cases_drivers.has(cle_case):
+			cases_drivers[cle_case] = []
+		(cases_drivers[cle_case] as Array).append(i)
 	var vus: Dictionary = {}
-	for e in entites:
-		var ce: Dictionary = cache[String(e.get("id", ""))]
-		var aabb_e: AABB = ce.aabb
-		var hd_e: float = aabb_e.size.length() * 0.5
-		var r: float = hd_e + rayon_max + float(ce.vel_len) * delta
-		var swept_e: AABB = ce.swept
-		var masque_e: int = int(ce.masque_c)
-		for entree in monde.choses_dans_rayon(e.position, r):
-			var o = entree.chose
-			if o == e:
-				continue
-			if not (o is Dictionary and (o.get("proprietes", {}) as Dictionary).has("formes")):
-				continue
-			var cle: String = _cle_paire(e, o)
-			if vus.has(cle):
-				continue
-			vus[cle] = true
-			var oid: String = String(o.get("id", ""))
-			var co: Dictionary
-			if cache.has(oid):
-				co = cache[oid]
-			else:
-				co = _construire_cache(o, delta)
-				cache[oid] = co
-			if (masque_e & int(co.masque_c)) == 0:
-				continue
-			if not swept_e.intersects(co.swept as AABB):
-				continue
-			var c: Dictionary = _contact_paire(e, ce, o, co, delta)
-			if not c.is_empty():
-				contacts.append(c)
+	for cle_case in cases_drivers:
+		var drivers_idx: Array = cases_drivers[cle_case]
+		# r_agr = max sur les drivers de la case de leur rayon de requete.
+		var r_agr := 0.0
+		for i in drivers_idx:
+			var hd: float = (col_aabb[i] as AABB).size.length() * 0.5
+			r_agr = maxf(r_agr, hd + rayon_max + float(col_vel_len[i]) * delta)
+		var centre_case: Vector3 = Vector3(cle_case) * arete + Vector3(arete, arete, arete) * 0.5
+		var voisinage: Array = monde.choses_dans_rayon(centre_case, r_agr + demi_diag_case)
+		for i in drivers_idx:
+			var a = col_ent[i]
+			var pos_a: Vector3 = a.position
+			var hd_a: float = (col_aabb[i] as AABB).size.length() * 0.5
+			var r_a: float = hd_a + rayon_max + float(col_vel_len[i]) * delta
+			var r_a_sq: float = r_a * r_a
+			var masque_a: int = int(col_masque_c[i])
+			var swept_a: AABB = col_swept[i]
+			for entree in voisinage:
+				var b = entree.chose
+				if b == a:
+					continue
+				if not (b is Dictionary and (b.get("proprietes", {}) as Dictionary).has("formes")):
+					continue
+				# Filtre distance per-driver : equivalent bit-pour-bit au filtre
+				# de choses_dans_rayon(a, r_a) qu'utilisait la version per-entity.
+				if pos_a.distance_squared_to(entree.position as Vector3) > r_a_sq:
+					continue
+				var cle: String = _cle_paire(a, b)
+				if vus.has(cle):
+					continue
+				vus[cle] = true
+				var bid: String = String(b.get("id", ""))
+				var j: int
+				if id_to_idx.has(bid):
+					j = int(id_to_idx[bid])
+				else:
+					j = col_ent.size()
+					_pousser_cache(b, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
+						col_orient, col_aabb, col_swept, col_masque_c, col_masque_r,
+						col_reponse, col_formes, col_taille_min)
+					id_to_idx[bid] = j
+				if (masque_a & int(col_masque_c[j])) == 0:
+					continue
+				if not swept_a.intersects(col_swept[j] as AABB):
+					continue
+				var c: Dictionary = _contact_paire(a, i, b, j, delta,
+					col_vel, col_vel_len, col_vel_nz, col_orient, col_formes,
+					col_taille_min, col_reponse, col_masque_r)
+				if not c.is_empty():
+					contacts.append(c)
 	return contacts
 
-# Construit le cache par-entite lu par le hot path : une lecture par champ,
-# une seule fois par tick. Contient aussi les valeurs derivees (vel_len,
-# vel_nz, taille_min) et l'AABB balayee (aabb etendue par -velocite*delta,
-# ou aabb si velocite nulle).
-static func _construire_cache(e, delta: float) -> Dictionary:
+# Empile UNE entree dans les 13 Arrays paralleles du cache colonnes. Lit chaque
+# champ de e UNE SEULE fois. Remplace l'ancien _construire_cache qui allouait
+# un Dictionary de 11 clefs par entite (poste 21% au profiler avant chantier).
+static func _pousser_cache(e, delta: float,
+		col_ent: Array, col_vel: Array, col_vel_len: Array, col_vel_nz: Array,
+		col_orient: Array, col_aabb: Array, col_swept: Array,
+		col_masque_c: Array, col_masque_r: Array, col_reponse: Array,
+		col_formes: Array, col_taille_min: Array) -> void:
 	var pr: Dictionary = e.get("proprietes", {})
 	var vel: Vector3 = _prop(e, "velocite", Vector3.ZERO)
 	var orient: Basis = _prop(e, "orientation", Basis.IDENTITY)
@@ -359,62 +414,64 @@ static func _construire_cache(e, delta: float) -> Dictionary:
 	var swept: AABB = aabb
 	if vel_nz:
 		swept = aabb.merge(AABB(aabb.position - vel * delta, aabb.size))
-	return {
-		"vel": vel,
-		"vel_len": vel_len,
-		"vel_nz": vel_nz,
-		"orient": orient,
-		"aabb": aabb,
-		"swept": swept,
-		"masque_c": int(_prop(e, "masque_collision", 0)),
-		"masque_r": int(_prop(e, "masque_reponse", 0)),
-		"reponse": String(_prop(e, "reponse", "")),
-		"formes": formes,
-		"taille_min": _taille_min_formes(formes),
-	}
+	col_ent.append(e)
+	col_vel.append(vel)
+	col_vel_len.append(vel_len)
+	col_vel_nz.append(vel_nz)
+	col_orient.append(orient)
+	col_aabb.append(aabb)
+	col_swept.append(swept)
+	col_masque_c.append(int(_prop(e, "masque_collision", 0)))
+	col_masque_r.append(int(_prop(e, "masque_reponse", 0)))
+	col_reponse.append(String(_prop(e, "reponse", "")))
+	col_formes.append(formes)
+	col_taille_min.append(_taille_min_formes(formes))
 
 # Narrowphase avec swept : echantillonne le trajet parcouru [position -
 # velocite*delta, position] en N sous-pas (N grandit si le deplacement depasse
 # la moitie de la plus petite dimension) et rend le PREMIER contact rencontre en
-# partant de l'endpoint (k=0) vers l'arriere. {} si aucun. Lit uniquement le
-# cache par-entite (ce, co) construit par la pre-passe de tick -- aucun appel a
+# partant de l'endpoint (k=0) vers l'arriere. {} si aucun. Lit uniquement les
+# colonnes du cache (col_*) indexees par i, j -- aucun appel a
 # _velocite/_orientation/_taille_min_entite ici. Le contact rendu embarque
 # reponse/masque_reponse/vel_nz pour que resoudre n'ait pas non plus a
 # relire les entites.
-static func _contact_paire(e, ce: Dictionary, o, co: Dictionary, delta: float) -> Dictionary:
-	var vel_e: Vector3 = ce.vel
-	var vel_o: Vector3 = co.vel
-	var pos_e: Vector3 = e.position
-	var pos_o: Vector3 = o.position
-	var orient_e: Basis = ce.orient
-	var orient_o: Basis = co.orient
+static func _contact_paire(a, i: int, b, j: int, delta: float,
+		col_vel: Array, col_vel_len: Array, col_vel_nz: Array,
+		col_orient: Array, col_formes: Array, col_taille_min: Array,
+		col_reponse: Array, col_masque_r: Array) -> Dictionary:
+	var vel_a: Vector3 = col_vel[i]
+	var vel_b: Vector3 = col_vel[j]
+	var pos_a: Vector3 = a.position
+	var pos_b: Vector3 = b.position
+	var orient_a: Basis = col_orient[i]
+	var orient_b: Basis = col_orient[j]
 	var n := 1
-	var tm_e: float = float(ce.taille_min)
-	var tm_o: float = float(co.taille_min)
-	var vlen_e: float = float(ce.vel_len)
-	var vlen_o: float = float(co.vel_len)
-	if tm_e > 0.0 and vlen_e * delta > tm_e * 0.5:
-		n = maxi(n, int(ceil(vlen_e * delta / (tm_e * 0.5))))
-	if tm_o > 0.0 and vlen_o * delta > tm_o * 0.5:
-		n = maxi(n, int(ceil(vlen_o * delta / (tm_o * 0.5))))
-	var formes_e: Array = ce.formes
-	var formes_o: Array = co.formes
+	var tm_a: float = float(col_taille_min[i])
+	var tm_b: float = float(col_taille_min[j])
+	var vla: float = float(col_vel_len[i])
+	var vlb: float = float(col_vel_len[j])
+	if tm_a > 0.0 and vla * delta > tm_a * 0.5:
+		n = maxi(n, int(ceil(vla * delta / (tm_a * 0.5))))
+	if tm_b > 0.0 and vlb * delta > tm_b * 0.5:
+		n = maxi(n, int(ceil(vlb * delta / (tm_b * 0.5))))
+	var formes_a: Array = col_formes[i]
+	var formes_b: Array = col_formes[j]
 	for k in range(n + 1):
 		var frac: float = float(k) / float(n)
-		var pe: Vector3 = pos_e - vel_e * delta * frac
-		var po: Vector3 = pos_o - vel_o * delta * frac
-		for fa in formes_e:
-			var ta: Transform3D = Transform3D(orient_e, pe) * fa.get("transform_locale", Transform3D.IDENTITY)
-			for fb in formes_o:
-				var tb: Transform3D = Transform3D(orient_o, po) * fb.get("transform_locale", Transform3D.IDENTITY)
+		var pe: Vector3 = pos_a - vel_a * delta * frac
+		var po: Vector3 = pos_b - vel_b * delta * frac
+		for fa in formes_a:
+			var ta: Transform3D = Transform3D(orient_a, pe) * fa.get("transform_locale", Transform3D.IDENTITY)
+			for fb in formes_b:
+				var tb: Transform3D = Transform3D(orient_b, po) * fb.get("transform_locale", Transform3D.IDENTITY)
 				var r: Dictionary = contact_forme_paire(fa, ta, fb, tb)
 				if not r.is_empty():
 					return {
-						"a": e, "b": o,
+						"a": a, "b": b,
 						"normale": r.normale, "profondeur": r.profondeur,
-						"a_reponse": ce.reponse, "b_reponse": co.reponse,
-						"a_masque_r": int(ce.masque_r), "b_masque_r": int(co.masque_r),
-						"a_vel_nz": bool(ce.vel_nz), "b_vel_nz": bool(co.vel_nz),
+						"a_reponse": col_reponse[i], "b_reponse": col_reponse[j],
+						"a_masque_r": int(col_masque_r[i]), "b_masque_r": int(col_masque_r[j]),
+						"a_vel_nz": bool(col_vel_nz[i]), "b_vel_nz": bool(col_vel_nz[j]),
 					}
 	return {}
 

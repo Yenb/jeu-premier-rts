@@ -42,13 +42,29 @@ Dispatch par type UNIQUEMENT dans `_support_local` (un 5e type = un `case`).
 
 ## Broadphase
 
-`monde.choses_dans_rayon(centre, r)`, `r = demi-diagonale AABB entité +
-demi-diagonale max du voisinage + vitesse*delta` (marge swept). Filtre
-`masque_collision` puis recouvrement des AABB **balayées**.
+Groupée par case : les entités du `tick` sont regroupées par case virtuelle
+(arête = 2 × rayon max), et `monde.choses_dans_rayon(centre_case, r_agr +
+demi_diag_case)` est appelé UNE FOIS par case, `r_agr = max` du rayon des
+occupants (`demi-diagonale AABB + rayon max + vitesse*delta`). Chaque driver
+de la case filtre ensuite le voisinage partagé par `dist(x, y) ≤ r_x` — même
+filtre que la version per-entity, parité stricte du set de paires atteignant
+le narrowphase. Puis filtre `masque_collision` et recouvrement des AABB
+**balayées**.
 
 Limite : `monde.gd` indexe un POINT, pas une AABB. Valable tant que les tailles
 restent comparables. Des entités de tailles très différentes exigeraient
 d'étendre `monde.gd` (chantier framework, Orion) — hors de ce prototype.
+
+## Cache en colonnes
+
+`tick` construit 13 Arrays parallèles (`col_vel`, `col_orient`, `col_aabb`,
+`col_swept`, `col_masque_c`, `col_masque_r`, `col_reponse`, `col_formes`,
+`col_taille_min`, `col_vel_len`, `col_vel_nz`, `col_ent`), indexés par la
+position dans `entites`. `id_to_idx` (Dict String→int) résout un `o` retourné
+par la broadphase mais absent d'`entites` — cache construit à la volée, une
+fois par tick. `_pousser_cache` fait UNE lecture par champ (via `_prop`) et
+empile ; le hot path lit `col_x[i]` (Array par int), plus aucun Dict par
+entité ni keyage string.
 
 ## GJK
 
