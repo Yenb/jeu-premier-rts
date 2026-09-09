@@ -333,15 +333,68 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 	col_formes.resize(N)
 	var col_taille_min: PackedFloat32Array = PackedFloat32Array()
 	col_taille_min.resize(N)
+	# CORPS INLINE (ex _ecrire_cache) : appel de fonction par entite retire, tous
+	# les lookups et calculs directement dans la boucle. Chemin rapide AABB : si
+	# orient IDENTITY (cas dominant peuplement), l'AABB monde d'une forme = AABB
+	# locale cachee + position, sans composer Transform3D. Fallback complet
+	# (Transform3D(orient, pos) * transform_locale) sur orient tournee.
 	var rayon_max := 0.0
 	for idx in N:
 		var e: Dictionary = entites[idx]
-		_ecrire_cache(idx, e, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
-			col_orient, col_aabb, col_swept, col_masque_c, col_masque_r,
-			col_reponse, col_formes, col_taille_min)
-		e.proprietes["aabb_cache"] = col_aabb[idx]
-		var s: Vector3 = col_aabb[idx].size
-		rayon_max = maxf(rayon_max, s.length() * 0.5)
+		var pr: Dictionary = e.get("proprietes", {})
+		var vel: Vector3 = pr.get("velocite", Vector3.ZERO)
+		var orient: Basis = pr.get("orientation", Basis.IDENTITY)
+		var formes: Array = pr.get("formes", [])
+		var pos: Vector3 = e.position
+		var aabb: AABB
+		if formes.is_empty():
+			aabb = AABB(pos, Vector3.ZERO)
+		elif orient == Basis.IDENTITY:
+			var f0: Dictionary = formes[0]
+			var id0: int = int(f0.get("_aabb_id", -1))
+			if id0 < 0:
+				id0 = _cacher_forme(f0)
+			var l0: AABB = _cache_aabb_locale[id0]
+			aabb = AABB(l0.position + pos, l0.size)
+			for i_f in range(1, formes.size()):
+				var fi: Dictionary = formes[i_f]
+				var idi: int = int(fi.get("_aabb_id", -1))
+				if idi < 0:
+					idi = _cacher_forme(fi)
+				var li: AABB = _cache_aabb_locale[idi]
+				aabb = aabb.merge(AABB(li.position + pos, li.size))
+		else:
+			aabb = _aabb_from(orient, formes, pos)
+		var vel_len: float = vel.length()
+		var vel_nz: bool = vel.length_squared() > 0.0
+		var swept: AABB = aabb
+		if vel_nz:
+			swept = aabb.merge(AABB(aabb.position - vel * delta, aabb.size))
+		# Taille min via cache par-forme (INLINE aussi -- evite l'appel a
+		# _taille_min_formes_cache et sa boucle interne).
+		var m: float = INF
+		for f in formes:
+			var idf: int = int((f as Dictionary).get("_aabb_id", -1))
+			if idf < 0:
+				idf = _cacher_forme(f)
+			var t: float = _cache_taille_min_forme[idf]
+			if t < m:
+				m = t
+		col_ent[idx] = e
+		col_vel[idx] = vel
+		col_vel_len[idx] = vel_len
+		col_vel_nz[idx] = 1 if vel_nz else 0
+		col_orient[idx] = orient
+		col_aabb[idx] = aabb
+		col_swept[idx] = swept
+		col_masque_c[idx] = int(pr.get("masque_collision", 0))
+		col_masque_r[idx] = int(pr.get("masque_reponse", 0))
+		col_reponse[idx] = String(pr.get("reponse", ""))
+		col_formes[idx] = formes
+		col_taille_min[idx] = 0.0 if m == INF else m
+		e.proprietes["aabb_cache"] = aabb
+		var sz: Vector3 = aabb.size
+		rayon_max = maxf(rayon_max, sz.length() * 0.5)
 	# GRILLE LOCALE PAR COUNTING SORT : indice de case lineaire par entite,
 	# sorted_idx tri par cell + offsets (start par cell) -- structure exacte
 	# du portage C++ a venir (cell-id array + sorted index + start/end offsets).
@@ -489,47 +542,6 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 							if not contact.is_empty():
 								contacts.append(contact)
 	return contacts
-
-# Ecrit UNE entree DANS LES COLONNES a l'index idx. Aucune allocation (les
-# colonnes sont pre-dimensionnees par tick, resize UNE fois). Colonnes typees :
-# PackedArray natifs pour Vector3/float/int/byte, Array[T] typee pour Basis/
-# AABB/Dictionary/String -- plus aucun boxing Variant. Remplace l'ancien
-# _pousser_cache qui faisait 12 append par entite sur des Array generiques
-# (poste 30% au profiler avant chantier).
-# LECTURE DIRECTE pr.get au lieu de _prop : les 5 champs (velocite, orientation,
-# masque_collision, masque_reponse, reponse) sont TOUJOURS poses dans
-# proprietes par tous les callers du depot (banc_peuplement, manager_proto_2,
-# ennemis, tests). Le fallback top-level de _prop (e.has/e[cle]) ne sert
-# jamais ici -- verifie au grep.
-static func _ecrire_cache(idx: int, e: Dictionary, delta: float,
-		col_ent: Array[Dictionary], col_vel: PackedVector3Array,
-		col_vel_len: PackedFloat32Array, col_vel_nz: PackedByteArray,
-		col_orient: Array[Basis], col_aabb: Array[AABB], col_swept: Array[AABB],
-		col_masque_c: PackedInt32Array, col_masque_r: PackedInt32Array,
-		col_reponse: PackedStringArray, col_formes: Array,
-		col_taille_min: PackedFloat32Array) -> void:
-	var pr: Dictionary = e.get("proprietes", {})
-	var vel: Vector3 = pr.get("velocite", Vector3.ZERO)
-	var orient: Basis = pr.get("orientation", Basis.IDENTITY)
-	var formes: Array = pr.get("formes", [])
-	var aabb: AABB = _aabb_from(orient, formes, e.position)
-	var vel_len: float = vel.length()
-	var vel_nz: bool = vel.length_squared() > 0.0
-	var swept: AABB = aabb
-	if vel_nz:
-		swept = aabb.merge(AABB(aabb.position - vel * delta, aabb.size))
-	col_ent[idx] = e
-	col_vel[idx] = vel
-	col_vel_len[idx] = vel_len
-	col_vel_nz[idx] = 1 if vel_nz else 0
-	col_orient[idx] = orient
-	col_aabb[idx] = aabb
-	col_swept[idx] = swept
-	col_masque_c[idx] = int(pr.get("masque_collision", 0))
-	col_masque_r[idx] = int(pr.get("masque_reponse", 0))
-	col_reponse[idx] = String(pr.get("reponse", ""))
-	col_formes[idx] = formes
-	col_taille_min[idx] = _taille_min_formes_cache(formes)
 
 # Narrowphase avec swept : echantillonne le trajet parcouru [position -
 # velocite*delta, position] en N sous-pas (N grandit si le deplacement depasse

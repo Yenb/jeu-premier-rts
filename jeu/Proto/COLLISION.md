@@ -100,10 +100,16 @@ fois, aucune réallocation, aucun boxing Variant sur les scalaires/vecteurs) :
 - `Array[Dictionary]` : `col_ent`
 - `Array` générique : `col_formes` (Array[Array] non supporté par GDScript)
 
-`_ecrire_cache(idx, e, delta, ...)` écrit par index — plus d'`append`. Lecture
-directe `pr.get(cle, defaut)` (pr = `e.proprietes` tenu en local), sans passer
-par `_prop` — les 5 champs `velocite`/`orientation`/`masque_collision`/
+Le remplissage de ces colonnes est **inline** dans la boucle principale de
+`tick` (plus d'appel de fonction par entité). Lecture directe
+`pr.get(cle, defaut)` (pr = `e.proprietes` tenu en local), sans passer par
+`_prop` — les 5 champs `velocite`/`orientation`/`masque_collision`/
 `masque_reponse`/`reponse` sont toujours dans `proprietes` chez les callers.
+
+Chemin rapide AABB dans la même boucle : si `orient == Basis.IDENTITY` (cas
+dominant peuplement), l'AABB monde d'une forme = AABB locale cachée + position,
+sans composer `Transform3D`. Fallback complet (`_aabb_from` avec projection)
+sur orient tournée.
 
 Le hot path lit `col_x[i]` par int, sans allocation ni conversion.
 
