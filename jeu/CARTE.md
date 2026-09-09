@@ -1220,7 +1220,8 @@ Tout statique, aucun état interne. Aucune physique Godot
 données, hors rendu comme dans le rendu. Système complet : SUPPORT unifié, AABB
 par forme, GJK, EPA, `detecter` (broadphase LOCALE par counting sort, aucun index externe interrogé + narrowphase + swept),
 `resoudre` (séparation en donnée pure). L'appelant fournit la liste complète des entités à tester
-(banc_peuplement passe sa population fermée ; le joueur compose `[entite] + voisins` collectés via `monde.choses_dans_rayon`). Quatre types de forme : `sphere`,
+(le joueur compose `[entite] + voisins` collectés via `monde.choses_dans_rayon`).
+Portage C++ : `extension_terrain/src/collision_lot.h/.cpp` (**CollisionLot**) porte le même contrat, généraliste (sphère/boîte/capsule/hull, orient tournée), frontière SoA plate — c'est ce port qu'utilise `banc_peuplement.gd` en prod ; `collision.gd` reste l'oracle de parité (test_collision_lot_cpp.gd, égalité EXACTE). Quatre types de forme : `sphere`,
 `boite`, `capsule` (axe Y), `hull`. Le dispatch par type vit UNIQUEMENT dans
 `_support_local` — cinquième type = un `case` de plus, rien d'autre ailleurs.
 `transform_monde` reçu par `support`/`aabb_forme` est COMPLET (l'appelant

@@ -183,13 +183,25 @@ var _index_cpp: RefCounted = null
 # COLLISION -- une seule voie de reponse aux recouvrements inter-agents. Chaque
 # agent porte une entite dediee (Dictionary, forme "boite" avec demi_taille
 # derivee de data/mesh.json[mesh_ref].taille/2) dans _entites_collision. Ce
-# tableau STABLE (alloue au _fabriquer_lot, jamais realloue par frame) sert de
-# `entites` a Collision.detecter et est aussi inscrit dans _monde pour que la
-# broadphase de Collision.detecter le retrouve via monde.choses_dans_rayon.
-# Independant de _pool.individus : marche sous regime_masse (aucun Dict individu)
-# comme sous regime normal. Le sync par frame (cols.position -> entite.position,
-# collision, entite.position corrigee -> cols.position) est la seule autorite.
+# tableau STABLE (alloue au _fabriquer_lot, jamais realloue par frame) tient la
+# geometrie de reference et sert d'inscription unique dans _monde. Le hot path
+# passe par CollisionLot C++ (extension_terrain) : SoA stable pre-decompose une
+# fois au _fabriquer_lot, mise a jour de positions seule par frame. La partie
+# stable (orientations IDENTITY, masques 1/1, reponse "bloque", forme boite
+# unique par agent) ne bouge JAMAIS post-fab -- pas de recomposition par frame.
+# Une seule voie de prod : plus d'appel a jeu/Proto/collision.gd ici (l'oracle
+# est appele par scripts/test_collision_lot_cpp.gd uniquement).
 var _entites_collision: Array = []
+# Instance CollisionLot creee au _fabriquer_lot. null si l'extension n'est pas
+# chargee -- alors la passe collision est INACTIVE (push_error au monte, aucun
+# repli GDScript en prod).
+var _collision_cpp: RefCounted = null
+# SoA stable de _entites_collision, decompose UNE fois au _fabriquer_lot.
+# Cles : orientations, masques_c, masques_r, reponses, formes_debut, formes_type,
+# formes_tf_locale, formes_params, hull_points, velocites.
+# positions est POSEE chaque frame (assignation Packed, CoW) avant l'appel
+# CollisionLot.detecter -- jamais recomposee.
+var _soa_collision_stable: Dictionary = {}
 # DEMI-TAILLE derivee de data/mesh.json[mesh_ref].taille (aucun nombre en dur,
 # aucun @export). Calculee au _monter_pool depuis la meme source que le mesh
 # visuel -- collision et rendu suivent le meme reglage.
@@ -337,7 +349,7 @@ func _monter_pool() -> void:
 		push_error("banc_peuplement : MeshCatalogue.fabriquer_mesh('%s') a rendu null" % mesh_ref)
 		return
 	# DEMI-TAILLE DE COLLISION DERIVEE DE LA TAILLE DU CORPS. La forme "boite"
-	# passee a Collision.detecter a `parametres.demi_taille = taille / 2` sur chaque
+	# passee a CollisionLot.detecter a `parametres.demi_taille = taille / 2` sur chaque
 	# axe. Aucun nombre en dur : la valeur vient de data/mesh.json[mesh_ref].taille,
 	# meme source que le mesh visuel -- collision et rendu suivent le meme reglage.
 	var fiche_mesh: Dictionary = catalogue_mesh[mesh_ref]
@@ -449,7 +461,7 @@ func _fabriquer_lot() -> void:
 	# derivee du mesh (voir _monter_pool). Tableau STABLE alloue ici et jamais
 	# realloue -- le sync par frame (cols.position <-> entite.position) est la
 	# seule autorite de position ; les entites sont inscrites une fois dans
-	# _monde pour que la broadphase de Collision.detecter les retrouve via
+	# _monde pour que la broadphase de CollisionLot.detecter les retrouve via
 	# monde.choses_dans_rayon. Independant de _pool.individus : marche sous
 	# regime_masse comme sous regime normal.
 	_entites_collision.clear()
@@ -481,6 +493,17 @@ func _fabriquer_lot() -> void:
 			_entites_collision.append(ent)
 			_monde.ajouter(ent, "peuplement_coll", pos_k)
 			k += 1
+	# INSTANCE CollisionLot C++ + decomposition SoA stable. Une seule voie de
+	# prod : si l'extension n'est pas chargee, push_error et la passe collision
+	# reste inactive (aucun repli GDScript). La partie stable (orientations,
+	# masques, reponses, formes) est calculee UNE fois -- par frame, seules
+	# positions est mise a jour.
+	if not _entites_collision.is_empty():
+		if not ClassDB.class_exists("CollisionLot"):
+			push_error("banc_peuplement : classe C++ 'CollisionLot' introuvable -- extension_terrain non chargee ? Passe collision inactive.")
+		else:
+			_collision_cpp = ClassDB.instantiate("CollisionLot")
+			_soa_collision_stable = _batir_soa_collision_stable(_entites_collision)
 	if actif_releve:
 		var duree_us: int = Time.get_ticks_usec() - chrono_creation_debut
 		print("[peuplement] creation N=%d en %d us (push RS unique final)" % [poses, duree_us])
@@ -571,30 +594,48 @@ func _physics_process(delta: float) -> void:
 		buffer = _physique_et_buffer_cpp(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
 	else:
 		buffer = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
-	# PASSE COLLISION -- port de jeu/Proto/collision.gd (GJK/EPA en donnee pure,
-	# aucune physique Godot). Sync cols.position -> _entites_collision[i].position,
-	# Collision.detecter + Collision.resoudre (mutations directes sur entite.position),
-	# sync retour vers cols.position. La broadphase construit sa propre grille
-	# locale par counting sort, ne lit plus _monde -- pas de deplacer_simple
-	# prealable.
-	if brancher_monde and _monde != null and not _entites_collision.is_empty():
+	# PASSE COLLISION -- CollisionLot C++ (extension_terrain), miroir bit-a-bit
+	# de jeu/Proto/collision.gd::detecter+resoudre. Le SoA stable est fabrique une
+	# fois au _fabriquer_lot ; par frame seule "positions" est posee depuis
+	# cols.position. Sortie : positions mutees, recopiees vers cols.position ET
+	# vers _entites_collision[k].position (l'entite Dict garde sa position vivante
+	# pour un futur consommateur qui interroge _monde). Une seule voie de prod :
+	# aucun appel a jeu/Proto/collision.gd ici.
+	if brancher_monde and _monde != null and _collision_cpp != null and not _entites_collision.is_empty():
 		var n_coll: int = _entites_collision.size()
 		var cols_pos: PackedVector3Array = cols.position
+		# _soa_collision_stable.positions est une PackedVector3Array de taille
+		# n_coll. On la remplace par cols_pos tronquee (n_coll == cols_pos.size()
+		# par contrat : _entites_collision.size() == positions_final.size() au
+		# _fabriquer_lot, aucune mutation en cours de vie).
+		_soa_collision_stable["positions"] = cols_pos
+		_soa_collision_stable["delta"] = delta
+		var sortie_det: Dictionary = _collision_cpp.detecter(_soa_collision_stable)
+		var entree_res := {
+			"positions": _soa_collision_stable.positions,
+			"velocites": _soa_collision_stable.velocites,
+			"reponses": _soa_collision_stable.reponses,
+			"masques_r": _soa_collision_stable.masques_r,
+			"contacts_a": sortie_det.contacts_a,
+			"contacts_b": sortie_det.contacts_b,
+			"contacts_normale": sortie_det.contacts_normale,
+			"contacts_profondeur": sortie_det.contacts_profondeur,
+		}
+		var sortie_res: Dictionary = _collision_cpp.resoudre(entree_res)
+		var positions_mutees: PackedVector3Array = sortie_res.positions
+		# Recopie vers cols.position ET vers les Dict-entites (miroir position
+		# vivante inscrite dans _monde -- un futur consommateur qui interroge
+		# _monde.choses_dans_rayon voit les positions post-collision).
 		var kk: int = 0
 		while kk < n_coll and kk < count:
-			(_entites_collision[kk] as Dictionary).position = cols_pos[kk]
-			kk += 1
-		var contacts: Array = Collision.detecter(_entites_collision, delta)
-		Collision.resoudre(contacts, _entites_collision)
-		kk = 0
-		while kk < n_coll and kk < count:
-			cols_pos[kk] = (_entites_collision[kk] as Dictionary).position
+			cols_pos[kk] = positions_mutees[kk]
+			(_entites_collision[kk] as Dictionary).position = positions_mutees[kk]
 			kk += 1
 		cols.position = cols_pos
 	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) avec cols.position
 	# corrige. La branche GDScript _monde.deplacer_simple est retiree : plus
 	# aucun lecteur de l'index _monde n'existe dans ce banc depuis que
-	# Collision.detecter a sa propre grille locale (verifie au grep :
+	# CollisionLot.detecter a sa propre grille locale (verifie au grep :
 	# choses_dans_rayon, par_id, resolutions_ouvertes). Rebrancher la maj
 	# ici si un futur mecanisme (perception, chasse, ...) redemande a lire
 	# l'index de _monde. Chemin deplacer_cpp conserve tel quel.
@@ -1107,3 +1148,122 @@ func _passe_fatigue(delta_cadence: float, vitesse_type: float) -> void:
 
 func _exit_tree() -> void:
 	Peuplement.detruire_pool(_pool)
+
+# Decompose _entites_collision en SoA plate pour CollisionLot. Ne traite QUE
+# la partie STABLE : orientations, masques, reponses, formes. positions et
+# delta sont posees par frame dans _physics_process. velocites est constante
+# (Vector3.ZERO pour toutes les entites -- ce banc n'anime pas la collision
+# via velocite mais via position mutee).
+# Pool de formes plat, 1 forme par entite (aucune deduplication -- l'appelant
+# accepte le cout memoire vs la simplicite du contrat).
+func _batir_soa_collision_stable(entites: Array) -> Dictionary:
+	var N: int = entites.size()
+	var velocites := PackedVector3Array()
+	velocites.resize(N)
+	var orientations := PackedFloat32Array()
+	orientations.resize(N * 9)
+	var masques_c := PackedInt32Array()
+	masques_c.resize(N)
+	var masques_r := PackedInt32Array()
+	masques_r.resize(N)
+	var reponses := PackedByteArray()
+	reponses.resize(N)
+	var formes_debut := PackedInt32Array()
+	formes_debut.resize(N + 1)
+	var formes_type := PackedInt32Array()
+	var formes_tf_locale := PackedFloat32Array()
+	var formes_params := PackedFloat32Array()
+	var hull_points := PackedVector3Array()
+	var offset: int = 0
+	for i in range(N):
+		var e: Dictionary = entites[i]
+		var p: Dictionary = e.proprietes
+		velocites[i] = p.get("velocite", Vector3.ZERO)
+		var b: Basis = p.get("orientation", Basis.IDENTITY)
+		orientations[i * 9 + 0] = b.x.x
+		orientations[i * 9 + 1] = b.y.x
+		orientations[i * 9 + 2] = b.z.x
+		orientations[i * 9 + 3] = b.x.y
+		orientations[i * 9 + 4] = b.y.y
+		orientations[i * 9 + 5] = b.z.y
+		orientations[i * 9 + 6] = b.x.z
+		orientations[i * 9 + 7] = b.y.z
+		orientations[i * 9 + 8] = b.z.z
+		masques_c[i] = int(p.get("masque_collision", 0))
+		masques_r[i] = int(p.get("masque_reponse", 0))
+		reponses[i] = 1 if String(p.get("reponse", "")) == "bloque" else 0
+		formes_debut[i] = offset
+		var formes: Array = p.get("formes", [])
+		for f in formes:
+			var f_dict: Dictionary = f
+			var t: String = String(f_dict.get("type", ""))
+			var type_int: int = 0
+			match t:
+				"sphere": type_int = 0
+				"boite": type_int = 1
+				"capsule": type_int = 2
+				"hull": type_int = 3
+			formes_type.push_back(type_int)
+			var tf_l: Transform3D = f_dict.get("transform_locale", Transform3D.IDENTITY)
+			var bl: Basis = tf_l.basis
+			formes_tf_locale.push_back(bl.x.x)
+			formes_tf_locale.push_back(bl.y.x)
+			formes_tf_locale.push_back(bl.z.x)
+			formes_tf_locale.push_back(bl.x.y)
+			formes_tf_locale.push_back(bl.y.y)
+			formes_tf_locale.push_back(bl.z.y)
+			formes_tf_locale.push_back(bl.x.z)
+			formes_tf_locale.push_back(bl.y.z)
+			formes_tf_locale.push_back(bl.z.z)
+			formes_tf_locale.push_back(tf_l.origin.x)
+			formes_tf_locale.push_back(tf_l.origin.y)
+			formes_tf_locale.push_back(tf_l.origin.z)
+			var params: Dictionary = f_dict.get("parametres", {})
+			match t:
+				"sphere":
+					formes_params.push_back(float(params.get("rayon", 0.0)))
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+				"boite":
+					var d: Vector3 = params.get("demi_taille", Vector3.ZERO)
+					formes_params.push_back(d.x)
+					formes_params.push_back(d.y)
+					formes_params.push_back(d.z)
+					formes_params.push_back(0.0)
+				"capsule":
+					formes_params.push_back(float(params.get("rayon", 0.0)))
+					formes_params.push_back(float(params.get("hauteur", 0.0)))
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+				"hull":
+					var pts: Array = params.get("points", [])
+					formes_params.push_back(float(hull_points.size()))
+					formes_params.push_back(float(pts.size()))
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+					for q in pts:
+						hull_points.push_back(q as Vector3)
+				_:
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+					formes_params.push_back(0.0)
+			offset += 1
+	formes_debut[N] = offset
+	# positions est vide (PackedVector3Array) : posee par frame depuis cols.position.
+	var positions_placeholder := PackedVector3Array()
+	return {
+		"positions": positions_placeholder,
+		"velocites": velocites,
+		"orientations": orientations,
+		"masques_c": masques_c,
+		"masques_r": masques_r,
+		"reponses": reponses,
+		"formes_debut": formes_debut,
+		"formes_type": formes_type,
+		"formes_tf_locale": formes_tf_locale,
+		"formes_params": formes_params,
+		"hull_points": hull_points,
+		"delta": 0.0,
+	}

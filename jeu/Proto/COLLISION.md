@@ -152,6 +152,23 @@ Normale unitaire, sens **A→B** (pour A en 0 et B en +X, normale = +X).
 collecte voisins (si liste ouverte) → `detecter` → `resoudre` (ou séparation
 custom SAFE_MARGIN pour le joueur, voir `mouvement_kinematic.gd` B.12).
 
+## Portage C++ — CollisionLot (extension_terrain)
+
+`extension_terrain/src/collision_lot.h/.cpp` porte `detecter` + `resoudre` en
+C++, généraliste dès M1 (sphère, boîte, capsule, hull ; orientation ≠ Identity ;
+raccourci boîte-boîte AABB alignée = chemin rapide interne). Une seule voie de
+prod : `banc_peuplement.gd` appelle **CollisionLot**, `jeu/Proto/collision.gd`
+reste l'oracle de parité appelé uniquement par
+`scripts/test_collision_lot_cpp.gd` (égalité EXACTE des flottants, peuplement +
+multi-formes). Convention de type : composantes Vector3 en `real_t` (float 32),
+scalaires temporaires en `double` avec promotion explicite `(double)vec.dot()`
+aux mêmes points que GDScript. Frontière SoA (le hot path évite tout boxing
+Variant) : positions/velocites/orientations aplaties/masques/reponses + pool
+de formes plat `formes_debut/formes_type/formes_tf_locale/formes_params` +
+`hull_points`. Chronos temporaires `derniers_chronos() → {broadphase,
+narrowphase, resoudre}` en microsecondes. Mono-thread. Multithread : morceau
+ultérieur.
+
 ## Ce que le système NE fait PAS
 
 Friction, rotation en réponse, masse/restitution, résolution itérative
