@@ -1277,24 +1277,30 @@ func _passe_fatigue(delta_cadence: float, vitesse_type: float) -> void:
 	var bascules: Array = SeuilEtat.avancer(individus, _catalogue_seuils)
 	if bascules.is_empty():
 		return
-	# COMPORTEMENT DEMO A LA BASCULE. Pour chaque id bascule, ajuster cols.vitesse.
-	# Lire etats_actifs UNE fois pour savoir dans quel sens on va -- la memoire par
-	# entree de seuil_etat.gd garantit que ce fut un VRAI franchissement.
+	# COMPORTEMENT DEMO A LA BASCULE. Pour chaque id bascule, ajuster cols.vitesse
+	# a l'INDICE DE POOL (id_to_index[id]) -- la meme convention que errance
+	# (vitesses[i], i = indice de pool) et que _remplir_colonnes_depuis_individus
+	# (vitesses[i]). Le champ _slot est l'indice MultiMesh, JAMAIS l'index d'une
+	# colonne : ecrire vitesses[_slot] ralentirait une AUTRE unite des que _slot
+	# et l'indice de pool divergent (apres tout retrait swap-remove, ou pool de
+	# capacite nombre_individus*2 aux slots non contigus). Lire etats_actifs UNE
+	# fois pour savoir dans quel sens on va -- la memoire par entree de
+	# seuil_etat.gd garantit que ce fut un VRAI franchissement.
 	var cols: Dictionary = _pool.colonnes
 	var vitesses: PackedFloat32Array = cols.vitesse
 	var id_to_index: Dictionary = _pool.id_to_index
 	for id in bascules:
 		if not id_to_index.has(id):
 			continue
-		var individu: Dictionary = individus[int(id_to_index[id])]
-		var slot: int = int(individu.proprietes.get("_slot", -1))
-		if slot < 0 or slot >= vitesses.size():
+		var pool_index: int = int(id_to_index[id])
+		if pool_index < 0 or pool_index >= vitesses.size():
 			continue
+		var individu: Dictionary = individus[pool_index]
 		var etats: Array = individu.proprietes.get("etats_actifs", [])
 		if etats.has("epuise"):
-			vitesses[slot] = vitesse_type * vitesse_epuise_facteur
+			vitesses[pool_index] = vitesse_type * vitesse_epuise_facteur
 		else:
-			vitesses[slot] = vitesse_type
+			vitesses[pool_index] = vitesse_type
 	cols.vitesse = vitesses
 
 func _exit_tree() -> void:
