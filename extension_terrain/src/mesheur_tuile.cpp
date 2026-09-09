@@ -36,11 +36,6 @@ struct Vec3iHash {
 	}
 };
 
-struct BucketItem {
-	std::vector<float> buffer;
-	std::vector<int32_t> cellules;
-};
-
 constexpr double PI_D = 3.14159265358979323846;
 
 inline Basis face_base(int i) {
@@ -78,22 +73,13 @@ inline Basis decode_basis(const std::vector<float> &arr, int orient) {
 
 inline void ecrire_instance(std::vector<float> &buffer, const Basis &b, const Vector3 &origin,
 		float r, float g, float bl, float a) {
-	buffer.push_back((float)b.rows[0].x);
-	buffer.push_back((float)b.rows[0].y);
-	buffer.push_back((float)b.rows[0].z);
-	buffer.push_back((float)origin.x);
-	buffer.push_back((float)b.rows[1].x);
-	buffer.push_back((float)b.rows[1].y);
-	buffer.push_back((float)b.rows[1].z);
-	buffer.push_back((float)origin.y);
-	buffer.push_back((float)b.rows[2].x);
-	buffer.push_back((float)b.rows[2].y);
-	buffer.push_back((float)b.rows[2].z);
-	buffer.push_back((float)origin.z);
-	buffer.push_back(r);
-	buffer.push_back(g);
-	buffer.push_back(bl);
-	buffer.push_back(a);
+	const float v[16] = {
+		(float)b.rows[0].x, (float)b.rows[0].y, (float)b.rows[0].z, (float)origin.x,
+		(float)b.rows[1].x, (float)b.rows[1].y, (float)b.rows[1].z, (float)origin.y,
+		(float)b.rows[2].x, (float)b.rows[2].y, (float)b.rows[2].z, (float)origin.z,
+		r, g, bl, a
+	};
+	buffer.insert(buffer.end(), v, v + 16);
 }
 
 inline void ecrire_cellule(std::vector<int32_t> &cellules, const Vector3i &c) {
@@ -299,16 +285,39 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 		}
 	}
 
-	std::unordered_map<int, BucketItem> par_forme;
-	std::unordered_map<int, BucketItem> par_forme_sol;
-	std::unordered_map<int, BucketItem> par_forme_mini;
-	std::vector<int32_t> cellules_occl;
-	std::vector<int32_t> cellules_teintables;
+	// Conteneurs membres reutilises entre bakes. On vide ce qu'il faut
+	// pour garder la capacite : les entrees des 3 maps sont conservees et
+	// SEUL le buffer de chaque BucketItem est clear() -- vider la map
+	// jetterait la capacite des buffers accumulee sur les tuiles
+	// precedentes. Les 4 vecteurs de sortie sont clear() eux aussi.
+	auto &par_forme = _par_forme;
+	auto &par_forme_sol = _par_forme_sol;
+	auto &par_forme_mini = _par_forme_mini;
+	auto &cellules_occl = _cellules_occl;
+	auto &cellules_teintables = _cellules_teintables;
 	// teinte_candidats : 6-tuples (item, x, y, z, idx_start, count) par cellule
-	// cubique propre visible. Pret pour le GDScript qui ne re-scannera plus
-	// par_forme[item].cellules.
-	std::vector<int32_t> teinte_cand_normal;
-	std::vector<int32_t> teinte_cand_sol;
+	// cubique propre visible. idx_start = buffer.size()/16 avant emission.
+	auto &teinte_cand_normal = _teinte_cand_normal;
+	auto &teinte_cand_sol = _teinte_cand_sol;
+	for (auto &kv : par_forme) kv.second.buffer.clear();
+	for (auto &kv : par_forme_sol) kv.second.buffer.clear();
+	for (auto &kv : par_forme_mini) kv.second.buffer.clear();
+	cellules_occl.clear();
+	cellules_teintables.clear();
+	teinte_cand_normal.clear();
+	teinte_cand_sol.clear();
+
+	// Borne haute pour la capacite d'un buffer d'item : colonnes x rangs x
+	// 6 faces x 16 floats, ramenee au quart (peu d'items concentrent la
+	// masse -- sur-allouer chaque item couterait plus que l'economie de
+	// realloc). Reserve idempotente au premier acces (capacity() == 0).
+	const size_t reserve_cap_buffer = (size_t)taille * (size_t)taille *
+			(size_t)couches_max * 6 * 16 / 4;
+	auto obtenir_bucket = [&reserve_cap_buffer](std::unordered_map<int, BucketItem> &m, int item) -> BucketItem & {
+		BucketItem &b = m[item];
+		if (b.buffer.capacity() == 0) b.buffer.reserve(reserve_cap_buffer);
+		return b;
+	};
 	int couche_min_out = couche_base + couches_max;
 	int couche_max_out = couche_base;
 
@@ -383,9 +392,8 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 					auto mtit = _mesh_transforms.find(item);
 					if (mtit != _mesh_transforms.end()) mesh_tf = mtit->second;
 					Transform3D total = Transform3D(base_ortho, pos) * mesh_tf;
-					BucketItem &bucket = par_forme[item];
+					BucketItem &bucket = obtenir_bucket(par_forme, item);
 					ecrire_instance(bucket.buffer, total.basis, total.origin, 1.0f, 1.0f, 1.0f, 1.0f);
-					ecrire_cellule(bucket.cellules, cellule);
 					continue;
 				}
 
@@ -396,7 +404,7 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				bool a_pv = (pvit != pv_par_cellule.end());
 
 				if (masque_sous != masque_sous_plein || a_pv) {
-					BucketItem &bucket = par_forme_mini[item];
+					BucketItem &bucket = obtenir_bucket(par_forme_mini, item);
 					const real_t pas = cote / (real_t)3.0;
 					const std::unordered_map<int, int> *pv_map = a_pv ? &pvit->second : nullptr;
 					Basis identity;
@@ -418,7 +426,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 						if (t < 0.f) t = 0.f;
 						if (t > 1.f) t = 1.f;
 						ecrire_instance(bucket.buffer, identity, pos + offset, t, t, t, 1.0f);
-						ecrire_cellule(bucket.cellules, cellule);
 					}
 					continue;
 				}
@@ -426,8 +433,8 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				// CUBE PROPRE : candidat teinte + emission 6 faces exposees.
 				ecrire_cellule(cellules_teintables, cellule);
 				bool est_sol = (couche == sommet_base);
-				BucketItem &bucket = est_sol ? par_forme_sol[item] : par_forme[item];
-				int idx_start = (int)bucket.cellules.size() / 3;
+				BucketItem &bucket = est_sol ? obtenir_bucket(par_forme_sol, item) : obtenir_bucket(par_forme, item);
+				int idx_start = (int)(bucket.buffer.size() / 16);
 
 				real_t h_item = cote;
 				{
@@ -451,7 +458,6 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 						origine = pos + n * (cote * (real_t)0.5) + Vector3(0, (h - cote) * (real_t)0.5, 0);
 					}
 					ecrire_instance(bucket.buffer, base, origine, 1.0f, 1.0f, 1.0f, 1.0f);
-					ecrire_cellule(bucket.cellules, cellule);
 				};
 
 				emettre_face(0, mon_c, rang + 1);
@@ -461,7 +467,7 @@ Dictionary MesheurTuile::bake_tuile_a(const Dictionary &e) const {
 				emettre_face(4, nzp_c, rang);
 				emettre_face(5, nzm_c, rang);
 
-				int count_faces = (int)bucket.cellules.size() / 3 - idx_start;
+				int count_faces = (int)(bucket.buffer.size() / 16) - idx_start;
 				if (count_faces > 0) {
 					std::vector<int32_t> &tc = est_sol ? teinte_cand_sol : teinte_cand_normal;
 					tc.push_back(item);

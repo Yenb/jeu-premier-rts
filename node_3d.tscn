@@ -1,0 +1,8 @@
+[gd_scene format=3 uid="uid://doe1n2f42oiyb"]
+
+[ext_resource type="Script" uid="uid://cejlu354puucv" path="res://extension_terrain/test_mesheur.gd" id="1_a202f"]
+
+[node name="Node3D" type="Node3D" unique_id=377742448]
+
+[node name="Node" type="Node" parent="." unique_id=1581359855]
+script = ExtResource("1_a202f")

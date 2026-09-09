@@ -82,7 +82,7 @@ func _parite_deplacer() -> void:
 		e_d.chose.position += decalage
 		e_s.chose.position += decalage
 		m_defaut.deplacer(e_d.chose)
-		m_simple.deplacer(e_s.chose)
+		m_simple.deplacer_simple(e_s.chose)
 	var ancien_defaut := _ids_tries(m_defaut, Vector3(10, 0, 10), 5.0)
 	var ancien_simple := _ids_tries(m_simple, Vector3(10, 0, 10), 5.0)
 	verif.v(ancien_defaut == ancien_simple,

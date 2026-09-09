@@ -6,6 +6,15 @@
 // _ready du rendu, puis les tuiles n'envoient plus que leurs donnees
 // specifiques.
 //
+// Conteneurs de meshing (buckets par item, cellules_occl/teintables,
+// teinte_cand_*) portes en membres mutable et reutilises entre bakes
+// (cache thread-local facon godot_voxel). En debut de bake_tuile_a on
+// clear() ce qu'il faut : sur les 3 maps, on garde les entrees et on
+// vide SEULEMENT le buffer de chaque BucketItem -- vider la map jetterait
+// la capacite des buffers accumulee. Sortie deja copiee en PackedArray
+// par items_to_dict/to_packed_int, donc les vider au bake suivant ne
+// casse rien cote appelant.
+//
 // Sortie par item : PackedFloat32Array buffer (16 floats/instance = 12
 // transform TRANSFORM_3D + 4 color), pret pour `MultiMesh.buffer = ...`
 // en UN appel natif cote GDScript. Plus les derives cellules_occl,
@@ -35,6 +44,24 @@ class MesheurTuile : public RefCounted {
 	mutable std::unordered_map<int, float> _hauteur_par_item;
 	mutable std::unordered_map<int, Transform3D> _mesh_transforms;
 	mutable std::vector<float> _bases_ortho; // 216 floats
+
+	// Conteneurs de meshing reutilises entre bakes (cache thread-local
+	// facon godot_voxel). Vides (clear()) en debut de bake_tuile_a : les
+	// vector<float>/vector<int32_t> gardent leur capacite, l'unordered_map
+	// garde ses entrees et le buffer de chaque BucketItem garde SA
+	// capacite -- apres quelques tuiles, plus aucune reallocation. Sortie
+	// deja copiee en PackedArray par items_to_dict/to_packed_int, donc
+	// vider ces conteneurs au bake suivant ne casse rien cote appelant.
+	struct BucketItem {
+		std::vector<float> buffer;
+	};
+	mutable std::unordered_map<int, BucketItem> _par_forme;
+	mutable std::unordered_map<int, BucketItem> _par_forme_sol;
+	mutable std::unordered_map<int, BucketItem> _par_forme_mini;
+	mutable std::vector<int32_t> _cellules_occl;
+	mutable std::vector<int32_t> _cellules_teintables;
+	mutable std::vector<int32_t> _teinte_cand_normal;
+	mutable std::vector<int32_t> _teinte_cand_sol;
 
 protected:
 	static void _bind_methods();
