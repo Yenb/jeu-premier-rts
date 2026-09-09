@@ -26,19 +26,7 @@ extends Node
 # un type_id, un mesh_ref -- rien d'autre. Le banc lit ce fichier au _ready
 # pour surcharger ses defauts @export.
 #
-# INTENTION. Deux chemins pour poser desiree = direction * vitesse :
-#   separation_active=true : UN appel C++ separation_lot(cols.position,
-#     rayon_separation) lit l'index (deja tenu par deplacer_lot) et rend une
-#     direction unitaire de repulsion par unite -- les voisins dans rayon
-#     poussent, sinon direction=0. desiree entierement ecrase. Premiere brique
-#     d'IA de masse : perception + intention en une passe native, aucune
-#     requete par unite. Exige deplacer_cpp=true et brancher_monde=true.
-#   separation_active=false : ERRANCE. Pour chaque individu :
-# 1. cap_horloge -= delta ; a <= 0, tirer une nouvelle direction et nouvelle
-#    horloge dans [3, 8] s.
-# 2. Poser desiree = direction * vitesse (vitesse vient du type mobile_test).
-#
-# ERRANCE (chemin separation_active=false). Chaque tick physique, pour chaque
+# INTENTION -- ERRANCE (seule voie). Chaque tick physique, pour chaque
 # individu du pool (for-in sur individus, aucun index construit) :
 # 1. cap_horloge -= delta ; a <= 0, tirer une nouvelle direction et nouvelle
 #    horloge dans [3, 8] s.
@@ -76,6 +64,7 @@ const MeshCatalogue = preload("res://scripts/mesh_catalogue.gd")
 const Mouvement = preload("res://scripts/mouvement_kinematic.gd")
 const Depense = preload("res://scripts/depense.gd")
 const SeuilEtat = preload("res://scripts/seuil_etat.gd")
+const Collision = preload("res://jeu/Proto/collision.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 
@@ -114,26 +103,6 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # comme oracle et rollback. Verrouille par test_index_spatial_cpp.gd (parite
 # bit a bit des cases entre index C++ et index GDScript).
 @export var deplacer_cpp: bool = false
-# SEPARATION (premiere brique d'IA de masse). true : la passe errance est
-# remplacee par UN appel _index_cpp.separation_lot(cols.position, rayon_separation)
-# qui rend UNE direction unitaire par unite (repulsion des voisins dans le rayon,
-# lue depuis l'index C++ deja tenu par deplacer_lot). Le resultat ecrase
-# cols.desiree : direction * vitesse. false : passe errance historique (cap
-# horloge + tirage direction), separation ignoree. Exige deplacer_cpp=true et
-# brancher_monde=true (sinon _index_cpp est null, repli automatique sur errance
-# avec push_error). Verrouille par test_separation_cpp.gd (parite du calcul C++
-# vs un oracle GDScript naif O(N^2)).
-@export var separation_active: bool = false
-# Rayon de perception pour la separation, en unites du monde. Le banc ouvre en
-# plus du niveau deplacer (arete 16) un SECOND niveau dedie a la separation,
-# d'exposant `ceil(log2(rayon_separation))` -- la case du niveau separation
-# couvre le rayon sur chaque axe, la boucle interne de separation_lot ne voit
-# qu'une poignee de voisins par case. Sans ce second niveau, la separation
-# lisait le niveau du deplacer (arete 16 pour un rayon 2 : chaque case
-# ramassait des milliers de candidats hors rayon, degeneration quasi-N^2
-# local -- releve en jeu ~1 020 000 us / frame a N=100 000, 1 fps). Voir
-# en-tete de extension_terrain/src/index_spatial.h::separation_lot.
-@export var rayon_separation: float = 2.0
 # PAQUETS PARTAGES (chantier "partage COW du paquet par defaut", 2026-09-08).
 # true : Peuplement.spawn passe paquets_partages=true a Objet.fabriquer -- les
 # sous-Dict/Array de premier niveau des paquets herites (objet_physique +
@@ -183,47 +152,6 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # 'epuise'. 0.4 = ralentit a 40% de sa vitesse nominale, visible a l'oeil. Retour a
 # 1.0 quand 'epuise' est retire (franchissement descendant).
 @export var vitesse_epuise_facteur: float = 0.4
-# ---- VUE (cone_oriente) + OCCLUSION en C++ (chantier "vue avec occlusion en
-# C++", 2026-09-08). vue_lot(positions, orientations, opacites, rayon,
-# cos_moitie_angle, largeur, seuil) fait TOUT en un seul parcours du voisinage
-# planaire : (1) voisins dans le rayon, (2) filtres par le cone d'angle
-# autour de l'orientation de chaque unite (patron perception.gd::_percevoir_cone_oriente),
-# (3) test d'occlusion contre les autres corps du meme voisinage 3x3 (jamais
-# une requete spatiale par paire, contrat prompt), (4) accumulation de la
-# separation dans le MEME parcours -- les voisins vus sont deja la. Sortie :
-# direction unitaire horizontale (Y=0) par unite. Un seul poste de chrono,
-# une seule frontiere.
-# La geometrie d'occlusion (t dans ]0,1[, distance laterale <= largeur, cumul
-# multiplicatif) est portee mot pour mot depuis scripts/occlusion.gd::facteur.
-# largeur_occlusion : DERIVEE de la taille du corps (chantier "occlusion a
-# hauteur de la taille reelle", 2026-09-08). Un corps de rayon r occulte au
-# maximum a distance laterale r+r = taille horizontale du corps (peuplement
-# homogene : occulteur et cible font la meme taille). Calculee au _monter_pool
-# depuis data/mesh.json[mesh_ref].taille -- aucun nombre en dur, aucun
-# @export. Un premier jet avait pose 0.5 pour un corps de 0.8 : le couloir
-# etait plus etroit que les corps, un occulteur latteralement decale de 0.6
-# n'etait pas compte alors que geometriquement il bouche encore la ligne de
-# vue -> ~64 cibles/unite au releve BORNE au lieu de la poignee attendue.
-var _largeur_occlusion: float = 0.0
-# Seuil du facteur d'occlusion sous lequel un voisin est retire du percu.
-# Convention historique du depot (test_banc_p1 : 0.001) : un facteur nul serait
-# trivialement rejete, 0.001 laisse passer un obstacle transparent tout en
-# refusant un obstacle opaque (facteur == 0.0).
-@export var seuil_facteur_occlusion: float = 0.001
-# Opacite uniforme des unites du peuplement : chaque unite est ce
-# corps-obstacle pour les autres. 1.0 = totalement opaque (blocage total).
-# Cablage local du banc, jamais un nom en dur en C++ (le C++ recoit un
-# PackedFloat32Array indexe par id, aveugle au nom de propriete).
-@export var opacite_unite: float = 1.0
-# Angle TOTAL du cone de vue en degres (patron scripts/perception.gd:
-# _percevoir_cone_oriente qui prend l'angle total puis divise par deux pour
-# comparer au cosinus de la moitie). 120.0 par defaut = un cone de vision
-# large. >= 360.0 degenere en sphere pure -- l'angle ne peut plus exclure
-# aucun voisin, comportement identique a un canal sans reglage d'angle. Le
-# C++ recoit le COSINUS de la moitie (calcule une fois cote banc), aucun acos
-# en boucle sur la masse.
-@export var angle_vue_deg: float = 120.0
-
 var _pool: Dictionary = {}
 var _monde = null
 var _carte: Resource = null
@@ -247,44 +175,25 @@ const VITESSE_TERMINALE_ABS := 55.0
 var _physique_cpp: RefCounted = null
 # INDEX SPATIAL C++ (chantier deplacer_cpp). Instance unique creee au
 # _monter_pool si deplacer_cpp=true et brancher_monde=true. Un seul niveau
-# ouvert a EXPOSANT_INDEX_CPP (arete 2^n) -- correspond au rayon de perception
-# typique du peuplement (choses_dans_rayon eventuel restera GDScript pour ce
-# chantier, cf. en-tete de scripts/index_spatial.h).
+# ouvert a EXPOSANT_INDEX_CPP (arete 2^n = 16). deplacer_lot y met a jour
+# TOUS les niveaux ouverts en UNE passe par frame.
 const EXPOSANT_INDEX_CPP := 4  # arete = 2^4 = 16
 var _index_cpp: RefCounted = null
-# Exposant du niveau PLANAIRE ouvert par _monter_pool sous separation_active
-# (arete = 2^exposant, choisi pour couvrir rayon_separation sur chaque axe).
-# -1 = aucun niveau planaire ouvert (separation_active=false ou brancher_monde=false).
-# Lu par la passe candidats pour choisir le niveau a interroger.
-var _exposant_planaire: int = -1
 
-# CHRONO -- lus par _imprimer_releve_si_seconde_ecoulee. UN SEUL POSTE : vue
-# (le seul qui pese en foule dense a N=100 000, ~600 000 us contre <10 000 us
-# pour tous les autres postes cumules). Les autres postes historiques
-# (errance/phys+buffer/deplacer/fatigue/mm_set) ont ete retires du releve
-# comme inutilises pour l'optimisation en cours (chantier "concentre le
-# releve sur la vue", 2026-09-08). Chronos internes de leurs branches
-# supprimes aussi -- ils ne sont plus calcules.
-var _us_vue: int = 0
-# Sous-chronos temporaires du vue_lot C++ (chantier "decouper le poste vue en
-# collecte/filtre/tri/occ_sep", diagnostic seul -- a retirer une fois le poste
-# couteux identifie). Lus via _index_cpp.derniers_chronos_vue() apres chaque
-# appel vue_lot, cumules sur la seconde comme _us_vue. La somme des quatre
-# doit approcher _us_vue (a l'arrondi des microsecondes pres).
-var _us_collecte: int = 0
-var _us_filtre: int = 0
-var _us_tri: int = 0
-var _us_occ_sep: int = 0
-# COMPTEURS TEMPORAIRES du voisinage vu par vue_lot -- somme des tailles des
-# listes brutes dans_rayon_case sur toutes les unites d'une frame + nombre
-# d'unites traitees. voisins_moy = total / unites. Lus via
-# _index_cpp.derniers_compteurs_vue().
-var _vue_voisins_total: int = 0
-var _vue_unites_total: int = 0
-# Voisins effectivement VUS apres occlusion (facteur > seuil, atteignent
-# l'accumulation separation). Doit tomber a ~20-30 en foule dense si la
-# barriere d'occlusion mord. vus_moy = vus_total / unites_total.
-var _vue_vus_total: int = 0
+# COLLISION -- une seule voie de reponse aux recouvrements inter-agents. Chaque
+# agent porte une entite dediee (Dictionary, forme "boite" avec demi_taille
+# derivee de data/mesh.json[mesh_ref].taille/2) dans _entites_collision. Ce
+# tableau STABLE (alloue au _fabriquer_lot, jamais realloue par frame) sert de
+# `entites` a Collision.tick et est aussi inscrit dans _monde pour que la
+# broadphase de Collision.tick le retrouve via monde.choses_dans_rayon.
+# Independant de _pool.individus : marche sous regime_masse (aucun Dict individu)
+# comme sous regime normal. Le sync par frame (cols.position -> entite.position,
+# collision, entite.position corrigee -> cols.position) est la seule autorite.
+var _entites_collision: Array = []
+# DEMI-TAILLE derivee de data/mesh.json[mesh_ref].taille (aucun nombre en dur,
+# aucun @export). Calculee au _monter_pool depuis la meme source que le mesh
+# visuel -- collision et rendu suivent le meme reglage.
+var _demi_taille_agent: Vector3 = Vector3.ZERO
 # Catalogue seuils_etat.json charge une fois au _ready. Passe la sur SeuilEtat.avancer.
 var _catalogue_seuils: Dictionary = {}
 # CAPACITE du canal `sommeil` sur mobile_test : lue une fois au _fabriquer_lot depuis
@@ -296,8 +205,6 @@ var _capacite_sommeil: float = 100.0
 # Compteur de frames depuis la derniere passe fatigue. La passe se declenche quand
 # ce compteur atteint `cadence_fatigue_frames`, puis se remet a zero.
 var _frames_depuis_fatigue: int = 0
-var _frames_accumulees: int = 0
-var _temps_prochain_ms: int = 0
 
 func _ready() -> void:
 	_charger_reglages_locaux()
@@ -338,10 +245,6 @@ func _charger_reglages_locaux() -> void:
 		brancher_monde = bool(donnees.brancher_monde)
 	if donnees.has("deplacer_cpp"):
 		deplacer_cpp = bool(donnees.deplacer_cpp)
-	if donnees.has("separation_active"):
-		separation_active = bool(donnees.separation_active)
-	if donnees.has("rayon_separation"):
-		rayon_separation = float(donnees.rayon_separation)
 	if donnees.has("paquets_partages"):
 		paquets_partages = bool(donnees.paquets_partages)
 	if donnees.has("regime_masse"):
@@ -354,12 +257,6 @@ func _charger_reglages_locaux() -> void:
 		cout_base_sommeil_demo = float(donnees.cout_base_sommeil_demo)
 	if donnees.has("vitesse_epuise_facteur"):
 		vitesse_epuise_facteur = float(donnees.vitesse_epuise_facteur)
-	if donnees.has("seuil_facteur_occlusion"):
-		seuil_facteur_occlusion = float(donnees.seuil_facteur_occlusion)
-	if donnees.has("opacite_unite"):
-		opacite_unite = float(donnees.opacite_unite)
-	if donnees.has("angle_vue_deg"):
-		angle_vue_deg = float(donnees.angle_vue_deg)
 
 func _monter_scene() -> void:
 	# CarteTerrain plate au defaut neutre : demi_cote=150 (300x300 cellules),
@@ -414,18 +311,11 @@ func _monter_pool() -> void:
 	else:
 		_monde = null
 	# INDEX SPATIAL EN C++ (chantier "portage C++ deplacer_lot"). Instancie
-	# UNE fois, configure a la taille pool. Deux niveaux ouverts sous
-	# separation_active :
-	#   - EXPOSANT_INDEX_CPP (arete 16) : niveau du deplacer, grand pour
-	#     amortir le nombre de re-affectations de case par frame.
-	#   - exposant_separation = ceil(log2(rayon_separation)) : niveau lu par
-	#     separation_lot, arete du meme ordre que le rayon pour que la case
-	#     couvre le voisinage sur chaque axe (regle arete <= rayon rejetee,
-	#     c'est le piege documente). Sans ce second niveau, la separation
-	#     lisait le niveau du deplacer et degenerait en quasi-N^2 local a
-	#     N=100 000.
-	# deplacer_lot met a jour TOUS les niveaux ouverts (patron IndexSpatial).
-	# L'appelant garde le Ref vivant tant qu'il en a besoin (RefCounted, pas Node).
+	# UNE fois, configure a la taille pool. Un seul niveau ouvert
+	# (EXPOSANT_INDEX_CPP, arete 16 : niveau du deplacer, grand pour amortir
+	# le nombre de re-affectations de case par frame). deplacer_lot met a jour
+	# TOUS les niveaux ouverts. L'appelant garde le Ref vivant tant qu'il en
+	# a besoin (RefCounted, pas Node).
 	if deplacer_cpp and brancher_monde:
 		if not ClassDB.class_exists("IndexSpatial"):
 			push_error("banc_peuplement : classe C++ 'IndexSpatial' introuvable -- extension_terrain non chargee ? Repli GDScript pour ce banc.")
@@ -434,22 +324,6 @@ func _monter_pool() -> void:
 			_index_cpp = ClassDB.instantiate("IndexSpatial")
 			_index_cpp.configurer(nombre_individus * 2)
 			_index_cpp.ouvrir_niveau(EXPOSANT_INDEX_CPP)
-			if separation_active:
-				# exposant tel que 2^exposant >= rayon_separation, minimal. Pour
-				# rayon 2.0 : ceil(log2(2)) = 1 -> arete 2. Pour rayon 3.0 :
-				# ceil(log2(3)) = 2 -> arete 4. Le C++ auto-selectionne ce
-				# niveau via separation_lot (plus petit exposant tel que arete
-				# >= rayon).
-				var exposant_sep: int = int(ceil(log(maxf(rayon_separation, 1.0e-3)) / log(2.0)))
-				# PLANAIRE (chantier "degraissage separation_lot", 2026-09-08) :
-				# separation_lot lit ce niveau sans jamais balayer l'axe Y.
-				# deplacer_lot y insere avec y=0 dans la clef -- toutes les unites
-				# d'une meme colonne (fx, fz) dans la meme entree unordered_map,
-				# quelle que soit leur altitude. Le niveau du deplacer (arete 16)
-				# reste 3D. Voir extension_terrain/src/index_spatial.h §
-				# Niveau::planaire et separation_lot.
-				_index_cpp.ouvrir_niveau_planaire(exposant_sep)
-				_exposant_planaire = exposant_sep
 	# Le banc charge le catalogue types.json et le passe au mecanisme --
 	# Peuplement lui-meme n'ouvre jamais un fichier.
 	_catalogue = _charger_types()
@@ -462,17 +336,18 @@ func _monter_pool() -> void:
 	if mesh == null:
 		push_error("banc_peuplement : MeshCatalogue.fabriquer_mesh('%s') a rendu null" % mesh_ref)
 		return
-	# LARGEUR D'OCCLUSION DERIVEE DE LA TAILLE DU CORPS (chantier "occlusion a
-	# hauteur de la taille reelle"). En peuplement homogene (occulteur et cible
-	# de meme taille), la distance laterale maximale d'un occulteur pour boucher
-	# entierement le corps derriere = r_occulteur + r_cible = 2 * (taille/2) =
-	# taille. La geometrie horizontale se lit sur max(taille.x, taille.z). Aucun
-	# nombre en dur : la valeur vient de data/mesh.json[mesh_ref].taille.
+	# DEMI-TAILLE DE COLLISION DERIVEE DE LA TAILLE DU CORPS. La forme "boite"
+	# passee a Collision.tick a `parametres.demi_taille = taille / 2` sur chaque
+	# axe. Aucun nombre en dur : la valeur vient de data/mesh.json[mesh_ref].taille,
+	# meme source que le mesh visuel -- collision et rendu suivent le meme reglage.
 	var fiche_mesh: Dictionary = catalogue_mesh[mesh_ref]
 	var t_mesh: Dictionary = fiche_mesh.get("taille", {})
-	_largeur_occlusion = maxf(float(t_mesh.get("x", 0.0)), float(t_mesh.get("z", 0.0)))
-	if _largeur_occlusion <= 0.0:
-		push_error("banc_peuplement : taille horizontale du mesh '%s' introuvable ou nulle (%s) -- occlusion inerte" % [mesh_ref, str(t_mesh)])
+	_demi_taille_agent = Vector3(
+		float(t_mesh.get("x", 0.0)) * 0.5,
+		float(t_mesh.get("y", 0.0)) * 0.5,
+		float(t_mesh.get("z", 0.0)) * 0.5)
+	if _demi_taille_agent.x <= 0.0 or _demi_taille_agent.z <= 0.0:
+		push_error("banc_peuplement : taille du mesh '%s' introuvable ou nulle (%s) -- collision inerte" % [mesh_ref, str(t_mesh)])
 	# Taille du pool = capacite avec un peu de marge -- des chantiers ulterieurs
 	# pourront spawn/kill dynamiquement sans re-allouer.
 	# Node (pas Node3D) : pas de get_world_3d() direct. Passer par le Viewport.
@@ -487,12 +362,6 @@ func _monter_pool() -> void:
 		"cap_horloge": 0.0,
 		"vitesse": 1.0,
 		"slot": 0,
-		# Opacite de chaque unite pour le test d'occlusion de perception_lot.
-		# Uniforme sur ce peuplement (opacite_unite comme defaut) -- l'appelant
-		# du C++ (perception_lot) lit cette colonne indexee par id, aveugle au
-		# nom de propriete. Le nom "opacite" est un choix local du banc (patron
-		# CLAUDE.md § ADN : un banc peut nommer une categorie).
-		"opacite": opacite_unite,
 	}
 	_pool = Peuplement.creer_pool(nombre_individus * 2, mesh, get_viewport().get_world_3d().scenario, colonnes)
 
@@ -571,14 +440,47 @@ func _fabriquer_lot() -> void:
 	# (spawn(..., false) les ecrit sans pousser). Un seul envoi au serveur de rendu
 	# pour tout le lot -- N=100 000, coup unique au lieu de N.
 	Peuplement.pousser_buffer(_pool)
-	# SEED DE L'INDEX C++ : sous separation_active, la separation lit l'index a la
-	# frame N pour ecrire desiree, AVANT que la physique ne bouge et que deplacer_lot
-	# ne soit rappele en queue. Sans ce seed, la frame 0 lirait un index vide et
-	# rendrait direction=0 partout. Une passe de C++ ici, une fois pour toute la vie
-	# du banc -- cout amorti a zero.
+	# SEED DE L'INDEX C++ : premier deplacer_lot en fin de fabrication, avant
+	# la premiere physique. Une passe C++, une fois pour toute la vie du banc.
 	if _index_cpp != null:
 		var cols_seed: Dictionary = _pool.colonnes
 		_index_cpp.deplacer_lot(cols_seed.position)
+	# ENTITES DE COLLISION : un Dict-entite par agent, forme "boite" demi-taille
+	# derivee du mesh (voir _monter_pool). Tableau STABLE alloue ici et jamais
+	# realloue -- le sync par frame (cols.position <-> entite.position) est la
+	# seule autorite de position ; les entites sont inscrites une fois dans
+	# _monde pour que la broadphase de Collision.tick les retrouve via
+	# monde.choses_dans_rayon. Independant de _pool.individus : marche sous
+	# regime_masse comme sous regime normal.
+	_entites_collision.clear()
+	if brancher_monde and _monde != null and _demi_taille_agent.length_squared() > 0.0:
+		var cols_final: Dictionary = _pool.colonnes
+		var positions_final: PackedVector3Array = cols_final.position
+		var n_agents: int = positions_final.size()
+		var forme_boite: Dictionary = {
+			"type": "boite",
+			"transform_locale": Transform3D.IDENTITY,
+			"parametres": {"demi_taille": _demi_taille_agent},
+		}
+		var k: int = 0
+		while k < n_agents:
+			var pos_k: Vector3 = positions_final[k]
+			var ent: Dictionary = {
+				"id": "peuplement_coll_%d" % k,
+				"position": pos_k,
+				"proprietes": {
+					"formes": [forme_boite],
+					"velocite": Vector3.ZERO,
+					"orientation": Basis.IDENTITY,
+					"masque_collision": 1,
+					"masque_reponse": 1,
+					"reponse": "bloque",
+				},
+			}
+			ent.proprietes["aabb_cache"] = Collision.aabb_forme(forme_boite, Transform3D(Basis.IDENTITY, pos_k))
+			_entites_collision.append(ent)
+			_monde.ajouter(ent, "peuplement_coll", pos_k)
+			k += 1
 	if actif_releve:
 		var duree_us: int = Time.get_ticks_usec() - chrono_creation_debut
 		print("[peuplement] creation N=%d en %d us (push RS unique final)" % [poses, duree_us])
@@ -634,113 +536,68 @@ func _physics_process(delta: float) -> void:
 	var count: int = cols_positions_ref.size()
 	if count == 0:
 		return
-	# CHRONOS -- trois postes du hot path, en microsecondes. Sous actif_releve
-	# false, les trois `Time.get_ticks_usec()` sont EVITES au maximum (une
-	# branche par poste plutot que trois inconditionnels) : instrumenter n'est
-	# pas biaiser la mesure.
-	var chrono_intention_debut: int = Time.get_ticks_usec() if actif_releve else 0
-	# INTENTION. Deux chemins :
-	#   separation_active=true : UN SEUL APPEL C++ -- vue_lot(positions,
-	#     orientations, opacites, rayon, cos_moitie_angle, largeur, seuil).
-	#     UN SEUL PARCOURS DU VOISINAGE PAR FRAME. Pour chaque unite : voisins
-	#     dans le rayon ET dans le cone d'angle autour de son orientation, PUIS
-	#     filtrage occlusion (obstacles = les autres corps du meme voisinage
-	#     3x3 planaire, jamais une requete spatiale par paire), PUIS accumulation
-	#     de la separation dans le MEME parcours (les voisins vus sont deja la).
-	#     Sortie : direction unitaire horizontale (Y=0) de repulsion par unite.
-	#     Un seul poste `vue`, une seule frontiere.
-	#   separation_active=false : errance historique. desiree[i] n'est reecrit
-	#     QUE quand l'horloge expire.
+	# INTENTION -- errance historique (seule voie). desiree[i] n'est reecrit
+	# QUE quand l'horloge expire. Tirage direction + horloge dans [3, 8] s.
 	var cols: Dictionary = _pool.colonnes
 	var vitesses: PackedFloat32Array = cols.vitesse
 	var desirees: PackedVector3Array = cols.desiree
-	var chrono_intention_fin: int = 0
-	if separation_active and _index_cpp != null:
-		# Cos de la moitie de l'angle total, calcule UNE fois. Cone_oriente
-		# (perception.gd) compare orientation.dot(direction_vers_voisin) a ce
-		# cos ; angle >= 360 -> cos_moitie = -1.0 (sphere pure, accepte tout).
-		var demi_angle_rad: float = deg_to_rad(angle_vue_deg * 0.5)
-		var cos_moitie_angle: float = -1.0 if angle_vue_deg >= 360.0 else cos(demi_angle_rad)
-		var perception: Dictionary = _index_cpp.perception_lot(
-			cols.position,
-			cols.direction,
-			cols.opacite,
-			rayon_separation,
-			cos_moitie_angle,
-			_largeur_occlusion,
-			seuil_facteur_occlusion)
-		var directions_sep: PackedVector3Array = _index_cpp.separation_lot(
-			cols.position,
-			perception["ids"],
-			perception["offsets"],
-			rayon_separation)
-		var k: int = 0
-		while k < count:
-			desirees[k] = directions_sep[k] * vitesses[k]
-			k += 1
+	var directions: PackedVector3Array = cols.direction
+	var cap_horloges: PackedFloat32Array = cols.cap_horloge
+	var repack_desiree: bool = false
+	var repack_direction: bool = false
+	var i: int = 0
+	while i < count:
+		var horloge: float = cap_horloges[i] - delta
+		if horloge <= 0.0:
+			var angle: float = _rng.randf() * TAU
+			var direction := Vector3(cos(angle), 0.0, sin(angle))
+			directions[i] = direction
+			repack_direction = true
+			horloge = _rng.randf_range(3.0, 8.0)
+			desirees[i] = direction * vitesses[i]
+			repack_desiree = true
+		cap_horloges[i] = horloge
+		i += 1
+	cols.cap_horloge = cap_horloges
+	if repack_direction:
+		cols.direction = directions
+	if repack_desiree:
 		cols.desiree = desirees
-		if actif_releve:
-			chrono_intention_fin = Time.get_ticks_usec()
-			_us_vue += chrono_intention_fin - chrono_intention_debut
-			var chr: Dictionary = _index_cpp.derniers_chronos_vue()
-			_us_collecte += int(chr.get("collecte", 0))
-			_us_filtre += int(chr.get("filtre", 0))
-			_us_tri += int(chr.get("tri", 0))
-			_us_occ_sep += int(chr.get("occ_sep", 0))
-			var cpt: Dictionary = _index_cpp.derniers_compteurs_vue()
-			_vue_voisins_total += int(cpt.get("voisins_total", 0))
-			_vue_unites_total += int(cpt.get("unites_total", 0))
-			_vue_vus_total += int(cpt.get("vus_total", 0))
-	else:
-		if separation_active and _index_cpp == null:
-			push_error("banc_peuplement : separation_active=true mais _index_cpp null (deplacer_cpp=%s, brancher_monde=%s) -- repli sur errance." % [str(deplacer_cpp), str(brancher_monde)])
-		var directions: PackedVector3Array = cols.direction
-		var cap_horloges: PackedFloat32Array = cols.cap_horloge
-		var repack_desiree: bool = false
-		var repack_direction: bool = false
-		var i: int = 0
-		while i < count:
-			var horloge: float = cap_horloges[i] - delta
-			if horloge <= 0.0:
-				var angle: float = _rng.randf() * TAU
-				var direction := Vector3(cos(angle), 0.0, sin(angle))
-				directions[i] = direction
-				repack_direction = true
-				horloge = _rng.randf_range(3.0, 8.0)
-				desirees[i] = direction * vitesses[i]
-				repack_desiree = true
-			cap_horloges[i] = horloge
-			i += 1
-		cols.cap_horloge = cap_horloges
-		if repack_direction:
-			cols.direction = directions
-		if repack_desiree:
-			cols.desiree = desirees
-	# PASSE 2 -- physique + buffer fusionnes. Deux chemins : C++ (chantier
-	# "portage C++ du poste physique") derriere @export utilise_cpp, GDScript
-	# sinon (chemin oracle, verrouille par test_tick_fusionne + test de parite
-	# C++ vs GDScript). Le C++ traite tout ce qui est un HIT sur la table plate
-	# de sol ; les indices ratant au moins un des trois tests sol repartent
-	# GDScript sur physique_et_buffer_indices (repli sommet_sous). En regime
-	# chaud, la liste est presque toujours vide.
+	# PASSE PHYSIQUE + BUFFER FUSIONNES. Deux chemins : C++ derriere @export
+	# utilise_cpp, GDScript sinon (chemin oracle, verrouille par
+	# test_tick_fusionne + test de parite C++ vs GDScript).
 	var buffer: PackedFloat32Array
 	if utilise_cpp:
 		buffer = _physique_et_buffer_cpp(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
 	else:
 		buffer = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
-	# PASSE DEPLACER (chantier "rebrancher l'index spatial") : la physique a
-	# mute cols.position (verite tenue par la boucle physique) mais PAS
-	# individu.position (les Dictionary du pool). monde.gd:deplacer lit
-	# chose.position, donc on RECOPIE colonne -> individu juste avant l'appel.
-	# Duplication transitoire, une frame, aucun autre code ne lit
-	# individu.position entre-temps. Sous brancher_monde=false, cette passe est
-	# integralement sautee (aucune recopie, aucun deplacer, poste = 0).
+	# PASSE COLLISION -- port de jeu/Proto/collision.gd (GJK/EPA en donnee pure,
+	# aucune physique Godot). Sync cols.position -> _entites_collision[i].position,
+	# maj _monde pour la broadphase, Collision.tick + Collision.resoudre
+	# (mutations directes sur entite.position), sync retour vers cols.position.
+	# La position corrigee devient la verite des colonnes ; la passe deplacer qui
+	# suit met a jour l'index sur cette position corrigee.
+	if brancher_monde and _monde != null and not _entites_collision.is_empty():
+		var n_coll: int = _entites_collision.size()
+		var cols_pos: PackedVector3Array = cols.position
+		var kk: int = 0
+		while kk < n_coll and kk < count:
+			var ent_k: Dictionary = _entites_collision[kk]
+			ent_k.position = cols_pos[kk]
+			_monde.deplacer_simple(ent_k)
+			kk += 1
+		var contacts: Array = Collision.tick(_monde, _entites_collision, delta)
+		Collision.resoudre(contacts, _entites_collision)
+		kk = 0
+		while kk < n_coll and kk < count:
+			cols_pos[kk] = (_entites_collision[kk] as Dictionary).position
+			kk += 1
+		cols.position = cols_pos
+	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) OU du Monde GDScript
+	# (deplacer_simple par unite) avec cols.position corrige. Sous
+	# brancher_monde=false, cette passe est integralement sautee.
 	if brancher_monde:
 		if deplacer_cpp and _index_cpp != null:
-			# UN appel, tout le lot. Le C++ tient son index natif (unordered_map)
-			# et met a jour les 100 000 unites en une passe (aucun franchissement
-			# de frontiere par unite). L'index GDScript de _monde n'est plus tenu
-			# a jour sous ce chemin -- voir en-tete scripts/index_spatial.h.
 			_index_cpp.deplacer_lot(cols.position)
 		elif _monde != null:
 			var positions_apres: PackedVector3Array = cols.position
@@ -763,52 +620,6 @@ func _physics_process(delta: float) -> void:
 		_frames_depuis_fatigue = 0
 	RenderingServer.multimesh_set_buffer((_pool.mm as MultiMesh).get_rid(), buffer)
 	_pool["buffer"] = buffer
-	if actif_releve:
-		_frames_accumulees += 1
-		_imprimer_releve_si_seconde_ecoulee(count)
-
-# UNE LIGNE PAR SECONDE, jamais par frame -- format stable, prefixe "[peuplement]",
-# valeurs en microsecondes moyennes PAR FRAME (accumule / frames de la seconde
-# ecoulee). Remet les accumulateurs a zero apres chaque impression (patron
-# monde.gd:remettre_les_compteurs). La toute premiere impression tombe apres la
-# premiere seconde de jeu, jamais a t=0.
-func _imprimer_releve_si_seconde_ecoulee(count: int) -> void:
-	var maintenant_ms: int = Time.get_ticks_msec()
-	if _temps_prochain_ms == 0:
-		_temps_prochain_ms = maintenant_ms + 1000
-		return
-	if maintenant_ms < _temps_prochain_ms:
-		return
-	var frames: int = maxi(_frames_accumulees, 1)
-	# Divisions promues en float pour eviter le warning GDScript "Integer division.
-	# Decimal part will be discarded." au reload -- le format reste %d, arrondi au us.
-	var inv_frames: float = 1.0 / float(frames)
-	var voisins_moy: float = 0.0
-	var vus_moy: float = 0.0
-	if _vue_unites_total > 0:
-		voisins_moy = float(_vue_voisins_total) / float(_vue_unites_total)
-		vus_moy = float(_vue_vus_total) / float(_vue_unites_total)
-	print("[peuplement] N=%d fps=%d vue=%dus collecte=%dus filtre=%dus tri=%dus occ_sep=%dus voisins_moy=%.1f vus_moy=%.1f" % [
-		count,
-		int(Engine.get_frames_per_second()),
-		int(float(_us_vue) * inv_frames),
-		int(float(_us_collecte) * inv_frames),
-		int(float(_us_filtre) * inv_frames),
-		int(float(_us_tri) * inv_frames),
-		int(float(_us_occ_sep) * inv_frames),
-		voisins_moy,
-		vus_moy,
-	])
-	_us_vue = 0
-	_us_collecte = 0
-	_us_filtre = 0
-	_us_tri = 0
-	_us_occ_sep = 0
-	_vue_voisins_total = 0
-	_vue_unites_total = 0
-	_vue_vus_total = 0
-	_frames_accumulees = 0
-	_temps_prochain_ms = maintenant_ms + 1000
 
 
 # PHYSIQUE + BUFFER FUSIONNES (round 11 revise) : une seule boucle sur count qui
@@ -1260,9 +1071,8 @@ func _appliquer_cout_base_sommeil_demo(individu: Dictionary) -> void:
 #      un recalcul). Rend les ids qui ont bascule.
 #   4. Comportement DEMO : pour chaque id bascule, lire etats_actifs.has('epuise') UNE
 #      fois et ecrire cols.vitesse a `vitesse_nominale * facteur` ou `vitesse_nominale`.
-#      La colonne vitesse alimente desiree = direction * vitesse dans la passe errance,
-#      et separation_lot la lit aussi. La vitesse s'applique au tick suivant sans jamais
-#      re-tester la jauge.
+#      La colonne vitesse alimente desiree = direction * vitesse dans la passe
+#      errance. La vitesse s'applique au tick suivant sans jamais re-tester la jauge.
 func _passe_fatigue(delta_cadence: float, vitesse_type: float) -> void:
 	var individus: Array = _pool.individus
 	if individus.is_empty() or _catalogue_seuils.is_empty():
