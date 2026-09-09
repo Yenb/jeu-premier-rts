@@ -294,7 +294,7 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 # CONTRAT : toutes les entites collisionnables doivent etre dans `entites` --
 # le tick ne va plus chercher dans le monde ce qui n'y est pas. Sans quoi la
 # paire (driver, exterieur) n'est jamais testee.
-static func tick(monde, entites: Array, delta: float) -> Array:
+static func tick(_monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
 	if entites.is_empty():
 		return contacts
@@ -491,8 +491,10 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 		var end_c: int = offsets[c + 1]
 		if start_c == end_c:
 			continue
+		@warning_ignore("integer_division")
 		var lcz: int = c / NxNy
 		var reste: int = c - lcz * NxNy
+		@warning_ignore("integer_division")
 		var lcy: int = reste / Nx
 		var lcx: int = reste - lcy * Nx
 		for pi in range(start_c, end_c):
