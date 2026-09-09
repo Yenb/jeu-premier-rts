@@ -79,27 +79,13 @@ class IndexSpatial : public RefCounted {
 	int _nombre_ids = 0;
 	std::vector<Niveau> _niveaux;
 
-	// SOUS-CHRONOS TEMPORAIRES de perception_lot (a retirer une fois identifie
-	// le poste couteux). Le releve global `vue=` du banc enveloppe tout le
-	// corps de perception_lot ; ces compteurs le decoupent en :
-	//   _us_collecte : le rassemblement per-agent -- iteration des cases du
-	//                  disque (basse/haute), filtre distance^2 + cone elargi,
-	//                  push dans `dans_rayon`. AUCUN sqrt paye ici (sqrt differe
-	//                  a l'extraction argmin).
-	//   _us_filtre   : reste a 0 depuis la fusion collecte/occlusion -- le
-	//                  filtre distance + cone elargi est integre au
-	//                  rassemblement, plus de passe filtre distincte. Cle
-	//                  gardee dans le Dictionary de sortie pour compat banc.
-	//   _us_tri      : l'argmin lineaire incremental sur les voisins non
-	//                  traites, comparaison sur d2 (aucun sqrt), par unite.
-	//   _us_occ_sep  : la boucle occlusion (sqrt differe de d + base_k si le
-	//                  voisin devient bloqueur) + accumulation des vus, par
-	//                  unite.
-	// Exposes par derniers_chronos_vue() -- lus par le banc, imprimes a cote
-	// de vue=.
-	mutable int64_t _us_collecte = 0;
-	mutable int64_t _us_filtre = 0;
-	mutable int64_t _us_tri = 0;
+	// CHRONO TEMPORAIRE de perception_lot (a retirer une fois identifie le
+	// poste couteux). UN SEUL poste : le parcours complet par agent (
+	// rassemblement + test occlusion port de scripts/occlusion.gd::facteur).
+	// Aucun autre sous-poste : plus d'argmin, plus de collecte-passe, plus
+	// de secteurs. Expose par derniers_chronos_vue() sous la cle "occ_sep"
+	// (nom conserve pour compat banc, meme si le geste est plus large que
+	// l'ancienne "occlusion + separation").
 	mutable int64_t _us_occ_sep = 0;
 
 	// COMPTEURS TEMPORAIRES de vue_lot exposes par derniers_compteurs_vue() :
@@ -150,113 +136,63 @@ public:
 	Dictionary cases_pour_niveau(int exposant) const;
 
 	// VUE = PERCEPTION (ce que l'agent voit : rayon + cone oriente + occlusion
-	// visuelle corps-traversee). Portage de scripts/perception.gd::_percevoir_cone_oriente
-	// sur la masse en C++. La sortie est CE QUE CHAQUE AGENT VOIT (liste d'ids
-	// par agent), jamais une direction de repulsion : la separation est un
-	// CONSOMMATEUR distinct (voir separation_depuis_perception plus bas).
+	// selon scripts/occlusion.gd::facteur, portee mot pour mot). La sortie est
+	// CE QUE CHAQUE AGENT VOIT (liste d'ids par agent), jamais une direction
+	// de repulsion : la separation est un CONSOMMATEUR distinct (separation_lot).
 	//
-	// Selection identique a l'ancienne (rayon + cone oriente + occlusion corps
-	// traverse, chaque etape verrouillee par test_vue_cpp.gd) :
-	// (1) voisins dans le rayon (distance horizontale strictement inferieure au
-	// rayon, port de choses_dans_rayon), (2) filtre par cone d'angle autour de
-	// l'orientation de chaque unite (cos(diff, orient) >= cos_moitie_angle,
-	// patron scripts/perception.gd::_percevoir_cone_oriente), (3) test
-	// d'occlusion contre les autres corps du disque de l'agent (geometrie de
-	// scripts/occlusion.gd::facteur portee mot pour mot -- t dans ]0,1[,
-	// distance laterale <= largeur), un voisin cache par un corps plus proche
-	// est RETIRE. (4) Ce qui reste dans le cone strict et non cache est ce que
-	// l'agent VOIT -- son id est enregistre dans la perception.
+	// TROIS FILTRES CUMULES, dans cet ordre :
+	// (1) DISTANCE : voisins du disque de rayon `rayon` (port de
+	//     scripts/monde.gd::choses_dans_rayon -- basse/haute en cases derives
+	//     de `p_i +/- rayon`, iteration du bounding box, test `d2 < rayon^2`
+	//     par candidat).
+	// (2) CONE : parmi ces voisins, la cible passe le cone strict si
+	//     `orient . direction_vers_voisin >= cos_moitie_angle`. Patron
+	//     scripts/perception.gd::_percevoir_cone_oriente.
+	// (3) OCCLUSION MULTIPLICATIVE (scripts/occlusion.gd::facteur portee mot
+	//     pour mot) : pour chaque cible qui passe cone, un facteur `f` dans
+	//     [0,1] cumule multiplicativement l'attenuation de chaque autre voisin
+	//     dont la projection sur le segment agent->cible tombe strictement dans
+	//     ]0,1[ ET dont la distance laterale est <= `largeur`. La valeur
+	//     multipliee est `1 - clamp(opacite[k], 0, 1)`. La cible est VUE si
+	//     `f > seuil_facteur`. ORDRE LIBRE des obstacles (pas d'argmin, pas de
+	//     tri, pas de bloqueurs-avec-base_k, pas de secteurs) -- le produit est
+	//     commutatif, l'ordre n'a aucun effet sur le resultat.
 	//
-	// Sortie CSR (Compressed Sparse Row), format compact plat -- une seule
-	// allocation par lot, jamais N listes :
-	//   Dictionary {
-	//     "offsets": PackedInt32Array de taille count+1,
-	//                offsets[i]..offsets[i+1] delimite les vus de l'agent i.
-	//     "vus":     PackedInt32Array concatene, ids des voisins vus.
-	//   }
-	// Un agent qui ne voit personne a offsets[i] == offsets[i+1] (liste vide).
-	// A vus_moy ~1 en foule dense, N=100 000 -> vus ~400 Ko + offsets ~400 Ko.
+	// OPACITE PAR-ID : PackedFloat32Array de meme taille que positions,
+	// opacites[k] = opacite de l'id k, aveugle au nom de la propriete (le banc
+	// aplatit la colonne). Consomme par facteur() pour chaque obstacle candidat.
 	//
-	// OBSTACLES = corps deja collectes dans le disque de l'agent (voir plus
-	// bas). JAMAIS une requete spatiale par paire percepteur-voisin.
-	//
-	// OPACITE PAR-ID :  est un PackedFloat32Array de meme taille que
-	// , opacites[k] est l'opacite de l'id k. Aveugle au nom de la
-	// propriete du monde -- c'est l'appelant (banc) qui aplatit la propriete
-	// en colonne AVANT l'appel. Ce fichier ne connait aucun nom de propriete.
-	//
-	// ORIENTATION PAR-ID :  est un PackedVector3Array de meme
-	// taille, orientations[k] est le vecteur unitaire (horizontal) que l'id k
-	// regarde. Le banc alimente cette colonne (typiquement la direction de
-	// deplacement d'errance).
+	// ORIENTATION PAR-ID : PackedVector3Array de meme taille, vecteur unitaire
+	// horizontal que l'id k regarde.
 	//
 	// COS_MOITIE_ANGLE : precalcule cote banc (cos(deg2rad(angle_deg/2))),
 	// -1.0 pour un cone > 360 degres (sphere pure). Aucun acos en boucle.
 	//
+	// LARGEUR : tolerance laterale au segment cible->agent, meme sens que
+	// largeur_obstacle de occlusion.gd. Un obstacle dont la distance laterale
+	// depasse cette valeur ne compte pas.
+	//
+	// SEUIL_FACTEUR : facteur en dessous duquel la cible est ecartee (blocage
+	// effectif). Convention historique du depot : 0.001 laisse passer un
+	// obstacle transparent, refuse un obstacle opaque (f = 0).
+	//
 	// EXIGE UN NIVEAU PLANAIRE (voir ouvrir_niveau_planaire / Niveau::planaire).
-	// Aucun niveau planaire ouvert : push_error, retour a directions nulles.
+	// Aucun niveau planaire ouvert : push_error, retour a listes vides.
 	//
-	// COLLECTE PAR AGENT (port de scripts/monde.gd::choses_dans_rayon en lot).
-	// Pour chaque agent : basse/haute en cases derives de `p_i +/- rayon`,
-	// iteration des cases du bounding box, filtre `distance^2 <= rayon^2` par
-	// candidat, puis PRE-FILTRE CONE ELARGI (dot vs cos_elargi sur d2, SANS
-	// sqrt : ce qui est derriere l'agent ou hors marge sort avant tout sqrt).
-	// Le sqrt n'est paye que pour les voisins qui peuvent etre vus OU servir
-	// d'occulteur en passe 2. Le cone elargi = demi_cone_strict +
-	// atan2(largeur, rayon) garantit qu'aucun bloqueur legitime n'est perdu.
-	// UNE frontiere GDScript->C++ par frame (perception_lot rend {ids,
-	// offsets} pour TOUS les agents), pas d'appel GDScript par agent.
+	// UN SEUL PARCOURS PAR AGENT. Voisinage local (voisins du disque) rassemble
+	// et consomme dans le meme scope : il sert de liste des cibles ET de liste
+	// des obstacles, aucune passe collecte distincte, aucun tri.
 	//
-	// OCCLUSION VISUELLE : CORPS TRAVERSE. Un voisin J est CACHE si le segment
-	// percepteur -> J traverse le VOLUME (disque horizontal rayon =
-	// largeur/2) d'un corps K PLUS PROCHE que J (d_k < d_j). Un corps plus
-	// loin ou lateralement decale sans traverser le segment ne cache JAMAIS
-	// -- physiquement impossible. Modele "premier corps opaque bloque",
-	// binaire (vu ou cache), sans opacite ni cumul. Un bloqueur hors cone
-	// compte quand meme comme obstacle visuel (un corps a cote peut boucher
-	// une ligne de vue), mais ne contribue pas lui-meme a la separation.
-	// La densite fait tomber vus_moy : plus il y a de corps proches, plus
-	// de lignes de vue sont bloquees, moins de voisins sont vus.
+	// UNE FRONTIERE GDScript->C++ par frame (perception_lot rend {ids, offsets}
+	// pour tous les agents), pas d'appel GDScript par agent.
 	//
-	// DISTINCT de scripts/occlusion.gd (attenuation multiplicative pour
-	// son/odeur, ou attenuer un signal a du sens). Le modele visuel binaire
-	// ne s'applique JAMAIS aux canaux son/odeur ; scripts/occlusion.gd est
-	// INTACT pour eux. Les parametres `opacites` et `seuil_facteur` restent
-	// dans la signature de perception_lot pour compat mais ne sont plus consommes.
-	//
-	// Etapes de la passe 2 par unite :
-	//   (1) SELECTION INCREMENTALE DU PLUS PROCHE. Pas de tas construit
-	//       d'avance : a chaque tour, argmin lineaire sur les non traites +
-	//       swap-remove. Cout par extraction O(reste), cout total O(K * N)
-	//       avec K = nombre de voisins parcourus avant l'arret d'occlusion
-	//       (petit a densite forte). Pas de passe O(N) payee AVANT de savoir
-	//       combien on extrait.
-	//   (2) Parcours proche->loin par l'argmin ci-dessus. Pour chaque J :
-	//       (a) Preselection angulaire : pour chaque bloqueur K deja retenu,
-	//           tester `vk . vj >= base_k * d_j` (avec base_k = sqrt(d2_k -
-	//           r_corps2) precalcule). Contraposee sans perte du test segment-
-	//           disque : ecarte les bloqueurs dont le secteur angulaire de
-	//           demi-largeur asin(r_corps/d_k) ne couvre pas l'axe A->J.
-	//       (b) Sur les candidats retenus, verdict final segment-disque exact
-	//           -- verdict bit-a-bit identique.
-	//   (3) J cache -> skip. J vu -> retenir comme bloqueur (avec son base_j),
-	//       puis (si dans le cone strict) l'ajouter a la liste des vus de i.
-	//   (4) MAJ union des secteurs angulaires clampes a [-demi_cone, +demi_cone].
-	//       ARRET SANS PERTE quand l'union recouvre tout le cone : tous les
-	//       voisins restants ont leur angle dans un secteur ferme, sont donc
-	//       cachés (equivalence angulaire du segment-disque) ; les voisins
-	//       hors cone restants ne contribuent pas et deviennent inutiles.
-	//       C'est le levier qui realise "plus dense = moins cher".
-	//
-	// UNE frontiere par appel. Aucun appel par unite. Verrouille par
-	// scripts/test_vue_cpp.gd (cas 5 re-verrouille par le modele corps
-	// traverse : K PLUS PROCHE que J + traverse segment -> J cache).
-	// PERCEPTION_LOT (ex-vue_lot) : rend, par agent, la liste des voisins VUS
-	// (ceux qui passent rayon strict + cone strict + occlusion visuelle
-	// corps-traverse). Sortie Dictionary { "ids", "offsets" } : voisins de
-	// l'agent i = ids[offsets[i]..offsets[i+1]]. C'est de la PERCEPTION pure --
-	// aucun calcul de repulsion, aucune direction. La separation devient un
-	// consommateur separe (separation_lot).
+	// Sortie CSR (Compressed Sparse Row) :
+	//   Dictionary {
+	//     "offsets": PackedInt32Array de taille count+1,
+	//                offsets[i]..offsets[i+1] delimite les vus de l'agent i.
+	//     "ids":     PackedInt32Array concatene, ids des voisins vus.
+	//   }
+	// Un agent qui ne voit personne a offsets[i] == offsets[i+1] (liste vide).
 	Dictionary perception_lot(
 			const PackedVector3Array &positions,
 			const PackedVector3Array &orientations,
@@ -278,9 +214,8 @@ public:
 			const PackedInt32Array &offsets,
 			float rayon) const;
 
-	// Sous-chronos internes du dernier vue_lot, en microsecondes (voir
-	// declaration des mutable _us_collecte / _us_filtre / _us_tri / _us_occ_sep
-	// plus haut). Dictionary { "collecte", "filtre", "tri", "occ_sep" }.
+	// Chrono interne du dernier perception_lot, en microsecondes (voir
+	// declaration de _us_occ_sep plus haut). Dictionary { "occ_sep" }.
 	// Temporaire : outil de diagnostic, a retirer une fois le poste couteux
 	// identifie.
 	Dictionary derniers_chronos_vue() const;

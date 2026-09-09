@@ -12,24 +12,6 @@
 
 using namespace godot;
 
-namespace {
-// Entree "voisin retenu dans le disque" pour perception_lot -- id + delta et
-// distance AU CARRE (sqrt differe a l'extraction argmin). Le rassemblement
-// ne fait AUCUN sqrt : il pousse d2 tel que calcule par le filtre distance.
-// L'argmin de la passe occlusion compare d2 (monotone equivalent). Le sqrt
-// n'est paye qu'a l'instant ou le voisin est extrait par argmin -- les
-// voisins jamais extraits (arret sans perte des secteurs) n'en paient pas.
-// Les seuls corps qui peuvent occulter un voisin retenu sont eux-memes dans
-// cette liste : un obstacle plus loin ne coupe pas le segment percepteur ->
-// voisin (t dans ]0,1[ le rejette).
-struct VoisinVue {
-	int32_t id;
-	float dx; // pos_i.x - pos_k.x
-	float dz; // pos_i.z - pos_k.z
-	float d2; // distance horizontale AU CARRE (sqrt differe a l'extraction)
-};
-} // namespace anonyme
-
 void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("configurer", "nombre_ids"), &IndexSpatial::configurer);
 	ClassDB::bind_method(D_METHOD("ouvrir_niveau", "exposant"), &IndexSpatial::ouvrir_niveau);
@@ -168,9 +150,6 @@ Dictionary IndexSpatial::perception_lot(
 	}
 	// Reset des sous-chronos temporaires (voir en-tete). La somme des quatre
 	// couvre tout le corps de perception_lot.
-	_us_collecte = 0;
-	_us_filtre = 0;
-	_us_tri = 0;
 	_us_occ_sep = 0;
 	if (count <= 0 || _niveaux.empty() || rayon <= 0.0f) {
 		out["ids"] = ids_plat;
@@ -223,17 +202,31 @@ Dictionary IndexSpatial::perception_lot(
 	const Vector3 *pos_r = positions.ptr();
 	const Vector3 *orient_r = orientations.ptr();
 	const float rayon2 = rayon * rayon;
-	// `opacites` et `seuil_facteur` ne sont plus consommes par le modele
-	// visuel (corps traversee = opaque binaire, pas d'attenuation). Signature
-	// preservee pour compat -- restent dans occlusion.gd pour son/odeur.
-	(void)opacites;
-	(void)seuil_facteur;
-	const float rayon_corps = 0.5f * largeur;
-	const float r_corps2 = rayon_corps * rayon_corps;
+	// PORT DE scripts/occlusion.gd::facteur EN LOT. Modele MULTIPLICATIF de
+	// l'occlusion (aucun argmin, aucun tri, aucun ordre proche->loin) : pour
+	// chaque cible dans le cone strict, un facteur `f` dans [0,1] cumule
+	// multiplicativement l'attenuation de chaque autre voisin dont la
+	// projection sur le segment agent->cible tombe strictement dans ]0,1[ et
+	// dont la distance laterale est <= largeur. La cible est VUE si
+	// f > seuil_facteur. `opacites[k]` fournit la valeur d'attenuation (clampee
+	// [0,1]) pour l'obstacle k.
+	//
+	// UN SEUL PARCOURS PAR AGENT (chrono `_us_occ_sep`). Le voisinage local
+	// (voisins dans le disque de rayon `rayon`) sert a la fois de liste des
+	// cibles potentielles et de liste des obstacles. Rassemblement et test
+	// occlusion dans le meme scope, aucune passe collecte distincte.
+	const float *opacite_r = opacites.ptr();
+	const float largeur2 = largeur * largeur;
 
-	// PERCEPTION MATERIALISEE : `vus_par_id` accumule pendant la passe 2 les
-	// ids vus par chaque agent, puis serialise en `ids_plat` + `offsets` a la
-	// fin. thread_local pour amortir l'allocation entre frames.
+	struct VoisinLocal {
+		int32_t id;
+		float dx; // p_i.x - p_k.x
+		float dz; // p_i.z - p_k.z
+		float d;  // distance horizontale
+	};
+	static thread_local std::vector<VoisinLocal> voisinage_local;
+
+	// vus_par_id : accumule les ids vus par chaque agent, serialise a la fin.
 	static thread_local std::vector<std::vector<int32_t>> vus_par_id;
 	if ((int)vus_par_id.size() < count) {
 		vus_par_id.resize((size_t)count);
@@ -241,62 +234,29 @@ Dictionary IndexSpatial::perception_lot(
 	for (int i = 0; i < count; i++) {
 		vus_par_id[(size_t)i].clear();
 	}
-	// LISTE DES VOISINS DANS LE RAYON, per-agent. thread_local : capacite
-	// gardee entre agents et entre frames, seul `clear()` est paye a chaque
-	// nouvel agent.
-	static thread_local std::vector<VoisinVue> dans_rayon;
-	// Compteurs TEMPORAIRES : voisins bruts (rayon), voisins VUS (rayon + cone
-	// + occlusion), unites traitees.
+
+	// Compteurs TEMPORAIRES.
 	_vue_voisins_total = 0;
 	_vue_unites_total = 0;
 	_vue_vus_total = 0;
 
-	// PRE-FILTRE CONE ELARGI (avant sqrt dans la collecte per-agent).
-	// demi_cone_elargi = demi_cone_strict + atan2(largeur, rayon). La marge
-	// atan2(largeur, rayon) garantit qu'aucun bloqueur legitime n'est perdu :
-	// un occulteur de taille `largeur` a distance `rayon` reste dans le cone
-	// elargi meme s'il est hors cone strict. Le verdict final (cone strict +
-	// occlusion) reste en passe 2.
-	float cos_moitie_elargi = cos_moitie_angle;
-	if (cos_moitie_angle > -1.0f + 1e-6f) {
-		float demi_angle = std::acos(cos_moitie_angle);
-		float extra = std::atan2(largeur, rayon);
-		float elargi = demi_angle + extra;
-		if (elargi >= 3.14159265f) {
-			cos_moitie_elargi = -1.0f;
-		} else {
-			cos_moitie_elargi = std::cos(elargi);
-		}
-	}
-	const float cos_elargi_sq = cos_moitie_elargi * cos_moitie_elargi;
-	const bool cos_elargi_positif = (cos_moitie_elargi >= 0.0f);
-	const bool cone_ferme = (cos_moitie_elargi > -1.0f + 1e-6f);
-
-	// PORT DE scripts/monde.gd::choses_dans_rayon EN LOT. Chaque agent lit son
-	// disque depuis SA position -- basse/haute en cases derives de `position +/-
-	// rayon`, iteration des cases du bounding box, filtre `distance^2 <= rayon^2`
-	// par candidat. Une frontiere GDScript->C++ par frame (perception_lot rend
-	// {ids, offsets} pour tous les agents), pas d'appel GDScript par agent.
 	for (int i = 0; i < count; i++) {
 		const int32_t id = i;
 		const Vector3 &p_i = pos_r[id];
 		const Vector3 &orient_i = orient_r[id];
+		auto t_agent_debut = std::chrono::steady_clock::now();
 
-		// BASSE / HAUTE en cases, derives de la position de l'agent : cases
-		// touchees par le disque de rayon `rayon` centre sur p_i. Meme geste
-		// que _case_pour(position - rayon) et _case_pour(position + rayon) dans
-		// scripts/monde.gd::choses_dans_rayon.
+		// BASSE / HAUTE en cases, port de scripts/monde.gd::choses_dans_rayon :
+		// cases touchees par le disque de rayon `rayon` centre sur p_i.
 		const int cx_min = (int)std::floor((p_i.x - rayon) * inv_a);
 		const int cx_max = (int)std::floor((p_i.x + rayon) * inv_a);
 		const int cz_min = (int)std::floor((p_i.z - rayon) * inv_a);
 		const int cz_max = (int)std::floor((p_i.z + rayon) * inv_a);
 
-		// COLLECTE : itere les cases du bounding box du disque, filtre
-		// `d2 < rayon2` (test candidat identique a monde.gd:_collecter) puis
-		// pre-filtre cone elargi sans sqrt. Le sqrt n'est paye que pour les
-		// voisins qui peuvent etre vus OU servir d'occulteur en passe 2.
-		auto t_col_debut = std::chrono::steady_clock::now();
-		dans_rayon.clear();
+		// RASSEMBLEMENT du voisinage local (voisins dans le disque). AUCUN
+		// filtre cone ici : un voisin hors cone peut encore etre OBSTACLE pour
+		// une cible dans le cone -- la geometrie de facteur() tranche.
+		voisinage_local.clear();
 		for (int cx = cx_min; cx <= cx_max; cx++) {
 			for (int cz = cz_min; cz <= cz_max; cz++) {
 				Vector3i cle(cx, 0, cz);
@@ -318,221 +278,85 @@ Dictionary IndexSpatial::perception_lot(
 					if (d2 >= rayon2) {
 						continue;
 					}
-					// PRE-FILTRE CONE ELARGI (sans sqrt). Test dot_vers >=
-					// cos_moitie_elargi * d. dot_vers = orient . (percepteur->
-					// voisin) = -(orient.x * dx + orient.z * dz).
-					// Cas cos_elargi_positif : rejeter si dot <= 0 (voisin
-					// derriere) OU dot^2 < cos_elargi_sq * d2 (hors cone).
-					// Cas cos_elargi < 0 (cone > 180 deg) : accepte tout.
-					if (cone_ferme && cos_elargi_positif) {
-						float dot_vers = -(orient_i.x * dx + orient_i.z * dz);
-						if (dot_vers <= 0.0f) {
-							continue;
-						}
-						if (dot_vers * dot_vers < cos_elargi_sq * d2) {
-							continue;
-						}
-					}
-					// Pas de sqrt ici : `d` differe a l'extraction argmin
-					// (les voisins skippes par l'arret sans perte n'en paient pas).
-					VoisinVue vv;
-					vv.id = k_id;
-					vv.dx = dx;
-					vv.dz = dz;
-					vv.d2 = d2;
-					dans_rayon.push_back(vv);
+					VoisinLocal vl;
+					vl.id = k_id;
+					vl.dx = dx;
+					vl.dz = dz;
+					vl.d = std::sqrt(d2);
+					voisinage_local.push_back(vl);
 				}
 			}
 		}
-		_us_collecte += std::chrono::duration_cast<std::chrono::microseconds>(
-				std::chrono::steady_clock::now() - t_col_debut).count();
 
-		// Compteurs diagnostic : accumule taille de dans_rayon (candidats
-		// apres filtre distance + cone elargi) et compte l'unite.
-		_vue_voisins_total += (int64_t)dans_rayon.size();
+		_vue_voisins_total += (int64_t)voisinage_local.size();
 		_vue_unites_total += 1;
 
-		{
-			const Vector3 &orient = orient_i;
-			std::vector<VoisinVue> &liste = dans_rayon;
+		std::vector<int32_t> &vus_ids_i = vus_par_id[(size_t)id];
+		const int nvl = (int)voisinage_local.size();
 
-			// MODULE OCCLUSION VISUELLE CORPS-TRAVERSE + SEPARATION.
-			// Modele inchange : la vue s'arrete au premier corps opaque, un
-			// voisin J est CACHE si le segment percepteur->J traverse le
-			// VOLUME (disque horizontal rayon = largeur/2) d'un corps K PLUS
-			// PROCHE. Bloqueurs hors cone bouchent quand meme sans contribuer
-			// a la separation. Verdict final : segment-disque exact (bit-a-bit
-			// identique).
-			//
-			// SELECTION INCREMENTALE DU PLUS PROCHE (pas de tas complet).
-			// Un simple argmin lineaire sur liste[0..reste-1] a chaque tour +
-			// swap-remove en fin. Cout par extraction O(reste), cout total
-			// O(K * N) avec K = voisins parcourus avant l'arret d'occlusion
-			// (petit a densite forte, ~1-2). Pas de passe O(N) de construction
-			// de tas payee AVANT de savoir qu'on s'arretera a K=2. Chrono `tri`
-			// mesure les balayages lineaires. Pire cas K=N (peu d'occlusion) :
-			// O(N^2), acceptable pour cette version simple.
-			//
-			// PRESELECTION ANGULAIRE (heritee, sans perte) : `cos_num >=
-			// base_k * d_j` avec `base_k = sqrt(d2_k - r_corps2)` -- contraposee
-			// exacte du critere segment-disque. Les rares bloqueurs qui passent
-			// la preselection sont re-verifies par le segment-disque exact.
-			//
-			// ARRET SANS PERTE quand le CONE de vue est bouche : l'union des
-			// secteurs angulaires clampes au cone (par bloqueur ajoute) est
-			// tenue trie. Des qu'elle recouvre [-demi_cone, +demi_cone], tous
-			// les voisins restants dans le cone ont leur angle dans un secteur
-			// ferme -> ils sont caches (le segment-disque tranche de toute
-			// facon par equivalence). Les voisins hors cone restants ne
-			// contribuent pas a la separation et deviennent inutiles comme
-			// bloqueurs supplementaires (les cibles dans le cone sont deja
-			// couvertes). L'arret est prouvablement sans perte.
-			auto t_occ_debut = std::chrono::steady_clock::now();
-			std::vector<int32_t> &vus_ids_i = vus_par_id[(size_t)id];
-			// Bloqueurs : copies des VoisinVue (la liste change avec le
-			// swap-remove, on ne peut plus indexer). thread_local pour amortir.
-			struct Bloqueur {
-				VoisinVue v;
-				float base_k;
-			};
-			static thread_local std::vector<Bloqueur> bloqueurs;
-			bloqueurs.clear();
-			// Secteurs angulaires fermes, TOUS clampes a [-demi_cone, +demi_cone].
-			// Tri par borne min, fusion des chevauchants. Cone bouche quand
-			// l'union = un seul intervalle qui couvre [-demi_cone, +demi_cone].
-			static thread_local std::vector<std::pair<float, float>> secteurs;
-			secteurs.clear();
-			// Angle de l'orientation de l'unite + demi-cone (en rad). Precalc.
-			const float angle_orient = std::atan2(orient.z, orient.x);
-			float cos_clamp = cos_moitie_angle;
-			if (cos_clamp < -1.0f) cos_clamp = -1.0f;
-			if (cos_clamp > 1.0f) cos_clamp = 1.0f;
-			const float demi_cone = std::acos(cos_clamp);
-			const float PI_F = 3.14159265f;
-			const float TAU_F = 6.2831853f;
-			int reste = (int)liste.size();
-			while (reste > 0) {
-				// Extraire le plus proche : argmin lineaire sur [0..reste-1] +
-				// swap-remove en fin. Comparaison sur d2 (monotone equivalente
-				// a d, aucune sqrt payee ici). Le chrono `tri` couvre ce balayage.
-				auto t_sel_debut = std::chrono::steady_clock::now();
-				int min_idx = 0;
-				float min_d2 = liste[0].d2;
-				for (int s = 1; s < reste; s++) {
-					if (liste[(size_t)s].d2 < min_d2) {
-						min_d2 = liste[(size_t)s].d2;
-						min_idx = s;
-					}
+		// TEST OCCLUSION per cible (voisins du cone strict), port de
+		// scripts/occlusion.gd::facteur. Ordre libre des obstacles, cumul
+		// multiplicatif, aucun tri, aucun argmin.
+		for (int c = 0; c < nvl; c++) {
+			const VoisinLocal &vj = voisinage_local[(size_t)c];
+
+			// CONE STRICT : orient.dot(direction_vers_voisin) >= cos_moitie_angle.
+			// direction_vers_voisin = -(vj.dx, vj.dz) / vj.d, donc :
+			//   orient.dot(...) = -(orient.x * vj.dx + orient.z * vj.dz) / vj.d.
+			// Multiplier des deux cotes par vj.d (positif) : cos_moitie_angle * vj.d.
+			float dot_vers = -(orient_i.x * vj.dx + orient_i.z * vj.dz);
+			if (dot_vers < cos_moitie_angle * vj.d) {
+				continue;  // hors cone strict, cible non testee
+			}
+
+			// FACTEUR = port de occlusion.gd::facteur en repere relatif a
+			// l'agent (agent a l'origine 0,0). depuis=(0,0), vers=(-vj.dx,-vj.dz),
+			// vecteur=(-vj.dx,-vj.dz), longueur_carre=vj.d*vj.d.
+			// Pour chaque obstacle vk :
+			//   position_k = (-vk.dx, -vk.dz)
+			//   t_dot = (position_k - depuis) . vecteur = vk.dx * vj.dx + vk.dz * vj.dz
+			//   t = t_dot / longueur_carre
+			//   Condition t dans ]0,1[ : t_dot > 0 ET t_dot < longueur_carre.
+			//   point_sur_segment = vecteur * t = (-vj.dx * t, -vj.dz * t)
+			//   distance_laterale^2 = (position_k - point_sur_segment).len_sq
+			//                       = (-vk.dx + vj.dx * t)^2 + (-vk.dz + vj.dz * t)^2
+			const float d2_j = vj.d * vj.d;
+			const float inv_d2_j = 1.0f / d2_j;
+			float f = 1.0f;
+			for (int o = 0; o < nvl; o++) {
+				if (o == c) {
+					continue;  // ids_exclus = la cible elle-meme
 				}
-				if (min_idx != reste - 1) {
-					std::swap(liste[(size_t)min_idx], liste[(size_t)(reste - 1)]);
+				const VoisinLocal &vk = voisinage_local[(size_t)o];
+				float t_dot = vk.dx * vj.dx + vk.dz * vj.dz;
+				if (t_dot <= 0.0f) {
+					continue;  // t <= 0
 				}
-				reste--;
-				const VoisinVue vj = liste[(size_t)reste];
-				_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
-						std::chrono::steady_clock::now() - t_sel_debut).count();
-				const float d2_j = vj.d2;
-				// SQRT DIFFERE : d n'est calcule qu'ici, une fois pour ce voisin
-				// (les voisins jamais extraits par l'argmin ne le paient jamais).
-				const float d_j = std::sqrt(d2_j);
-				// Test cache par un bloqueur plus proche (preselection +
-				// segment-disque exact sur les candidats).
-				bool cache = false;
-				const int nb = (int)bloqueurs.size();
-				for (int b = 0; b < nb; b++) {
-					const Bloqueur &bc = bloqueurs[(size_t)b];
-					const VoisinVue &vk = bc.v;
-					float cos_num = vj.dx * vk.dx + vj.dz * vk.dz;
-					if (cos_num <= 0.0f) {
-						continue;
-					}
-					if (cos_num < bc.base_k * d_j) {
-						continue;
-					}
-					float t_proj = cos_num / d2_j;
-					if (t_proj <= 0.0f || t_proj >= 1.0f) {
-						continue;
-					}
-					float lat_x = -vk.dx - t_proj * (-vj.dx);
-					float lat_z = -vk.dz - t_proj * (-vj.dz);
-					float lat2 = lat_x * lat_x + lat_z * lat_z;
-					if (lat2 <= r_corps2) {
-						cache = true;
-						break;
-					}
+				if (t_dot >= d2_j) {
+					continue;  // t >= 1
 				}
-				if (cache) {
+				float t = t_dot * inv_d2_j;
+				float lat_x = -vk.dx + vj.dx * t;
+				float lat_z = -vk.dz + vj.dz * t;
+				float lat2 = lat_x * lat_x + lat_z * lat_z;
+				if (lat2 > largeur2) {
 					continue;
 				}
-				// J vu -- devient bloqueur pour les voisins suivants.
-				Bloqueur bc;
-				bc.v = vj;
-				bc.base_k = std::sqrt(std::max(d2_j - r_corps2, 0.0f));
-				bloqueurs.push_back(bc);
-				// Mise a jour de l'union des secteurs (clampes au cone).
-				float angle_v = std::atan2(-vj.dz, -vj.dx) - angle_orient;
-				while (angle_v > PI_F) angle_v -= TAU_F;
-				while (angle_v < -PI_F) angle_v += TAU_F;
-				float sin_arg = rayon_corps / d_j;
-				if (sin_arg > 1.0f) sin_arg = 1.0f;
-				float demi_v = std::asin(sin_arg);
-				// Un secteur [angle - demi, angle + demi] est eclate en deux si
-				// il deborde de [-PI, PI]. Chaque morceau est clampe a
-				// [-demi_cone, +demi_cone] puis fusionne dans `secteurs`.
-				float morceaux[2][2];
-				int nb_morceaux = 0;
-				float lo_v = angle_v - demi_v;
-				float hi_v = angle_v + demi_v;
-				if (hi_v > PI_F) {
-					morceaux[nb_morceaux][0] = lo_v; morceaux[nb_morceaux][1] = PI_F; nb_morceaux++;
-					morceaux[nb_morceaux][0] = -PI_F; morceaux[nb_morceaux][1] = hi_v - TAU_F; nb_morceaux++;
-				} else if (lo_v < -PI_F) {
-					morceaux[nb_morceaux][0] = -PI_F; morceaux[nb_morceaux][1] = hi_v; nb_morceaux++;
-					morceaux[nb_morceaux][0] = lo_v + TAU_F; morceaux[nb_morceaux][1] = PI_F; nb_morceaux++;
-				} else {
-					morceaux[nb_morceaux][0] = lo_v; morceaux[nb_morceaux][1] = hi_v; nb_morceaux++;
-				}
-				for (int m = 0; m < nb_morceaux; m++) {
-					float lo = morceaux[m][0];
-					float hi = morceaux[m][1];
-					// Clamp au cone.
-					if (hi < -demi_cone || lo > demi_cone) continue;
-					if (lo < -demi_cone) lo = -demi_cone;
-					if (hi > demi_cone) hi = demi_cone;
-					// Fusion avec les chevauchants existants.
-					auto it = secteurs.begin();
-					while (it != secteurs.end()) {
-						if (it->second < lo || it->first > hi) {
-							++it;
-						} else {
-							if (it->first < lo) lo = it->first;
-							if (it->second > hi) hi = it->second;
-							it = secteurs.erase(it);
-						}
-					}
-					// Insertion triee par borne min.
-					auto pos = secteurs.begin();
-					while (pos != secteurs.end() && pos->first < lo) ++pos;
-					secteurs.insert(pos, std::make_pair(lo, hi));
-				}
-				// Contribution PERCEPTION si J dans le cone strict : ajouter
-				// son id a la liste des vus de l'agent. La separation (et tout
-				// autre consommateur) lira cette liste hors de perception_lot.
-				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
-				if (dot_vers_voisin >= cos_moitie_angle * d_j) {
-					_vue_vus_total += 1;
-					vus_ids_i.push_back(vj.id);
-				}
-				// ARRET SANS PERTE : union recouvre tout le cone.
-				if (secteurs.size() == 1
-						&& secteurs[0].first <= -demi_cone + 1e-4f
-						&& secteurs[0].second >= demi_cone - 1e-4f) {
-					break;
-				}
+				// valeur = clamp(opacite[vk.id], 0, 1) ; f *= (1 - valeur).
+				float valeur = opacite_r[vk.id];
+				if (valeur < 0.0f) valeur = 0.0f;
+				if (valeur > 1.0f) valeur = 1.0f;
+				f *= (1.0f - valeur);
 			}
-			_us_occ_sep += std::chrono::duration_cast<std::chrono::microseconds>(
-					std::chrono::steady_clock::now() - t_occ_debut).count();
+
+			if (f > seuil_facteur) {
+				vus_ids_i.push_back(vj.id);
+				_vue_vus_total += 1;
+			}
 		}
+
+		_us_occ_sep += std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now() - t_agent_debut).count();
 	}
 	// SERIALISATION de vus_par_id -> ids_plat + offsets. Deux passes :
 	// (1) offsets[i+1] = offsets[i] + vus_par_id[i].size(). (2) copie plate.
@@ -613,9 +437,6 @@ PackedVector3Array IndexSpatial::separation_lot(
 
 Dictionary IndexSpatial::derniers_chronos_vue() const {
 	Dictionary out;
-	out["collecte"] = (int64_t)_us_collecte;
-	out["filtre"] = (int64_t)_us_filtre;
-	out["tri"] = (int64_t)_us_tri;
 	out["occ_sep"] = (int64_t)_us_occ_sep;
 	return out;
 }
