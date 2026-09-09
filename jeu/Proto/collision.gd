@@ -298,29 +298,50 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
 	if entites.is_empty():
 		return contacts
-	# CACHE EN COLONNES : un Array par champ, indexe par la position dans entites.
-	# _pousser_cache remplit 13 Arrays paralleles a la volee.
-	var col_ent: Array = []
-	var col_vel: Array = []
-	var col_vel_len: Array = []
-	var col_vel_nz: Array = []
-	var col_orient: Array = []
-	var col_aabb: Array = []
-	var col_swept: Array = []
-	var col_masque_c: Array = []
-	var col_masque_r: Array = []
-	var col_reponse: Array = []
+	# CACHE EN COLONNES TYPEES ET PRE-DIMENSIONNEES : une colonne par champ,
+	# resize(N) UNE fois -- aucune reallocation progressive, aucun boxing Variant
+	# sur les scalaires/vecteurs. Les PackedArray natifs (Vector3/Float32/Int32/
+	# Byte) portent les scalaires ; les Array[T] typees portent Basis/AABB/
+	# Dictionary/String (aucun PackedArray de ces types). col_formes reste Array
+	# generique car GDScript ne supporte pas Array[Array] typee. _ecrire_cache
+	# ecrit par index, plus d'append dans le chemin normal.
+	# Contrat : toutes les entites collisionnables sont dans `entites` (voir
+	# en-tete de tick) -- pas de branche "entite en plus ajoutee a la volee",
+	# donc pas de reallocation apres le resize initial.
+	var N: int = entites.size()
+	var col_ent: Array[Dictionary] = []
+	col_ent.resize(N)
+	var col_vel: PackedVector3Array = PackedVector3Array()
+	col_vel.resize(N)
+	var col_vel_len: PackedFloat32Array = PackedFloat32Array()
+	col_vel_len.resize(N)
+	var col_vel_nz: PackedByteArray = PackedByteArray()
+	col_vel_nz.resize(N)
+	var col_orient: Array[Basis] = []
+	col_orient.resize(N)
+	var col_aabb: Array[AABB] = []
+	col_aabb.resize(N)
+	var col_swept: Array[AABB] = []
+	col_swept.resize(N)
+	var col_masque_c: PackedInt32Array = PackedInt32Array()
+	col_masque_c.resize(N)
+	var col_masque_r: PackedInt32Array = PackedInt32Array()
+	col_masque_r.resize(N)
+	var col_reponse: PackedStringArray = PackedStringArray()
+	col_reponse.resize(N)
 	var col_formes: Array = []
-	var col_taille_min: Array = []
+	col_formes.resize(N)
+	var col_taille_min: PackedFloat32Array = PackedFloat32Array()
+	col_taille_min.resize(N)
 	var rayon_max := 0.0
-	for e in entites:
-		var idx: int = col_ent.size()
-		_pousser_cache(e, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
+	for idx in N:
+		var e: Dictionary = entites[idx]
+		_ecrire_cache(idx, e, delta, col_ent, col_vel, col_vel_len, col_vel_nz,
 			col_orient, col_aabb, col_swept, col_masque_c, col_masque_r,
 			col_reponse, col_formes, col_taille_min)
 		e.proprietes["aabb_cache"] = col_aabb[idx]
-		rayon_max = maxf(rayon_max, (col_aabb[idx] as AABB).size.length() * 0.5)
-	var N: int = col_ent.size()
+		var s: Vector3 = col_aabb[idx].size
+		rayon_max = maxf(rayon_max, s.length() * 0.5)
 	# GRILLE LOCALE PAR COUNTING SORT : indice de case lineaire par entite,
 	# sorted_idx tri par cell + offsets (start par cell) -- structure exacte
 	# du portage C++ a venir (cell-id array + sorted index + start/end offsets).
@@ -464,21 +485,24 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 								contacts.append(contact)
 	return contacts
 
-# Empile UNE entree dans les 13 Arrays paralleles du cache colonnes. Lit chaque
-# champ de e UNE SEULE fois. Remplace l'ancien _construire_cache qui allouait
-# un Dictionary de 11 clefs par entite (poste 21% au profiler avant chantier).
-static func _pousser_cache(e, delta: float,
-		col_ent: Array, col_vel: Array, col_vel_len: Array, col_vel_nz: Array,
-		col_orient: Array, col_aabb: Array, col_swept: Array,
-		col_masque_c: Array, col_masque_r: Array, col_reponse: Array,
-		col_formes: Array, col_taille_min: Array) -> void:
-	# LECTURE DIRECTE pr.get au lieu de _prop : les 5 champs (velocite, orientation,
-	# masque_collision, masque_reponse, reponse) sont TOUJOURS poses dans
-	# proprietes par tous les callers du depot (banc_peuplement, manager_proto_2,
-	# ennemis, tests). Le fallback top-level de _prop (e.has/e[cle]) ne sert
-	# jamais ici -- verifie au grep. Une entree top-level d'un de ces champs
-	# serait invisible pour le tick : c'est la meme frontiere que _prop, exprimee
-	# plus directement.
+# Ecrit UNE entree DANS LES COLONNES a l'index idx. Aucune allocation (les
+# colonnes sont pre-dimensionnees par tick, resize UNE fois). Colonnes typees :
+# PackedArray natifs pour Vector3/float/int/byte, Array[T] typee pour Basis/
+# AABB/Dictionary/String -- plus aucun boxing Variant. Remplace l'ancien
+# _pousser_cache qui faisait 12 append par entite sur des Array generiques
+# (poste 30% au profiler avant chantier).
+# LECTURE DIRECTE pr.get au lieu de _prop : les 5 champs (velocite, orientation,
+# masque_collision, masque_reponse, reponse) sont TOUJOURS poses dans
+# proprietes par tous les callers du depot (banc_peuplement, manager_proto_2,
+# ennemis, tests). Le fallback top-level de _prop (e.has/e[cle]) ne sert
+# jamais ici -- verifie au grep.
+static func _ecrire_cache(idx: int, e: Dictionary, delta: float,
+		col_ent: Array[Dictionary], col_vel: PackedVector3Array,
+		col_vel_len: PackedFloat32Array, col_vel_nz: PackedByteArray,
+		col_orient: Array[Basis], col_aabb: Array[AABB], col_swept: Array[AABB],
+		col_masque_c: PackedInt32Array, col_masque_r: PackedInt32Array,
+		col_reponse: PackedStringArray, col_formes: Array,
+		col_taille_min: PackedFloat32Array) -> void:
 	var pr: Dictionary = e.get("proprietes", {})
 	var vel: Vector3 = pr.get("velocite", Vector3.ZERO)
 	var orient: Basis = pr.get("orientation", Basis.IDENTITY)
@@ -489,18 +513,18 @@ static func _pousser_cache(e, delta: float,
 	var swept: AABB = aabb
 	if vel_nz:
 		swept = aabb.merge(AABB(aabb.position - vel * delta, aabb.size))
-	col_ent.append(e)
-	col_vel.append(vel)
-	col_vel_len.append(vel_len)
-	col_vel_nz.append(vel_nz)
-	col_orient.append(orient)
-	col_aabb.append(aabb)
-	col_swept.append(swept)
-	col_masque_c.append(int(pr.get("masque_collision", 0)))
-	col_masque_r.append(int(pr.get("masque_reponse", 0)))
-	col_reponse.append(String(pr.get("reponse", "")))
-	col_formes.append(formes)
-	col_taille_min.append(_taille_min_formes(formes))
+	col_ent[idx] = e
+	col_vel[idx] = vel
+	col_vel_len[idx] = vel_len
+	col_vel_nz[idx] = 1 if vel_nz else 0
+	col_orient[idx] = orient
+	col_aabb[idx] = aabb
+	col_swept[idx] = swept
+	col_masque_c[idx] = int(pr.get("masque_collision", 0))
+	col_masque_r[idx] = int(pr.get("masque_reponse", 0))
+	col_reponse[idx] = String(pr.get("reponse", ""))
+	col_formes[idx] = formes
+	col_taille_min[idx] = _taille_min_formes(formes)
 
 # Narrowphase avec swept : echantillonne le trajet parcouru [position -
 # velocite*delta, position] en N sous-pas (N grandit si le deplacement depasse
@@ -511,9 +535,10 @@ static func _pousser_cache(e, delta: float,
 # reponse/masque_reponse/vel_nz pour que resoudre n'ait pas non plus a
 # relire les entites.
 static func _contact_paire(a, i: int, b, j: int, delta: float,
-		col_vel: Array, col_vel_len: Array, col_vel_nz: Array,
-		col_orient: Array, col_formes: Array, col_taille_min: Array,
-		col_reponse: Array, col_masque_r: Array) -> Dictionary:
+		col_vel: PackedVector3Array, col_vel_len: PackedFloat32Array,
+		col_vel_nz: PackedByteArray, col_orient: Array[Basis],
+		col_formes: Array, col_taille_min: PackedFloat32Array,
+		col_reponse: PackedStringArray, col_masque_r: PackedInt32Array) -> Dictionary:
 	var vel_a: Vector3 = col_vel[i]
 	var vel_b: Vector3 = col_vel[j]
 	var pos_a: Vector3 = a.position

@@ -72,17 +72,24 @@ d'une position aberrante ; la broadphase reste correcte mais consomme.
 
 ## Cache en colonnes
 
-`tick` construit 13 Arrays parallèles (`col_vel`, `col_orient`, `col_aabb`,
-`col_swept`, `col_masque_c`, `col_masque_r`, `col_reponse`, `col_formes`,
-`col_taille_min`, `col_vel_len`, `col_vel_nz`, `col_ent`), indexés par la
-position dans `entites`. `id_to_idx` (Dict String→int) résout un `o` retourné
-par la broadphase mais absent d'`entites` — cache construit à la volée, une
-fois par tick. `_pousser_cache` fait UNE lecture par champ en `pr.get(cle, defaut)` direct
-(pr = `e.proprietes` tenu en local), sans passer par `_prop` — les 5 champs
-`velocite`/`orientation`/`masque_collision`/`masque_reponse`/`reponse` sont
-toujours dans `proprietes` chez les callers, le fallback top-level de `_prop`
-ne sert pas dans le tick. Le hot path lit `col_x[i]` (Array par int), plus
-aucun Dict par entité ni keyage string.
+`tick` construit 12 colonnes **typées et pré-dimensionnées** (`resize(N)` UNE
+fois, aucune réallocation, aucun boxing Variant sur les scalaires/vecteurs) :
+- `PackedVector3Array` : `col_vel`
+- `PackedFloat32Array` : `col_vel_len`, `col_taille_min`
+- `PackedInt32Array` : `col_masque_c`, `col_masque_r`
+- `PackedByteArray` : `col_vel_nz` (0/1)
+- `PackedStringArray` : `col_reponse`
+- `Array[Basis]` : `col_orient`
+- `Array[AABB]` : `col_aabb`, `col_swept`
+- `Array[Dictionary]` : `col_ent`
+- `Array` générique : `col_formes` (Array[Array] non supporté par GDScript)
+
+`_ecrire_cache(idx, e, delta, ...)` écrit par index — plus d'`append`. Lecture
+directe `pr.get(cle, defaut)` (pr = `e.proprietes` tenu en local), sans passer
+par `_prop` — les 5 champs `velocite`/`orientation`/`masque_collision`/
+`masque_reponse`/`reponse` sont toujours dans `proprietes` chez les callers.
+
+Le hot path lit `col_x[i]` par int, sans allocation ni conversion.
 
 ## GJK
 
