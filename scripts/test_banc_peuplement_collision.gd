@@ -2,7 +2,7 @@ extends SceneTree
 
 # Test headless : jeu/Proto/collision.gd applique a deux Dict-entites en
 # recouvrement les ecarte de leur profondeur -- verrouille le contrat cable
-# par jeu/bancs/banc_peuplement.gd (Collision.tick + Collision.resoudre sur
+# par jeu/bancs/banc_peuplement.gd (Collision.detecter + Collision.resoudre sur
 # _entites_collision, sortie mute directement entite.position).
 #
 # Deux boites de demi_taille 0.4 sur X, positionnees a (0,0,0) et (0.5,0,0).
@@ -23,7 +23,7 @@ func _init() -> void:
 func _lancer() -> void:
 	_executer()
 	if _v.echecs() == 0:
-		print("OK: banc_peuplement collision -- deux agents en recouvrement ecartes par Collision.tick + resoudre (aucune physique Godot)")
+		print("OK: banc_peuplement collision -- deux agents en recouvrement ecartes par Collision.detecter + resoudre (aucune physique Godot)")
 		quit(0)
 	else:
 		printerr("ECHEC: %d assertion(s) fausse(s)" % _v.echecs())
@@ -47,12 +47,12 @@ func _executer() -> void:
 	var d_avant: float = (a.position as Vector3).distance_to(b.position as Vector3)
 	_v.v(is_equal_approx(d_avant, 0.5), "pre : distance != 0.5 (obtenu %.4f)" % d_avant)
 
-	# Un tick de collision : broadphase + narrowphase GJK/EPA + resoudre.
-	var contacts: Array = Collision.tick(monde, [a, b], 0.016)
-	_v.v(contacts.size() == 1, "tick : attendu 1 contact, obtenu %d" % contacts.size())
+	# Une passe de collision : broadphase + narrowphase GJK/EPA + resoudre.
+	var contacts: Array = Collision.detecter([a, b], 0.016)
+	_v.v(contacts.size() == 1, "detecter : attendu 1 contact, obtenu %d" % contacts.size())
 	if contacts.size() >= 1:
 		var c: Dictionary = contacts[0]
-		_v.v(float(c.get("profondeur", 0.0)) >= 0.29, "tick : profondeur < 0.29 (obtenu %.4f)" % float(c.get("profondeur", 0.0)))
+		_v.v(float(c.get("profondeur", 0.0)) >= 0.29, "detecter : profondeur < 0.29 (obtenu %.4f)" % float(c.get("profondeur", 0.0)))
 
 	Collision.resoudre(contacts, [a, b])
 

@@ -43,14 +43,14 @@ extends RefCounted
 #   entite.proprietes.saut_demande               : bool     (POSE par l'appelant -- evenement, pas un Input lu ici)
 #   entite.proprietes.vitesse_saut               : float    (impulsion verticale quand saut_demande et au_sol)
 #   entite.proprietes.velocite_desiree_horizontale : Vector3 (l'intention horizontale, calculee en amont)
-#   entite.proprietes.y_appui_entite             : float    (POSE par _tick_collision AVANT l'appel : dessus de l'entite sous les pieds, -INF si aucune)
+#   entite.proprietes.y_appui_entite             : float    (POSE et LU par _pas_complet_atomique B.13 : dessus de l'entite sous les pieds, -INF si aucune)
 #
 # ---- CE QU'IL N'ECRIT PAS ----
 # entite.noeud, aucun rendu, aucun Node : le rendu suit la donnee, ailleurs.
 #
 # ---- PRIMITIVES EXTERNES QU'IL UTILISERA (phase 2+, pas encore appelees) ----
 #   monde  (scripts/monde.gd)              : requete spatiale + deplacer() apres mouvement
-#   collision.gd (jeu/Proto/collision.gd)  : Collision.tick / resoudre (GJK/EPA), collision inter-entites en donnee pure
+#   collision.gd (jeu/Proto/collision.gd)  : Collision.detecter / resoudre (GJK/EPA), collision inter-entites en donnee pure
 #   carte.sommet_sous(x, z, y_max)         : surface pleine la plus haute <= y_max (sol sous les pieds, plafonne un surplomb)
 #   carte.est_pleine(colonne, couche)      : masque de volume -- obstacle a hauteur de corps (scale avec la taille)
 #   carte.sommet(x, z)                     : point le plus haut d'une colonne
@@ -69,6 +69,15 @@ extends RefCounted
 # faute d'un mecanisme de mouvement partage cote framework (voir CLAUDE.md
 # § Frontiere pour la raison d'etre de l'ecart et sa portee ; meme geste que
 # scripts/monde.gd:retirer).
+#
+# ECART AVEC LE DEPOT FRAMEWORK : la collecte des voisins pour la collision
+# inter-entites du joueur vit ICI (B.12), pas dans Collision.detecter. detecter
+# n'interroge aucun index externe -- c'est l'appelant qui fournit la liste
+# complete. Le pas complet collecte via monde.choses_dans_rayon autour de la
+# capsule, compose [entite] + voisins, appelle detecter, puis applique sa
+# propre separation SAFE_MARGIN (Collision.resoudre est bypasse : lui
+# teleporterait de la profondeur entiere d'un coup). Meme geste doctrinal que
+# scripts/monde.gd:retirer.
 
 # DEPENDANCE DE COUCHE A SIGNALER : ce module (scripts/, framework) preload
 # collision.gd qui vit encore dans jeu/Proto/ (prototype destine a Orion, voir
@@ -323,14 +332,31 @@ static func _pas_complet_atomique(entite: Dictionary, dt: float, monde, carte) -
 	# B.11 -- Deplacer dans l'index spatial (position a jour avant broadphase).
 	monde.deplacer(entite)
 
-	# B.12 -- Multipass collision inter-entites. tick fait SA broadphase via
-	# monde.choses_dans_rayon -- on ne lui pre-mache aucun voisin. On applique la
-	# separation NOUS-MEMES, clampee a SAFE_MARGIN*10 par passe (Collision.resoudre
-	# est bypasse : lui teleporterait de la profondeur entiere d'un coup).
+	# B.12 -- Multipass collision inter-entites. Collision.detecter n'interroge
+	# aucun index externe : c'est ICI qu'on collecte les voisins de l'entite via
+	# monde.choses_dans_rayon, puis qu'on compose la liste [entite] + voisins.
+	# Le rayon de collecte = demi-diagonale AABB balayee + demi-diagonale max
+	# des voisins attendus (approche par le rayon de la capsule, seule dimension
+	# connue ici). On applique la separation NOUS-MEMES, clampee a SAFE_MARGIN*10
+	# par passe (Collision.resoudre est bypasse : lui teleporterait de la
+	# profondeur entiere d'un coup).
 	var id_e = entite.get("id")
+	var hauteur_e: float = float(p.get("hauteur_capsule", 1.8))
+	var vel_e: Vector3 = p.get("velocite", Vector3.ZERO)
+	# Rayon de collecte : demi-diagonale du corps + course sur le sous-pas + marge
+	# defensive pour la demi-diagonale d'un voisin typique. detecter filtre par
+	# distance et masque, un rayon large ne casse rien -- il elargit la liste.
+	var demi_diag_corps: float = sqrt(rayon * rayon + (hauteur_e * 0.5) * (hauteur_e * 0.5) + rayon * rayon)
+	var rayon_collecte: float = demi_diag_corps + vel_e.length() * dt + 2.0
 	var contacts: Array = []
 	for _passe in range(MULTIPASS_N):
-		contacts = Collision.tick(monde, [entite], dt)
+		var liste: Array = [entite]
+		for entree in monde.choses_dans_rayon(entite.position, rayon_collecte):
+			var voisin: Dictionary = entree.chose
+			if voisin.get("id") == id_e:
+				continue
+			liste.append(voisin)
+		contacts = Collision.detecter(liste, dt)
 		var max_prof := 0.0
 		for c in contacts:
 			var est_a: bool = c.a.get("id") == id_e

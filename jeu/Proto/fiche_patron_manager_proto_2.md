@@ -158,7 +158,8 @@ Instance construite via `Collision.aabb_forme(forme, transform)` pour le
 [manager_proto_2.gd:278-280](manager_proto_2.gd:278)).
 La résolution vit dans le pas partagé `scripts/mouvement_kinematic.gd` (voir
 son bloc « B.11–B.13 multipass collision inter-entités » qui appelle
-`Collision.tick(monde, [entite], dt)`) — le manager ne la déclenche PAS à part.
+`Collision.detecter([entite] + voisins, dt)` avec voisins collectés via
+`monde.choses_dans_rayon`) — le manager ne la déclenche PAS à part.
 
 **Scalabilité :** l'index spatial du monde est du bucket/hash spatial (par
 implementation de `scripts/monde.gd`, cité comme patron `monde indexé (c)` en

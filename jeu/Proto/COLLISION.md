@@ -3,8 +3,11 @@
 Module : `jeu/Proto/collision.gd` (RefCounted, tout statique, aucun état
 interne). AUCUNE physique Godot (PhysicsServer3D / StaticBody3D /
 CollisionShape3D). Prototypé ici, destiné à Orion : à réutiliser pour tout futur
-objet interactif — la collision passe par `Collision.tick`/`resoudre` sur des
-Dictionary d'entités, jamais par des nœuds.
+objet interactif — la collision passe par `Collision.detecter`/`resoudre` sur
+des Dictionary d'entités, jamais par des nœuds. **Une seule voie** : `detecter`
+rend les contacts, `resoudre` les applique. `detecter` n'interroge AUCUN index
+externe — l'appelant fournit la liste complète des entités à tester (voir
+Broadphase ci-dessous).
 
 ## Modèle de donnée
 
@@ -58,12 +61,12 @@ anciennes valeurs. Formes stables pour l'instant, invalidation hors scope.
 
 ## Broadphase
 
-**100 % locale, aucun appel à `monde.gd`**. Le tick construit sa propre grille
-par **counting sort** à partir du cache colonnes : `cell_id` linéaire par
-entité, `PackedInt32Array` d'indices triés par cell + `offsets` (start par
-cell). Voisinage d'une cell = elle-même + les 26 cases adjacentes (3×3×3),
-lecture directe dans `sorted_idx[offsets[vc]..offsets[vc+1]]`. C'est la
-structure exacte du portage C++ à venir (cell-id array + sorted index +
+**100 % locale, aucun appel à un index externe**. `detecter` construit sa
+propre grille par **counting sort** à partir du cache colonnes : `cell_id`
+linéaire par entité, `PackedInt32Array` d'indices triés par cell + `offsets`
+(start par cell). Voisinage d'une cell = elle-même + les 26 cases adjacentes
+(3×3×3), lecture directe dans `sorted_idx[offsets[vc]..offsets[vc+1]]`. C'est
+la structure exacte du portage C++ à venir (cell-id array + sorted index +
 start/end offsets).
 
 **Arête** = `max r_i × 1.0001` avec `r_i = demi-diagonale AABB + rayon max +
@@ -71,9 +74,13 @@ vitesse × delta`. La marge 1.0001 garantit que la sphère de rayon `r_i` autour
 d'une entité tient dans 3×3×3 cases (sans la marge, cas dégénéré `r_i = arete`
 et `p` au bord d'une case → `case(q)` peut être `case(p)+2`).
 
-**Contrat** : toutes les entités collisionnables doivent être dans `entites`.
-Le tick ne regarde plus le monde — une entité présente dans `monde` mais
-absente d'`entites` n'apparaît jamais comme candidat.
+**Contrat** : toutes les entités à tester doivent être dans `entites`.
+`detecter` n'interroge JAMAIS d'index externe — un appelant qui veut tester
+une entité contre ses voisins collecte les voisins lui-même (typiquement
+`monde.choses_dans_rayon(pos, rayon_collecte)`) et compose la liste avant
+l'appel. Ce partage tient les deux appelants : le peuplement passe sa
+population fermée (`_entites_collision` stable), le joueur passe
+`[entite] + voisins collectés` (voir `scripts/mouvement_kinematic.gd` B.12).
 
 **Filtres per-paire** dans l'ordre : distance (`dist ≤ r_a`, reproduit
 l'ancien filtre `choses_dans_rayon`), dédup (`vus[cle]`), masque
@@ -129,22 +136,21 @@ Normale unitaire, sens **A→B** (pour A en 0 et B en +X, normale = +X).
 
 `{ a, b, normale (A→B), profondeur }`.
 
-## tick / resoudre
+## detecter / resoudre
 
-- `tick(monde, entites, delta)` → Array de contacts. Broadphase + swept +
+- `detecter(entites, delta)` → Array de contacts. Broadphase + swept +
   narrowphase GJK→EPA par paire de formes ; dédup de paires par ids.
   Swept : `N = ceil(vitesse*delta / (taille_min*0.5))` sous-pas sur le trajet
   `[position - vitesse*delta, position]`, premier contact depuis l'endpoint.
-  (`delta` ajouté à la signature — le swept en a besoin.)
 - `resoudre(contacts, entites)` : pour `reponse == "bloque"` des deux ET
   `masque_reponse` compatibles → écarte le long de la normale de la profondeur.
   Immobile (`velocite == 0`) fixe / l'autre encaisse ; deux mobiles ou deux
   immobiles 50/50. Passe unique.
 
-## Ordre par tick
+## Ordre par frame chez l'appelant
 
-broadphase → (sous-pas swept) GJK → EPA → contacts → `resoudre` → recopie de la
-position corrigée du joueur dans `_observateur`.
+collecte voisins (si liste ouverte) → `detecter` → `resoudre` (ou séparation
+custom SAFE_MARGIN pour le joueur, voir `mouvement_kinematic.gd` B.12).
 
 ## Ce que le système NE fait PAS
 

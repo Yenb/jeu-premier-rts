@@ -179,6 +179,13 @@ mesh = SubResource("BoxMesh_zone_spawn")
 transform = Transform3D(0.99988616, 0, -0.015088755, 0, 1, 0, 0.015088755, 0, 0.99988616, 111.17137, 0, 267.79074)
 script = ExtResource("24_mgr2")
 
+[node name="ZoneSpawnIAPrototype2" type="MeshInstance3D" parent="ManagerProto2" unique_id=1201141475]
+physics_interpolation_mode = 1
+auto_translate_mode = 2
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 155.42133, 15, -2.345398)
+sorting_use_aabb_center = false
+mesh = SubResource("BoxMesh_zone_spawn")
+
 [node name="StockJoueur" type="Node" parent="." unique_id=810000002]
 script = ExtResource("17_stock")
 

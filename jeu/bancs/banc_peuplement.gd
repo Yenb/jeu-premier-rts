@@ -184,8 +184,8 @@ var _index_cpp: RefCounted = null
 # agent porte une entite dediee (Dictionary, forme "boite" avec demi_taille
 # derivee de data/mesh.json[mesh_ref].taille/2) dans _entites_collision. Ce
 # tableau STABLE (alloue au _fabriquer_lot, jamais realloue par frame) sert de
-# `entites` a Collision.tick et est aussi inscrit dans _monde pour que la
-# broadphase de Collision.tick le retrouve via monde.choses_dans_rayon.
+# `entites` a Collision.detecter et est aussi inscrit dans _monde pour que la
+# broadphase de Collision.detecter le retrouve via monde.choses_dans_rayon.
 # Independant de _pool.individus : marche sous regime_masse (aucun Dict individu)
 # comme sous regime normal. Le sync par frame (cols.position -> entite.position,
 # collision, entite.position corrigee -> cols.position) est la seule autorite.
@@ -337,7 +337,7 @@ func _monter_pool() -> void:
 		push_error("banc_peuplement : MeshCatalogue.fabriquer_mesh('%s') a rendu null" % mesh_ref)
 		return
 	# DEMI-TAILLE DE COLLISION DERIVEE DE LA TAILLE DU CORPS. La forme "boite"
-	# passee a Collision.tick a `parametres.demi_taille = taille / 2` sur chaque
+	# passee a Collision.detecter a `parametres.demi_taille = taille / 2` sur chaque
 	# axe. Aucun nombre en dur : la valeur vient de data/mesh.json[mesh_ref].taille,
 	# meme source que le mesh visuel -- collision et rendu suivent le meme reglage.
 	var fiche_mesh: Dictionary = catalogue_mesh[mesh_ref]
@@ -449,7 +449,7 @@ func _fabriquer_lot() -> void:
 	# derivee du mesh (voir _monter_pool). Tableau STABLE alloue ici et jamais
 	# realloue -- le sync par frame (cols.position <-> entite.position) est la
 	# seule autorite de position ; les entites sont inscrites une fois dans
-	# _monde pour que la broadphase de Collision.tick les retrouve via
+	# _monde pour que la broadphase de Collision.detecter les retrouve via
 	# monde.choses_dans_rayon. Independant de _pool.individus : marche sous
 	# regime_masse comme sous regime normal.
 	_entites_collision.clear()
@@ -573,7 +573,7 @@ func _physics_process(delta: float) -> void:
 		buffer = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
 	# PASSE COLLISION -- port de jeu/Proto/collision.gd (GJK/EPA en donnee pure,
 	# aucune physique Godot). Sync cols.position -> _entites_collision[i].position,
-	# Collision.tick + Collision.resoudre (mutations directes sur entite.position),
+	# Collision.detecter + Collision.resoudre (mutations directes sur entite.position),
 	# sync retour vers cols.position. La broadphase construit sa propre grille
 	# locale par counting sort, ne lit plus _monde -- pas de deplacer_simple
 	# prealable.
@@ -584,7 +584,7 @@ func _physics_process(delta: float) -> void:
 		while kk < n_coll and kk < count:
 			(_entites_collision[kk] as Dictionary).position = cols_pos[kk]
 			kk += 1
-		var contacts: Array = Collision.tick(_monde, _entites_collision, delta)
+		var contacts: Array = Collision.detecter(_entites_collision, delta)
 		Collision.resoudre(contacts, _entites_collision)
 		kk = 0
 		while kk < n_coll and kk < count:
@@ -594,7 +594,7 @@ func _physics_process(delta: float) -> void:
 	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) avec cols.position
 	# corrige. La branche GDScript _monde.deplacer_simple est retiree : plus
 	# aucun lecteur de l'index _monde n'existe dans ce banc depuis que
-	# Collision.tick a sa propre grille locale (verifie au grep :
+	# Collision.detecter a sa propre grille locale (verifie au grep :
 	# choses_dans_rayon, par_id, resolutions_ouvertes). Rebrancher la maj
 	# ici si un futur mecanisme (perception, chasse, ...) redemande a lire
 	# l'index de _monde. Chemin deplacer_cpp conserve tel quel.

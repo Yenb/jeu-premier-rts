@@ -7,8 +7,11 @@ extends RefCounted
 # calcule sur ces donnees, partout et tout le temps (hors rendu comme dans le
 # rendu). A reutiliser pour tout futur objet interactif.
 #
-# SYSTEME COMPLET : SUPPORT unifiee, AABB par forme, GJK, EPA, tick (broadphase
-# monde.gd + narrowphase + swept) et resoudre (separation en donnee pure).
+# SYSTEME COMPLET : SUPPORT unifiee, AABB par forme, GJK, EPA, detecter
+# (broadphase grille locale + narrowphase + swept) et resoudre (separation en
+# donnee pure). Une seule voie de collision : detecter + resoudre. L'appelant
+# fournit la liste COMPLETE des entites a tester ; detecter ne va jamais
+# chercher un voisin dans un index externe -- la collecte est de son ressort.
 #
 # CONTRAT DE FORME : { type: String, transform_locale: Transform3D,
 # parametres: Dictionary }. Quatre types :
@@ -273,15 +276,14 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 			return
 	aretes.append([i, j])
 
-# --- TICK : liste des contacts pour un ensemble d'entites ---
-# BROADPHASE 100% LOCALE : le tick construit UNE grille par counting sort a
-# partir du cache colonnes -- plus aucun appel a monde.choses_dans_rayon. Pour
-# chaque case non vide, le voisinage lu est les occupants de la case + ceux des
-# 26 cases adjacentes (3x3x3), directement dans la grille locale. `monde` reste
-# dans la signature pour compat externe mais n'est plus interroge. Le filtre
-# distance per-driver `dist(a, b) <= r_a` reproduit le filtre de l'ancienne
-# broadphase per-entity : parite stricte du set de paires. Narrowphase GJK->EPA
-# par paire de formes, avec SWEPT.
+# --- DETECTER : liste des contacts pour un ensemble d'entites ---
+# BROADPHASE 100% LOCALE : detecter construit UNE grille par counting sort a
+# partir du cache colonnes -- aucun appel a un index externe. Pour chaque case
+# non vide, le voisinage lu est les occupants de la case + ceux des 26 cases
+# adjacentes (3x3x3), directement dans la grille locale. Le filtre distance
+# per-driver `dist(a, b) <= r_a` reproduit le filtre de l'ancienne broadphase
+# per-entity : parite stricte du set de paires. Narrowphase GJK->EPA par paire
+# de formes, avec SWEPT.
 # Rend un Array de contacts { a, b, normale (A->B), profondeur, a_reponse,
 # b_reponse, a_masque_r, b_masque_r, a_vel_nz, b_vel_nz }.
 #
@@ -291,10 +293,11 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 # (String), aabb_cache (rafraichie ici). transform monde d'une forme =
 # Transform3D(orientation, position) * transform_locale.
 #
-# CONTRAT : toutes les entites collisionnables doivent etre dans `entites` --
-# le tick ne va plus chercher dans le monde ce qui n'y est pas. Sans quoi la
-# paire (driver, exterieur) n'est jamais testee.
-static func tick(_monde, entites: Array, delta: float) -> Array:
+# CONTRAT : toutes les entites a tester doivent etre dans `entites` -- detecter
+# ne va JAMAIS chercher dans un index externe. Un appelant qui veut tester une
+# entite contre ses voisins collecte les voisins lui-meme (ex :
+# monde.choses_dans_rayon) et compose la liste avant d'appeler.
+static func detecter(entites: Array, delta: float) -> Array:
 	var contacts: Array = []
 	if entites.is_empty():
 		return contacts
@@ -306,7 +309,7 @@ static func tick(_monde, entites: Array, delta: float) -> Array:
 	# generique car GDScript ne supporte pas Array[Array] typee. _ecrire_cache
 	# ecrit par index, plus d'append dans le chemin normal.
 	# Contrat : toutes les entites collisionnables sont dans `entites` (voir
-	# en-tete de tick) -- pas de branche "entite en plus ajoutee a la volee",
+	# en-tete de detecter) -- pas de branche "entite en plus ajoutee a la volee",
 	# donc pas de reallocation apres le resize initial.
 	var N: int = entites.size()
 	var col_ent: Array[Dictionary] = []
@@ -726,7 +729,7 @@ static func _aabb_from(orient: Basis, formes: Array, pos: Vector3) -> AABB:
 
 # AABB de l'entite a sa position ET a sa position d'il y a un tick (couvre le
 # trajet swept) -- pour la broadphase. Lit proprietes.aabb_cache si present
-# (ecrit par la pre-passe de tick), sinon recalcule via _aabb_entite : la
+# (ecrit par la pre-passe de detecter), sinon recalcule via _aabb_entite : la
 # broadphase reste correcte (jamais un faux negatif) meme si le cache manque.
 static func _aabb_balayee(e, delta: float) -> AABB:
 	var a: AABB = _aabb_cachee(e)
@@ -737,9 +740,10 @@ static func _aabb_balayee(e, delta: float) -> AABB:
 	return a.merge(b)
 
 # AABB de l'entite lue dans son cache proprietes.aabb_cache si present, sinon
-# recalculee. Le cache est ecrit par la pre-passe de tick, donc frais pour toute
-# entite passee dans le meme tick. Une entite trouvee par la broadphase mais
-# absente de la liste tick n'a pas ce cache -- fallback safe sur _aabb_entite.
+# recalculee. Le cache est ecrit par la pre-passe de detecter, donc frais pour
+# toute entite passee dans le meme appel. Une entite trouvee par la broadphase
+# mais absente de la liste passee a detecter n'a pas ce cache -- fallback safe
+# sur _aabb_entite.
 static func _aabb_cachee(e) -> AABB:
 	var pr: Dictionary = e.get("proprietes", {})
 	if pr.has("aabb_cache"):
