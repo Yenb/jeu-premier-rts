@@ -14,17 +14,19 @@ using namespace godot;
 
 namespace {
 // Entree "voisin retenu dans le disque" pour perception_lot -- id + delta et
-// distance precalcules pour eviter tout recalcul dans la passe occlusion.
-// La liste `dans_rayon` (per-agent) collecte ces entrees a partir des cases
-// touchees par le disque de l'agent, filtree par distance^2 <= rayon^2 puis
-// par cone elargi (sans sqrt). Les seuls corps qui peuvent occulter un
-// voisin retenu sont eux-memes dans cette liste : un obstacle plus loin ne
-// coupe pas le segment percepteur -> voisin (t dans ]0,1[ le rejette).
+// distance AU CARRE (sqrt differe a l'extraction argmin). Le rassemblement
+// ne fait AUCUN sqrt : il pousse d2 tel que calcule par le filtre distance.
+// L'argmin de la passe occlusion compare d2 (monotone equivalent). Le sqrt
+// n'est paye qu'a l'instant ou le voisin est extrait par argmin -- les
+// voisins jamais extraits (arret sans perte des secteurs) n'en paient pas.
+// Les seuls corps qui peuvent occulter un voisin retenu sont eux-memes dans
+// cette liste : un obstacle plus loin ne coupe pas le segment percepteur ->
+// voisin (t dans ]0,1[ le rejette).
 struct VoisinVue {
 	int32_t id;
 	float dx; // pos_i.x - pos_k.x
 	float dz; // pos_i.z - pos_k.z
-	float d;  // distance horizontale
+	float d2; // distance horizontale AU CARRE (sqrt differe a l'extraction)
 };
 } // namespace anonyme
 
@@ -331,12 +333,13 @@ Dictionary IndexSpatial::perception_lot(
 							continue;
 						}
 					}
-					float d = std::sqrt(d2);
+					// Pas de sqrt ici : `d` differe a l'extraction argmin
+					// (les voisins skippes par l'arret sans perte n'en paient pas).
 					VoisinVue vv;
 					vv.id = k_id;
 					vv.dx = dx;
 					vv.dz = dz;
-					vv.d = d;
+					vv.d2 = d2;
 					dans_rayon.push_back(vv);
 				}
 			}
@@ -410,13 +413,14 @@ Dictionary IndexSpatial::perception_lot(
 			int reste = (int)liste.size();
 			while (reste > 0) {
 				// Extraire le plus proche : argmin lineaire sur [0..reste-1] +
-				// swap-remove en fin. Le chrono `tri` couvre ce balayage.
+				// swap-remove en fin. Comparaison sur d2 (monotone equivalente
+				// a d, aucune sqrt payee ici). Le chrono `tri` couvre ce balayage.
 				auto t_sel_debut = std::chrono::steady_clock::now();
 				int min_idx = 0;
-				float min_d = liste[0].d;
+				float min_d2 = liste[0].d2;
 				for (int s = 1; s < reste; s++) {
-					if (liste[(size_t)s].d < min_d) {
-						min_d = liste[(size_t)s].d;
+					if (liste[(size_t)s].d2 < min_d2) {
+						min_d2 = liste[(size_t)s].d2;
 						min_idx = s;
 					}
 				}
@@ -427,7 +431,10 @@ Dictionary IndexSpatial::perception_lot(
 				const VoisinVue vj = liste[(size_t)reste];
 				_us_tri += std::chrono::duration_cast<std::chrono::microseconds>(
 						std::chrono::steady_clock::now() - t_sel_debut).count();
-				const float d2_j = vj.d * vj.d;
+				const float d2_j = vj.d2;
+				// SQRT DIFFERE : d n'est calcule qu'ici, une fois pour ce voisin
+				// (les voisins jamais extraits par l'argmin ne le paient jamais).
+				const float d_j = std::sqrt(d2_j);
 				// Test cache par un bloqueur plus proche (preselection +
 				// segment-disque exact sur les candidats).
 				bool cache = false;
@@ -439,7 +446,7 @@ Dictionary IndexSpatial::perception_lot(
 					if (cos_num <= 0.0f) {
 						continue;
 					}
-					if (cos_num < bc.base_k * vj.d) {
+					if (cos_num < bc.base_k * d_j) {
 						continue;
 					}
 					float t_proj = cos_num / d2_j;
@@ -466,7 +473,7 @@ Dictionary IndexSpatial::perception_lot(
 				float angle_v = std::atan2(-vj.dz, -vj.dx) - angle_orient;
 				while (angle_v > PI_F) angle_v -= TAU_F;
 				while (angle_v < -PI_F) angle_v += TAU_F;
-				float sin_arg = rayon_corps / vj.d;
+				float sin_arg = rayon_corps / d_j;
 				if (sin_arg > 1.0f) sin_arg = 1.0f;
 				float demi_v = std::asin(sin_arg);
 				// Un secteur [angle - demi, angle + demi] est eclate en deux si
@@ -512,7 +519,7 @@ Dictionary IndexSpatial::perception_lot(
 				// son id a la liste des vus de l'agent. La separation (et tout
 				// autre consommateur) lira cette liste hors de perception_lot.
 				float dot_vers_voisin = -(orient.x * vj.dx + orient.z * vj.dz);
-				if (dot_vers_voisin >= cos_moitie_angle * vj.d) {
+				if (dot_vers_voisin >= cos_moitie_angle * d_j) {
 					_vue_vus_total += 1;
 					vus_ids_i.push_back(vj.id);
 				}

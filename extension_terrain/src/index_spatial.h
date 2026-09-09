@@ -79,19 +79,24 @@ class IndexSpatial : public RefCounted {
 	int _nombre_ids = 0;
 	std::vector<Niveau> _niveaux;
 
-	// SOUS-CHRONOS TEMPORAIRES de vue_lot (a retirer une fois identifie le
-	// poste couteux). Le releve global `vue=` du banc enveloppe tout le corps
-	// de vue_lot ; ces quatre compteurs decoupent ce corps en :
-	//   _us_collecte : la boucle (2n+1)^2 de niveau.cases.find par case qui
-	//                  remplit `voisinage`.
-	//   _us_filtre   : le remplissage de `dans_rayon` (filtre distance +
-	//                  cone elargi) par unite.
-	//   _us_tri      : le std::sort de `dans_rayon` par distance croissante,
-	//                  par unite.
-	//   _us_occ_sep  : la double boucle occlusion + accumulation separation,
-	//                  par unite.
-	// La somme des quatre couvre tout le corps de vue_lot sans trou. Exposes
-	// par derniers_chronos_vue() -- lus par le banc, imprimes a cote de vue=.
+	// SOUS-CHRONOS TEMPORAIRES de perception_lot (a retirer une fois identifie
+	// le poste couteux). Le releve global `vue=` du banc enveloppe tout le
+	// corps de perception_lot ; ces compteurs le decoupent en :
+	//   _us_collecte : le rassemblement per-agent -- iteration des cases du
+	//                  disque (basse/haute), filtre distance^2 + cone elargi,
+	//                  push dans `dans_rayon`. AUCUN sqrt paye ici (sqrt differe
+	//                  a l'extraction argmin).
+	//   _us_filtre   : reste a 0 depuis la fusion collecte/occlusion -- le
+	//                  filtre distance + cone elargi est integre au
+	//                  rassemblement, plus de passe filtre distincte. Cle
+	//                  gardee dans le Dictionary de sortie pour compat banc.
+	//   _us_tri      : l'argmin lineaire incremental sur les voisins non
+	//                  traites, comparaison sur d2 (aucun sqrt), par unite.
+	//   _us_occ_sep  : la boucle occlusion (sqrt differe de d + base_k si le
+	//                  voisin devient bloqueur) + accumulation des vus, par
+	//                  unite.
+	// Exposes par derniers_chronos_vue() -- lus par le banc, imprimes a cote
+	// de vue=.
 	mutable int64_t _us_collecte = 0;
 	mutable int64_t _us_filtre = 0;
 	mutable int64_t _us_tri = 0;
