@@ -289,28 +289,35 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 # Transform3D(orientation, position) * transform_locale.
 static func tick(monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
-	# PRE-PASSE aabb_cache + swept_cache : chaque entite qui entre dans tick voit
-	# son aabb_cache reecrit AVANT la broadphase, et son AABB balayee (aabb_cache
-	# etendue par -velocite*delta) memorisee dans swept_cache, clef = reference
-	# entite. Le filtre AABB de la boucle interne lit swept_cache au lieu de
-	# rappeler _aabb_balayee : un seul calcul par entite, pas un par paire. Une
-	# entite trouvee par choses_dans_rayon mais absente d'entites (donc absente
-	# des deux caches) retombe sur _aabb_balayee (fallback safe, meme esprit que
-	# _aabb_cachee).
+	# PRE-PASSE cache : pour chaque entite, UNE SEULE lecture des champs
+	# proprietes (velocite, orientation, formes, masques, reponse) et calcul
+	# de l'AABB courante + AABB balayee. Tout est empile dans un Dictionary
+	# local (clef = reference entite). Le hot path (boucle broadphase,
+	# _contact_paire, resoudre) lit ce cache -- plus aucun appel a
+	# _prop/_velocite/_orientation, qui font 2 lookups Dictionary chacun.
+	# aabb_cache est aussi ecrit dans e.proprietes pour les lectures
+	# externes (manager_proto_2 s'en sert). Une entite trouvee par
+	# choses_dans_rayon mais absente d'entites est cachee A LA VOLEE
+	# (une seule construction par tick, meme esprit que le fallback
+	# precedent).
+	# Cache keye par id (string) : GDScript hashe les Dictionary par contenu,
+	# donc muter e.proprietes entre l'ecriture et la lecture casserait un
+	# `cache[e]`. L'id joue le meme role que dans _cle_paire, unique par entite.
+	var cache: Dictionary = {}
 	var rayon_max := 0.0
 	for e in entites:
-		var aabb_e := _aabb_entite(e)
-		e.proprietes["aabb_cache"] = aabb_e
-		rayon_max = maxf(rayon_max, aabb_e.size.length() * 0.5)
-	var swept_cache: Dictionary = {}
-	for e in entites:
-		swept_cache[e] = _aabb_balayee(e, delta)
+		var ce: Dictionary = _construire_cache(e, delta)
+		cache[String(e.get("id", ""))] = ce
+		e.proprietes["aabb_cache"] = ce.aabb
+		rayon_max = maxf(rayon_max, (ce.aabb as AABB).size.length() * 0.5)
 	var vus: Dictionary = {}
 	for e in entites:
-		var aabb_e2: AABB = e.proprietes["aabb_cache"]
-		var hd_e: float = aabb_e2.size.length() * 0.5
-		var r: float = hd_e + rayon_max + _velocite(e).length() * delta
-		var swept_e: AABB = swept_cache[e]
+		var ce: Dictionary = cache[String(e.get("id", ""))]
+		var aabb_e: AABB = ce.aabb
+		var hd_e: float = aabb_e.size.length() * 0.5
+		var r: float = hd_e + rayon_max + float(ce.vel_len) * delta
+		var swept_e: AABB = ce.swept
+		var masque_e: int = int(ce.masque_c)
 		for entree in monde.choses_dans_rayon(e.position, r):
 			var o = entree.chose
 			if o == e:
@@ -321,40 +328,77 @@ static func tick(monde, entites: Array, delta: float) -> Array:
 			if vus.has(cle):
 				continue
 			vus[cle] = true
-			if (int(_prop(e, "masque_collision", 0)) & int(_prop(o, "masque_collision", 0))) == 0:
-				continue
-			var swept_o: AABB
-			if swept_cache.has(o):
-				swept_o = swept_cache[o]
+			var oid: String = String(o.get("id", ""))
+			var co: Dictionary
+			if cache.has(oid):
+				co = cache[oid]
 			else:
-				swept_o = _aabb_balayee(o, delta)
-			if not swept_e.intersects(swept_o):
+				co = _construire_cache(o, delta)
+				cache[oid] = co
+			if (masque_e & int(co.masque_c)) == 0:
 				continue
-			var c: Dictionary = _contact_paire(e, o, delta)
+			if not swept_e.intersects(co.swept as AABB):
+				continue
+			var c: Dictionary = _contact_paire(e, ce, o, co, delta)
 			if not c.is_empty():
 				contacts.append(c)
 	return contacts
 
+# Construit le cache par-entite lu par le hot path : une lecture par champ,
+# une seule fois par tick. Contient aussi les valeurs derivees (vel_len,
+# vel_nz, taille_min) et l'AABB balayee (aabb etendue par -velocite*delta,
+# ou aabb si velocite nulle).
+static func _construire_cache(e, delta: float) -> Dictionary:
+	var pr: Dictionary = e.get("proprietes", {})
+	var vel: Vector3 = _prop(e, "velocite", Vector3.ZERO)
+	var orient: Basis = _prop(e, "orientation", Basis.IDENTITY)
+	var formes: Array = pr.get("formes", [])
+	var aabb: AABB = _aabb_from(orient, formes, e.position)
+	var vel_len: float = vel.length()
+	var vel_nz: bool = vel.length_squared() > 0.0
+	var swept: AABB = aabb
+	if vel_nz:
+		swept = aabb.merge(AABB(aabb.position - vel * delta, aabb.size))
+	return {
+		"vel": vel,
+		"vel_len": vel_len,
+		"vel_nz": vel_nz,
+		"orient": orient,
+		"aabb": aabb,
+		"swept": swept,
+		"masque_c": int(_prop(e, "masque_collision", 0)),
+		"masque_r": int(_prop(e, "masque_reponse", 0)),
+		"reponse": String(_prop(e, "reponse", "")),
+		"formes": formes,
+		"taille_min": _taille_min_formes(formes),
+	}
+
 # Narrowphase avec swept : echantillonne le trajet parcouru [position -
 # velocite*delta, position] en N sous-pas (N grandit si le deplacement depasse
 # la moitie de la plus petite dimension) et rend le PREMIER contact rencontre en
-# partant de l'endpoint (k=0) vers l'arriere. {} si aucun.
-static func _contact_paire(e, o, delta: float) -> Dictionary:
-	var vel_e: Vector3 = _velocite(e)
-	var vel_o: Vector3 = _velocite(o)
+# partant de l'endpoint (k=0) vers l'arriere. {} si aucun. Lit uniquement le
+# cache par-entite (ce, co) construit par la pre-passe de tick -- aucun appel a
+# _velocite/_orientation/_taille_min_entite ici. Le contact rendu embarque
+# reponse/masque_reponse/vel_nz pour que resoudre n'ait pas non plus a
+# relire les entites.
+static func _contact_paire(e, ce: Dictionary, o, co: Dictionary, delta: float) -> Dictionary:
+	var vel_e: Vector3 = ce.vel
+	var vel_o: Vector3 = co.vel
 	var pos_e: Vector3 = e.position
 	var pos_o: Vector3 = o.position
-	var orient_e: Basis = _orientation(e)
-	var orient_o: Basis = _orientation(o)
+	var orient_e: Basis = ce.orient
+	var orient_o: Basis = co.orient
 	var n := 1
-	var tm_e: float = _taille_min_entite(e)
-	var tm_o: float = _taille_min_entite(o)
-	if tm_e > 0.0 and vel_e.length() * delta > tm_e * 0.5:
-		n = maxi(n, int(ceil(vel_e.length() * delta / (tm_e * 0.5))))
-	if tm_o > 0.0 and vel_o.length() * delta > tm_o * 0.5:
-		n = maxi(n, int(ceil(vel_o.length() * delta / (tm_o * 0.5))))
-	var formes_e: Array = e.proprietes.get("formes", [])
-	var formes_o: Array = o.proprietes.get("formes", [])
+	var tm_e: float = float(ce.taille_min)
+	var tm_o: float = float(co.taille_min)
+	var vlen_e: float = float(ce.vel_len)
+	var vlen_o: float = float(co.vel_len)
+	if tm_e > 0.0 and vlen_e * delta > tm_e * 0.5:
+		n = maxi(n, int(ceil(vlen_e * delta / (tm_e * 0.5))))
+	if tm_o > 0.0 and vlen_o * delta > tm_o * 0.5:
+		n = maxi(n, int(ceil(vlen_o * delta / (tm_o * 0.5))))
+	var formes_e: Array = ce.formes
+	var formes_o: Array = co.formes
 	for k in range(n + 1):
 		var frac: float = float(k) / float(n)
 		var pe: Vector3 = pos_e - vel_e * delta * frac
@@ -365,7 +409,13 @@ static func _contact_paire(e, o, delta: float) -> Dictionary:
 				var tb: Transform3D = Transform3D(orient_o, po) * fb.get("transform_locale", Transform3D.IDENTITY)
 				var r: Dictionary = contact_forme_paire(fa, ta, fb, tb)
 				if not r.is_empty():
-					return {"a": e, "b": o, "normale": r.normale, "profondeur": r.profondeur}
+					return {
+						"a": e, "b": o,
+						"normale": r.normale, "profondeur": r.profondeur,
+						"a_reponse": ce.reponse, "b_reponse": co.reponse,
+						"a_masque_r": int(ce.masque_r), "b_masque_r": int(co.masque_r),
+						"a_vel_nz": bool(ce.vel_nz), "b_vel_nz": bool(co.vel_nz),
+					}
 	return {}
 
 # RACCOURCI boite-boite AABB-alignee : quand les deux formes sont "boite" et
@@ -412,13 +462,18 @@ static func contact_forme_paire(fa: Dictionary, ta: Transform3D, fb: Dictionary,
 	return {}
 
 static func _aabb_entite(e) -> AABB:
-	var formes: Array = e.get("proprietes", {}).get("formes", [])
+	return _aabb_from(_orientation(e), e.get("proprietes", {}).get("formes", []), e.position)
+
+# AABB monde d'un ensemble de formes deja resolues (orient + formes + position
+# passes directement). Utilise par _aabb_entite et par _construire_cache (qui
+# tient deja orient et formes en variables locales et n'a aucune raison de
+# refaire les getters).
+static func _aabb_from(orient: Basis, formes: Array, pos: Vector3) -> AABB:
 	if formes.is_empty():
-		return AABB(e.position, Vector3.ZERO)
-	var orient: Basis = _orientation(e)
-	var res: AABB = aabb_forme(formes[0], Transform3D(orient, e.position) * formes[0].get("transform_locale", Transform3D.IDENTITY))
+		return AABB(pos, Vector3.ZERO)
+	var res: AABB = aabb_forme(formes[0], Transform3D(orient, pos) * formes[0].get("transform_locale", Transform3D.IDENTITY))
 	for i in range(1, formes.size()):
-		res = res.merge(aabb_forme(formes[i], Transform3D(orient, e.position) * formes[i].get("transform_locale", Transform3D.IDENTITY)))
+		res = res.merge(aabb_forme(formes[i], Transform3D(orient, pos) * formes[i].get("transform_locale", Transform3D.IDENTITY)))
 	return res
 
 # AABB de l'entite a sa position ET a sa position d'il y a un tick (couvre le
@@ -444,7 +499,9 @@ static func _aabb_cachee(e) -> AABB:
 	return _aabb_entite(e)
 
 static func _taille_min_entite(e) -> float:
-	var formes: Array = e.get("proprietes", {}).get("formes", [])
+	return _taille_min_formes(e.get("proprietes", {}).get("formes", []))
+
+static func _taille_min_formes(formes: Array) -> float:
 	var m := INF
 	for f in formes:
 		m = minf(m, _taille_min_forme(f))
@@ -505,14 +562,15 @@ static func resoudre(contacts: Array, _entites: Array) -> void:
 		var normale: Vector3 = c.normale
 		if prof <= _EPS or normale.length_squared() < _EPS:
 			continue
-		var a = c.a
-		var b = c.b
-		if String(_prop(a, "reponse", "")) != "bloque" or String(_prop(b, "reponse", "")) != "bloque":
+		# Champs entite MIS EN CACHE par _contact_paire dans le contact lui-meme :
+		# resoudre ne rappelle plus _prop/_velocite sur a ni sur b -- tout ce
+		# dont il a besoin voyage avec le contact.
+		if String(c.a_reponse) != "bloque" or String(c.b_reponse) != "bloque":
 			continue
-		if (int(_prop(a, "masque_reponse", 0)) & int(_prop(b, "masque_reponse", 0))) == 0:
+		if (int(c.a_masque_r) & int(c.b_masque_r)) == 0:
 			continue
-		var a_mobile: bool = _velocite(a).length_squared() > 0.0
-		var b_mobile: bool = _velocite(b).length_squared() > 0.0
+		var a_mobile: bool = bool(c.a_vel_nz)
+		var b_mobile: bool = bool(c.b_vel_nz)
 		var part_a := 0.5
 		var part_b := 0.5
 		if a_mobile and not b_mobile:
@@ -522,5 +580,7 @@ static func resoudre(contacts: Array, _entites: Array) -> void:
 			part_a = 0.0
 			part_b = 1.0
 		# normale pointe A->B : A s'ecarte en -normale, B en +normale.
+		var a = c.a
+		var b = c.b
 		a.position -= normale * prof * part_a
 		b.position += normale * prof * part_b
