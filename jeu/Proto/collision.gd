@@ -280,14 +280,21 @@ static func _ajouter_bord(aretes: Array, i: int, j: int) -> void:
 # Transform3D(orientation, position) * transform_locale.
 static func tick(monde, entites: Array, delta: float) -> Array:
 	var contacts: Array = []
+	# PRE-PASSE aabb_cache : chaque entite qui entre dans tick voit son cache
+	# reecrit AVANT la broadphase. _aabb_balayee peut alors lire aabb_cache sans
+	# risque de le trouver obsolete (ecrit au tick precedent) ni absent (o vu par
+	# broadphase avant que son iteration principale ait tourne). Une entite
+	# trouvee par choses_dans_rayon qui n'aurait pas de cache retombe sur
+	# _aabb_entite (voir _aabb_cachee).
 	var rayon_max := 0.0
 	for e in entites:
-		rayon_max = maxf(rayon_max, _aabb_entite(e).size.length() * 0.5)
+		var aabb_e := _aabb_entite(e)
+		e.proprietes["aabb_cache"] = aabb_e
+		rayon_max = maxf(rayon_max, aabb_e.size.length() * 0.5)
 	var vus: Dictionary = {}
 	for e in entites:
-		var aabb_e := _aabb_entite(e)
-		e.proprietes["aabb_cache"] = aabb_e  # rafraichit le cache
-		var hd_e: float = aabb_e.size.length() * 0.5
+		var aabb_e2: AABB = e.proprietes["aabb_cache"]
+		var hd_e: float = aabb_e2.size.length() * 0.5
 		var r: float = hd_e + rayon_max + _velocite(e).length() * delta
 		for entree in monde.choses_dans_rayon(e.position, r):
 			var o = entree.chose
@@ -336,10 +343,52 @@ static func _contact_paire(e, o, delta: float) -> Dictionary:
 			var ta: Transform3D = Transform3D(orient_e, pe) * fa.get("transform_locale", Transform3D.IDENTITY)
 			for fb in formes_o:
 				var tb: Transform3D = Transform3D(orient_o, po) * fb.get("transform_locale", Transform3D.IDENTITY)
-				var g: Dictionary = gjk(fa, ta, fb, tb)
-				if g.intersecte:
-					var ep: Dictionary = epa(g.simplexe, fa, ta, fb, tb)
-					return {"a": e, "b": o, "normale": ep.normale, "profondeur": ep.profondeur}
+				var r: Dictionary = contact_forme_paire(fa, ta, fb, tb)
+				if not r.is_empty():
+					return {"a": e, "b": o, "normale": r.normale, "profondeur": r.profondeur}
+	return {}
+
+# RACCOURCI boite-boite AABB-alignee : quand les deux formes sont "boite" et
+# que leurs transforms monde n'ont pas de rotation (basis == IDENTITY), le
+# contact se calcule par recouvrement d'AABB direct -- normale = axe de plus
+# petit recouvrement, profondeur = ce recouvrement. Meme resultat que gjk/epa
+# sur ce cas (verrouille par test de parite), mais sans les 32 iterations
+# bornees ni les 6 supports par AABB. Tout autre cas (une capsule, une orient
+# tournee, un transform_locale rotate) retombe sur gjk/epa inchange.
+static func contact_forme_paire(fa: Dictionary, ta: Transform3D, fb: Dictionary, tb: Transform3D) -> Dictionary:
+	if String(fa.get("type", "")) == "boite" and String(fb.get("type", "")) == "boite" \
+			and ta.basis == Basis.IDENTITY and tb.basis == Basis.IDENTITY:
+		var ha: Vector3 = fa.get("parametres", {}).get("demi_taille", Vector3.ZERO)
+		var hb: Vector3 = fb.get("parametres", {}).get("demi_taille", Vector3.ZERO)
+		var delta_c: Vector3 = tb.origin - ta.origin
+		var rx: float = ha.x + hb.x - absf(delta_c.x)
+		if rx <= 0.0:
+			return {}
+		var ry: float = ha.y + hb.y - absf(delta_c.y)
+		if ry <= 0.0:
+			return {}
+		var rz: float = ha.z + hb.z - absf(delta_c.z)
+		if rz <= 0.0:
+			return {}
+		var normale: Vector3
+		var profondeur: float
+		if rx <= ry and rx <= rz:
+			var s: float = signf(delta_c.x)
+			normale = Vector3(s if s != 0.0 else 1.0, 0.0, 0.0)
+			profondeur = rx
+		elif ry <= rz:
+			var s2: float = signf(delta_c.y)
+			normale = Vector3(0.0, s2 if s2 != 0.0 else 1.0, 0.0)
+			profondeur = ry
+		else:
+			var s3: float = signf(delta_c.z)
+			normale = Vector3(0.0, 0.0, s3 if s3 != 0.0 else 1.0)
+			profondeur = rz
+		return {"normale": normale, "profondeur": profondeur}
+	var g: Dictionary = gjk(fa, ta, fb, tb)
+	if g.intersecte:
+		var ep: Dictionary = epa(g.simplexe, fa, ta, fb, tb)
+		return {"normale": ep.normale, "profondeur": ep.profondeur}
 	return {}
 
 static func _aabb_entite(e) -> AABB:
@@ -353,14 +402,26 @@ static func _aabb_entite(e) -> AABB:
 	return res
 
 # AABB de l'entite a sa position ET a sa position d'il y a un tick (couvre le
-# trajet swept) -- pour la broadphase.
+# trajet swept) -- pour la broadphase. Lit proprietes.aabb_cache si present
+# (ecrit par la pre-passe de tick), sinon recalcule via _aabb_entite : la
+# broadphase reste correcte (jamais un faux negatif) meme si le cache manque.
 static func _aabb_balayee(e, delta: float) -> AABB:
-	var a := _aabb_entite(e)
+	var a: AABB = _aabb_cachee(e)
 	var vel: Vector3 = _velocite(e)
 	if vel.length_squared() <= 0.0:
 		return a
 	var b := AABB(a.position - vel * delta, a.size)
 	return a.merge(b)
+
+# AABB de l'entite lue dans son cache proprietes.aabb_cache si present, sinon
+# recalculee. Le cache est ecrit par la pre-passe de tick, donc frais pour toute
+# entite passee dans le meme tick. Une entite trouvee par la broadphase mais
+# absente de la liste tick n'a pas ce cache -- fallback safe sur _aabb_entite.
+static func _aabb_cachee(e) -> AABB:
+	var pr: Dictionary = e.get("proprietes", {})
+	if pr.has("aabb_cache"):
+		return pr["aabb_cache"]
+	return _aabb_entite(e)
 
 static func _taille_min_entite(e) -> float:
 	var formes: Array = e.get("proprietes", {}).get("formes", [])

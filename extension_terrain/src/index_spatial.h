@@ -58,17 +58,16 @@ class IndexSpatial : public RefCounted {
 	struct Niveau {
 		float inv_arete = 1.0f;
 		int exposant = 0;
-		// PLANAIRE (chantier "degraissage separation_lot", 2026-09-08) : quand
-		// vrai, deplacer_lot force le composant Y de la case-clef a 0 lors de
-		// l'insertion -- toutes les unites de la meme colonne (fx, fz) tombent
-		// dans la MEME entree unordered_map, quelle que soit leur altitude.
-		// separation_lot exige un niveau planaire (voir sa doc) : elle lit UNE
-		// case cases[(cx, 0, cz)] par colonne cible, jamais une pile de plans Y
+		// PLANAIRE : quand vrai, deplacer_lot force le composant Y de la
+		// case-clef a 0 lors de l'insertion -- toutes les unites de la meme
+		// colonne (fx, fz) tombent dans la MEME entree unordered_map, quelle
+		// que soit leur altitude. Un lecteur planaire lit alors UNE case
+		// cases[(cx, 0, cz)] par colonne cible, jamais une pile de plans Y
 		// dont la plupart seraient vides -- gain massif de hashmap.find sur un
-		// terrain fait de 100 000 unites entassees. Niveau non planaire (defaut) :
-		// deplacer_lot insere en 3D pur, comportement historique. Le niveau du
-		// deplacer (arete 16) reste 3D ; seul un second niveau dedie a la
-		// separation est ouvert planaire par le banc.
+		// terrain fait de 100 000 unites entassees. Niveau non planaire
+		// (defaut) : deplacer_lot insere en 3D pur. Le niveau du deplacer
+		// (arete 16) reste 3D ; un second niveau dedie a la lecture planaire
+		// est ouvert planaire par le banc.
 		bool planaire = false;
 		std::unordered_map<Vector3i, std::vector<int32_t>, Vec3iHash> cases;
 		std::vector<Vector3i> case_de;
@@ -119,8 +118,8 @@ public:
 
 	// Meme geste que ouvrir_niveau, mais le niveau est marque PLANAIRE (voir
 	// struct Niveau::planaire). deplacer_lot y insere avec y=0 dans la clef,
-	// separation_lot le lit sans jamais boucler sur l'axe Y. No-op si un niveau
-	// (planaire ou non) au meme exposant est deja ouvert.
+	// la lecture planaire le lit sans jamais boucler sur l'axe Y. No-op si un
+	// niveau (planaire ou non) au meme exposant est deja ouvert.
 	void ouvrir_niveau_planaire(int exposant);
 
 	// Met a jour l'index avec les positions courantes des IDs 0..count-1,
@@ -137,8 +136,7 @@ public:
 
 	// VUE = PERCEPTION (ce que l'agent voit : rayon + cone oriente + occlusion
 	// selon scripts/occlusion.gd::facteur, portee mot pour mot). La sortie est
-	// CE QUE CHAQUE AGENT VOIT (liste d'ids par agent), jamais une direction
-	// de repulsion : la separation est un CONSOMMATEUR distinct (separation_lot).
+	// CE QUE CHAQUE AGENT VOIT (liste d'ids par agent).
 	//
 	// TROIS FILTRES CUMULES, dans cet ordre :
 	// (1) DISTANCE : voisins du disque de rayon `rayon` (port de
@@ -201,18 +199,6 @@ public:
 			float cos_moitie_angle,
 			float largeur,
 			float seuil_facteur) const;
-
-	// SEPARATION_LOT : consomme une perception (ids + offsets) et rend une
-	// direction unitaire horizontale de repulsion par agent. Somme ponderee
-	// w = (rayon - d) / d sur ses voisins vus, normalisee. Le sqrt est
-	// recalcule depuis positions -- structure compacte, pas de duplication
-	// de dx/dz/d. Chaque consommateur de la perception (fuite, ciblage, ...)
-	// est un cousin de cette fonction.
-	PackedVector3Array separation_lot(
-			const PackedVector3Array &positions,
-			const PackedInt32Array &ids,
-			const PackedInt32Array &offsets,
-			float rayon) const;
 
 	// Chrono interne du dernier perception_lot, en microsecondes (voir
 	// declaration de _us_occ_sep plus haut). Dictionary { "occ_sep" }.

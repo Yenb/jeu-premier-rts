@@ -19,7 +19,6 @@ void IndexSpatial::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("deplacer_lot", "positions"), &IndexSpatial::deplacer_lot);
 	ClassDB::bind_method(D_METHOD("cases_pour_niveau", "exposant"), &IndexSpatial::cases_pour_niveau);
 	ClassDB::bind_method(D_METHOD("perception_lot", "positions", "orientations", "opacites", "rayon", "cos_moitie_angle", "largeur", "seuil_facteur"), &IndexSpatial::perception_lot);
-	ClassDB::bind_method(D_METHOD("separation_lot", "positions", "ids", "offsets", "rayon"), &IndexSpatial::separation_lot);
 	ClassDB::bind_method(D_METHOD("derniers_chronos_vue"), &IndexSpatial::derniers_chronos_vue);
 	ClassDB::bind_method(D_METHOD("derniers_compteurs_vue"), &IndexSpatial::derniers_compteurs_vue);
 }
@@ -94,7 +93,7 @@ void IndexSpatial::deplacer_lot(const PackedVector3Array &positions) {
 			// PLANAIRE : la clef de case ecrase Y a 0 (voir Niveau::planaire).
 			// Toutes les unites de la meme colonne (fx, fz) tombent dans la
 			// meme entree unordered_map, quelle que soit leur altitude --
-			// lecture de separation_lot en O(cases planaires) sans balayer Y.
+			// la lecture planaire en O(cases planaires) sans balayer Y.
 			Vector3i visee(
 					(int32_t)std::floor(p.x * inv_a),
 					planaire ? 0 : (int32_t)std::floor(p.y * inv_a),
@@ -378,60 +377,6 @@ Dictionary IndexSpatial::perception_lot(
 	}
 	out["ids"] = ids_plat;
 	out["offsets"] = offsets;
-	return out;
-}
-
-PackedVector3Array IndexSpatial::separation_lot(
-		const PackedVector3Array &positions,
-		const PackedInt32Array &ids,
-		const PackedInt32Array &offsets,
-		float rayon) const {
-	PackedVector3Array out;
-	int count = offsets.size() - 1;
-	if (count <= 0) {
-		return out;
-	}
-	out.resize(count);
-	Vector3 *out_w = out.ptrw();
-	for (int i = 0; i < count; i++) {
-		out_w[i] = Vector3();
-	}
-	if (positions.size() < count) {
-		ERR_PRINT("IndexSpatial::separation_lot : positions trop petit vs offsets. Retour a zero.");
-		return out;
-	}
-	const Vector3 *pos_r = positions.ptr();
-	const int32_t *ids_r = ids.ptr();
-	const int32_t *off_r = offsets.ptr();
-	for (int i = 0; i < count; i++) {
-		int debut = off_r[i];
-		int fin = off_r[i + 1];
-		if (debut == fin) {
-			continue;
-		}
-		const Vector3 &p_i = pos_r[i];
-		float ax = 0.0f;
-		float az = 0.0f;
-		for (int j = debut; j < fin; j++) {
-			int32_t id_k = ids_r[j];
-			const Vector3 &p_k = pos_r[id_k];
-			float dx = p_i.x - p_k.x;
-			float dz = p_i.z - p_k.z;
-			float d2 = dx * dx + dz * dz;
-			if (d2 <= 1e-8f) {
-				continue;
-			}
-			float d = std::sqrt(d2);
-			float w = (rayon - d) / d;
-			ax += dx * w;
-			az += dz * w;
-		}
-		float len2 = ax * ax + az * az;
-		if (len2 > 1e-8f) {
-			float inv_len = 1.0f / std::sqrt(len2);
-			out_w[i] = Vector3(ax * inv_len, 0.0f, az * inv_len);
-		}
-	}
 	return out;
 }
 

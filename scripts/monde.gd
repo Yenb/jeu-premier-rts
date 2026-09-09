@@ -63,6 +63,17 @@ const NiveauMonde = preload("res://scripts/niveau_monde.gd")
 # Ne peut pas attendre le depot framework : les tests de charge en phase 8
 # franchissent le seuil. Meme geste doctrinal que retirer() ci-dessus.
 #
+# ECART AVEC LE DEPOT FRAMEWORK : choses_dans_rayon lit `niveau.inv_arete`
+# precalcule au lieu de rappeler `_arete(exposant)` (pow) a chaque requete, et
+# calcule `origine = Vector3(cle) * arete` UNIQUEMENT au dispatch Dictionary --
+# sous structure_simple chaque case est un Array a plat, la branche Dictionary
+# de _collecter est morte et l'origine n'a jamais a etre allouee. La branche
+# Array est aussi inlinee dans choses_dans_rayon (economie de l'appel _collecter
+# + du dispatch `contenu is Array`). Compteurs requetes/cases_lues/
+# candidats_mesures identiques a l'ancien chemin (verrouille par
+# test_monde_structure_simple.gd et test_monde_subdivision.gd). Le depot orion
+# ne porte pas ces retraits.
+#
 # ECART AVEC LE DEPOT FRAMEWORK : `structure_simple` (bool, defaut false --
 # comportement historique intact). Sous true, la subdivision adaptative est
 # COURT-CIRCUITEE : ajouter/deplacer/retirer prennent une branche courte
@@ -338,10 +349,13 @@ func choses_dans_rayon(position: Vector3, rayon: float) -> Array:
 	var exposant := _exposant_pour(rayon)
 	var niveau := _niveau(exposant)
 	var cases: Dictionary = niveau.cases
-	var basse := _case_pour(position - Vector3(rayon, rayon, rayon), exposant)
-	var haute := _case_pour(position + Vector3(rayon, rayon, rayon), exposant)
+	# inv_arete precalcule dans le niveau (voir _batir) : evite pow(2, exposant)
+	# par requete et transforme les 3 divisions de _case_pour en 3
+	# multiplications. Voir ECART FRAMEWORK en tete de fichier.
+	var inv_a: float = niveau.inv_arete
+	var basse := _case_pour_inv(position - Vector3(rayon, rayon, rayon), inv_a)
+	var haute := _case_pour_inv(position + Vector3(rayon, rayon, rayon), inv_a)
 	var carre := rayon * rayon
-	var arete := _arete(exposant)
 	requetes += 1
 	for cx in range(basse.x, haute.x + 1):
 		for cy in range(basse.y, haute.y + 1):
@@ -351,8 +365,23 @@ func choses_dans_rayon(position: Vector3, rayon: float) -> Array:
 				var contenu = cases.get(cle, null)
 				if contenu == null:
 					continue
-				var origine := Vector3(cle) * arete
-				_collecter(contenu, origine, arete, position, carre, resultat)
+				# BRANCHE ARRAY INLINE : cas dominant sous structure_simple (chaque
+				# case reste Array a plat, jamais Dictionary). Economise l'appel a
+				# _collecter et son dispatch `is Array`, et surtout n'alloue pas
+				# `origine` qui ne servirait a rien ici.
+				if contenu is Array:
+					for id in contenu:
+						var entree: Dictionary = choses[id]
+						var pos_vivante: Vector3 = entree.chose.position
+						candidats_mesures += 1
+						if position.distance_squared_to(pos_vivante) <= carre:
+							resultat.append({"chose": entree.chose, "type": entree.type, "position": pos_vivante})
+				else:
+					# BRANCHE DICTIONARY : subdivision. Origine et arete calcules
+					# PARESSEUSEMENT, uniquement quand on descend.
+					var arete: float = 1.0 / inv_a
+					var origine := Vector3(cle) * arete
+					_collecter(contenu, origine, arete, position, carre, resultat)
 	if trier_par_insertion:
 		resultat.sort_custom(_avant)
 	if verifier_index:
@@ -521,6 +550,16 @@ func _case_pour(position: Vector3, exposant: int) -> Vector3i:
 		floori(position.x / arete),
 		floori(position.y / arete),
 		floori(position.z / arete))
+
+# Variante qui prend inv_arete deja precalcule (typiquement niveau.inv_arete) :
+# trois floori sur des MULTIPLICATIONS, aucune division, aucun pow. Utilisee par
+# choses_dans_rayon (hot path). Meme resultat que _case_pour a arithmetique
+# equivalente (arete = 1/inv_arete).
+func _case_pour_inv(position: Vector3, inv_arete: float) -> Vector3i:
+	return Vector3i(
+		floori(position.x * inv_arete),
+		floori(position.y * inv_arete),
+		floori(position.z * inv_arete))
 
 # La resolution demandee, batie a la volee si elle n'existe pas encore. Ce
 # premier passage coute une passe sur toute la population -- une fois, pour
