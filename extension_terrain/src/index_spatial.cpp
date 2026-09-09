@@ -13,34 +13,18 @@
 using namespace godot;
 
 namespace {
-// Entree "voisin retenu par filtre distance" pour vue_lot -- id + delta et
-// distance precalcules pour eviter tout recalcul dans les boucles cone et
-// occlusion. Un vector<VoisinVue> local a vue_lot remplace la boucle
-// d'occlusion sur le voisinage brut (chantier "degraissage vue_lot",
-// 2026-09-08) : les seuls corps qui peuvent occulter un voisin retenu sont
-// eux-memes des voisins dans le rayon (un obstacle plus loin ne coupe pas
-// le segment percepteur -> voisin, la geometrie de occlusion.gd::facteur
-// avec t dans ]0,1[ le rejette de facto). Filtrer d'abord par distance rend
-// la liste bien plus petite que le voisinage brut (typiquement 5-10x moins
-// a densite du peuplement mobile_test), donc l'occlusion coute nv_r^2 au
-// lieu de nv_brut^2 -- gain quadratique sur le poste vue.
+// Entree "voisin retenu dans le disque" pour perception_lot -- id + delta et
+// distance precalcules pour eviter tout recalcul dans la passe occlusion.
+// La liste `dans_rayon` (per-agent) collecte ces entrees a partir des cases
+// touchees par le disque de l'agent, filtree par distance^2 <= rayon^2 puis
+// par cone elargi (sans sqrt). Les seuls corps qui peuvent occulter un
+// voisin retenu sont eux-memes dans cette liste : un obstacle plus loin ne
+// coupe pas le segment percepteur -> voisin (t dans ]0,1[ le rejette).
 struct VoisinVue {
 	int32_t id;
 	float dx; // pos_i.x - pos_k.x
 	float dz; // pos_i.z - pos_k.z
 	float d;  // distance horizontale
-};
-// Voisinage BRUT d'une case (patron boids : liste de voisinage batie une fois
-// par cellule, partagee entre tous les agents de la cellule). Contient
-// {id, x, z} de chaque corps du bloc (2*n_cases+1)^2 autour de la case, sans
-// dedoublonnage necessaire (chaque case adjacente ne contient qu'une fois un
-// id donne). Chaque unite de la case courante lit ce voisinage commun pour
-// calculer SES propres dx/dz/d (soustraction depuis sa position + sqrt) --
-// la LISTE DES CORPS a considerer n'est etablie qu'une fois par case.
-struct VoisinBrut {
-	int32_t id;
-	float x;
-	float z;
 };
 } // namespace anonyme
 
@@ -245,10 +229,6 @@ Dictionary IndexSpatial::perception_lot(
 	const float rayon_corps = 0.5f * largeur;
 	const float r_corps2 = rayon_corps * rayon_corps;
 
-	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron Verlet neighbor list,
-	// reconstruit par frame). dans_rayon_case est indexe par POSITION dans la
-	// case courante et EFFACE a chaque nouvelle case.
-	std::vector<std::vector<VoisinVue>> dans_rayon_case;
 	// PERCEPTION MATERIALISEE : `vus_par_id` accumule pendant la passe 2 les
 	// ids vus par chaque agent, puis serialise en `ids_plat` + `offsets` a la
 	// fin. thread_local pour amortir l'allocation entre frames.
@@ -259,19 +239,22 @@ Dictionary IndexSpatial::perception_lot(
 	for (int i = 0; i < count; i++) {
 		vus_par_id[(size_t)i].clear();
 	}
+	// LISTE DES VOISINS DANS LE RAYON, per-agent. thread_local : capacite
+	// gardee entre agents et entre frames, seul `clear()` est paye a chaque
+	// nouvel agent.
+	static thread_local std::vector<VoisinVue> dans_rayon;
 	// Compteurs TEMPORAIRES : voisins bruts (rayon), voisins VUS (rayon + cone
 	// + occlusion), unites traitees.
 	_vue_voisins_total = 0;
 	_vue_unites_total = 0;
 	_vue_vus_total = 0;
 
-	const int n_cases = (int)std::ceil(rayon * inv_a);
-
-	// PRE-FILTRE CONE ELARGI (avant sqrt en passe 1b). demi_cone_elargi =
-	// demi_cone_strict + atan2(largeur, rayon). La marge atan2(largeur, rayon)
-	// garantit qu'aucun bloqueur legitime n'est perdu : un occulteur de taille
-	// `largeur` a distance `rayon` reste dans le cone elargi meme s'il est hors
-	// cone strict. Le verdict final (cone strict + occlusion) reste en passe 2.
+	// PRE-FILTRE CONE ELARGI (avant sqrt dans la collecte per-agent).
+	// demi_cone_elargi = demi_cone_strict + atan2(largeur, rayon). La marge
+	// atan2(largeur, rayon) garantit qu'aucun bloqueur legitime n'est perdu :
+	// un occulteur de taille `largeur` a distance `rayon` reste dans le cone
+	// elargi meme s'il est hors cone strict. Le verdict final (cone strict +
+	// occlusion) reste en passe 2.
 	float cos_moitie_elargi = cos_moitie_angle;
 	if (cos_moitie_angle > -1.0f + 1e-6f) {
 		float demi_angle = std::acos(cos_moitie_angle);
@@ -287,106 +270,88 @@ Dictionary IndexSpatial::perception_lot(
 	const bool cos_elargi_positif = (cos_moitie_elargi >= 0.0f);
 	const bool cone_ferme = (cos_moitie_elargi > -1.0f + 1e-6f);
 
-	for (const auto &kv_case : niveau.cases) {
-		const Vector3i &C1 = kv_case.first;
-		const std::vector<int32_t> &unites_case = kv_case.second;
-		if (unites_case.empty()) {
-			continue;
-		}
-		const int n1 = (int)unites_case.size();
+	// PORT DE scripts/monde.gd::choses_dans_rayon EN LOT. Chaque agent lit son
+	// disque depuis SA position -- basse/haute en cases derives de `position +/-
+	// rayon`, iteration des cases du bounding box, filtre `distance^2 <= rayon^2`
+	// par candidat. Une frontiere GDScript->C++ par frame (perception_lot rend
+	// {ids, offsets} pour tous les agents), pas d'appel GDScript par agent.
+	for (int i = 0; i < count; i++) {
+		const int32_t id = i;
+		const Vector3 &p_i = pos_r[id];
+		const Vector3 &orient_i = orient_r[id];
 
-		// PASSE 1a : voisinage BRUT de la case, etabli UNE FOIS.
-		// La liste des corps du bloc (2*n_cases+1)^2 autour de la case est
-		// commune aux unites de la case -- seul le calcul dx/dz/d depuis leur
-		// position est per-unite. Patron boids : liste de voisinage batie une
-		// fois par cellule, partagee entre tous les agents. Reutilise entre
-		// cases via un thread_local (clear + capacite gardee).
+		// BASSE / HAUTE en cases, derives de la position de l'agent : cases
+		// touchees par le disque de rayon `rayon` centre sur p_i. Meme geste
+		// que _case_pour(position - rayon) et _case_pour(position + rayon) dans
+		// scripts/monde.gd::choses_dans_rayon.
+		const int cx_min = (int)std::floor((p_i.x - rayon) * inv_a);
+		const int cx_max = (int)std::floor((p_i.x + rayon) * inv_a);
+		const int cz_min = (int)std::floor((p_i.z - rayon) * inv_a);
+		const int cz_max = (int)std::floor((p_i.z + rayon) * inv_a);
+
+		// COLLECTE : itere les cases du bounding box du disque, filtre
+		// `d2 < rayon2` (test candidat identique a monde.gd:_collecter) puis
+		// pre-filtre cone elargi sans sqrt. Le sqrt n'est paye que pour les
+		// voisins qui peuvent etre vus OU servir d'occulteur en passe 2.
 		auto t_col_debut = std::chrono::steady_clock::now();
-		static thread_local std::vector<VoisinBrut> voisinage_case;
-		voisinage_case.clear();
-		for (int dcx = -n_cases; dcx <= n_cases; dcx++) {
-			for (int dcz = -n_cases; dcz <= n_cases; dcz++) {
-				Vector3i Cadj(C1.x + dcx, 0, C1.z + dcz);
-				auto it = niveau.cases.find(Cadj);
+		dans_rayon.clear();
+		for (int cx = cx_min; cx <= cx_max; cx++) {
+			for (int cz = cz_min; cz <= cz_max; cz++) {
+				Vector3i cle(cx, 0, cz);
+				auto it = niveau.cases.find(cle);
 				if (it == niveau.cases.end()) {
 					continue;
 				}
-				const std::vector<int32_t> &unites_adj = it->second;
-				const int na = (int)unites_adj.size();
-				for (int jj = 0; jj < na; jj++) {
-					int32_t k_id = unites_adj[jj];
+				const std::vector<int32_t> &unites_cle = it->second;
+				const int nu = (int)unites_cle.size();
+				for (int jj = 0; jj < nu; jj++) {
+					int32_t k_id = unites_cle[jj];
+					if (k_id == id) {
+						continue;  // exclure soi
+					}
 					const Vector3 &p_k = pos_r[k_id];
-					VoisinBrut vb;
-					vb.id = k_id;
-					vb.x = p_k.x;
-					vb.z = p_k.z;
-					voisinage_case.push_back(vb);
-				}
-			}
-		}
-		// PASSE 1b : chaque unite de la case lit le voisinage commun pour
-		// calculer SES propres dx/dz/d et remplir sa liste. Le CONE ELARGI
-		// filtre AVANT le sqrt : voisin derriere ou hors marge angulaire
-		// sort immediatement, sans distance calculee. La liste finale ne
-		// contient que ce qui peut etre vu OU servir d'occulteur en passe 2.
-		if ((int)dans_rayon_case.size() < n1) {
-			dans_rayon_case.resize((size_t)n1);
-		}
-		const int nvb = (int)voisinage_case.size();
-		for (int ii = 0; ii < n1; ii++) {
-			int32_t i_id = unites_case[ii];
-			const Vector3 &p_i = pos_r[i_id];
-			const Vector3 &orient_i = orient_r[i_id];
-			std::vector<VoisinVue> &liste_ii = dans_rayon_case[(size_t)ii];
-			liste_ii.clear();
-			for (int a = 0; a < nvb; a++) {
-				const VoisinBrut &vb = voisinage_case[(size_t)a];
-				if (vb.id == i_id) {
-					continue;  // exclure soi
-				}
-				float dx = p_i.x - vb.x;
-				float dz = p_i.z - vb.z;
-				float d2 = dx * dx + dz * dz;
-				if (d2 >= rayon2) {
-					continue;
-				}
-				// PRE-FILTRE CONE ELARGI (sans sqrt). Test dot_vers >=
-				// cos_moitie_elargi * d. dot_vers = orient . (percepteur->voisin)
-				// = -(orient.x * dx + orient.z * dz).
-				// Cas cos_elargi_positif : rejeter si dot <= 0 (voisin derriere)
-				//   OU dot^2 < cos_elargi_sq * d2 (hors cone). Sans racine.
-				// Cas cos_elargi < 0 (cone > 180 deg) : accepte tout (le pre-
-				// filtre serait trop complique pour peu d'economie).
-				if (cone_ferme && cos_elargi_positif) {
-					float dot_vers = -(orient_i.x * dx + orient_i.z * dz);
-					if (dot_vers <= 0.0f) {
+					float dx = p_i.x - p_k.x;
+					float dz = p_i.z - p_k.z;
+					float d2 = dx * dx + dz * dz;
+					if (d2 >= rayon2) {
 						continue;
 					}
-					if (dot_vers * dot_vers < cos_elargi_sq * d2) {
-						continue;
+					// PRE-FILTRE CONE ELARGI (sans sqrt). Test dot_vers >=
+					// cos_moitie_elargi * d. dot_vers = orient . (percepteur->
+					// voisin) = -(orient.x * dx + orient.z * dz).
+					// Cas cos_elargi_positif : rejeter si dot <= 0 (voisin
+					// derriere) OU dot^2 < cos_elargi_sq * d2 (hors cone).
+					// Cas cos_elargi < 0 (cone > 180 deg) : accepte tout.
+					if (cone_ferme && cos_elargi_positif) {
+						float dot_vers = -(orient_i.x * dx + orient_i.z * dz);
+						if (dot_vers <= 0.0f) {
+							continue;
+						}
+						if (dot_vers * dot_vers < cos_elargi_sq * d2) {
+							continue;
+						}
 					}
+					float d = std::sqrt(d2);
+					VoisinVue vv;
+					vv.id = k_id;
+					vv.dx = dx;
+					vv.dz = dz;
+					vv.d = d;
+					dans_rayon.push_back(vv);
 				}
-				float d = std::sqrt(d2);
-				VoisinVue vv;
-				vv.id = vb.id;
-				vv.dx = dx;
-				vv.dz = dz;
-				vv.d = d;
-				liste_ii.push_back(vv);
 			}
 		}
 		_us_collecte += std::chrono::duration_cast<std::chrono::microseconds>(
 				std::chrono::steady_clock::now() - t_col_debut).count();
 
-		// PASSE 2 : per-unite (cone elargi + tri + cone strict + occlusion + separation).
-		for (int iu = 0; iu < n1; iu++) {
-			int32_t id = unites_case[iu];
-			const Vector3 &orient = orient_r[id];
-			std::vector<VoisinVue> &liste = dans_rayon_case[(size_t)iu];
-			// Compteurs diagnostic : accumule taille des listes brutes (avant
-			// filtre cone) et compte l'unite. Voisins_moy = total / unites.
-			_vue_voisins_total += (int64_t)liste.size();
-			_vue_unites_total += 1;
+		// Compteurs diagnostic : accumule taille de dans_rayon (candidats
+		// apres filtre distance + cone elargi) et compte l'unite.
+		_vue_voisins_total += (int64_t)dans_rayon.size();
+		_vue_unites_total += 1;
+
+		{
+			const Vector3 &orient = orient_i;
+			std::vector<VoisinVue> &liste = dans_rayon;
 
 			// MODULE OCCLUSION VISUELLE CORPS-TRAVERSE + SEPARATION.
 			// Modele inchange : la vue s'arrete au premier corps opaque, un

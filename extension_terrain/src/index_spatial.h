@@ -152,11 +152,11 @@ public:
 	//
 	// Selection identique a l'ancienne (rayon + cone oriente + occlusion corps
 	// traverse, chaque etape verrouillee par test_vue_cpp.gd) :
-	// (1) voisins dans le rayon (distance horizontale strictement inferieure a
-	// ), (2) filtre par cone d'angle autour de l'orientation de chaque
-	// unite (cos(diff, orient) >= cos_moitie_angle, patron
-	// scripts/perception.gd::_percevoir_cone_oriente), (3) test d'occlusion
-	// contre les autres corps du meme voisinage 3x3 planaire (geometrie de
+	// (1) voisins dans le rayon (distance horizontale strictement inferieure au
+	// rayon, port de choses_dans_rayon), (2) filtre par cone d'angle autour de
+	// l'orientation de chaque unite (cos(diff, orient) >= cos_moitie_angle,
+	// patron scripts/perception.gd::_percevoir_cone_oriente), (3) test
+	// d'occlusion contre les autres corps du disque de l'agent (geometrie de
 	// scripts/occlusion.gd::facteur portee mot pour mot -- t dans ]0,1[,
 	// distance laterale <= largeur), un voisin cache par un corps plus proche
 	// est RETIRE. (4) Ce qui reste dans le cone strict et non cache est ce que
@@ -172,9 +172,8 @@ public:
 	// Un agent qui ne voit personne a offsets[i] == offsets[i+1] (liste vide).
 	// A vus_moy ~1 en foule dense, N=100 000 -> vus ~400 Ko + offsets ~400 Ko.
 	//
-	// OBSTACLES = voisinage courant : JAMAIS une requete spatiale par paire
-	// percepteur-voisin (ce serait le piege n^2 documente dans le prompt). Les
-	// obstacles sont les corps deja lus dans les cases 3x3 planaires visitees.
+	// OBSTACLES = corps deja collectes dans le disque de l'agent (voir plus
+	// bas). JAMAIS une requete spatiale par paire percepteur-voisin.
 	//
 	// OPACITE PAR-ID :  est un PackedFloat32Array de meme taille que
 	// , opacites[k] est l'opacite de l'id k. Aveugle au nom de la
@@ -192,26 +191,16 @@ public:
 	// EXIGE UN NIVEAU PLANAIRE (voir ouvrir_niveau_planaire / Niveau::planaire).
 	// Aucun niveau planaire ouvert : push_error, retour a directions nulles.
 	//
-	// OUTIL DE VOISINAGE MUTUALISE PAR CASE (patron boids : liste de voisinage
-	// batie une fois par cellule, partagee entre tous les agents de la cellule).
-	// Deux etapes par case :
-	//   - PASSE 1a : voisinage BRUT etabli UNE fois. La liste {id, x, z} des
-	//     corps du bloc (2*n_cases+1)^2 autour de la case est commune aux
-	//     unites de la case courante. Un thread_local reutilise entre cases
-	//     (clear + capacite gardee), aucune allocation par frame.
-	//   - PASSE 1b : chaque unite de la case parcourt ce voisinage commun,
-	//     calcule SES propres dx/dz (soustraction depuis sa position), teste
-	//     d2<rayon2 puis PRE-FILTRE PAR LE CONE ELARGI (dot vs cos_elargi
-	//     sur d2, SANS sqrt : ce qui est derriere l'agent ou hors marge sort
-	//     avant tout sqrt). Le sqrt n'est paye que pour les voisins qui
-	//     peuvent etre vus OU servir d'occulteur en passe 2. Le cone elargi
-	//     = demi_cone_strict + atan2(largeur, rayon) garantit qu'aucun
-	//     bloqueur legitime n'est perdu (un occulteur de taille `largeur` a
-	//     distance `rayon` reste dans le cone elargi meme s'il est hors cone
-	//     strict).
-	// Ce qui reste PER-UNITE (jamais mutualisable, depend de orient_r[id]) :
-	// selection par distance + occlusion visuelle corps-traversee + collecte
-	// des ids vus (la separation est un consommateur separe, cf separation_lot).
+	// COLLECTE PAR AGENT (port de scripts/monde.gd::choses_dans_rayon en lot).
+	// Pour chaque agent : basse/haute en cases derives de `p_i +/- rayon`,
+	// iteration des cases du bounding box, filtre `distance^2 <= rayon^2` par
+	// candidat, puis PRE-FILTRE CONE ELARGI (dot vs cos_elargi sur d2, SANS
+	// sqrt : ce qui est derriere l'agent ou hors marge sort avant tout sqrt).
+	// Le sqrt n'est paye que pour les voisins qui peuvent etre vus OU servir
+	// d'occulteur en passe 2. Le cone elargi = demi_cone_strict +
+	// atan2(largeur, rayon) garantit qu'aucun bloqueur legitime n'est perdu.
+	// UNE frontiere GDScript->C++ par frame (perception_lot rend {ids,
+	// offsets} pour TOUS les agents), pas d'appel GDScript par agent.
 	//
 	// OCCLUSION VISUELLE : CORPS TRAVERSE. Un voisin J est CACHE si le segment
 	// percepteur -> J traverse le VOLUME (disque horizontal rayon =
