@@ -621,16 +621,56 @@ static func contact_forme_paire(fa: Dictionary, ta: Transform3D, fb: Dictionary,
 static func _aabb_entite(e) -> AABB:
 	return _aabb_from(_orientation(e), e.get("proprietes", {}).get("formes", []), e.position)
 
+# CACHE D'AABB LOCALE PAR FORME : les unites d'une population partagent une
+# meme instance de forme (peuplement : 1600 unites, meme boite). L'AABB LOCALE
+# (forme placee a orient=IDENTITY, pos=ZERO, avec son transform_locale
+# applique) ne depend PAS de la position monde ni de l'orientation de l'entite
+# -- elle ne bouge pas tant que la geometrie de la forme ne bouge pas. On la
+# calcule une fois via aabb_forme puis on la range.
+#
+# CLEF : un id INT injecte dans la forme (`forme["_aabb_id"]`) au premier
+# passage. Evite de hasher le Dictionary forme a chaque acces (2 lookups sur
+# String vs 1 hash de contenu de Dict) ; permet aussi un cache Array plat
+# (index -> AABB) au lieu d'un Dictionary. La mutation de la forme est
+# intentionnelle : plusieurs entites qui partagent la meme instance forme
+# voient toutes le meme id.
+#
+# POINT NOIR : cache jamais invalide. Si une forme CHANGE de contenu en
+# gardant la meme reference (hitbox d'animation, morph), le cache reste sur
+# l'ancien AABB local -- il faudra ajouter une invalidation (bump d'id ou
+# horloge de version). Formes STABLES pour l'instant, hors scope.
+static var _cache_aabb_locale: Array[AABB] = []
+
+static func _aabb_locale_de_forme(forme: Dictionary) -> AABB:
+	var id: int = int(forme.get("_aabb_id", -1))
+	if id >= 0:
+		return _cache_aabb_locale[id]
+	var a: AABB = aabb_forme(forme, forme.get("transform_locale", Transform3D.IDENTITY))
+	id = _cache_aabb_locale.size()
+	_cache_aabb_locale.append(a)
+	forme["_aabb_id"] = id
+	return a
+
 # AABB monde d'un ensemble de formes deja resolues (orient + formes + position
-# passes directement). Utilise par _aabb_entite et par _construire_cache (qui
-# tient deja orient et formes en variables locales et n'a aucune raison de
-# refaire les getters).
+# passes directement). Utilise par _aabb_entite et par _ecrire_cache.
+# Cas dominant (orient IDENTITY) : AABB locale cachee, translation. Cas
+# tournee : recalcul complet par aabb_forme (l'AABB monde d'une AABB locale
+# tournee n'est pas la translation de l'AABB locale, il faut projeter).
 static func _aabb_from(orient: Basis, formes: Array, pos: Vector3) -> AABB:
 	if formes.is_empty():
 		return AABB(pos, Vector3.ZERO)
-	var res: AABB = aabb_forme(formes[0], Transform3D(orient, pos) * formes[0].get("transform_locale", Transform3D.IDENTITY))
-	for i in range(1, formes.size()):
-		res = res.merge(aabb_forme(formes[i], Transform3D(orient, pos) * formes[i].get("transform_locale", Transform3D.IDENTITY)))
+	var identity_orient: bool = orient == Basis.IDENTITY
+	var res: AABB
+	if identity_orient:
+		var local0: AABB = _aabb_locale_de_forme(formes[0])
+		res = AABB(local0.position + pos, local0.size)
+		for i in range(1, formes.size()):
+			var li: AABB = _aabb_locale_de_forme(formes[i])
+			res = res.merge(AABB(li.position + pos, li.size))
+	else:
+		res = aabb_forme(formes[0], Transform3D(orient, pos) * formes[0].get("transform_locale", Transform3D.IDENTITY))
+		for i in range(1, formes.size()):
+			res = res.merge(aabb_forme(formes[i], Transform3D(orient, pos) * formes[i].get("transform_locale", Transform3D.IDENTITY)))
 	return res
 
 # AABB de l'entite a sa position ET a sa position d'il y a un tick (couvre le
