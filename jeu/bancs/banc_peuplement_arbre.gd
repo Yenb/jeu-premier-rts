@@ -61,24 +61,6 @@
 # (rythme individuel) ; `_facteur_longevite[i]` multiplie le seuil de
 # mort (compare a l'age reel).
 #
-# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : `_process(delta)` accumule
-# le temps ecoule dans `_temps_depuis_sim` et ne lance la boucle sur les
-# arbres (senescence, stade, fertilite, couvert, ecriture MultiMesh) que
-# lorsque l'accumulateur atteint `_intervalle_sim` (derive de
-# `cadence_simulation_hz` du JSON). Le `pas` passe aux mecanismes est le
-# TEMPS REEL ACCUMULE (plusieurs secondes), pas un delta de frame. La
-# croissance a l'oeil reste identique -- elle est simplement calculee moins
-# souvent. Le joueur (CharacterBody3D) tourne dans son propre
-# `_physics_process` a 60 fps, jamais ralenti par cette cadence.
-#
-# ECRITURE MULTIMESH CIBLEE : un slot n'est reecrit que si le stade a
-# change OU si la hauteur de tronc interpolee a varie de plus de
-# `EPS_TAILLE` depuis la derniere ecriture. Un arbre au stade 8 (fige) ou
-# un arbre entre deux passes trop rapprochees ne repaie pas l'ecriture --
-# c'est cette economie qui rend le MultiMesh vraiment utile. La derniere
-# hauteur ecrite est stockee dans `_derniere_ht` ; un slot libere la
-# remet a NAN pour forcer la reecriture a la prochaine naissance.
-#
 # ECART FRAMEWORK : ce banc + son catalogue local sont neufs, voir
 # CLAUDE.md § Frontiere.
 
@@ -110,12 +92,6 @@ const CADENCE_RELEVE_POPULATION_FRAMES := 60
 # Seuil de nettoyage d'une case du champ dont le cumul retombe sous cette
 # valeur absolue (evite les zeros residuels de float qui polluent le Dict).
 const EPS_COUVERT := 1.0e-6
-
-# Epsilon (en unites monde) de variation de la hauteur de tronc en dessous
-# duquel une passe de simulation NE reecrit PAS le MultiMesh du slot -- le
-# stade n'a pas change et la taille interpolee n'a pas bouge de facon
-# perceptible.
-const EPS_TAILLE := 1.0e-3
 
 # Nom du type local declare dans le catalogue combine et resolu par
 # `Objet.fabriquer`.
@@ -173,11 +149,6 @@ var _slots_libres: Array = []
 var _slot_stade: PackedInt32Array = PackedInt32Array()
 var _facteur_croissance: PackedFloat32Array = PackedFloat32Array()
 var _facteur_longevite: PackedFloat32Array = PackedFloat32Array()
-# Derniere hauteur de tronc effectivement ecrite dans le MultiMesh pour le
-# slot i. NAN = jamais ecrite (force la premiere ecriture). Une passe qui
-# ne fait pas bouger cette valeur de plus de EPS_TAILLE et qui ne change
-# pas le stade saute la reecriture des deux transforms.
-var _derniere_ht: PackedFloat32Array = PackedFloat32Array()
 
 # Population vivante courante, tenue en O(1) : incrementee dans _naitre,
 # decrementee dans _liberer_slot. Aucun scan par frame.
@@ -189,27 +160,12 @@ var _frames_depuis_releve: int = 0
 var _couvert: Dictionary = {}
 
 # Banque de graines dormantes deleguee au mecanisme framework
-# scripts/attente_seuil.gd. Chaque prospect porte trois cles : `position`
-# (Vector3, structurelle -- lue par le mecanisme), `date_ajout` et
-# `prochain_test` (donnees libres opaques que le mecanisme transporte
-# sans les lire). `_temps_ecoule` est le temps cumule du banc, avance
-# par frame ; `_duree_vie_graine` borne la duree qu'une graine peut
-# rester sans lever (mortalite de la banque, evite le gonflement infini).
-# `_tick_banque` n'appelle plus `avancer` (test global synchronise, source
-# de salves) : il itere `prospects()` et teste UNIQUEMENT les graines
-# dont `prochain_test` est atteint -- levees etalees dans le temps.
+# scripts/attente_seuil.gd : le banc enregistre chaque graine comme
+# prospect (position + rien d'autre), l'accumulateur `_temps_depuis_retest`
+# rythme les appels a `avancer` a la cadence `_intervalle_retest` pour
+# preserver le comportement observable de l'ancienne banque en dur.
 var _banque_graines: RefCounted = null
-var _temps_ecoule: float = 0.0
-var _duree_vie_graine: float = 300.0
-
-# Cadence de simulation (Hz) et intervalle equivalent (secondes) : la boucle
-# de vieillissement / stade / fertilite / couvert / ecriture MultiMesh ne
-# tourne que lorsque `_temps_depuis_sim` a franchi `_intervalle_sim`. Le
-# `pas` passe aux mecanismes est le TEMPS REEL accumule, pas un delta de
-# frame. Une cadence <= 0 est interpretee comme "chaque frame" (retro).
-var _cadence_simulation_hz: float = 2.0
-var _intervalle_sim: float = 0.5
-var _temps_depuis_sim: float = 0.0
+var _temps_depuis_retest: float = 0.0
 
 var _rng := RandomNumberGenerator.new()
 
@@ -287,8 +243,6 @@ func _charger_reglages_locaux() -> void:
 		_seuil_couvert = float(donnees.seuil_couvert)
 	if donnees.has("intervalle_retest"):
 		_intervalle_retest = float(donnees.intervalle_retest)
-	if donnees.has("duree_vie_graine"):
-		_duree_vie_graine = float(donnees.duree_vie_graine)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
 	if donnees.has("variance_croissance"):
@@ -297,12 +251,6 @@ func _charger_reglages_locaux() -> void:
 		_variance_longevite = float(donnees.variance_longevite)
 	if donnees.has("annees_par_seconde"):
 		_annees_par_seconde = float(donnees.annees_par_seconde)
-	if donnees.has("cadence_simulation_hz"):
-		_cadence_simulation_hz = float(donnees.cadence_simulation_hz)
-	if _cadence_simulation_hz > 0.0:
-		_intervalle_sim = 1.0 / _cadence_simulation_hz
-	else:
-		_intervalle_sim = 0.0
 	if _stades.size() != 8:
 		push_error("banc_peuplement_arbre : `stades` doit contenir 8 entrees (recu %d)" % _stades.size())
 	if _durees.size() != 7:
@@ -730,52 +678,33 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
 		return
-	# Phase aleatoire dans [0, _intervalle_retest[ pour desynchroniser les
-	# re-tests entre graines. `date_ajout` + `prochain_test` = donnees libres,
-	# transportees telles quelles par attente_seuil.gd (jamais lues par lui).
-	_banque_graines.ajouter({
-		"position": Vector3(pos_x, Y_SOL, pos_z),
-		"date_ajout": _temps_ecoule,
-		"prochain_test": _temps_ecoule + _rng.randf() * _intervalle_retest,
-	})
+	_banque_graines.ajouter({"position": Vector3(pos_x, Y_SOL, pos_z)})
 
-# Tick banque : itere les prospects et teste UNIQUEMENT ceux dont
-# `prochain_test` est atteint -- levees etalees, plus de salve globale.
-# Une graine dont l'age depasse `_duree_vie_graine` meurt sans naitre.
-# Le mecanisme framework `attente_seuil.gd` n'est pas appele en `avancer`
-# (contrat "toutes en meme temps" incompatible avec la desynchronisation) ;
-# le banc lit `prospects()` et utilise `retirer(id)`. Les mutations du
-# registre (retirer) se font APRES l'iteration pour ne pas invalider
-# le parcours du Dictionary.
+# Cadence de re-test des prospects : un test par graine tous les
+# `_intervalle_retest` secondes (jamais a chaque frame, sinon les graines
+# seraient bien plus reactives). Quand le temps accumule atteint la
+# cadence, on appelle `_banque_graines.avancer` avec le Callable de
+# lecture de couvert, seuil = `_seuil_couvert`, sens = "en_dessous" ; les
+# entrees rendues sont retirees du registre et donnent lieu a naissance.
 func _tick_banque(pas: float) -> void:
 	if _banque_graines == null or _banque_graines.nombre() == 0:
 		return
-	_temps_ecoule += pas
-	var a_retirer: Array = []
-	var a_lever: Array = []
-	var prospects: Dictionary = _banque_graines.prospects()
-	for id in prospects:
-		var entree: Dictionary = prospects[id]
-		var age: float = _temps_ecoule - float(entree.get("date_ajout", 0.0))
-		if age >= _duree_vie_graine:
-			a_retirer.append(id)
-			continue
-		var prochain: float = float(entree.get("prochain_test", 0.0))
-		if _temps_ecoule < prochain:
-			continue
-		var pos: Vector3 = entree.position
-		if _lire_couvert(pos.x, pos.z) < _seuil_couvert:
-			a_lever.append({"id": id, "pos": pos})
-		else:
-			# Mutation de la VALEUR (pas de la structure Dict) : autorise
-			# par le contrat d'attente_seuil.gd (les cles libres sont
-			# transportees telles quelles, elles ne sont pas verrouillees).
-			entree.prochain_test = _temps_ecoule + _intervalle_retest
-	for id in a_retirer:
-		_banque_graines.retirer(int(id))
-	for r in a_lever:
+	_temps_depuis_retest += pas
+	if _temps_depuis_retest < _intervalle_retest:
+		return
+	_temps_depuis_retest = 0.0
+	var realisables: Array = _banque_graines.avancer(
+		Callable(self, "_lire_couvert_v3"), _seuil_couvert, "en_dessous")
+	for r in realisables:
+		var pos: Vector3 = r.entree.position
 		_banque_graines.retirer(int(r.id))
-		_naitre(r.pos.x, r.pos.z)
+		_naitre(pos.x, pos.z)
+
+# Adapteur pour le Callable passe a `AttenteSeuil.avancer` : le mecanisme
+# framework recoit une position Vector3, le champ de couvert du banc lit
+# en (x, z) plans horizontal.
+func _lire_couvert_v3(pos: Vector3) -> float:
+	return _lire_couvert(pos.x, pos.z)
 
 # Double la capacite des deux MultiMesh et des colonnes. Godot conserve
 # les transforms existantes lors d'une augmentation de instance_count.
