@@ -4,11 +4,11 @@ extends RefCounted
 # registre d'entrees LATENTES, chacune portant au moins une position
 # (Vector3) et des donnees libres que ce fichier ne lit jamais. A
 # chaque appel a avancer(), pour chaque entree, un moyen de lecture
-# fourni par l'appelant (un Callable qui recoit la position et rend un
-# float) donne la valeur observee a cette position ; cette valeur est
-# comparee a un seuil selon un sens (au-dessus/en-dessous, strict).
-# Rend les entrees dont la comparaison est vraie ce passage --
-# DECLAREES REALISABLES, jamais FABRIQUEES : ce fichier ne fait
+# fourni par l'appelant (un Callable qui recoit la position et rend
+# un float) donne la valeur observee a cette position ; cette valeur
+# est comparee a un seuil selon un sens (au-dessus/en-dessous,
+# strict). Rend les entrees dont la comparaison est vraie ce passage
+# -- DECLAREES REALISABLES, jamais FABRIQUEES : ce fichier ne fait
 # naitre rien, ne mute aucune de ses entrees, ne les retire pas
 # automatiquement. Meme discipline que gestation.gd : pose un signal
 # (ici : la selection dans le retour), laisse l'appelant consommer
@@ -25,15 +25,24 @@ extends RefCounted
 # collection -- une instance par registre. new() est le point
 # d'entree, chaque instance vit tant que son appelant la reference.
 #
+# IDENTITE STABLE PAR ID MONOTONE : chaque entree recoit a l'ajout
+# un id entier attribue par un compteur monotone JAMAIS REUTILISE.
+# L'id ne bouge pas pour la vie de l'entree, aucun retrait n'affecte
+# les ids des autres. L'appelant peut retirer plusieurs entrees en
+# un passage, dans n'importe quel ordre, sans se soucier de
+# decalage. Structure interne : Dictionary { id: int -> entree:
+# Dictionary }, ordre d'insertion preserve par Godot -- ajouter
+# O(1), retirer par id O(1), avancer itere les valeurs.
+#
 # API :
 #   ajouter(entree: Dictionary) -> int
 #     Enregistre une entree. Exige au moins la cle "position"
 #     (Vector3). Toute autre cle est libre et OPAQUE : ce fichier
 #     ne la lit ni ne la mute jamais -- elle voyage telle quelle,
-#     rendue a l'appelant dans avancer(). Rend l'INDEX interne de
+#     rendue a l'appelant dans avancer(). Rend l'ID STABLE de
 #     l'entree (utilisable ensuite par retirer()). Une entree sans
-#     "position" ou dont "position" n'est pas un Vector3 : push_error,
-#     rien enregistre, rend -1.
+#     "position" ou dont "position" n'est pas un Vector3 :
+#     push_error, rien enregistre, rend -1.
 #
 #   avancer(lire_valeur: Callable, seuil: float, sens: String) -> Array
 #     Pour chaque entree du registre, appelle lire_valeur.call(entree.
@@ -41,24 +50,27 @@ extends RefCounted
 #       "au_dessus" -> valeur > seuil (strict, meme convention que
 #                      charge.gd et seuil_etat.gd)
 #       "en_dessous" -> valeur < seuil (strict, symetrique)
-#     Rend un Array de Dictionary { "index": int, "entree": Dictionary,
+#     Rend un Array de Dictionary { "id": int, "entree": Dictionary,
 #     "valeur": float } pour chaque entree dont la comparaison est
-#     vraie -- une COPIE PROFONDE du dict entree, pour que la mutation
-#     eventuelle par l'appelant n'affecte pas le registre. NE RETIRE
-#     RIEN, ne mute rien : la meme entree peut redevenir realisable a
-#     un appel ulterieur, ou etre volontairement gardee latente par
-#     l'appelant.
+#     vraie -- une COPIE PROFONDE du dict entree, pour que la
+#     mutation eventuelle par l'appelant n'affecte pas le registre.
+#     NE RETIRE RIEN, ne mute rien : la meme entree peut redevenir
+#     realisable a un appel ulterieur, ou etre volontairement gardee
+#     latente par l'appelant.
 #     "sens" different de "au_dessus" ou "en_dessous" : push_error,
 #     rend [] (jamais un defaut permissif).
 #
-#   retirer(index: int) -> void
-#     Retire l'entree d'index donne. Meme geste que l'appelant fait
-#     sur gestation apres consommation. Index hors bornes : push_error,
-#     rien mute.
+#   retirer(id: int) -> void
+#     Retire l'entree portant cet id. L'ordre de retrait n'a AUCUNE
+#     importance : plusieurs retraits en un passage, dans n'importe
+#     quel ordre, retirent toujours les entrees visees, quel que
+#     soit l'ordre des ajouts ou retraits intercales. Id absent
+#     (deja retire ou jamais attribue) : push_error, rien mute --
+#     jamais un retrait silencieux qui masquerait un bug d'appelant.
 #
-#   prospects() -> Array
-#     Rend l'Array interne des entrees encore latentes (lecture, non
-#     duplique -- consommateur ne doit pas muter la structure).
+#   prospects() -> Dictionary
+#     Rend le Dictionary interne id -> entree (lecture, non duplique
+#     -- consommateur ne doit pas muter la structure).
 #
 #   nombre() -> int
 #     Rend le nombre d'entrees latentes.
@@ -70,13 +82,6 @@ extends RefCounted
 # typique : un candidat qui redevient realisable a chaque cycle
 # tant qu'aucune ressource n'est libre pour le materialiser). Ce
 # fichier ne prend jamais cette decision.
-#
-# ORDRE DE RETRAIT PAR INDEX : retirer(index) utilise remove_at,
-# qui decale les indices des entrees suivantes. Un appelant qui
-# consomme plusieurs realisables en un passage doit donc les
-# retirer PAR INDEX DECROISSANT (ou dupliquer la liste et retirer
-# a la volee) -- convention Godot standard, laissee a l'appelant
-# comme dans monde.gd:retirer.
 #
 # VERTICALITE : position en Vector3 strict, jamais Vector2 (regle
 # du depot -- meme si Z reste a zero pour un usage donne, la
@@ -97,7 +102,8 @@ extends RefCounted
 # framework, pas ici (documents/ est lecture seule).
 
 
-var _prospects: Array = []
+var _prospects: Dictionary = {}
+var _prochain_id: int = 0
 
 
 func ajouter(entree: Dictionary) -> int:
@@ -107,8 +113,10 @@ func ajouter(entree: Dictionary) -> int:
 	if not (entree.position is Vector3):
 		push_error("attente_seuil.gd : ajouter() -- 'position' n'est pas un Vector3")
 		return -1
-	_prospects.append(entree)
-	return _prospects.size() - 1
+	var id := _prochain_id
+	_prochain_id += 1
+	_prospects[id] = entree
+	return id
 
 
 func avancer(lire_valeur: Callable, seuil: float, sens: String) -> Array:
@@ -116,8 +124,8 @@ func avancer(lire_valeur: Callable, seuil: float, sens: String) -> Array:
 		push_error("attente_seuil.gd : avancer() -- sens inconnu '%s' (attendu 'au_dessus' ou 'en_dessous')" % sens)
 		return []
 	var realisables: Array = []
-	for index in range(_prospects.size()):
-		var entree: Dictionary = _prospects[index]
+	for id in _prospects:
+		var entree: Dictionary = _prospects[id]
 		var valeur: float = float(lire_valeur.call(entree.position))
 		var vrai := false
 		if sens == "au_dessus":
@@ -126,21 +134,21 @@ func avancer(lire_valeur: Callable, seuil: float, sens: String) -> Array:
 			vrai = valeur < seuil
 		if vrai:
 			realisables.append({
-				"index": index,
+				"id": id,
 				"entree": entree.duplicate(true),
 				"valeur": valeur,
 			})
 	return realisables
 
 
-func retirer(index: int) -> void:
-	if index < 0 or index >= _prospects.size():
-		push_error("attente_seuil.gd : retirer() -- index %d hors bornes (taille %d)" % [index, _prospects.size()])
+func retirer(id: int) -> void:
+	if not _prospects.has(id):
+		push_error("attente_seuil.gd : retirer() -- id %d absent" % id)
 		return
-	_prospects.remove_at(index)
+	_prospects.erase(id)
 
 
-func prospects() -> Array:
+func prospects() -> Dictionary:
 	return _prospects
 
 
