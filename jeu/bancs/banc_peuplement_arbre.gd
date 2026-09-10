@@ -68,6 +68,9 @@ var _intervalle_graine: float = 10.0
 var _rayon_graine: float = 6.0
 var _stade_fertile_debut: int = 5
 var _stade_fertile_fin: int = 7
+var _rayon_densite: float = 20.0
+var _seuil_densite: int = 3
+var _intervalle_retest: float = 5.0
 
 var _mm_tronc: MultiMesh = null
 var _mm_feuillage: MultiMesh = null
@@ -86,6 +89,13 @@ var _slots_libres: Array = []
 # decrementee dans _liberer_slot. Aucun scan par frame.
 var _population: int = 0
 var _frames_depuis_releve: int = 0
+
+# Banque de graines dormantes -- colonnes distinctes des arbres, sans rendu.
+# Une graine porte une position (x,z) et une horloge de re-test. Retrait par
+# swap-remove quand elle leve (test de densite passe).
+var _graines_x: PackedFloat32Array = PackedFloat32Array()
+var _graines_z: PackedFloat32Array = PackedFloat32Array()
+var _graines_horloge: PackedFloat32Array = PackedFloat32Array()
 
 var _rng := RandomNumberGenerator.new()
 
@@ -132,6 +142,12 @@ func _charger_reglages_locaux() -> void:
 		_stade_fertile_fin = int(donnees.stade_fertile_fin)
 	_stade_fertile_debut = clampi(_stade_fertile_debut, 1, 8)
 	_stade_fertile_fin = clampi(_stade_fertile_fin, _stade_fertile_debut, 8)
+	if donnees.has("rayon_densite"):
+		_rayon_densite = float(donnees.rayon_densite)
+	if donnees.has("seuil_densite"):
+		_seuil_densite = int(donnees.seuil_densite)
+	if donnees.has("intervalle_retest"):
+		_intervalle_retest = float(donnees.intervalle_retest)
 	if _stades.size() != 8:
 		push_error("banc_peuplement_arbre : `stades` doit contenir 8 entrees (recu %d)" % _stades.size())
 	if _durees.size() != 7:
@@ -256,10 +272,11 @@ func _process(delta: float) -> void:
 			_horloges[i] = h
 		_ecrire_slot(i, age_i)
 		i += 1
+	_tick_banque_graines(pas)
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
-		print("[arbre] population = %d" % _population)
+		print("[arbre] population = %d, dormantes = %d" % [_population, _graines_horloge.size()])
 
 # Trouve le segment de stade contenant `age` et rend un Vector4 (h_tronc,
 # l_tronc, h_feuillage, l_feuillage) interpole lineairement entre le stade
@@ -359,7 +376,70 @@ func _naitre_pres_de(parent_index: int) -> void:
 	var rayon: float = sqrt(_rng.randf()) * _rayon_graine
 	var pos_x: float = _positions_x[parent_index] + cos(angle) * rayon
 	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
-	_naitre(pos_x, pos_z)
+	_deposer_graine(pos_x, pos_z)
+
+# Semer une graine : test densite immediat -- si voisins < seuil, elle leve
+# tout de suite (`_naitre`), sinon elle entre dans la banque dormante avec
+# horloge = 0.
+func _deposer_graine(pos_x: float, pos_z: float) -> void:
+	if _compter_voisins(pos_x, pos_z) < _seuil_densite:
+		_naitre(pos_x, pos_z)
+		return
+	_graines_x.append(pos_x)
+	_graines_z.append(pos_z)
+	_graines_horloge.append(0.0)
+
+# Comptage O(N) des arbres vivants dont la position horizontale est dans un
+# disque `_rayon_densite` autour de (pos_x, pos_z). Version grossiere assumee
+# par le prompt : pas de grille ni de broadphase a cette etape (canevas
+# LOCALITE SPATIALE du CLAUDE.md ecarte volontairement -- amorti acceptable a
+# quelques milliers d'arbres, a revisiter au-dela).
+func _compter_voisins(pos_x: float, pos_z: float) -> int:
+	var r2: float = _rayon_densite * _rayon_densite
+	var n: int = 0
+	var i: int = 0
+	var cap: int = _capacite
+	while i < cap:
+		if _libres[i] == 0:
+			var dx: float = _positions_x[i] - pos_x
+			var dz: float = _positions_z[i] - pos_z
+			if dx * dx + dz * dz <= r2:
+				n += 1
+		i += 1
+	return n
+
+# Boucle banque : chaque graine dormante voit son horloge avancer ; a chaque
+# fois qu'elle atteint `_intervalle_retest`, retest de densite. Si les
+# voisins repassent sous le seuil, la graine leve (`_naitre`) et est
+# retiree par swap-remove sur les trois colonnes. Aucune allocation dans la
+# boucle au-dela de l'appel a _naitre lors des levees (rare par frame).
+func _tick_banque_graines(pas: float) -> void:
+	var i: int = 0
+	while i < _graines_horloge.size():
+		var h: float = _graines_horloge[i] + pas
+		var doit_lever: bool = false
+		while h >= _intervalle_retest:
+			h -= _intervalle_retest
+			if _compter_voisins(_graines_x[i], _graines_z[i]) < _seuil_densite:
+				doit_lever = true
+				break
+		if doit_lever:
+			var px: float = _graines_x[i]
+			var pz: float = _graines_z[i]
+			var dernier: int = _graines_horloge.size() - 1
+			if i != dernier:
+				_graines_x[i] = _graines_x[dernier]
+				_graines_z[i] = _graines_z[dernier]
+				_graines_horloge[i] = _graines_horloge[dernier]
+			_graines_x.resize(dernier)
+			_graines_z.resize(dernier)
+			_graines_horloge.resize(dernier)
+			_naitre(px, pz)
+			# On ne fait pas i += 1 : le slot i porte maintenant l'ancien dernier,
+			# a re-examiner cette meme frame.
+		else:
+			_graines_horloge[i] = h
+			i += 1
 
 # Double la capacite des deux MultiMesh et des colonnes. Les nouveaux slots
 # sont poses libres, transforms a echelle nulle. Godot conserve les

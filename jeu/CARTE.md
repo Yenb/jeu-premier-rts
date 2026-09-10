@@ -4468,9 +4468,18 @@ en-tête).
   après quoi le slot est libéré (échelle nulle, poussé sur
   `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
   `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème
-  toutes les `intervalle_graine` secondes ; la graine
-  (invisible, sans rendu propre) fait naître un arbre au stade 1 dans un
-  rayon horizontal `rayon_graine` autour du parent. NAISSANCE : slot libre
+  une graine dans un disque uniforme `rayon_graine`. Chaque graine passe
+  par une BANQUE DORMANTE (colonnes séparées `_graines_x`/`_graines_z`/
+  `_graines_horloge`, sans rendu, sans slot MultiMesh) : test de densité
+  immédiat, si le nombre de voisins vivants dans le disque `rayon_densite`
+  est strictement inférieur à `seuil_densite` la graine lève tout de suite
+  (`_naitre`), sinon elle reste dormante et re-teste sa densité toutes
+  les `intervalle_retest` secondes jusqu'à ce que le voisinage repasse
+  sous le seuil. Retrait par swap-remove sur les trois colonnes à la
+  levée. Le comptage `_compter_voisins` est O(N) sur les vivants —
+  version grossière assumée (canevas LOCALITÉ SPATIALE du CLAUDE.md
+  écarté à cette étape, à revisiter au-delà de quelques milliers).
+  NAISSANCE : slot libre
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
   amorti O(1) — patron FREE-LIST de `jeu/PROTOCOLE_MULTIMESH.md` § 1).
