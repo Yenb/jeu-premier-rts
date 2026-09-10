@@ -110,12 +110,7 @@ var _mode_test_rapide: bool = false
 var _joueur_actif: bool = true
 var _graine_rng: int = 20260910
 var _intervalle_graine: float = 10.0
-# Deux regimes de dispersion tires par graine : la plupart tombent
-# proches du parent (bosquets), une petite fraction part loin (nouveaux
-# fronts). Tirage seede via `_rng`.
-var _rayon_graine_court: float = 6.0
-var _rayon_graine_long: float = 200.0
-var _proba_dispersion_longue: float = 0.1
+var _rayon_graine: float = 6.0
 var _stade_fertile_debut: int = 5
 var _stade_fertile_fin: int = 7
 var _taille_case: float = 20.0
@@ -225,12 +220,8 @@ func _charger_reglages_locaux() -> void:
 		_graine_rng = int(donnees.graine_rng)
 	if donnees.has("intervalle_graine"):
 		_intervalle_graine = float(donnees.intervalle_graine)
-	if donnees.has("rayon_graine_court"):
-		_rayon_graine_court = float(donnees.rayon_graine_court)
-	if donnees.has("rayon_graine_long"):
-		_rayon_graine_long = float(donnees.rayon_graine_long)
-	if donnees.has("proba_dispersion_longue"):
-		_proba_dispersion_longue = clampf(float(donnees.proba_dispersion_longue), 0.0, 1.0)
+	if donnees.has("rayon_graine"):
+		_rayon_graine = float(donnees.rayon_graine)
 	if donnees.has("stade_fertile_debut"):
 		_stade_fertile_debut = int(donnees.stade_fertile_debut)
 	if donnees.has("stade_fertile_fin"):
@@ -662,14 +653,8 @@ func _index_pour_age(age: float) -> int:
 
 func _semer_pres_de(parent_index: int) -> void:
 	# Tirage UNIFORME dans le disque : angle uniforme + rayon = sqrt(u) * R.
-	# Deux regimes selon `_proba_dispersion_longue` -- l'essentiel des
-	# graines tombe dans `rayon_graine_court` (bosquets), une petite
-	# fraction dans `rayon_graine_long` (colonisation lointaine).
-	var rayon_max: float = _rayon_graine_court
-	if _rng.randf() < _proba_dispersion_longue:
-		rayon_max = _rayon_graine_long
 	var angle: float = _rng.randf() * TAU
-	var rayon: float = sqrt(_rng.randf()) * rayon_max
+	var rayon: float = sqrt(_rng.randf()) * _rayon_graine
 	var pos_x: float = _positions_x[parent_index] + cos(angle) * rayon
 	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
 	_deposer_graine(pos_x, pos_z)
