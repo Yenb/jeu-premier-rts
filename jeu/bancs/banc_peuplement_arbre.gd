@@ -536,9 +536,14 @@ func _ecrire_slot_vide(i: int) -> void:
 	_mm_feuillage.set_instance_transform(i, t)
 
 # CHAMP DE COUVERT -- depot/retrait strictement symetrique (signe -1 =
-# retrait). `stade` ici = numero de stade (1..8, index+1) pour lire
-# `_ombrage_par_stade[stade-1]`. Case dont le cumul retombe sous
-# EPS_COUVERT est retiree du Dict.
+# retrait). `stade` = numero de stade (1..8, index+1) pour lire
+# `_ombrage_par_stade[stade-1]`. La magnitude est le PIC CENTRAL ; a
+# distance d de la case centrale (d = max(|dcx|, |dcz|), norme Chebyshev),
+# l'apport est mag * (1 - d/rayon) -- decroissance lineaire, plein au
+# centre, zero au bord (case skippee). Rayon 0 : seule la case centrale
+# recoit mag. Le retrait rejoue exactement la meme formule (deterministe
+# pour (pos, stade) fixes) : invariant strict, aucune derive du champ.
+# Case dont le cumul retombe sous EPS_COUVERT est retiree du Dict.
 func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> void:
 	if stade < 1 or stade > 8:
 		return
@@ -555,8 +560,16 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 	while dcx <= rayon:
 		var dcz: int = -rayon
 		while dcz <= rayon:
+			var d: int = maxi(absi(dcx), absi(dcz))
+			var poids: float = 1.0
+			if rayon > 0:
+				poids = 1.0 - float(d) / float(rayon)
+			if poids <= 0.0:
+				dcz += 1
+				continue
+			var apport: float = mag * poids
 			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
-			var v: float = float(_couvert.get(cle, 0.0)) + mag
+			var v: float = float(_couvert.get(cle, 0.0)) + apport
 			if absf(v) < EPS_COUVERT:
 				_couvert.erase(cle)
 			else:
