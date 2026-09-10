@@ -37,10 +37,16 @@ extends RefCounted
 # si les naissances sont serialisees, source de non-determinisme si
 # elles sont concurrentes (a la charge de l'appelant, pas du mecanisme).
 #
-# ECART FRAMEWORK : ce fichier est ajoute dans la copie scripts/ du jeu,
-# pas dans le depot framework (voir CLAUDE.md § Frontiere, precedent
-# scripts/monde.gd:retirer). A remonter au framework quand un second
-# banc en aura besoin.
+# ECART FRAMEWORK : ce fichier n'existe pas dans le depot framework Orion,
+# ajoute dans cette copie faute d'equivalent generique. Le seul tirage
+# individuel autour d'un pivot present dans le coeur vit ENFERME dans
+# scripts/heredite.gd (rng.randi_range pour choisir un allele au tirage
+# sexue, rng.randfn pour un bruit gaussien de mutation) -- usage cible
+# reproduction, non reutilisable comme mecanisme de variance ouverte
+# entre les individus d'une population. Meme geste doctrinal que
+# scripts/monde.gd:retirer (premier precedent d'un ecart trace dans le
+# fichier lui-meme). La fiche CARTE.md correspondante est un ajout a
+# faire cote depot framework, pas ici (documents/ est lecture seule).
 
 static func tirer(rng: RandomNumberGenerator, amplitude: float) -> float:
 	var a: float = clampf(amplitude, 0.0, 1.0)
