@@ -104,6 +104,10 @@ var _duree_croissance_totale: float = 0.0
 var _debut_fertilite: float = 0.0
 var _fin_fertilite: float = 0.0
 var _mode_test_rapide: bool = false
+# Gate : true = le joueur (CharacterBody3D, exception CLAUDE.md) est
+# instancie et sa camera est current ; false = pas de joueur, la camera
+# plongeante de la scene devient current.
+var _joueur_actif: bool = true
 var _graine_rng: int = 20260910
 var _intervalle_graine: float = 10.0
 var _rayon_graine: float = 6.0
@@ -178,7 +182,8 @@ func _ready() -> void:
 	_charger_reglages_locaux()
 	_rng.seed = _graine_rng
 	_monter_scene()
-	_monter_joueur()
+	if _joueur_actif:
+		_monter_joueur()
 	_monter_population()
 	_construire_catalogue()
 	_init_tampon()
@@ -209,6 +214,8 @@ func _charger_reglages_locaux() -> void:
 		_duree_mort = float(donnees.duree_mort)
 	if donnees.has("mode_test_rapide"):
 		_mode_test_rapide = bool(donnees.mode_test_rapide)
+	if donnees.has("joueur_actif"):
+		_joueur_actif = bool(donnees.joueur_actif)
 	if donnees.has("graine_rng"):
 		_graine_rng = int(donnees.graine_rng)
 	if donnees.has("intervalle_graine"):
@@ -329,7 +336,9 @@ func _monter_scene() -> void:
 	# elle -- aucun consommateur du groupe dans ce banc, verifie au grep.
 	var camera := Camera3D.new()
 	camera.position = Vector3(0.0, 55.0, 55.0)
-	camera.current = false
+	# current = true si le joueur est desactive (JSON `joueur_actif`=false),
+	# sinon false : le joueur mettra sa propre camera current au _ready.
+	camera.current = not _joueur_actif
 	camera.add_to_group(&"observateur")
 	add_child(camera)
 	camera.look_at(Vector3(0.0, Y_SOL, 0.0), Vector3.UP)
