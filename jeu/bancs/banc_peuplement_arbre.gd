@@ -367,6 +367,11 @@ func _monter_population() -> void:
 	_mm_tronc.instance_count = CAPACITE_INITIALE
 	_noeud_tronc = MultiMeshInstance3D.new()
 	_noeud_tronc.multimesh = _mm_tronc
+	# `_ecrire_slot` mute les transforms depuis `_process` (rendu par frame),
+	# pas `_physics_process` : desactiver l'interpolation physique evite le
+	# warning "MultiMesh interpolation triggered from outside physics process"
+	# de Godot 4.5+, sans effet sur le rendu (arbres statiques par nature).
+	_noeud_tronc.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_noeud_tronc)
 
 	var cone := CylinderMesh.new()
@@ -382,6 +387,7 @@ func _monter_population() -> void:
 	_mm_feuillage.instance_count = CAPACITE_INITIALE
 	_noeud_feuillage = MultiMeshInstance3D.new()
 	_noeud_feuillage.multimesh = _mm_feuillage
+	_noeud_feuillage.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_noeud_feuillage)
 
 	_capacite = CAPACITE_INITIALE
