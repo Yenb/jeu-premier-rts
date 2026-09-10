@@ -25,8 +25,14 @@
 
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_float32_array.hpp>
+#include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
+#include <godot_cpp/variant/vector3.hpp>
 
 #include <cstdint>
+#include <vector>
 
 namespace godot {
 
@@ -80,6 +86,28 @@ class CollisionLot : public RefCounted {
 	mutable int64_t _n_appels_raccourci = 0;
 	mutable int64_t _n_appels_gjk = 0;
 	mutable int64_t _n_contacts = 0;
+
+	// SoA STOCKE cote C++ (colonnes qui ne changent JAMAIS entre frames).
+	// Pose une fois par init_soa_stable, relu par _detecter_impl quand
+	// _soa_stable_initialise est vrai. Supprime la traversee GDScript/C++ des
+	// 10 colonnes par frame -- seules "positions" et "delta" traversent encore
+	// via le Dictionary passe a detecter_et_resoudre.
+	//
+	// detecter/resoudre individuels IGNORENT ces membres : ils lisent tout du
+	// Dictionary passe en argument. Le test de parite les utilise sans jamais
+	// appeler init_soa_stable ; la voie fallback (mode Dictionary complet)
+	// reste operationnelle dans _detecter_impl quand le flag est faux.
+	PackedVector3Array _velocites;
+	PackedFloat32Array _orientations;
+	PackedInt32Array _masques_c;
+	PackedInt32Array _masques_r;
+	PackedByteArray _reponses;
+	PackedInt32Array _formes_debut;
+	PackedInt32Array _formes_type;
+	PackedFloat32Array _formes_tf_locale;
+	PackedFloat32Array _formes_params;
+	PackedVector3Array _hull_points;
+	bool _soa_stable_initialise = false;
 
 protected:
 	static void _bind_methods();
@@ -137,6 +165,33 @@ public:
 	//   "positions"           PackedVector3Array (N) -- positions mutees
 	Dictionary resoudre(const Dictionary &entree) const;
 
+	// DETECTER_ET_RESOUDRE : enchaine detecter puis resoudre en interne, sans
+	// serialiser les contacts en Dictionary entre les deux -- ils restent en
+	// std::vector cote C++ et ne sortent jamais. Reduit les traversees de
+	// frontiere GDScript/C++ par frame de 4 (detecter dict-in dict-out +
+	// resoudre dict-in dict-out) a 2 (un dict-in un dict-out).
+	//
+	// Meme entree que detecter (cles positions/velocites/orientations/masques_*
+	// /reponses/formes_debut/formes_type/formes_tf_locale/formes_params/
+	// hull_points/delta). Chronos et compteurs remplis a l'identique de
+	// detecter puis resoudre appeles separement.
+	//
+	// Sortie :
+	//   "positions" PackedVector3Array (N) -- positions mutees
+	Dictionary detecter_et_resoudre(const Dictionary &entree) const;
+
+	// INIT_SOA_STABLE : copie les 10 colonnes stables du SoA dans les membres
+	// C++ (velocites, orientations, masques_c, masques_r, reponses, formes_debut,
+	// formes_type, formes_tf_locale, formes_params, hull_points) et pose le
+	// flag _soa_stable_initialise. Apres cet appel, detecter_et_resoudre
+	// n'utilise plus que "positions" et "delta" du Dictionary d'entree ; les
+	// 10 colonnes stables ne traversent plus la frontiere par frame.
+	//
+	// A appeler UNE FOIS a la fabrication du lot, cote appelant. Aucun contrat
+	// de reset : ces colonnes ne bougent jamais chez le peuplement. Si un jour
+	// une population change de forme au vol, un futur appel ecrase les membres.
+	void init_soa_stable(const Dictionary &soa);
+
 	// Chronos du dernier appel (prepasse/tri/parcours/narrowphase du dernier
 	// detecter, resoudre du dernier resoudre). Dictionary { "prepasse", "tri",
 	// "parcours", "narrowphase", "resoudre" } en microsecondes.
@@ -145,6 +200,40 @@ public:
 	// Compteurs de paires du dernier detecter. Dictionary { "paires_distance",
 	// "paires_dedup", "appels_nf", "contacts" }.
 	Dictionary derniers_compteurs() const;
+
+private:
+	// IMPLEMENTATION INTERNE partagee entre detecter et detecter_et_resoudre.
+	// Remplit les contacts dans des std::vector natifs -- pas de Packed*Array.
+	// Le tri stable des contacts est inclus (fin de la fonction), comme dans
+	// l'ancien detecter monolithique. Chronos prepasse/tri/parcours/narrowphase
+	// et compteurs de paires sont ecrits ici.
+	//
+	// `utiliser_soa_stocke` : si vrai, les 10 colonnes stables sont lues depuis
+	// les membres _velocites/_orientations/... au lieu du Dictionary. Seuls
+	// "positions" et "delta" sont alors extraits du Dictionary. Si faux, tout
+	// vient du Dictionary (voie historique, utilisee par detecter individuel).
+	void _detecter_impl(
+			const Dictionary &entree,
+			bool utiliser_soa_stocke,
+			std::vector<int32_t> &contacts_a,
+			std::vector<int32_t> &contacts_b,
+			std::vector<Vector3> &contacts_normale,
+			std::vector<float> &contacts_profondeur) const;
+
+	// IMPLEMENTATION INTERNE partagee entre resoudre et detecter_et_resoudre.
+	// Mute pos_w en place. Chrono us_resoudre ecrit ici. Pointeurs bruts pour
+	// que l'appelant passe .ptr() (PackedArray) ou .data() (std::vector) sans
+	// convertir.
+	void _resoudre_impl(
+			Vector3 *pos_w,
+			const Vector3 *vel_r,
+			const uint8_t *reponses_r,
+			const int32_t *masques_r_r,
+			const int32_t *ca_r,
+			const int32_t *cb_r,
+			const Vector3 *cn_r,
+			const float *cp_r,
+			int K) const;
 };
 
 } // namespace godot

@@ -501,6 +501,10 @@ func _fabriquer_lot() -> void:
 		else:
 			_collision_cpp = ClassDB.instantiate("CollisionLot")
 			_soa_collision_stable = _batir_soa_collision_stable(_entites_collision)
+			# Stocke les 10 colonnes stables cote C++ : elles ne traversent
+			# plus la frontiere par frame. Seules "positions" et "delta"
+			# transitent encore via le Dictionary a chaque detecter_et_resoudre.
+			_collision_cpp.init_soa_stable(_soa_collision_stable)
 	if actif_releve:
 		var duree_us: int = Time.get_ticks_usec() - chrono_creation_debut
 		print("[peuplement] creation N=%d en %d us (push RS unique final)" % [poses, duree_us])
@@ -598,23 +602,15 @@ func _physics_process(delta: float) -> void:
 	# n_coll = _entites_collision.size() == cols.position.size() par
 	# construction (fabrication _fabriquer_lot, aucune mutation en cours de vie).
 	# Une seule voie de prod : aucun appel a jeu/Proto/collision.gd ici.
+	# UN SEUL appel `detecter_et_resoudre` : les contacts restent en memoire C++
+	# entre les deux etapes, jamais serialises en Dictionary. 2 traversees de
+	# frontiere GDScript/C++ par frame au lieu de 4.
 	if brancher_monde and _monde != null and _collision_cpp != null and not _entites_collision.is_empty():
 		var n_coll: int = _entites_collision.size()
 		_soa_collision_stable["positions"] = cols.position
 		_soa_collision_stable["delta"] = delta
-		var sortie_det: Dictionary = _collision_cpp.detecter(_soa_collision_stable)
-		var entree_res := {
-			"positions": _soa_collision_stable.positions,
-			"velocites": _soa_collision_stable.velocites,
-			"reponses": _soa_collision_stable.reponses,
-			"masques_r": _soa_collision_stable.masques_r,
-			"contacts_a": sortie_det.contacts_a,
-			"contacts_b": sortie_det.contacts_b,
-			"contacts_normale": sortie_det.contacts_normale,
-			"contacts_profondeur": sortie_det.contacts_profondeur,
-		}
-		var sortie_res: Dictionary = _collision_cpp.resoudre(entree_res)
-		cols.position = sortie_res.positions
+		var sortie_col: Dictionary = _collision_cpp.detecter_et_resoudre(_soa_collision_stable)
+		cols.position = sortie_col.positions
 		# RELEVE COLLISION cadence, gate actif_releve. Cinq postes chronometres
 		# qui couvrent tout le corps de detecter+resoudre sans trou (voir
 		# collision_lot.h) + compteurs de paires. Sert a identifier le poste

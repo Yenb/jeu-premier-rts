@@ -534,8 +534,24 @@ inline Transform3D tf_monde_forme(const Basis &orient, const Vector3 &pos,
 void CollisionLot::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("detecter", "entree"), &CollisionLot::detecter);
 	ClassDB::bind_method(D_METHOD("resoudre", "entree"), &CollisionLot::resoudre);
+	ClassDB::bind_method(D_METHOD("detecter_et_resoudre", "entree"), &CollisionLot::detecter_et_resoudre);
+	ClassDB::bind_method(D_METHOD("init_soa_stable", "soa"), &CollisionLot::init_soa_stable);
 	ClassDB::bind_method(D_METHOD("derniers_chronos"), &CollisionLot::derniers_chronos);
 	ClassDB::bind_method(D_METHOD("derniers_compteurs"), &CollisionLot::derniers_compteurs);
+}
+
+void CollisionLot::init_soa_stable(const Dictionary &soa) {
+	_velocites = soa["velocites"];
+	_orientations = soa["orientations"];
+	_masques_c = soa["masques_c"];
+	_masques_r = soa["masques_r"];
+	_reponses = soa["reponses"];
+	_formes_debut = soa["formes_debut"];
+	_formes_type = soa["formes_type"];
+	_formes_tf_locale = soa["formes_tf_locale"];
+	_formes_params = soa["formes_params"];
+	_hull_points = soa["hull_points"];
+	_soa_stable_initialise = true;
 }
 
 CollisionLot::CollisionLot() {}
@@ -563,14 +579,22 @@ Dictionary CollisionLot::derniers_compteurs() const {
 }
 
 // =============================================================================
-// DETECTER
+// DETECTER (implementation interne, contacts en std::vector natifs)
 // =============================================================================
-Dictionary CollisionLot::detecter(const Dictionary &entree) const {
-	Dictionary sortie;
-	PackedInt32Array contacts_a;
-	PackedInt32Array contacts_b;
-	PackedVector3Array contacts_normale;
-	PackedFloat32Array contacts_profondeur;
+// Rempli par _detecter_impl, consomme par detecter (conversion en Packed*Array)
+// et par detecter_et_resoudre (passe directement a _resoudre_impl). Aucun
+// contact ne franchit la frontiere GDScript/C++ entre les deux voies.
+void CollisionLot::_detecter_impl(
+		const Dictionary &entree,
+		bool utiliser_soa_stocke,
+		std::vector<int32_t> &contacts_a,
+		std::vector<int32_t> &contacts_b,
+		std::vector<Vector3> &contacts_normale,
+		std::vector<float> &contacts_profondeur) const {
+	contacts_a.clear();
+	contacts_b.clear();
+	contacts_normale.clear();
+	contacts_profondeur.clear();
 
 	_us_prepasse = 0;
 	_us_tri = 0;
@@ -583,46 +607,86 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 	_n_appels_gjk = 0;
 	_n_contacts = 0;
 
+	// "positions" et "delta" viennent TOUJOURS du Dictionary (le premier mute
+	// par frame, le second aussi). Les 10 colonnes stables viennent des membres
+	// si utiliser_soa_stocke, sinon du Dictionary (mode fallback pour detecter
+	// individuel et pour la voie fusion sans init prealable).
 	PackedVector3Array positions = entree["positions"];
-	PackedVector3Array velocites = entree["velocites"];
-	PackedFloat32Array orientations = entree["orientations"];
-	PackedInt32Array masques_c = entree["masques_c"];
-	PackedInt32Array masques_r = entree["masques_r"];
-	PackedByteArray reponses = entree["reponses"];
-	PackedInt32Array formes_debut = entree["formes_debut"];
-	PackedInt32Array formes_type = entree["formes_type"];
-	PackedFloat32Array formes_tf_locale = entree["formes_tf_locale"];
-	PackedFloat32Array formes_params = entree["formes_params"];
-	PackedVector3Array hull_points = entree["hull_points"];
 	float delta = (float)(double)entree["delta"];
 
 	const int N = positions.size();
 	if (N <= 0) {
-		sortie["contacts_a"] = contacts_a;
-		sortie["contacts_b"] = contacts_b;
-		sortie["contacts_normale"] = contacts_normale;
-		sortie["contacts_profondeur"] = contacts_profondeur;
-		return sortie;
+		return;
 	}
 
+	// Locales pour tenir les Packed*Array en vie tant que leurs pointeurs
+	// sont deferences. Non allouees quand utiliser_soa_stocke est vrai.
+	PackedVector3Array velocites_l;
+	PackedFloat32Array orientations_l;
+	PackedInt32Array masques_c_l;
+	PackedInt32Array masques_r_l;
+	PackedByteArray reponses_l;
+	PackedInt32Array formes_debut_l;
+	PackedInt32Array formes_type_l;
+	PackedFloat32Array formes_tf_locale_l;
+	PackedFloat32Array formes_params_l;
+	PackedVector3Array hull_points_l;
+
 	const Vector3 *pos_r = positions.ptr();
-	const Vector3 *vel_r = velocites.ptr();
-	const float *orient_r = orientations.ptr();
-	const int32_t *masques_c_r = masques_c.ptr();
-	const int32_t *masques_r_r = masques_r.ptr();
-	const uint8_t *reponses_r = reponses.ptr();
-	const int32_t *formes_debut_r = formes_debut.ptr();
-	const int32_t *formes_type_r = formes_type.ptr();
-	const float *formes_tf_r = formes_tf_locale.ptr();
-	const float *formes_params_r = formes_params.ptr();
-	const Vector3 *hull_points_ptr = hull_points.ptr();
+	const Vector3 *vel_r;
+	const float *orient_r;
+	const int32_t *masques_c_r;
+	const int32_t *masques_r_r;
+	const uint8_t *reponses_r;
+	const int32_t *formes_debut_r;
+	const int32_t *formes_type_r;
+	const float *formes_tf_r;
+	const float *formes_params_r;
+	const Vector3 *hull_points_ptr;
+	int M;
+
+	if (utiliser_soa_stocke) {
+		vel_r = _velocites.ptr();
+		orient_r = _orientations.ptr();
+		masques_c_r = _masques_c.ptr();
+		masques_r_r = _masques_r.ptr();
+		reponses_r = _reponses.ptr();
+		formes_debut_r = _formes_debut.ptr();
+		formes_type_r = _formes_type.ptr();
+		formes_tf_r = _formes_tf_locale.ptr();
+		formes_params_r = _formes_params.ptr();
+		hull_points_ptr = _hull_points.ptr();
+		M = _formes_type.size();
+	} else {
+		velocites_l = entree["velocites"];
+		orientations_l = entree["orientations"];
+		masques_c_l = entree["masques_c"];
+		masques_r_l = entree["masques_r"];
+		reponses_l = entree["reponses"];
+		formes_debut_l = entree["formes_debut"];
+		formes_type_l = entree["formes_type"];
+		formes_tf_locale_l = entree["formes_tf_locale"];
+		formes_params_l = entree["formes_params"];
+		hull_points_l = entree["hull_points"];
+		vel_r = velocites_l.ptr();
+		orient_r = orientations_l.ptr();
+		masques_c_r = masques_c_l.ptr();
+		masques_r_r = masques_r_l.ptr();
+		reponses_r = reponses_l.ptr();
+		formes_debut_r = formes_debut_l.ptr();
+		formes_type_r = formes_type_l.ptr();
+		formes_tf_r = formes_tf_locale_l.ptr();
+		formes_params_r = formes_params_l.ptr();
+		hull_points_ptr = hull_points_l.ptr();
+		M = formes_type_l.size();
+	}
 
 	auto t_prepasse_debut = std::chrono::steady_clock::now();
 
 	// --- Cache par forme (calcule une fois par appel) ---
 	// AABB LOCALE : forme placee a orient=IDENTITY, pos=ZERO, avec tf_locale
 	// appliquee. Ne depend PAS de la position monde ni de l'orientation entite.
-	const int M = formes_type.size();
+	// M est fourni plus haut (soit _formes_type.size() soit formes_type_l.size()).
 	std::vector<AABB> aabb_locale_cache((size_t)M);
 	std::vector<double> taille_min_cache((size_t)M);
 	for (int fi = 0; fi < M; fi++) {
@@ -970,12 +1034,12 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 	// PERMUTATION SUR LES 4 COLONNES : trier chaque colonne separement casserait
 	// l'alignement. On trie un vector d'indices, puis on reconstruit les quatre
 	// Packed*Array. Inclus dans us_narrowphase (borne fermee juste apres).
-	const int K = contacts_a.size();
+	const int K = (int)contacts_a.size();
 	if (K > 1) {
 		std::vector<int> perm((size_t)K);
 		for (int k = 0; k < K; k++) perm[(size_t)k] = k;
-		const int32_t *ca_ptr = contacts_a.ptr();
-		const int32_t *cb_ptr = contacts_b.ptr();
+		const int32_t *ca_ptr = contacts_a.data();
+		const int32_t *cb_ptr = contacts_b.data();
 		std::stable_sort(perm.begin(), perm.end(), [&](int x, int y) {
 			int32_t ax = ca_ptr[x], bx = cb_ptr[x];
 			int32_t ay = ca_ptr[y], by = cb_ptr[y];
@@ -986,27 +1050,23 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 			if (lo_x != lo_y) return lo_x < lo_y;
 			return hi_x < hi_y;
 		});
-		PackedInt32Array new_a; new_a.resize(K);
-		PackedInt32Array new_b; new_b.resize(K);
-		PackedVector3Array new_n; new_n.resize(K);
-		PackedFloat32Array new_p; new_p.resize(K);
-		int32_t *na_w = new_a.ptrw();
-		int32_t *nb_w = new_b.ptrw();
-		Vector3 *nn_w = new_n.ptrw();
-		float *np_w = new_p.ptrw();
-		const Vector3 *cn_ptr = contacts_normale.ptr();
-		const float *cp_ptr = contacts_profondeur.ptr();
+		std::vector<int32_t> new_a((size_t)K);
+		std::vector<int32_t> new_b((size_t)K);
+		std::vector<Vector3> new_n((size_t)K);
+		std::vector<float> new_p((size_t)K);
+		const Vector3 *cn_ptr = contacts_normale.data();
+		const float *cp_ptr = contacts_profondeur.data();
 		for (int k = 0; k < K; k++) {
 			int src = perm[(size_t)k];
-			na_w[k] = ca_ptr[src];
-			nb_w[k] = cb_ptr[src];
-			nn_w[k] = cn_ptr[src];
-			np_w[k] = cp_ptr[src];
+			new_a[(size_t)k] = ca_ptr[src];
+			new_b[(size_t)k] = cb_ptr[src];
+			new_n[(size_t)k] = cn_ptr[src];
+			new_p[(size_t)k] = cp_ptr[src];
 		}
-		contacts_a = new_a;
-		contacts_b = new_b;
-		contacts_normale = new_n;
-		contacts_profondeur = new_p;
+		contacts_a = std::move(new_a);
+		contacts_b = std::move(new_b);
+		contacts_normale = std::move(new_n);
+		contacts_profondeur = std::move(new_p);
 	}
 
 	_us_narrowphase = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1015,7 +1075,33 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 
 	(void)reponses_r;
 	(void)masques_r_r;
+}
 
+// =============================================================================
+// DETECTER (wrapper Dictionary -> Dictionary)
+// =============================================================================
+Dictionary CollisionLot::detecter(const Dictionary &entree) const {
+	std::vector<int32_t> ca;
+	std::vector<int32_t> cb;
+	std::vector<Vector3> cn;
+	std::vector<float> cp;
+	// FORCE le mode Dictionary : detecter individuel ignore les membres stockes
+	// (le test de parite n'appelle jamais init_soa_stable).
+	_detecter_impl(entree, false, ca, cb, cn, cp);
+
+	const int K = (int)ca.size();
+	PackedInt32Array contacts_a; contacts_a.resize(K);
+	PackedInt32Array contacts_b; contacts_b.resize(K);
+	PackedVector3Array contacts_normale; contacts_normale.resize(K);
+	PackedFloat32Array contacts_profondeur; contacts_profondeur.resize(K);
+	if (K > 0) {
+		std::memcpy(contacts_a.ptrw(), ca.data(), sizeof(int32_t) * (size_t)K);
+		std::memcpy(contacts_b.ptrw(), cb.data(), sizeof(int32_t) * (size_t)K);
+		std::memcpy(contacts_normale.ptrw(), cn.data(), sizeof(Vector3) * (size_t)K);
+		std::memcpy(contacts_profondeur.ptrw(), cp.data(), sizeof(float) * (size_t)K);
+	}
+
+	Dictionary sortie;
 	sortie["contacts_a"] = contacts_a;
 	sortie["contacts_b"] = contacts_b;
 	sortie["contacts_normale"] = contacts_normale;
@@ -1024,31 +1110,23 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 }
 
 // =============================================================================
-// RESOUDRE
+// RESOUDRE (implementation interne, pointeurs bruts)
 // =============================================================================
-Dictionary CollisionLot::resoudre(const Dictionary &entree) const {
-	Dictionary sortie;
+// Mute pos_w en place. Chrono us_resoudre ecrit ici. Les pointeurs bruts
+// laissent l'appelant passer soit .ptr() (PackedArray depuis Dictionary), soit
+// .data() (std::vector produit par _detecter_impl).
+void CollisionLot::_resoudre_impl(
+		Vector3 *pos_w,
+		const Vector3 *vel_r,
+		const uint8_t *reponses_r,
+		const int32_t *masques_r_r,
+		const int32_t *ca_r,
+		const int32_t *cb_r,
+		const Vector3 *cn_r,
+		const float *cp_r,
+		int K) const {
 	_us_resoudre = 0;
 	auto t_debut = std::chrono::steady_clock::now();
-
-	PackedVector3Array positions = entree["positions"];
-	PackedVector3Array velocites = entree["velocites"];
-	PackedByteArray reponses = entree["reponses"];
-	PackedInt32Array masques_r = entree["masques_r"];
-	PackedInt32Array contacts_a = entree["contacts_a"];
-	PackedInt32Array contacts_b = entree["contacts_b"];
-	PackedVector3Array contacts_normale = entree["contacts_normale"];
-	PackedFloat32Array contacts_profondeur = entree["contacts_profondeur"];
-
-	Vector3 *pos_w = positions.ptrw();
-	const Vector3 *vel_r = velocites.ptr();
-	const uint8_t *reponses_r = reponses.ptr();
-	const int32_t *masques_r_r = masques_r.ptr();
-	const int32_t *ca_r = contacts_a.ptr();
-	const int32_t *cb_r = contacts_b.ptr();
-	const Vector3 *cn_r = contacts_normale.ptr();
-	const float *cp_r = contacts_profondeur.ptr();
-	const int K = contacts_a.size();
 
 	for (int k = 0; k < K; k++) {
 		double prof = (double)cp_r[k];
@@ -1077,6 +1155,87 @@ Dictionary CollisionLot::resoudre(const Dictionary &entree) const {
 
 	_us_resoudre += std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - t_debut).count();
+}
+
+// =============================================================================
+// RESOUDRE (wrapper Dictionary -> Dictionary)
+// =============================================================================
+Dictionary CollisionLot::resoudre(const Dictionary &entree) const {
+	Dictionary sortie;
+
+	PackedVector3Array positions = entree["positions"];
+	PackedVector3Array velocites = entree["velocites"];
+	PackedByteArray reponses = entree["reponses"];
+	PackedInt32Array masques_r = entree["masques_r"];
+	PackedInt32Array contacts_a = entree["contacts_a"];
+	PackedInt32Array contacts_b = entree["contacts_b"];
+	PackedVector3Array contacts_normale = entree["contacts_normale"];
+	PackedFloat32Array contacts_profondeur = entree["contacts_profondeur"];
+
+	_resoudre_impl(
+			positions.ptrw(),
+			velocites.ptr(),
+			reponses.ptr(),
+			masques_r.ptr(),
+			contacts_a.ptr(),
+			contacts_b.ptr(),
+			contacts_normale.ptr(),
+			contacts_profondeur.ptr(),
+			contacts_a.size());
+
+	sortie["positions"] = positions;
+	return sortie;
+}
+
+// =============================================================================
+// DETECTER_ET_RESOUDRE (une seule frontiere aller-retour)
+// =============================================================================
+// Enchaine _detecter_impl puis _resoudre_impl : les contacts restent en
+// std::vector cote C++, ne sortent jamais. 4 traversees GDScript/C++ par frame
+// (detecter dict-in dict-out + resoudre dict-in dict-out) deviennent 2.
+Dictionary CollisionLot::detecter_et_resoudre(const Dictionary &entree) const {
+	Dictionary sortie;
+
+	std::vector<int32_t> ca;
+	std::vector<int32_t> cb;
+	std::vector<Vector3> cn;
+	std::vector<float> cp;
+	_detecter_impl(entree, _soa_stable_initialise, ca, cb, cn, cp);
+
+	// positions vient TOUJOURS du Dictionary (mute par frame). Les trois
+	// autres (velocites, reponses, masques_r) viennent des membres si le SoA
+	// est initialise, sinon du Dictionary (fallback si l'appelant a saute
+	// init_soa_stable).
+	PackedVector3Array positions = entree["positions"];
+	PackedVector3Array velocites_l;
+	PackedByteArray reponses_l;
+	PackedInt32Array masques_r_l;
+	const Vector3 *vel_r;
+	const uint8_t *reponses_r;
+	const int32_t *masques_r_r;
+	if (_soa_stable_initialise) {
+		vel_r = _velocites.ptr();
+		reponses_r = _reponses.ptr();
+		masques_r_r = _masques_r.ptr();
+	} else {
+		velocites_l = entree["velocites"];
+		reponses_l = entree["reponses"];
+		masques_r_l = entree["masques_r"];
+		vel_r = velocites_l.ptr();
+		reponses_r = reponses_l.ptr();
+		masques_r_r = masques_r_l.ptr();
+	}
+
+	_resoudre_impl(
+			positions.ptrw(),
+			vel_r,
+			reponses_r,
+			masques_r_r,
+			ca.data(),
+			cb.data(),
+			cn.data(),
+			cp.data(),
+			(int)ca.size());
 
 	sortie["positions"] = positions;
 	return sortie;

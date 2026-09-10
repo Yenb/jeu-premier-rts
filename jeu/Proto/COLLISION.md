@@ -188,6 +188,33 @@ vient du nombre de paires ou du coût par paire. `banc_peuplement.gd` imprime
 ces mesures toutes `CADENCE_RELEVE_COLLISION_FRAMES` frames sous
 `actif_releve`. Mono-thread. Multithread : morceau ultérieur.
 
+**Frontière fusionnée** : `detecter_et_resoudre(entree) → { "positions" }` est
+la troisième méthode bindée. Elle enchaîne en interne `_detecter_impl` puis
+`_resoudre_impl` sur les mêmes std::vector natifs — les contacts ne franchissent
+jamais la frontière GDScript/C++. Passe de **4 traversées par frame** (detecter
+dict-in dict-out + resoudre dict-in dict-out, avec repackage des contacts entre
+les deux côté GDScript) à **2** (un dict-in, un dict-out). C'est la voie
+appelée par `banc_peuplement.gd`. `detecter` et `resoudre` individuels restent
+exposés (mêmes signatures, mêmes sorties) pour `test_collision_lot_cpp.gd` qui
+compare bit-à-bit contre l'oracle `collision.gd` — le test appelle `detecter`
+puis `resoudre` séparément, la parité tient parce que `_detecter_impl` et
+`_resoudre_impl` sont la même implémentation qu'avant le split, désormais
+partagée par les trois voies.
+
+**SoA stable stocké côté C++** : `init_soa_stable(soa)` copie les 10 colonnes
+qui ne changent jamais entre frames (`velocites`, `orientations`, `masques_c`,
+`masques_r`, `reponses`, `formes_debut`, `formes_type`, `formes_tf_locale`,
+`formes_params`, `hull_points`) dans des membres `PackedXArray` de CollisionLot
+et pose un flag `_soa_stable_initialise`. Après cet appel, `detecter_et_resoudre`
+ne lit du Dictionary d'entrée que `positions` et `delta` — les 10 colonnes
+stables ne franchissent plus la frontière par frame. À appeler UNE fois à la
+fabrication du lot (`banc_peuplement.gd` juste après `ClassDB.instantiate`).
+Fallback intégré : si `detecter_et_resoudre` est appelé sans `init_soa_stable`
+préalable, `_detecter_impl` retombe sur la voie Dictionary complet — utile pour
+un consommateur ponctuel qui ne veut pas s'engager sur un lot stable. `detecter`
+et `resoudre` individuels IGNORENT ces membres (ils forcent le mode Dictionary
+en interne), donc le test de parité tient sans jamais appeler `init_soa_stable`.
+
 ## Ce que le système NE fait PAS
 
 Friction, rotation en réponse, masse/restitution, résolution itérative
