@@ -1,15 +1,9 @@
 extends SceneTree
 
-# Test headless : parite BIT-A-BIT entre :
-#   ORACLE -- jeu/Proto/collision.gd::detecter + resoudre (GDScript, verite).
-#   CIBLE  -- extension_terrain/CollisionLot::detecter + resoudre (C++).
-#
-# DEUX scenarios :
-# (1) PEUPLEMENT : cluster de 6 boites en recouvrement, orient IDENTITY.
-#     Egalite exacte des flottants sur positions finales ET sur chaque contact.
-# (2) MULTI-FORMES : sphere + boite + capsule + hull, orient != IDENTITY pour
-#     une entite. Prouve que le narrowphase complet est porte, pas seulement
-#     la boite. Egalite exacte aussi.
+# Parite bit-a-bit CollisionLot (C++) vs jeu/Proto/collision.gd (oracle).
+# Trois scenarios : peuplement (6 boites en cluster), multi-formes
+# (sphere+boite+capsule+hull, orient tournee), rayons frontiere (r_i != r_j
+# a distance dans ]min, max[).
 
 const Verif = preload("res://scripts/verif.gd")
 const Collision = preload("res://jeu/Proto/collision.gd")
@@ -28,7 +22,7 @@ func _lancer() -> void:
 	_scenario_multi_formes()
 	_scenario_rayons_frontiere()
 	if _v.echecs() == 0:
-		print("OK: CollisionLot (C++) detecter+resoudre == collision.gd, egalite exacte des flottants sur peuplement (6 boites) ET multi-formes (sphere+boite+capsule+hull, orient tournee) ET rayons frontiere (r_i != r_j)")
+		print("OK: CollisionLot == collision.gd, egalite exacte des flottants (peuplement + multi-formes + rayons frontiere)")
 		quit(0)
 	else:
 		printerr("ECHEC: %d assertion(s) fausse(s)" % _v.echecs())
@@ -36,8 +30,8 @@ func _lancer() -> void:
 
 func _scenario_peuplement() -> void:
 	var demi := Vector3(0.4, 0.4, 0.4)
-	var f := {"type": "boite", "transform_locale": Transform3D.IDENTITY, "parametres": {"demi_taille": demi}}
-	var positions_init := [
+	var f := _forme_boite(demi)
+	var pos := [
 		Vector3(0.00, 0.00, 0.00),
 		Vector3(0.55, 0.00, 0.05),
 		Vector3(1.05, 0.00, 0.10),
@@ -46,132 +40,103 @@ func _scenario_peuplement() -> void:
 		Vector3(1.30, 0.00, 0.55),
 	]
 	var entites: Array = []
-	for i in range(positions_init.size()):
-		entites.append(_fab_generique("p%d" % i, positions_init[i], f, Basis.IDENTITY))
+	for i in range(pos.size()):
+		entites.append(_fab("p%d" % i, pos[i], f, Basis.IDENTITY))
 	_executer_et_comparer(entites, "peuplement")
 
 func _scenario_multi_formes() -> void:
-	var forme_sphere := {"type": "sphere", "transform_locale": Transform3D.IDENTITY,
-			"parametres": {"rayon": 0.4}}
-	var forme_boite := {"type": "boite", "transform_locale": Transform3D.IDENTITY,
-			"parametres": {"demi_taille": Vector3(0.35, 0.5, 0.35)}}
-	var forme_capsule := {"type": "capsule", "transform_locale": Transform3D.IDENTITY,
-			"parametres": {"rayon": 0.3, "hauteur": 1.2}}
-	var pts_hull: Array[Vector3] = [
+	var f_sphere := {"type": "sphere", "transform_locale": Transform3D.IDENTITY, "parametres": {"rayon": 0.4}}
+	var f_boite := _forme_boite(Vector3(0.35, 0.5, 0.35))
+	var f_capsule := {"type": "capsule", "transform_locale": Transform3D.IDENTITY, "parametres": {"rayon": 0.3, "hauteur": 1.2}}
+	var pts: Array[Vector3] = [
 		Vector3(0.4, 0.3, 0.4), Vector3(-0.4, 0.3, 0.4),
 		Vector3(-0.4, 0.3, -0.4), Vector3(0.4, 0.3, -0.4),
 		Vector3(0.0, -0.3, 0.0),
 	]
-	var forme_hull := {"type": "hull", "transform_locale": Transform3D.IDENTITY,
-			"parametres": {"points": pts_hull}}
+	var f_hull := {"type": "hull", "transform_locale": Transform3D.IDENTITY, "parametres": {"points": pts}}
 	var basis_rot := Basis(Vector3.UP, deg_to_rad(30.0))
 	var entites: Array = [
-		_fab_generique("s0", Vector3(0.0, 0.0, 0.0), forme_sphere, Basis.IDENTITY),
-		_fab_generique("b0", Vector3(0.65, 0.0, 0.0), forme_boite, Basis.IDENTITY),
-		_fab_generique("c0", Vector3(0.0, 0.0, 0.8), forme_capsule, Basis.IDENTITY),
-		_fab_generique("h0", Vector3(0.4, 0.0, 0.9), forme_hull, basis_rot),
+		_fab("s0", Vector3(0.0, 0.0, 0.0), f_sphere, Basis.IDENTITY),
+		_fab("b0", Vector3(0.65, 0.0, 0.0), f_boite, Basis.IDENTITY),
+		_fab("c0", Vector3(0.0, 0.0, 0.8), f_capsule, Basis.IDENTITY),
+		_fab("h0", Vector3(0.4, 0.0, 0.9), f_hull, basis_rot),
 	]
 	_executer_et_comparer(entites, "multi_formes")
 
 func _scenario_rayons_frontiere() -> void:
-	# Deux entites de RAYONS DIFFERENTS (r_i != r_j) posees a une distance
-	# HORIZONTALE entre min(r_i, r_j) et max(r_i, r_j). C'est le seul cas ou
-	# l'ancien pipeline OU (equivalent max(r_i, r_j)^2) diverge d'un filtre
-	# errone (r_source seul, ou min). Sans ce cas, le test peut etre vert
-	# meme si le max est mal cable. Avec, il verrouille exactement le point.
-	#
-	# r_par_i (broadphase) = demi-diagonale AABB + rayon_max + vel_len*delta,
-	# donc en pratique >= la moitie de la diagonale de la forme. On force des
-	# tailles franchement differentes : boite 0.4^3 vs boite 1.2^3. La grande
-	# entite doit "attirer" la petite dans son rayon d'influence via max.
-	var forme_petite := {"type": "boite", "transform_locale": Transform3D.IDENTITY,
-			"parametres": {"demi_taille": Vector3(0.4, 0.4, 0.4)}}
-	var forme_grande := {"type": "boite", "transform_locale": Transform3D.IDENTITY,
-			"parametres": {"demi_taille": Vector3(1.2, 1.2, 1.2)}}
-	# Distance = 2.5 : au-dela de la somme des demi-tailles (1.6 -> pas de contact
-	# reel), mais a portee de la broadphase de la grande (r ~ demi-diag 1.2*sqrt(3)
-	# ~ 2.08). La grande "voit" la petite dans son rayon, la petite ne verrait pas
-	# la grande avec son propre rayon. Le test verifie que max(r_i, r_j) capte
-	# bien la paire cote broadphase (meme si le narrowphase ne trouve pas de
-	# contact, l'ENSEMBLE de paires visitees doit etre le meme des deux cotes).
+	# r_i != r_j, distance dans ]min(r_i,r_j), max(r_i,r_j)[.
+	# Verrouille que max(r_i, r_j)^2 capte bien la paire cote broadphase.
 	var entites: Array = [
-		_fab_generique("pt0", Vector3.ZERO, forme_petite, Basis.IDENTITY),
-		_fab_generique("gd0", Vector3(2.5, 0.0, 0.0), forme_grande, Basis.IDENTITY),
+		_fab("pt", Vector3.ZERO, _forme_boite(Vector3(0.4, 0.4, 0.4)), Basis.IDENTITY),
+		_fab("gd", Vector3(2.5, 0.0, 0.0), _forme_boite(Vector3(1.2, 1.2, 1.2)), Basis.IDENTITY),
 	]
 	_executer_et_comparer(entites, "rayons_frontiere")
 
-func _executer_et_comparer(entites_original: Array, nom_scenario: String) -> void:
+func _executer_et_comparer(entites_original: Array, nom: String) -> void:
 	var delta: float = 0.016
-	# ORACLE.
-	var entites_oracle: Array = _cloner_entites(entites_original)
-	var contacts_oracle: Array = Collision.detecter(entites_oracle, delta)
-	Collision.resoudre(contacts_oracle, entites_oracle)
-	# CIBLE.
-	var entites_cible: Array = _cloner_entites(entites_original)
+	var oracle: Array = _cloner(entites_original)
+	var contacts_oracle: Array = Collision.detecter(oracle, delta)
+	Collision.resoudre(contacts_oracle, oracle)
+	var cible: Array = _cloner(entites_original)
 	var cpp = ClassDB.instantiate("CollisionLot")
-	var soa: Dictionary = _decomposer(entites_cible, delta)
-	var sortie: Dictionary = cpp.detecter(soa)
-	var entree_resoudre := {
+	var soa: Dictionary = _decomposer(cible, delta)
+	var out_det: Dictionary = cpp.detecter(soa)
+	var out_res: Dictionary = cpp.resoudre({
 		"positions": soa.positions,
 		"velocites": soa.velocites,
 		"reponses": soa.reponses,
 		"masques_r": soa.masques_r,
-		"contacts_a": sortie.contacts_a,
-		"contacts_b": sortie.contacts_b,
-		"contacts_normale": sortie.contacts_normale,
-		"contacts_profondeur": sortie.contacts_profondeur,
-	}
-	var sortie_res: Dictionary = cpp.resoudre(entree_resoudre)
-	var positions_cible: PackedVector3Array = sortie_res.positions
-	for i in range(entites_cible.size()):
-		entites_cible[i].position = positions_cible[i]
-	# --- Comparaisons ---
-	_v.v(contacts_oracle.size() == (sortie.contacts_a as PackedInt32Array).size(),
-		"%s : nb contacts oracle=%d cpp=%d" % [nom_scenario, contacts_oracle.size(), (sortie.contacts_a as PackedInt32Array).size()])
-	if contacts_oracle.size() == (sortie.contacts_a as PackedInt32Array).size():
-		var oracle_par_paire: Dictionary = {}
+		"contacts_a": out_det.contacts_a,
+		"contacts_b": out_det.contacts_b,
+		"contacts_normale": out_det.contacts_normale,
+		"contacts_profondeur": out_det.contacts_profondeur,
+	})
+	var pos_cible: PackedVector3Array = out_res.positions
+	for i in range(cible.size()):
+		cible[i].position = pos_cible[i]
+	var n_oracle: int = contacts_oracle.size()
+	var n_cible: int = (out_det.contacts_a as PackedInt32Array).size()
+	_v.v(n_oracle == n_cible, "%s : nb contacts oracle=%d cpp=%d" % [nom, n_oracle, n_cible])
+	if n_oracle == n_cible:
+		var ref: Dictionary = {}
 		for c in contacts_oracle:
-			var ia: int = _index_de(c.a, entites_oracle)
-			var ib: int = _index_de(c.b, entites_oracle)
+			var ia: int = _idx(c.a, oracle)
+			var ib: int = _idx(c.b, oracle)
 			var lo: int = mini(ia, ib)
 			var hi: int = maxi(ia, ib)
-			var normale_lohi: Vector3 = c.normale if ia < ib else -c.normale
-			oracle_par_paire[Vector2i(lo, hi)] = {
-				"normale": normale_lohi,
+			ref[Vector2i(lo, hi)] = {
+				"normale": c.normale if ia < ib else -c.normale,
 				"profondeur": float(c.profondeur),
 			}
-		var ca_arr: PackedInt32Array = sortie.contacts_a
-		var cb_arr: PackedInt32Array = sortie.contacts_b
-		var cn_arr: PackedVector3Array = sortie.contacts_normale
-		var cp_arr: PackedFloat32Array = sortie.contacts_profondeur
-		for k in range(ca_arr.size()):
-			var ia_c: int = ca_arr[k]
-			var ib_c: int = cb_arr[k]
-			var lo: int = mini(ia_c, ib_c)
-			var hi: int = maxi(ia_c, ib_c)
+		var ca: PackedInt32Array = out_det.contacts_a
+		var cb: PackedInt32Array = out_det.contacts_b
+		var cn: PackedVector3Array = out_det.contacts_normale
+		var cp: PackedFloat32Array = out_det.contacts_profondeur
+		for k in range(ca.size()):
+			var lo: int = mini(ca[k], cb[k])
+			var hi: int = maxi(ca[k], cb[k])
 			var cle := Vector2i(lo, hi)
-			if not oracle_par_paire.has(cle):
-				_v.v(false, "%s : paire cpp (%d,%d) absente cote oracle" % [nom_scenario, ia_c, ib_c])
+			if not ref.has(cle):
+				_v.v(false, "%s : paire cpp (%d,%d) absente oracle" % [nom, ca[k], cb[k]])
 				continue
-			var ref: Dictionary = oracle_par_paire[cle]
-			var n_cpp: Vector3 = cn_arr[k] if ia_c < ib_c else -cn_arr[k]
-			_v.v(n_cpp == ref.normale,
-				"%s : paire (%d,%d) normale cpp=%s oracle=%s" % [nom_scenario, lo, hi, str(n_cpp), str(ref.normale)])
-			_v.v(cp_arr[k] == ref.profondeur,
-				"%s : paire (%d,%d) profondeur cpp=%f oracle=%f" % [nom_scenario, lo, hi, cp_arr[k], ref.profondeur])
-	for i in range(entites_oracle.size()):
-		var pos_o: Vector3 = entites_oracle[i].position
-		var pos_c: Vector3 = entites_cible[i].position
-		_v.v(pos_o == pos_c,
-			"%s : position finale entite %d oracle=%s cpp=%s" % [nom_scenario, i, str(pos_o), str(pos_c)])
+			var r: Dictionary = ref[cle]
+			var n_cpp: Vector3 = cn[k] if ca[k] < cb[k] else -cn[k]
+			_v.v(n_cpp == r.normale, "%s : normale paire (%d,%d) cpp=%s oracle=%s" % [nom, lo, hi, str(n_cpp), str(r.normale)])
+			_v.v(cp[k] == r.profondeur, "%s : profondeur paire (%d,%d) cpp=%f oracle=%f" % [nom, lo, hi, cp[k], r.profondeur])
+	for i in range(oracle.size()):
+		_v.v(oracle[i].position == cible[i].position,
+			"%s : position finale entite %d oracle=%s cpp=%s" % [nom, i, str(oracle[i].position), str(cible[i].position)])
 
-func _index_de(entite: Dictionary, entites: Array) -> int:
+func _idx(entite: Dictionary, entites: Array) -> int:
 	for k in range(entites.size()):
 		if entites[k] == entite:
 			return k
 	return -1
 
-func _fab_generique(id: String, pos: Vector3, forme: Dictionary, orient: Basis) -> Dictionary:
+func _forme_boite(demi: Vector3) -> Dictionary:
+	return {"type": "boite", "transform_locale": Transform3D.IDENTITY, "parametres": {"demi_taille": demi}}
+
+func _fab(id: String, pos: Vector3, forme: Dictionary, orient: Basis) -> Dictionary:
 	var e := {
 		"id": id,
 		"position": pos,
@@ -187,136 +152,95 @@ func _fab_generique(id: String, pos: Vector3, forme: Dictionary, orient: Basis) 
 	e.proprietes["aabb_cache"] = Collision.aabb_forme(forme, Transform3D(orient, pos))
 	return e
 
-func _cloner_entites(entites: Array) -> Array:
+func _cloner(entites: Array) -> Array:
 	var out: Array = []
 	for e in entites:
-		var pr_src: Dictionary = e.proprietes
-		var pr: Dictionary = {
-			"formes": pr_src.formes,
-			"velocite": pr_src.velocite,
-			"orientation": pr_src.orientation,
-			"masque_collision": pr_src.masque_collision,
-			"masque_reponse": pr_src.masque_reponse,
-			"reponse": pr_src.reponse,
+		var p_src: Dictionary = e.proprietes
+		var p: Dictionary = {
+			"formes": p_src.formes,
+			"velocite": p_src.velocite,
+			"orientation": p_src.orientation,
+			"masque_collision": p_src.masque_collision,
+			"masque_reponse": p_src.masque_reponse,
+			"reponse": p_src.reponse,
 		}
-		if pr_src.has("aabb_cache"):
-			pr["aabb_cache"] = pr_src.aabb_cache
-		out.append({"id": e.id, "position": e.position, "proprietes": pr})
+		if p_src.has("aabb_cache"):
+			p["aabb_cache"] = p_src.aabb_cache
+		out.append({"id": e.id, "position": e.position, "proprietes": p})
 	return out
 
-# Decompose un Array de Dict-entites en colonnes SoA pour CollisionLot.
-# Pool de formes plat, une entree par (entite, i_forme) -- pas de dedup.
 func _decomposer(entites: Array, delta: float) -> Dictionary:
 	var N: int = entites.size()
-	var positions := PackedVector3Array()
-	positions.resize(N)
-	var velocites := PackedVector3Array()
-	velocites.resize(N)
-	var orientations := PackedFloat32Array()
-	orientations.resize(N * 9)
-	var masques_c := PackedInt32Array()
-	masques_c.resize(N)
-	var masques_r := PackedInt32Array()
-	masques_r.resize(N)
-	var reponses := PackedByteArray()
-	reponses.resize(N)
-	var formes_debut := PackedInt32Array()
-	formes_debut.resize(N + 1)
+	var positions := PackedVector3Array(); positions.resize(N)
+	var velocites := PackedVector3Array(); velocites.resize(N)
+	var orientations := PackedFloat32Array(); orientations.resize(N * 9)
+	var masques_c := PackedInt32Array(); masques_c.resize(N)
+	var masques_r := PackedInt32Array(); masques_r.resize(N)
+	var reponses := PackedByteArray(); reponses.resize(N)
+	var formes_debut := PackedInt32Array(); formes_debut.resize(N + 1)
 	var formes_type := PackedInt32Array()
 	var formes_tf_locale := PackedFloat32Array()
 	var formes_params := PackedFloat32Array()
 	var hull_points := PackedVector3Array()
-	var offset: int = 0
+	var off: int = 0
 	for i in range(N):
 		var e: Dictionary = entites[i]
 		positions[i] = e.position
 		var p: Dictionary = e.proprietes
 		velocites[i] = p.get("velocite", Vector3.ZERO)
 		var b: Basis = p.get("orientation", Basis.IDENTITY)
-		# Basis row-major (b.rows[i] cote C++) :
-		#   row 0 = (b.x.x, b.y.x, b.z.x)  (colonne .x contient les valeurs de x en chaque ligne)
-		orientations[i * 9 + 0] = b.x.x
-		orientations[i * 9 + 1] = b.y.x
-		orientations[i * 9 + 2] = b.z.x
-		orientations[i * 9 + 3] = b.x.y
-		orientations[i * 9 + 4] = b.y.y
-		orientations[i * 9 + 5] = b.z.y
-		orientations[i * 9 + 6] = b.x.z
-		orientations[i * 9 + 7] = b.y.z
-		orientations[i * 9 + 8] = b.z.z
+		orientations[i*9+0] = b.x.x; orientations[i*9+1] = b.y.x; orientations[i*9+2] = b.z.x
+		orientations[i*9+3] = b.x.y; orientations[i*9+4] = b.y.y; orientations[i*9+5] = b.z.y
+		orientations[i*9+6] = b.x.z; orientations[i*9+7] = b.y.z; orientations[i*9+8] = b.z.z
 		masques_c[i] = int(p.get("masque_collision", 0))
 		masques_r[i] = int(p.get("masque_reponse", 0))
 		reponses[i] = 1 if String(p.get("reponse", "")) == "bloque" else 0
-		formes_debut[i] = offset
-		var formes: Array = p.get("formes", [])
-		for f in formes:
-			var f_dict: Dictionary = f
-			var t: String = String(f_dict.get("type", ""))
-			var type_int: int = 0
+		formes_debut[i] = off
+		for f in p.get("formes", []):
+			var f_d: Dictionary = f
+			var t: String = String(f_d.get("type", ""))
+			var ti: int = 0
 			match t:
-				"sphere": type_int = 0
-				"boite": type_int = 1
-				"capsule": type_int = 2
-				"hull": type_int = 3
-			formes_type.push_back(type_int)
-			var tf_l: Transform3D = f_dict.get("transform_locale", Transform3D.IDENTITY)
-			var bl: Basis = tf_l.basis
-			formes_tf_locale.push_back(bl.x.x)
-			formes_tf_locale.push_back(bl.y.x)
-			formes_tf_locale.push_back(bl.z.x)
-			formes_tf_locale.push_back(bl.x.y)
-			formes_tf_locale.push_back(bl.y.y)
-			formes_tf_locale.push_back(bl.z.y)
-			formes_tf_locale.push_back(bl.x.z)
-			formes_tf_locale.push_back(bl.y.z)
-			formes_tf_locale.push_back(bl.z.z)
-			formes_tf_locale.push_back(tf_l.origin.x)
-			formes_tf_locale.push_back(tf_l.origin.y)
-			formes_tf_locale.push_back(tf_l.origin.z)
-			var params: Dictionary = f_dict.get("parametres", {})
+				"sphere": ti = 0
+				"boite": ti = 1
+				"capsule": ti = 2
+				"hull": ti = 3
+			formes_type.push_back(ti)
+			var tf: Transform3D = f_d.get("transform_locale", Transform3D.IDENTITY)
+			var bl: Basis = tf.basis
+			formes_tf_locale.push_back(bl.x.x); formes_tf_locale.push_back(bl.y.x); formes_tf_locale.push_back(bl.z.x)
+			formes_tf_locale.push_back(bl.x.y); formes_tf_locale.push_back(bl.y.y); formes_tf_locale.push_back(bl.z.y)
+			formes_tf_locale.push_back(bl.x.z); formes_tf_locale.push_back(bl.y.z); formes_tf_locale.push_back(bl.z.z)
+			formes_tf_locale.push_back(tf.origin.x); formes_tf_locale.push_back(tf.origin.y); formes_tf_locale.push_back(tf.origin.z)
+			var par: Dictionary = f_d.get("parametres", {})
 			match t:
 				"sphere":
-					formes_params.push_back(float(params.get("rayon", 0.0)))
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
+					formes_params.push_back(float(par.get("rayon", 0.0)))
+					formes_params.push_back(0.0); formes_params.push_back(0.0); formes_params.push_back(0.0)
 				"boite":
-					var d: Vector3 = params.get("demi_taille", Vector3.ZERO)
-					formes_params.push_back(d.x)
-					formes_params.push_back(d.y)
-					formes_params.push_back(d.z)
+					var d: Vector3 = par.get("demi_taille", Vector3.ZERO)
+					formes_params.push_back(d.x); formes_params.push_back(d.y); formes_params.push_back(d.z)
 					formes_params.push_back(0.0)
 				"capsule":
-					formes_params.push_back(float(params.get("rayon", 0.0)))
-					formes_params.push_back(float(params.get("hauteur", 0.0)))
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
+					formes_params.push_back(float(par.get("rayon", 0.0)))
+					formes_params.push_back(float(par.get("hauteur", 0.0)))
+					formes_params.push_back(0.0); formes_params.push_back(0.0)
 				"hull":
-					var pts: Array = params.get("points", [])
+					var pts: Array = par.get("points", [])
 					formes_params.push_back(float(hull_points.size()))
 					formes_params.push_back(float(pts.size()))
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
+					formes_params.push_back(0.0); formes_params.push_back(0.0)
 					for q in pts:
 						hull_points.push_back(q as Vector3)
 				_:
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
-					formes_params.push_back(0.0)
-			offset += 1
-	formes_debut[N] = offset
+					formes_params.push_back(0.0); formes_params.push_back(0.0)
+					formes_params.push_back(0.0); formes_params.push_back(0.0)
+			off += 1
+	formes_debut[N] = off
 	return {
-		"positions": positions,
-		"velocites": velocites,
-		"orientations": orientations,
-		"masques_c": masques_c,
-		"masques_r": masques_r,
-		"reponses": reponses,
-		"formes_debut": formes_debut,
-		"formes_type": formes_type,
-		"formes_tf_locale": formes_tf_locale,
-		"formes_params": formes_params,
-		"hull_points": hull_points,
-		"delta": delta,
+		"positions": positions, "velocites": velocites, "orientations": orientations,
+		"masques_c": masques_c, "masques_r": masques_r, "reponses": reponses,
+		"formes_debut": formes_debut, "formes_type": formes_type,
+		"formes_tf_locale": formes_tf_locale, "formes_params": formes_params,
+		"hull_points": hull_points, "delta": delta,
 	}
