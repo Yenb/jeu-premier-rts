@@ -37,7 +37,15 @@
 # herite de `objet_physique` seul, sans `dynamique` (donc sans `age` ni
 # `stades_config`) ; c'est ce manque qui justifie le type local.
 #
-# MECANIQUES ENCORE INLINE (manques framework a signaler, ne PAS bricoler
+# BANQUE DE GRAINES DORMANTES : deleguee au mecanisme framework
+# `scripts/attente_seuil.gd`. Le banc enregistre chaque graine comme
+# prospect (position seule) via `_banque_graines.ajouter`, et a la
+# cadence `_intervalle_retest` appelle `_banque_graines.avancer` en
+# fournissant un Callable de lecture de couvert (le mecanisme ne connait
+# ni le champ ni le contenu) ; les prospects rendus realisables sont
+# retires du registre et donnent lieu a `_naitre`.
+#
+# MECANIQUES ENCORE INLINE (manque framework a signaler, ne PAS bricoler
 # davantage) :
 # - CHAMP DE COUVERT (`_couvert`, Dictionary Vector2i -> float) : chaque
 #   arbre y ecrit son ombrage a la naissance, retire a la mort, redepose
@@ -46,10 +54,6 @@
 #   `jeu/Outil de jeu/champ_spatial.gd` est un compte entier +1/-1
 #   uniforme. Un mecanisme cadre `champ_saturation.gd` (float, depot
 #   signe sur carre de cases) manque au coeur.
-# - BANQUE DE GRAINES DORMANTES (`_graines_x/z/horloge`) : une graine
-#   attend qu'une condition tombe pour naitre. Aucun mecanisme du coeur
-#   ne porte ce prospect. Un mecanisme cadre `banque_dormante.gd`
-#   manque au coeur.
 #
 # VARIANCES INDIVIDUELLES : `scripts/facteur_variance.gd` (mecanisme cadre
 # neuf, teste hors domaine) deja en place. `_facteur_croissance[i]`
@@ -66,6 +70,7 @@ const Objet = preload("res://scripts/objet.gd")
 const Senescence = preload("res://scripts/senescence.gd")
 const Stade = preload("res://scripts/stade.gd")
 const FacteurVariance = preload("res://scripts/facteur_variance.gd")
+const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
 const CHEMIN_TYPES := "res://data/types.json"
@@ -144,10 +149,13 @@ var _frames_depuis_releve: int = 0
 # supprimee quand son cumul retombe sous EPS_COUVERT.
 var _couvert: Dictionary = {}
 
-# Banque de graines dormantes -- colonnes distinctes des arbres, sans rendu.
-var _graines_x: PackedFloat32Array = PackedFloat32Array()
-var _graines_z: PackedFloat32Array = PackedFloat32Array()
-var _graines_horloge: PackedFloat32Array = PackedFloat32Array()
+# Banque de graines dormantes deleguee au mecanisme framework
+# scripts/attente_seuil.gd : le banc enregistre chaque graine comme
+# prospect (position + rien d'autre), l'accumulateur `_temps_depuis_retest`
+# rythme les appels a `avancer` a la cadence `_intervalle_retest` pour
+# preserver le comportement observable de l'ancienne banque en dur.
+var _banque_graines: RefCounted = null
+var _temps_depuis_retest: float = 0.0
 
 var _rng := RandomNumberGenerator.new()
 
@@ -172,6 +180,7 @@ func _ready() -> void:
 	_monter_population()
 	_construire_catalogue()
 	_init_tampon()
+	_banque_graines = AttenteSeuil.new()
 	if _stades.size() == 8:
 		_naitre(POS_INITIALE.x, POS_INITIALE.y)
 
@@ -412,11 +421,12 @@ func _process(delta: float) -> void:
 			_horloges[i] = h
 		_ecrire_slot(i, age_i)
 		i += 1
-	_tick_banque_graines(pas)
+	_tick_banque(pas)
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
-		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, _graines_horloge.size(), _couvert.size()])
+		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
+		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.size()])
 
 # Nom du stade a l'index dans _stades_config_partagee. Index -1 -> "" :
 # aucun stade encore atteint.
@@ -599,36 +609,33 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
 		return
-	_graines_x.append(pos_x)
-	_graines_z.append(pos_z)
-	_graines_horloge.append(0.0)
+	_banque_graines.ajouter({"position": Vector3(pos_x, Y_SOL, pos_z)})
 
-# AU PLUS UN test par graine et par frame (horloge remise a zero apres
-# test rate). Levee = swap-remove sur les trois colonnes + _naitre.
-func _tick_banque_graines(pas: float) -> void:
-	var i: int = 0
-	while i < _graines_horloge.size():
-		var h: float = _graines_horloge[i] + pas
-		var doit_lever: bool = false
-		if h >= _intervalle_retest:
-			h = 0.0
-			if _lire_couvert(_graines_x[i], _graines_z[i]) < _seuil_couvert:
-				doit_lever = true
-		if doit_lever:
-			var px: float = _graines_x[i]
-			var pz: float = _graines_z[i]
-			var dernier: int = _graines_horloge.size() - 1
-			if i != dernier:
-				_graines_x[i] = _graines_x[dernier]
-				_graines_z[i] = _graines_z[dernier]
-				_graines_horloge[i] = _graines_horloge[dernier]
-			_graines_x.resize(dernier)
-			_graines_z.resize(dernier)
-			_graines_horloge.resize(dernier)
-			_naitre(px, pz)
-		else:
-			_graines_horloge[i] = h
-			i += 1
+# Cadence de re-test des prospects : un test par graine tous les
+# `_intervalle_retest` secondes (jamais a chaque frame, sinon les graines
+# seraient bien plus reactives). Quand le temps accumule atteint la
+# cadence, on appelle `_banque_graines.avancer` avec le Callable de
+# lecture de couvert, seuil = `_seuil_couvert`, sens = "en_dessous" ; les
+# entrees rendues sont retirees du registre et donnent lieu a naissance.
+func _tick_banque(pas: float) -> void:
+	if _banque_graines == null or _banque_graines.nombre() == 0:
+		return
+	_temps_depuis_retest += pas
+	if _temps_depuis_retest < _intervalle_retest:
+		return
+	_temps_depuis_retest = 0.0
+	var realisables: Array = _banque_graines.avancer(
+		Callable(self, "_lire_couvert_v3"), _seuil_couvert, "en_dessous")
+	for r in realisables:
+		var pos: Vector3 = r.entree.position
+		_banque_graines.retirer(int(r.id))
+		_naitre(pos.x, pos.z)
+
+# Adapteur pour le Callable passe a `AttenteSeuil.avancer` : le mecanisme
+# framework recoit une position Vector3, le champ de couvert du banc lit
+# en (x, z) plans horizontal.
+func _lire_couvert_v3(pos: Vector3) -> float:
+	return _lire_couvert(pos.x, pos.z)
 
 # Double la capacite des deux MultiMesh et des colonnes. Godot conserve
 # les transforms existantes lors d'une augmentation de instance_count.

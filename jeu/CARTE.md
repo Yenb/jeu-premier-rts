@@ -267,6 +267,19 @@ Deux positions, une portée, une réponse binaire. `en_portee(position_a,
 position_b, portee) -> bool`. Contrat : en-tête du fichier. Test :
 `test_portee.gd`.
 
+### `scripts/attente_seuil.gd` — registre de prospects latents
+Mécanisme du cœur STATEFUL : `AttenteSeuil.new()` rend une instance qui
+tient un `Dictionary { id → entree }`. `ajouter(entree)` enregistre une
+entrée (exige `entree.position: Vector3`, tout autre champ est opaque),
+rend un id monotone stable. `avancer(lire_valeur, seuil, sens)` appelle
+`lire_valeur.call(position)` pour chaque entrée, compare à `seuil` selon
+`sens` (`"au_dessus"` / `"en_dessous"`, strict), rend l'Array des
+entrées réalisables (id + copie profonde + valeur). NE FABRIQUE RIEN,
+NE RETIRE RIEN : l'appelant consomme via `retirer(id)`. Agnostique du
+type — testé hors domaine (`test_attente_seuil.gd`). **Écart framework** :
+ajouté dans la copie `scripts/` du jeu (CLAUDE.md § Frontière). Utilisé
+par `jeu/bancs/banc_peuplement_arbre.gd` (banque de graines dormantes).
+
 ### `scripts/facteur_variance.gd` — tirage individuel autour de 1.0
 Utilitaire : `tirer(rng, amplitude) -> float` rend un facteur uniforme
 dans `[1 - amplitude, 1 + amplitude]` (amplitude clampée à `[0, 1]`,
@@ -4492,8 +4505,13 @@ en-tête).
   `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
   `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème
   une graine dans un disque uniforme `rayon_graine`. Chaque graine passe par une BANQUE DORMANTE
-  (colonnes séparées `_graines_x`/`_graines_z`/`_graines_horloge`, sans
-  rendu, sans slot MultiMesh). GERMINATION VIA CHAMP DE COUVERT :
+  déléguée au mécanisme framework `scripts/attente_seuil.gd` : le banc
+  enregistre chaque graine comme prospect (position seule) et, à la
+  cadence `_intervalle_retest`, appelle `avancer` en fournissant un
+  Callable de lecture de couvert — le mécanisme ne connaît ni le champ
+  ni le contenu, il compare la valeur lue à `_seuil_couvert` (sens
+  `"en_dessous"`) et rend les prospects réalisables ; le banc les
+  retire du registre et fait `_naitre`. GERMINATION VIA CHAMP DE COUVERT :
   chaque arbre ÉCRIT son ombrage dans un champ scalaire par case
   (`_couvert` = Dictionary `Vector2i` → float, cote `_taille_case`) — au
   stade N il couvre les cases dans un carré de
@@ -4506,9 +4524,9 @@ en-tête).
   → `_naitre` immédiat ; sinon dormante, re-lecture toutes les
   `intervalle_retest` secondes (au plus un test par graine par frame,
   horloge remise à zéro après un test raté). L'arbre ne LIT PAS le champ
-  à cette étape (mort par compétition = chantier suivant). Retrait par
-  swap-remove sur les trois colonnes de la banque à la levée. Zéro
-  comptage de voisins. Champ inline dans l'esprit de
+  à cette étape (mort par compétition = chantier suivant). Retrait des
+  prospects levés directement dans le registre `AttenteSeuil` par id
+  stable. Zéro comptage de voisins. Champ inline dans l'esprit de
   `jeu/Outil de jeu/champ_spatial.gd` (canevas CLAUDE.md § LOCALITÉ
   SPATIALE, pattern (a) champ scalaire) — variante float+signée à
   dépôt sur un carré de cases, alors que le partagé gère un compte
