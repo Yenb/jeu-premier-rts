@@ -104,6 +104,12 @@ var _duree_croissance_totale: float = 0.0
 var _debut_fertilite: float = 0.0
 var _fin_fertilite: float = 0.0
 var _mode_test_rapide: bool = false
+# Demi-etendue de la carte en unites monde. Le sol est un carre de cote
+# `2 * _demi_carte` centre a l'origine ; toute graine dont la position
+# tombe hors [-_demi_carte, +_demi_carte] en x ou z est rejetee (perdue,
+# ne germe pas). UNE seule source de verite -- le sol de _monter_scene
+# et la garde de _deposer_graine derivent tous deux de cette valeur.
+var _demi_carte: float = 300.0
 # Gate : true = le joueur (CharacterBody3D, exception CLAUDE.md) est
 # instancie et sa camera est current ; false = pas de joueur, la camera
 # plongeante de la scene devient current.
@@ -214,6 +220,8 @@ func _charger_reglages_locaux() -> void:
 		_duree_mort = float(donnees.duree_mort)
 	if donnees.has("mode_test_rapide"):
 		_mode_test_rapide = bool(donnees.mode_test_rapide)
+	if donnees.has("demi_carte"):
+		_demi_carte = float(donnees.demi_carte)
 	if donnees.has("joueur_actif"):
 		_joueur_actif = bool(donnees.joueur_actif)
 	if donnees.has("graine_rng"):
@@ -308,7 +316,7 @@ func _init_tampon() -> void:
 func _monter_scene() -> void:
 	var sol := MeshInstance3D.new()
 	var plan := PlaneMesh.new()
-	plan.size = Vector2(600.0, 600.0)
+	plan.size = Vector2(_demi_carte * 2.0, _demi_carte * 2.0)
 	var mat_sol := StandardMaterial3D.new()
 	mat_sol.albedo_color = Color(0.3, 0.3, 0.3)
 	plan.material = mat_sol
@@ -322,7 +330,7 @@ func _monter_scene() -> void:
 	sol_corps.position = Vector3(0.0, Y_SOL - 0.1, 0.0)
 	var sol_collision := CollisionShape3D.new()
 	var sol_forme := BoxShape3D.new()
-	sol_forme.size = Vector3(600.0, 0.2, 600.0)
+	sol_forme.size = Vector3(_demi_carte * 2.0, 0.2, _demi_carte * 2.0)
 	sol_collision.shape = sol_forme
 	sol_corps.add_child(sol_collision)
 	add_child(sol_corps)
@@ -654,6 +662,9 @@ func _semer_pres_de(parent_index: int) -> void:
 	_deposer_graine(pos_x, pos_z)
 
 func _deposer_graine(pos_x: float, pos_z: float) -> void:
+	# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
+	if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
+		return
 	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
 		return
