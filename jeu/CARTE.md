@@ -267,6 +267,17 @@ Deux positions, une portée, une réponse binaire. `en_portee(position_a,
 position_b, portee) -> bool`. Contrat : en-tête du fichier. Test :
 `test_portee.gd`.
 
+### `scripts/facteur_variance.gd` — tirage individuel autour de 1.0
+Utilitaire : `tirer(rng, amplitude) -> float` rend un facteur uniforme
+dans `[1 - amplitude, 1 + amplitude]` (amplitude clampée à `[0, 1]`,
+jamais de facteur négatif silencieux). Sert à désynchroniser une
+grandeur uniforme (croissance, longévité, cadence, portée…) entre les
+individus d'une même population. Agnostique du type — appelant tire à
+la naissance, stocke le facteur dans une colonne propre à sa population,
+relit sans re-tirage. **Écart framework** : ajouté dans la copie
+`scripts/` du jeu (voir CLAUDE.md § Frontière, précédent
+`scripts/monde.gd:retirer`). Test hors domaine : `test_facteur_variance.gd`.
+
 ### `scripts/attaches.gd` — Couche 2, source « attache »
 - **Rôle** : état de menace de ce à quoi le colon tient. Le lien se fait par
   PROPRIÉTÉ, jamais par nom de type — une chose qu'on n'a pas encore
@@ -4489,7 +4500,14 @@ en-tête).
   `jeu/Outil de jeu/champ_spatial.gd` (canevas CLAUDE.md § LOCALITÉ
   SPATIALE, pattern (a) champ scalaire) — variante float+signée à
   dépôt sur un carré de cases, alors que le partagé gère un compte
-  entier +1/−1 uniforme.
+  entier +1/−1 uniforme. VARIANCES INDIVIDUELLES : chaque arbre tire à
+  la naissance deux facteurs (croissance et longévité) via
+  `scripts/facteur_variance.gd` (mécanisme framework, test hors domaine),
+  stockés dans `_facteur_croissance` et `_facteur_longevite`. Le premier
+  multiplie l'âge réel pour l'âge effectif qui pilote stade / fertilité /
+  géométrie ; le second multiplie le seuil de mort. Casse la
+  synchronisation des cohortes — tailles panachées dans un même
+  bosquet, morts étalées dans le temps au lieu de trous d'un bloc.
   NAISSANCE : slot libre
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût

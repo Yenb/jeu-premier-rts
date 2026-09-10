@@ -49,6 +49,8 @@
 
 extends Node
 
+const FacteurVariance = preload("res://scripts/facteur_variance.gd")
+
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
 
 # Hauteur du sol visuel monte par _monter_scene. La base des troncs y est posee.
@@ -84,6 +86,11 @@ var _taille_case: float = 20.0
 var _seuil_couvert: float = 0.5
 var _intervalle_retest: float = 5.0
 var _ombrage_par_stade: Array = []
+# Amplitudes de variance individuelle (JSON). Chaque arbre tire A LA NAISSANCE
+# un facteur dans [1-amplitude, 1+amplitude] via scripts/facteur_variance.gd,
+# lu ensuite sans re-tirage. Casse la synchronisation des cohortes.
+var _variance_croissance: float = 0.3
+var _variance_longevite: float = 0.3
 
 var _mm_tronc: MultiMesh = null
 var _mm_feuillage: MultiMesh = null
@@ -100,6 +107,13 @@ var _slots_libres: Array = []
 # Stade courant de chaque slot (1..8 vivant, 0 = slot libre). Compare a
 # _calculer_stade(age) chaque frame pour redeposer l'ombrage au franchissement.
 var _slot_stade: PackedInt32Array = PackedInt32Array()
+# Facteurs individuels tires a la naissance (FacteurVariance.tirer). Le
+# facteur de croissance multiplie l'age reel pour donner l'age effectif qui
+# pilote stade + fertilite + geometrie. Le facteur de longevite multiplie le
+# seuil de mort (compare a l'age reel). Deux arbres nes ensemble n'atteignent
+# pas les memes stades en meme temps et ne meurent pas au meme age.
+var _facteur_croissance: PackedFloat32Array = PackedFloat32Array()
+var _facteur_longevite: PackedFloat32Array = PackedFloat32Array()
 
 # Population vivante courante, tenue en O(1) : incrementee dans _naitre,
 # decrementee dans _liberer_slot. Aucun scan par frame.
@@ -170,6 +184,10 @@ func _charger_reglages_locaux() -> void:
 		_intervalle_retest = float(donnees.intervalle_retest)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
+	if donnees.has("variance_croissance"):
+		_variance_croissance = float(donnees.variance_croissance)
+	if donnees.has("variance_longevite"):
+		_variance_longevite = float(donnees.variance_longevite)
 	if _stades.size() != 8:
 		push_error("banc_peuplement_arbre : `stades` doit contenir 8 entrees (recu %d)" % _stades.size())
 	if _durees.size() != 7:
@@ -252,6 +270,8 @@ func _monter_population() -> void:
 	_positions_x.resize(_capacite)
 	_positions_z.resize(_capacite)
 	_slot_stade.resize(_capacite)
+	_facteur_croissance.resize(_capacite)
+	_facteur_longevite.resize(_capacite)
 	_slots_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
@@ -262,6 +282,8 @@ func _monter_population() -> void:
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
 		_slot_stade[i] = 0
+		_facteur_croissance[i] = 1.0
+		_facteur_longevite[i] = 1.0
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
@@ -283,25 +305,30 @@ func _process(delta: float) -> void:
 			continue
 		var age_i: float = _ages[i] + pas
 		_ages[i] = age_i
-		if age_i >= _duree_croissance_totale + _duree_mort:
+		# Age reel compare au seuil de mort MODULE par la longevite individuelle.
+		var seuil_mort: float = (_duree_croissance_totale + _duree_mort) * _facteur_longevite[i]
+		if age_i >= seuil_mort:
 			_liberer_slot(i)
 			i += 1
 			continue
-		# Detection de changement de stade -> maj du champ de couvert.
-		var nouveau_stade: int = _calculer_stade(age_i)
+		# Age effectif = age reel * facteur de croissance. Pilote stade,
+		# fertilite et geometrie -- deux arbres nes ensemble n'atteignent
+		# pas les memes stades en meme temps.
+		var age_effectif: float = age_i * _facteur_croissance[i]
+		var nouveau_stade: int = _calculer_stade(age_effectif)
 		var ancien: int = _slot_stade[i]
 		if nouveau_stade != ancien:
 			if ancien > 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien, -1)
 			_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_stade, 1)
 			_slot_stade[i] = nouveau_stade
-		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
+		if age_effectif >= _debut_fertilite and age_effectif < _fin_fertilite:
 			var h: float = _horloges[i] + pas
 			while h >= _intervalle_graine:
 				h -= _intervalle_graine
 				_semer_pres_de(i)
 			_horloges[i] = h
-		_ecrire_slot(i, age_i)
+		_ecrire_slot(i, age_effectif)
 		i += 1
 	_tick_banque_graines(pas)
 	_frames_depuis_releve += 1
@@ -447,6 +474,8 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_positions_x[i] = pos_x
 	_positions_z[i] = pos_z
 	_slot_stade[i] = 1
+	_facteur_croissance[i] = FacteurVariance.tirer(_rng, _variance_croissance)
+	_facteur_longevite[i] = FacteurVariance.tirer(_rng, _variance_longevite)
 	_deposer_ombrage(pos_x, pos_z, 1, 1)
 	_ecrire_slot(i, 0.0)
 	_population += 1
@@ -517,6 +546,8 @@ func _agrandir_capacite() -> void:
 	_positions_x.resize(nouvelle)
 	_positions_z.resize(nouvelle)
 	_slot_stade.resize(nouvelle)
+	_facteur_croissance.resize(nouvelle)
+	_facteur_longevite.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
@@ -528,6 +559,8 @@ func _agrandir_capacite() -> void:
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
 		_slot_stade[i] = 0
+		_facteur_croissance[i] = 1.0
+		_facteur_longevite[i] = 1.0
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
