@@ -1221,7 +1221,7 @@ données, hors rendu comme dans le rendu. Système complet : SUPPORT unifié, AA
 par forme, GJK, EPA, `detecter` (broadphase LOCALE par counting sort, aucun index externe interrogé + narrowphase + swept),
 `resoudre` (séparation en donnée pure). L'appelant fournit la liste complète des entités à tester
 (le joueur compose `[entite] + voisins` collectés via `monde.choses_dans_rayon`).
-Portage C++ : `extension_terrain/src/collision_lot.h/.cpp` (**CollisionLot**) porte le même contrat, généraliste (sphère/boîte/capsule/hull, orient tournée), frontière SoA plate — c'est ce port qu'utilise `banc_peuplement.gd` en prod via `detecter_et_resoudre` (une seule frontière aller-retour par frame, contacts gardés en std::vector natifs, 2 traversées au lieu de 4). Les 10 colonnes stables du SoA (`velocites`, `orientations`, `masques_c`, `masques_r`, `reponses`, `formes_debut`, `formes_type`, `formes_tf_locale`, `formes_params`, `hull_points`) sont stockées côté C++ via `init_soa_stable(soa)` appelée UNE fois à la fabrication du lot — elles ne franchissent plus la frontière par frame, seuls `positions` et `delta` transitent encore. `detecter` et `resoudre` individuels restent exposés pour `test_collision_lot_cpp.gd` qui compare bit-à-bit contre l'oracle `collision.gd` (égalité EXACTE) ; ils forcent le mode Dictionary complet en interne, indépendants du SoA stocké. Quatre types de forme : `sphere`,
+Portage C++ : `extension_terrain/src/collision_lot.h/.cpp` (**CollisionLot**) porte le même contrat, généraliste (sphère/boîte/capsule/hull, orient tournée), frontière SoA plate — c'est ce port qu'utilise `banc_peuplement.gd` en prod via `detecter_et_resoudre` (une seule frontière aller-retour par frame, contacts gardés en std::vector natifs, 2 traversées au lieu de 4). Les 10 colonnes stables du SoA (`velocites`, `orientations`, `masques_c`, `masques_r`, `reponses`, `formes_debut`, `formes_type`, `formes_tf_locale`, `formes_params`, `hull_points`) sont stockées côté C++ via `init_soa_stable(soa)` appelée UNE fois à la fabrication du lot — elles ne franchissent plus la frontière par frame. Le Dictionary passé chaque frame à `detecter_et_resoudre` a **2 clés seulement** (`positions`, `delta`) ; côté banc, `_soa_par_frame` porte ce Dictionary minimal, l'ancien à 12 clés n'existe plus après l'init. `detecter` et `resoudre` individuels restent exposés pour `test_collision_lot_cpp.gd` qui compare bit-à-bit contre l'oracle `collision.gd` (égalité EXACTE) ; ils forcent le mode Dictionary complet en interne, indépendants du SoA stocké. Quatre types de forme : `sphere`,
 `boite`, `capsule` (axe Y), `hull`. Le dispatch par type vit UNIQUEMENT dans
 `_support_local` — cinquième type = un `case` de plus, rien d'autre ailleurs.
 `transform_monde` reçu par `support`/`aabb_forme` est COMPLET (l'appelant
@@ -4448,6 +4448,36 @@ scène, ni `_process`, ni `data/`, ni mécanisme du cœur, aucun test ne la
 verrouille, `lanceur.gd` ne la ramasse pas (nom hors motif `test_*.gd`).
 Elle se lance seule : `--headless --script scripts/banc_llm_connexion.gd`.
 Contrat, pièges et limites : en-tête du fichier.
+
+### Bancs de jeu (`jeu/bancs/`)
+
+Bancs propres au jeu, hors framework. `banc_peuplement.gd` et
+`banc_peuplement_2.gd` restent à documenter ici (dette signalée par leur
+en-tête).
+
+- **`jeu/bancs/banc_peuplement_arbre.gd`** — population d'arbres statiques
+  qui pousse et se reproduit librement. Deux MultiMesh partagées (tronc :
+  `BoxMesh` unitaire ; feuillage : `CylinderMesh` top_radius=0), un slot
+  par arbre au MÊME index dans les deux. Colonnes parallèles indexées par
+  slot (`_ages`, `_horloges`, `_libres`, `_positions_x`, `_positions_z`) ;
+  hot path = UNE boucle par frame sur les slots vivants, écriture directe
+  des deux `set_instance_transform`, aucune allocation heap dans la boucle
+  (`_calc_params` renvoie un `Vector4`, `Transform3D`/`Basis` sont des
+  types valeur). Croissance interpolée sur 8 stades (paramètres et 7
+  durées de segment dans le JSON) puis phase de mort de `duree_mort`,
+  après quoi le slot est libéré (échelle nulle, poussé sur
+  `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
+  5 à 7) sème toutes les `intervalle_graine` secondes ; la graine
+  (invisible, sans rendu propre) fait naître un arbre au stade 1 dans un
+  rayon horizontal `rayon_graine` autour du parent. NAISSANCE : slot libre
+  en priorité (pop sur `_slots_libres`), sinon la capacité des deux
+  MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
+  amorti O(1) — patron FREE-LIST de `jeu/PROTOCOLE_MULTIMESH.md` § 1).
+  AUCUN plafond de population. `mode_test_rapide` (JSON) multiplie le pas
+  de temps par 4 pour observer le cycle. Version grossière assumée : pas
+  de collision, base des troncs au sol fixe `Y_SOL`, pas de double gate
+  `seuil_mere`/`seuil_cible` du canevas `jeu/plantes/vegetation.gd`.
+  Aucun mécanisme du cœur appelé.
 
 ---
 

@@ -205,15 +205,23 @@ partagée par les trois voies.
 qui ne changent jamais entre frames (`velocites`, `orientations`, `masques_c`,
 `masques_r`, `reponses`, `formes_debut`, `formes_type`, `formes_tf_locale`,
 `formes_params`, `hull_points`) dans des membres `PackedXArray` de CollisionLot
-et pose un flag `_soa_stable_initialise`. Après cet appel, `detecter_et_resoudre`
-ne lit du Dictionary d'entrée que `positions` et `delta` — les 10 colonnes
-stables ne franchissent plus la frontière par frame. À appeler UNE fois à la
-fabrication du lot (`banc_peuplement.gd` juste après `ClassDB.instantiate`).
-Fallback intégré : si `detecter_et_resoudre` est appelé sans `init_soa_stable`
-préalable, `_detecter_impl` retombe sur la voie Dictionary complet — utile pour
-un consommateur ponctuel qui ne veut pas s'engager sur un lot stable. `detecter`
-et `resoudre` individuels IGNORENT ces membres (ils forcent le mode Dictionary
-en interne), donc le test de parité tient sans jamais appeler `init_soa_stable`.
+et pose un flag `_soa_stable_initialise`. À appeler UNE fois à la fabrication
+du lot (`banc_peuplement.gd` juste après `ClassDB.instantiate`) sur un
+Dictionary complet construit en locale — la locale sort de scope juste après,
+les 10 refs Packed vivent uniquement dans les membres C++ (CowData refcounté).
+
+**Contrat par frame** : après `init_soa_stable`, `detecter_et_resoudre` reçoit
+un Dictionary à **2 clés seulement** : `positions` (posée depuis `cols.position`
+par frame) et `delta`. Rien d'autre ne traverse la frontière GDScript/C++.
+Côté banc, la variable membre `_soa_par_frame` porte ce Dictionary minimal ;
+l'ancien Dictionary à 12 clés n'existe plus après l'init.
+
+**Fallback** : si `detecter_et_resoudre` est appelé sans `init_soa_stable`
+préalable, `_detecter_impl` retombe sur la voie Dictionary complet — pour un
+consommateur ponctuel qui ne veut pas s'engager sur un lot stable, il devra
+alors passer les 12 clés. `detecter` et `resoudre` individuels IGNORENT ces
+membres (ils forcent le mode Dictionary en interne), donc le test de parité
+tient sans jamais appeler `init_soa_stable`.
 
 ## Ce que le système NE fait PAS
 

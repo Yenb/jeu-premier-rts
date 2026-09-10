@@ -188,12 +188,13 @@ var _entites_collision: Array = []
 # chargee -- alors la passe collision est INACTIVE (push_error au monte, aucun
 # repli GDScript en prod).
 var _collision_cpp: RefCounted = null
-# SoA stable de _entites_collision, decompose UNE fois au _fabriquer_lot.
-# Cles : orientations, masques_c, masques_r, reponses, formes_debut, formes_type,
-# formes_tf_locale, formes_params, hull_points, velocites.
-# positions est POSEE chaque frame (assignation Packed, CoW) avant l'appel
-# CollisionLot.detecter -- jamais recomposee.
-var _soa_collision_stable: Dictionary = {}
+# SoA par frame passe a CollisionLot.detecter_et_resoudre : deux cles seulement,
+# "positions" et "delta". Les 10 colonnes stables (velocites, orientations,
+# masques_c, masques_r, reponses, formes_debut, formes_type, formes_tf_locale,
+# formes_params, hull_points) vivent en membres C++ de CollisionLot depuis
+# init_soa_stable -- elles ne traversent plus la frontiere GDScript/C++ par
+# frame.
+var _soa_par_frame: Dictionary = {}
 # Cadence du releve collision imprime en jeu. 60 frames a 60 fps = 1 ligne/sec.
 # Constante -- pas un @export, un reglage d'affichage sans impact hors debug.
 # Ne s'imprime QUE sous actif_releve (meme gate que le chrono creation).
@@ -500,11 +501,14 @@ func _fabriquer_lot() -> void:
 			push_error("banc_peuplement : classe C++ 'CollisionLot' introuvable -- extension_terrain non chargee ? Passe collision inactive.")
 		else:
 			_collision_cpp = ClassDB.instantiate("CollisionLot")
-			_soa_collision_stable = _batir_soa_collision_stable(_entites_collision)
-			# Stocke les 10 colonnes stables cote C++ : elles ne traversent
-			# plus la frontiere par frame. Seules "positions" et "delta"
-			# transitent encore via le Dictionary a chaque detecter_et_resoudre.
-			_collision_cpp.init_soa_stable(_soa_collision_stable)
+			# Construit le SoA complet en LOCAL, le pousse cote C++ via
+			# init_soa_stable, puis laisse la locale sortir de scope : les 10
+			# Packed*Array stables ne sont plus referencees cote GDScript, seul
+			# CollisionLot les tient en vie (refcount CowData). Ce qui traverse
+			# la frontiere chaque frame est un Dictionary a 2 cles construit
+			# par _soa_par_frame -- rien d'autre.
+			var soa_init: Dictionary = _batir_soa_collision_stable(_entites_collision)
+			_collision_cpp.init_soa_stable(soa_init)
 	if actif_releve:
 		var duree_us: int = Time.get_ticks_usec() - chrono_creation_debut
 		print("[peuplement] creation N=%d en %d us (push RS unique final)" % [poses, duree_us])
@@ -607,9 +611,9 @@ func _physics_process(delta: float) -> void:
 	# frontiere GDScript/C++ par frame au lieu de 4.
 	if brancher_monde and _monde != null and _collision_cpp != null and not _entites_collision.is_empty():
 		var n_coll: int = _entites_collision.size()
-		_soa_collision_stable["positions"] = cols.position
-		_soa_collision_stable["delta"] = delta
-		var sortie_col: Dictionary = _collision_cpp.detecter_et_resoudre(_soa_collision_stable)
+		_soa_par_frame["positions"] = cols.position
+		_soa_par_frame["delta"] = delta
+		var sortie_col: Dictionary = _collision_cpp.detecter_et_resoudre(_soa_par_frame)
 		cols.position = sortie_col.positions
 		# RELEVE COLLISION cadence, gate actif_releve. Cinq postes chronometres
 		# qui couvrent tout le corps de detecter+resoudre sans trou (voir
