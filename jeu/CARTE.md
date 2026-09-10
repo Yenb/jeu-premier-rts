@@ -4474,10 +4474,15 @@ en-tête).
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
   amorti O(1) — patron FREE-LIST de `jeu/PROTOCOLE_MULTIMESH.md` § 1).
   AUCUN plafond de population. `mode_test_rapide` (JSON) multiplie le pas
-  de temps par 4 pour observer le cycle. Version grossière assumée : pas
-  de collision, base des troncs au sol fixe `Y_SOL`, pas de double gate
-  `seuil_mere`/`seuil_cible` du canevas `jeu/plantes/vegetation.gd`.
-  Aucun mécanisme du cœur appelé.
+  de temps par 4 pour observer le cycle. Tirage de position à la naissance
+  = disque uniforme (`angle` uniforme + `rayon = sqrt(u) * rayon_graine` —
+  `randf() * R` seul concentrerait la densité au centre). Compteur
+  `_population` tenu en O(1) (inc à `_naitre`, dec à `_liberer_slot`),
+  imprimé toutes les `CADENCE_RELEVE_POPULATION_FRAMES` frames (`[arbre]
+  population = N`) pour repérer à quel effectif le rendu commence à
+  peiner. Version grossière assumée : pas de collision, base des troncs
+  au sol fixe `Y_SOL`, pas de double gate `seuil_mere`/`seuil_cible` du
+  canevas `jeu/plantes/vegetation.gd`. Aucun mécanisme du cœur appelé.
 
 ---
 

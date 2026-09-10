@@ -52,6 +52,10 @@ const CAPACITE_INITIALE := 8
 # Position horizontale du premier arbre (l'arbre initial).
 const POS_INITIALE := Vector2(0.0, 0.0)
 
+# Cadence du releve population imprime dans la console (une ligne toutes les N
+# frames, ~1/s a 60 fps). Constante -- reglage de debug sans impact hors log.
+const CADENCE_RELEVE_POPULATION_FRAMES := 60
+
 var _durees: PackedFloat32Array = PackedFloat32Array()
 var _stades: Array = []
 var _duree_mort: float = 180.0
@@ -75,6 +79,11 @@ var _libres: PackedByteArray = PackedByteArray()
 var _positions_x: PackedFloat32Array = PackedFloat32Array()
 var _positions_z: PackedFloat32Array = PackedFloat32Array()
 var _slots_libres: Array = []
+
+# Population vivante courante, tenue en O(1) : incrementee dans _naitre,
+# decrementee dans _liberer_slot. Aucun scan par frame.
+var _population: int = 0
+var _frames_depuis_releve: int = 0
 
 var _rng := RandomNumberGenerator.new()
 
@@ -233,6 +242,10 @@ func _process(delta: float) -> void:
 			_horloges[i] = h
 		_ecrire_slot(i, age_i)
 		i += 1
+	_frames_depuis_releve += 1
+	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
+		_frames_depuis_releve = 0
+		print("[arbre] population = %d" % _population)
 
 # Trouve le segment de stade contenant `age` et rend un Vector4 (h_tronc,
 # l_tronc, h_feuillage, l_feuillage) interpole lineairement entre le stade
@@ -308,6 +321,7 @@ func _liberer_slot(i: int) -> void:
 	_horloges[i] = 0.0
 	_ecrire_slot_vide(i)
 	_slots_libres.append(i)
+	_population -= 1
 
 # Naissance a une position horizontale donnee. Prend un slot libre en
 # priorite ; agrandit la capacite s'il n'y en a plus.
@@ -321,10 +335,14 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_positions_x[i] = pos_x
 	_positions_z[i] = pos_z
 	_ecrire_slot(i, 0.0)
+	_population += 1
 
 func _naitre_pres_de(parent_index: int) -> void:
+	# Tirage UNIFORME dans le disque : angle uniforme + rayon = sqrt(u) * R.
+	# `randf() * R` seul concentrerait la densite au centre (piege classique
+	# de sampling : la surface annulaire croit lineairement avec r).
 	var angle: float = _rng.randf() * TAU
-	var rayon: float = _rng.randf() * _rayon_graine
+	var rayon: float = sqrt(_rng.randf()) * _rayon_graine
 	var pos_x: float = _positions_x[parent_index] + cos(angle) * rayon
 	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
 	_naitre(pos_x, pos_z)
