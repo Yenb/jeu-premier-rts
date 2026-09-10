@@ -78,7 +78,20 @@ et `p` au bord d'une case → `case(q)` peut être `case(p)+2`).
 `detecter` n'interroge JAMAIS d'index externe — un appelant qui veut tester
 une entité contre ses voisins collecte les voisins lui-même (typiquement
 `monde.choses_dans_rayon(pos, rayon_collecte)`) et compose la liste avant
-l'appel. Ce partage tient les deux appelants : le peuplement passe sa
+l'appel.
+
+**Demi-voisinage** : chaque paire (i, j) est visitée UNE seule fois. Intra-cellule
+`j > i`, inter-cellules les 13 offsets (dx, dy, dz) `>` (0, 0, 0) en ordre
+lexicographique. Le filtre distance est `d² ≤ max(r_i, r_j)²` — équivalent à
+l'ancien pipeline OU (les deux visites précédentes acceptaient la paire si
+au moins une passait `d² ≤ r_source²`). Pas de hashmap `vus` : rien à dédupliquer.
+
+**Tri stable des contacts** en fin de `detecter` (C++ ET oracle GDScript), clé
+`(min(idx_a, idx_b), max(idx_a, idx_b))` — rend `resoudre` déterministe par
+construction, indépendant de l'ordre de parcours. Prépare M2 (multithread) où
+l'ordre de parcours n'est plus garanti. `std::stable_sort` C++ + décorateur
+`[lo, hi, k_insertion, contact]` GDScript (Array.sort_custom n'est pas garanti
+stable). Ce partage tient les deux appelants : le peuplement passe sa
 population fermée (`_entites_collision` stable), le joueur passe
 `[entite] + voisins collectés` (voir `scripts/mouvement_kinematic.gd` B.12).
 

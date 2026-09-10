@@ -26,8 +26,9 @@ func _init() -> void:
 func _lancer() -> void:
 	_scenario_peuplement()
 	_scenario_multi_formes()
+	_scenario_rayons_frontiere()
 	if _v.echecs() == 0:
-		print("OK: CollisionLot (C++) detecter+resoudre == collision.gd, egalite exacte des flottants sur peuplement (6 boites) ET multi-formes (sphere+boite+capsule+hull, orient tournee)")
+		print("OK: CollisionLot (C++) detecter+resoudre == collision.gd, egalite exacte des flottants sur peuplement (6 boites) ET multi-formes (sphere+boite+capsule+hull, orient tournee) ET rayons frontiere (r_i != r_j)")
 		quit(0)
 	else:
 		printerr("ECHEC: %d assertion(s) fausse(s)" % _v.echecs())
@@ -71,6 +72,33 @@ func _scenario_multi_formes() -> void:
 		_fab_generique("h0", Vector3(0.4, 0.0, 0.9), forme_hull, basis_rot),
 	]
 	_executer_et_comparer(entites, "multi_formes")
+
+func _scenario_rayons_frontiere() -> void:
+	# Deux entites de RAYONS DIFFERENTS (r_i != r_j) posees a une distance
+	# HORIZONTALE entre min(r_i, r_j) et max(r_i, r_j). C'est le seul cas ou
+	# l'ancien pipeline OU (equivalent max(r_i, r_j)^2) diverge d'un filtre
+	# errone (r_source seul, ou min). Sans ce cas, le test peut etre vert
+	# meme si le max est mal cable. Avec, il verrouille exactement le point.
+	#
+	# r_par_i (broadphase) = demi-diagonale AABB + rayon_max + vel_len*delta,
+	# donc en pratique >= la moitie de la diagonale de la forme. On force des
+	# tailles franchement differentes : boite 0.4^3 vs boite 1.2^3. La grande
+	# entite doit "attirer" la petite dans son rayon d'influence via max.
+	var forme_petite := {"type": "boite", "transform_locale": Transform3D.IDENTITY,
+			"parametres": {"demi_taille": Vector3(0.4, 0.4, 0.4)}}
+	var forme_grande := {"type": "boite", "transform_locale": Transform3D.IDENTITY,
+			"parametres": {"demi_taille": Vector3(1.2, 1.2, 1.2)}}
+	# Distance = 2.5 : au-dela de la somme des demi-tailles (1.6 -> pas de contact
+	# reel), mais a portee de la broadphase de la grande (r ~ demi-diag 1.2*sqrt(3)
+	# ~ 2.08). La grande "voit" la petite dans son rayon, la petite ne verrait pas
+	# la grande avec son propre rayon. Le test verifie que max(r_i, r_j) capte
+	# bien la paire cote broadphase (meme si le narrowphase ne trouve pas de
+	# contact, l'ENSEMBLE de paires visitees doit etre le meme des deux cotes).
+	var entites: Array = [
+		_fab_generique("pt0", Vector3.ZERO, forme_petite, Basis.IDENTITY),
+		_fab_generique("gd0", Vector3(2.5, 0.0, 0.0), forme_grande, Basis.IDENTITY),
+	]
+	_executer_et_comparer(entites, "rayons_frontiere")
 
 func _executer_et_comparer(entites_original: Array, nom_scenario: String) -> void:
 	var delta: float = 0.016

@@ -548,6 +548,42 @@ static func detecter(entites: Array, delta: float) -> Array:
 								col_taille_min, col_reponse, col_masque_r)
 							if not contact.is_empty():
 								contacts.append(contact)
+	# TRI STABLE des contacts par (min(idx_a, idx_b), max(...)) -- rend
+	# `resoudre` deterministe par construction (ordre de composition des
+	# separations independant de l'ordre de parcours). Prepare M2 (multithread,
+	# ou l'ordre de parcours n'est plus garanti). Indice = position dans le
+	# tableau `entites`, MEME grandeur que le C++ (contacts_a/contacts_b sont
+	# des indices int du cache colonnes, identiques a la position dans entites).
+	# stable_sort obligatoire : plusieurs contacts de meme clef (multi-formes)
+	# doivent garder leur ordre d'insertion, identique aux deux cotes puisque
+	# le narrowphase itere les formes (fa puis fb) dans le meme ordre.
+	if not contacts.is_empty():
+		var id_to_idx: Dictionary = {}
+		for idx in entites.size():
+			id_to_idx[entites[idx].id] = idx
+		# STABILISATION par index d'insertion : Array.sort_custom de Godot 4
+		# n'est PAS garanti stable (introsort). Decorate-sort-undecorate avec
+		# l'indice d'origine `k` en dernier critere -- deux contacts de meme
+		# (lo, hi) gardent leur ordre d'insertion. Necessaire pour matcher le
+		# std::stable_sort du C++.
+		var decore: Array = []
+		for k in contacts.size():
+			var c: Dictionary = contacts[k]
+			var a_i: int = int(id_to_idx[c.a.id])
+			var b_i: int = int(id_to_idx[c.b.id])
+			var lo: int = a_i if a_i < b_i else b_i
+			var hi: int = b_i if a_i < b_i else a_i
+			decore.append([lo, hi, k, c])
+		decore.sort_custom(func(x, y):
+			if x[0] != y[0]:
+				return x[0] < y[0]
+			if x[1] != y[1]:
+				return x[1] < y[1]
+			return x[2] < y[2])
+		var trie: Array = []
+		for item in decore:
+			trie.append(item[3])
+		contacts = trie
 	return contacts
 
 # Narrowphase avec swept : echantillonne le trajet parcouru [position -

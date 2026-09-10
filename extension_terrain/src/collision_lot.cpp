@@ -16,7 +16,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <unordered_map>
 #include <vector>
 
 using namespace godot;
@@ -769,22 +768,47 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 	_us_tri = std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - t_tri_debut).count();
 
-	// --- Parcours par cellule 3x3x3, filtres, batch de paires ---
-	// Dedup par clef entiere : lo * N + hi, meme convention que GDScript.
+	// --- Parcours par cellule, DEMI-VOISINAGE, batch de paires ---
+	// Chaque paire (i, j) est visitee UNE SEULE fois : la hashmap vus est
+	// supprimee. Sur un peuplement dense, un find+insert par paire dans un
+	// unordered_map dominait us_parcours (315k operations/frame a N=20000).
+	//
+	// GEOMETRIE : pour la cellule courante c, on visite
+	//   - INTRA-cellule : paires (i, j) avec j apres i dans sorted_idx (donc
+	//     j > i puisque le counting sort est stable et remplit sorted_idx dans
+	//     l'ordre des IDs 0..N-1).
+	//   - INTER-cellules : les 13 cellules d'offset (dx, dy, dz) STRICTEMENT
+	//     superieur a (0, 0, 0) en ordre lexicographique (dz>0 OU (dz==0 ET
+	//     dy>0) OU (dz==0 ET dy==0 ET dx>0)) -- couvre chaque paire de cellules
+	//     adjacentes une seule fois.
+	//
+	// FILTRE DISTANCE : d2 <= max(r_i, r_j)^2. Le parcours actuel testait
+	// d2 <= r_source^2 aux DEUX visites -> l'entree effective etait un OU
+	// (max) ; en demi-voisinage on materialise ce max directement. Meme
+	// ensemble de paires.
+	//
 	// LA BOUCLE N'APPELLE PAS contact_forme_paire : les paires retenues sont
-	// poussees dans _batch_paires, consommees juste apres par le narrowphase.
-	// C'est ce qui permet de mesurer us_parcours ET us_narrowphase SEPAREMENT
-	// avec un seul now() par pas, jamais par paire (voir en-tete .h : « CHOIX
-	// DE MESURE »).
-	std::unordered_map<int64_t, uint8_t> vus;
+	// poussees dans batch_paires, consommees juste apres par le narrowphase.
 	struct PaireCandidat {
 		int32_t i;
 		int32_t j;
 	};
 	std::vector<PaireCandidat> batch_paires;
-	batch_paires.reserve((size_t)N * 4);  // reserve conservateur, evite reallocs sur peuplement dense
+	batch_paires.reserve((size_t)N * 4);
 
 	auto t_parcours_debut = std::chrono::steady_clock::now();
+
+	// Les 13 offsets de cellules "superieures" en ordre lex : (dx, dy, dz) > (0, 0, 0).
+	// Enumerer via dz de -1 a +1, dy de -1 a +1, dx de -1 a +1, en gardant seulement
+	// ceux qui sont "> (0,0,0)" lexicographiquement. Ordre absolu peu important :
+	// le tri stable final normalise l'ordre des contacts.
+	static const int OFFSETS_DEMI[13][3] = {
+		{1, 0, 0},
+		{-1, 1, 0}, {0, 1, 0}, {1, 1, 0},
+		{-1, -1, 1}, {0, -1, 1}, {1, -1, 1},
+		{-1, 0, 1},  {0, 0, 1},  {1, 0, 1},
+		{-1, 1, 1},  {0, 1, 1},  {1, 1, 1},
+	};
 
 	for (int64_t c = 0; c < total; c++) {
 		int32_t start_c = offsets[(size_t)c];
@@ -797,46 +821,56 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 		for (int32_t pi = start_c; pi < end_c; pi++) {
 			int32_t i = sorted_idx[(size_t)pi];
 			Vector3 pos_a = pos_r[i];
-			double r_a = r_par_i[(size_t)i];
-			double r_a_sq = r_a * r_a;
+			double r_i = r_par_i[(size_t)i];
 			int32_t masque_a = masques_c_r[i];
 			AABB swept_a = col_swept[(size_t)i];
-			for (int dx = -1; dx <= 1; dx++) {
-				int64_t vcx = lcx + dx;
+
+			// --- INTRA-cellule : paires (i, j) avec pj > pi (donc j > i) ---
+			for (int32_t pj = pi + 1; pj < end_c; pj++) {
+				int32_t j = sorted_idx[(size_t)pj];
+				Vector3 pos_b = pos_r[j];
+				double d2 = (double)pos_a.distance_squared_to(pos_b);
+				double r_j = r_par_i[(size_t)j];
+				double r_max = r_i > r_j ? r_i : r_j;
+				double r_max_sq = r_max * r_max;
+				if (d2 > r_max_sq) continue;
+				_n_paires_distance++;
+				_n_paires_dedup++;  // pas de dedup en demi-voisinage : identique a paires_distance
+				if ((masque_a & masques_c_r[j]) == 0) continue;
+				if (!swept_a.intersects(col_swept[(size_t)j])) continue;
+				PaireCandidat pc;
+				pc.i = i;
+				pc.j = j;
+				batch_paires.push_back(pc);
+			}
+
+			// --- INTER-cellules : 13 offsets "superieurs" ---
+			for (int k_off = 0; k_off < 13; k_off++) {
+				int64_t vcx = lcx + OFFSETS_DEMI[k_off][0];
 				if (vcx < 0 || vcx >= Nx) continue;
-				for (int dy = -1; dy <= 1; dy++) {
-					int64_t vcy = lcy + dy;
-					if (vcy < 0 || vcy >= Ny) continue;
-					for (int dz = -1; dz <= 1; dz++) {
-						int64_t vcz = lcz + dz;
-						if (vcz < 0 || vcz >= Nz) continue;
-						int64_t vc = vcx + vcy * Nx + vcz * NxNy;
-						int32_t vs = offsets[(size_t)vc];
-						int32_t ve = offsets[(size_t)(vc + 1)];
-						for (int32_t pj = vs; pj < ve; pj++) {
-							int32_t j = sorted_idx[(size_t)pj];
-							if (j == i) continue;
-							Vector3 pos_b = pos_r[j];
-							double d2 = (double)pos_a.distance_squared_to(pos_b);
-							if (d2 > r_a_sq) continue;
-							_n_paires_distance++;
-							int32_t lo = i < j ? i : j;
-							int32_t hi = j > i ? j : i;
-							int64_t cle = (int64_t)lo * (int64_t)N + (int64_t)hi;
-							if (vus.find(cle) != vus.end()) continue;
-							vus[cle] = 1;
-							_n_paires_dedup++;
-							if ((masque_a & masques_c_r[j]) == 0) continue;
-							if (!swept_a.intersects(col_swept[(size_t)j])) continue;
-							// Paire retenue : pousse dans le batch, narrowphase apres
-							// la boucle par cellule. Preserve l'ordre du parcours ->
-							// parite bit-a-bit de la sortie contacts_a/contacts_b.
-							PaireCandidat pc;
-							pc.i = i;
-							pc.j = j;
-							batch_paires.push_back(pc);
-						}
-					}
+				int64_t vcy = lcy + OFFSETS_DEMI[k_off][1];
+				if (vcy < 0 || vcy >= Ny) continue;
+				int64_t vcz = lcz + OFFSETS_DEMI[k_off][2];
+				if (vcz < 0 || vcz >= Nz) continue;
+				int64_t vc = vcx + vcy * Nx + vcz * NxNy;
+				int32_t vs = offsets[(size_t)vc];
+				int32_t ve = offsets[(size_t)(vc + 1)];
+				for (int32_t pj = vs; pj < ve; pj++) {
+					int32_t j = sorted_idx[(size_t)pj];
+					Vector3 pos_b = pos_r[j];
+					double d2 = (double)pos_a.distance_squared_to(pos_b);
+					double r_j = r_par_i[(size_t)j];
+					double r_max = r_i > r_j ? r_i : r_j;
+					double r_max_sq = r_max * r_max;
+					if (d2 > r_max_sq) continue;
+					_n_paires_distance++;
+					_n_paires_dedup++;
+					if ((masque_a & masques_c_r[j]) == 0) continue;
+					if (!swept_a.intersects(col_swept[(size_t)j])) continue;
+					PaireCandidat pc;
+					pc.i = i;
+					pc.j = j;
+					batch_paires.push_back(pc);
 				}
 			}
 		}
@@ -912,6 +946,55 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 			contacts_profondeur.push_back((float)prof_hit);
 		}
 	}
+
+	// --- TRI STABLE des contacts par (min(a,b), max(a,b)) ---
+	// Rend `resoudre` deterministe par construction : l'ordre de composition
+	// des separations ne depend plus de l'ordre de parcours des cellules.
+	// std::stable_sort obligatoire : deux contacts de meme clef (paire multi-formes)
+	// gardent leur ordre d'insertion, identique GDScript et C++ tant que le
+	// narrowphase itere les formes (fa puis fb) dans le meme ordre -- c'est le cas.
+	// PERMUTATION SUR LES 4 COLONNES : trier chaque colonne separement casserait
+	// l'alignement. On trie un vector d'indices, puis on reconstruit les quatre
+	// Packed*Array. Inclus dans us_narrowphase (borne fermee juste apres).
+	const int K = contacts_a.size();
+	if (K > 1) {
+		std::vector<int> perm((size_t)K);
+		for (int k = 0; k < K; k++) perm[(size_t)k] = k;
+		const int32_t *ca_ptr = contacts_a.ptr();
+		const int32_t *cb_ptr = contacts_b.ptr();
+		std::stable_sort(perm.begin(), perm.end(), [&](int x, int y) {
+			int32_t ax = ca_ptr[x], bx = cb_ptr[x];
+			int32_t ay = ca_ptr[y], by = cb_ptr[y];
+			int32_t lo_x = ax < bx ? ax : bx;
+			int32_t hi_x = ax < bx ? bx : ax;
+			int32_t lo_y = ay < by ? ay : by;
+			int32_t hi_y = ay < by ? by : ay;
+			if (lo_x != lo_y) return lo_x < lo_y;
+			return hi_x < hi_y;
+		});
+		PackedInt32Array new_a; new_a.resize(K);
+		PackedInt32Array new_b; new_b.resize(K);
+		PackedVector3Array new_n; new_n.resize(K);
+		PackedFloat32Array new_p; new_p.resize(K);
+		int32_t *na_w = new_a.ptrw();
+		int32_t *nb_w = new_b.ptrw();
+		Vector3 *nn_w = new_n.ptrw();
+		float *np_w = new_p.ptrw();
+		const Vector3 *cn_ptr = contacts_normale.ptr();
+		const float *cp_ptr = contacts_profondeur.ptr();
+		for (int k = 0; k < K; k++) {
+			int src = perm[(size_t)k];
+			na_w[k] = ca_ptr[src];
+			nb_w[k] = cb_ptr[src];
+			nn_w[k] = cn_ptr[src];
+			np_w[k] = cp_ptr[src];
+		}
+		contacts_a = new_a;
+		contacts_b = new_b;
+		contacts_normale = new_n;
+		contacts_profondeur = new_p;
+	}
+
 	_us_narrowphase = std::chrono::duration_cast<std::chrono::microseconds>(
 			std::chrono::steady_clock::now() - t_np_debut).count();
 	_n_contacts = (int64_t)contacts_a.size();
