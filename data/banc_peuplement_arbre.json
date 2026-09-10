@@ -3,7 +3,7 @@
 	"durees_stades": [120.0, 120.0, 60.0, 120.0, 120.0, 120.0, 180.0],
 	"duree_mort": 180.0,
 	"mode_test_rapide": true,
-	"joueur_actif": true,
+	"joueur_actif": false,
 	"graine_rng": 20260910,
 	"intervalle_graine": 10.0,
 	"rayon_graine": 200.0,
@@ -23,7 +23,7 @@
 		{ "rayon_cases": 2, "magnitude": 0.80 },
 		{ "rayon_cases": 2, "magnitude": 1.00 },
 		{ "rayon_cases": 2, "magnitude": 1.20 },
-		{ "rayon_cases": 1, "magnitude": 0.50 }
+		{ "rayon_cases": 0, "magnitude": 0.00 }
 	],
 	"stades": [
 		{ "tronc": { "hauteur": 0.4, "largeur": 0.08  }, "feuillage": { "hauteur": 0.6, "largeur": 0.5  } },
