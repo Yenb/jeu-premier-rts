@@ -90,6 +90,16 @@ var _slots_libres: Array = []
 var _population: int = 0
 var _frames_depuis_releve: int = 0
 
+# Grille spatiale 2D (plan x,z) indexant les arbres vivants par case, pour
+# rendre `_compter_voisins` LOCAL (9 cases 3x3 au lieu de toute la
+# population). Cle = Vector2i(case_x, case_z), valeur = Array d'indices de
+# slots. Taille de case = `_rayon_densite` -> un disque de ce rayon tient
+# dans le voisinage 3x3 quel que soit le point. _slot_case_x/z memorisent
+# la case de chaque slot pour le retrait en O(1) a la mort.
+var _grille: Dictionary = {}
+var _slot_case_x: PackedInt32Array = PackedInt32Array()
+var _slot_case_z: PackedInt32Array = PackedInt32Array()
+
 # Banque de graines dormantes -- colonnes distinctes des arbres, sans rendu.
 # Une graine porte une position (x,z) et une horloge de re-test. Retrait par
 # swap-remove quand elle leve (test de densite passe).
@@ -230,6 +240,8 @@ func _monter_population() -> void:
 	_libres.resize(_capacite)
 	_positions_x.resize(_capacite)
 	_positions_z.resize(_capacite)
+	_slot_case_x.resize(_capacite)
+	_slot_case_z.resize(_capacite)
 	_slots_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
@@ -347,6 +359,7 @@ func _ecrire_slot_vide(i: int) -> void:
 	_mm_feuillage.set_instance_transform(i, t)
 
 func _liberer_slot(i: int) -> void:
+	_retirer_de_grille(i)
 	_libres[i] = 1
 	_ages[i] = 0.0
 	_horloges[i] = 0.0
@@ -365,6 +378,7 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_horloges[i] = 0.0
 	_positions_x[i] = pos_x
 	_positions_z[i] = pos_z
+	_inserer_dans_grille(i, pos_x, pos_z)
 	_ecrire_slot(i, 0.0)
 	_population += 1
 
@@ -389,24 +403,62 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	_graines_z.append(pos_z)
 	_graines_horloge.append(0.0)
 
-# Comptage O(N) des arbres vivants dont la position horizontale est dans un
-# disque `_rayon_densite` autour de (pos_x, pos_z). Version grossiere assumee
-# par le prompt : pas de grille ni de broadphase a cette etape (canevas
-# LOCALITE SPATIALE du CLAUDE.md ecarte volontairement -- amorti acceptable a
-# quelques milliers d'arbres, a revisiter au-dela).
+# Comptage LOCAL des arbres vivants dans le disque `_rayon_densite` autour
+# de (pos_x, pos_z) : on ne balaie que les 9 cases 3x3 autour du point, puis
+# on teste la distance exacte sur ces candidats. Case_size = _rayon_densite,
+# donc un disque de ce rayon tient toujours dans le 3x3 quel que soit le
+# point. Resultat identique a un balayage global, cout O(voisins reels).
 func _compter_voisins(pos_x: float, pos_z: float) -> int:
 	var r2: float = _rayon_densite * _rayon_densite
+	var cx0: int = floori(pos_x / _rayon_densite)
+	var cz0: int = floori(pos_z / _rayon_densite)
 	var n: int = 0
-	var i: int = 0
-	var cap: int = _capacite
-	while i < cap:
-		if _libres[i] == 0:
-			var dx: float = _positions_x[i] - pos_x
-			var dz: float = _positions_z[i] - pos_z
-			if dx * dx + dz * dz <= r2:
-				n += 1
-		i += 1
+	var dcx: int = -1
+	while dcx <= 1:
+		var dcz: int = -1
+		while dcz <= 1:
+			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
+			if _grille.has(cle):
+				var indices: Array = _grille[cle]
+				var m: int = indices.size()
+				var k: int = 0
+				while k < m:
+					var idx: int = indices[k]
+					var dx: float = _positions_x[idx] - pos_x
+					var dz: float = _positions_z[idx] - pos_z
+					if dx * dx + dz * dz <= r2:
+						n += 1
+					k += 1
+			dcz += 1
+		dcx += 1
 	return n
+
+func _inserer_dans_grille(slot_i: int, pos_x: float, pos_z: float) -> void:
+	var cx: int = floori(pos_x / _rayon_densite)
+	var cz: int = floori(pos_z / _rayon_densite)
+	_slot_case_x[slot_i] = cx
+	_slot_case_z[slot_i] = cz
+	var cle: Vector2i = Vector2i(cx, cz)
+	if _grille.has(cle):
+		(_grille[cle] as Array).append(slot_i)
+	else:
+		_grille[cle] = [slot_i]
+
+func _retirer_de_grille(slot_i: int) -> void:
+	var cle: Vector2i = Vector2i(_slot_case_x[slot_i], _slot_case_z[slot_i])
+	if not _grille.has(cle):
+		return
+	var indices: Array = _grille[cle]
+	# Swap-remove pour eviter le decalage O(k) sur `erase`.
+	var dernier: int = indices.size() - 1
+	var pos: int = indices.find(slot_i)
+	if pos < 0:
+		return
+	if pos != dernier:
+		indices[pos] = indices[dernier]
+	indices.resize(dernier)
+	if indices.is_empty():
+		_grille.erase(cle)
 
 # Boucle banque : chaque graine dormante voit son horloge avancer ; a chaque
 # fois qu'elle atteint `_intervalle_retest`, retest de densite. Si les
@@ -418,11 +470,13 @@ func _tick_banque_graines(pas: float) -> void:
 	while i < _graines_horloge.size():
 		var h: float = _graines_horloge[i] + pas
 		var doit_lever: bool = false
-		while h >= _intervalle_retest:
-			h -= _intervalle_retest
+		# AU PLUS UN comptage par graine et par frame : on ne rattrape pas
+		# les intervalles accumules (freeze, mode_test_rapide), l'horloge est
+		# remise a zero apres un test rate.
+		if h >= _intervalle_retest:
+			h = 0.0
 			if _compter_voisins(_graines_x[i], _graines_z[i]) < _seuil_densite:
 				doit_lever = true
-				break
 		if doit_lever:
 			var px: float = _graines_x[i]
 			var pz: float = _graines_z[i]
@@ -455,6 +509,8 @@ func _agrandir_capacite() -> void:
 	_libres.resize(nouvelle)
 	_positions_x.resize(nouvelle)
 	_positions_z.resize(nouvelle)
+	_slot_case_x.resize(nouvelle)
+	_slot_case_z.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle

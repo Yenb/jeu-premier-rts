@@ -4476,9 +4476,18 @@ en-tête).
   (`_naitre`), sinon elle reste dormante et re-teste sa densité toutes
   les `intervalle_retest` secondes jusqu'à ce que le voisinage repasse
   sous le seuil. Retrait par swap-remove sur les trois colonnes à la
-  levée. Le comptage `_compter_voisins` est O(N) sur les vivants —
-  version grossière assumée (canevas LOCALITÉ SPATIALE du CLAUDE.md
-  écarté à cette étape, à revisiter au-delà de quelques milliers).
+  levée. Le comptage `_compter_voisins` est LOCAL : grille spatiale 2D
+  (`_grille` = Dictionary `Vector2i` → Array d'indices), case_size =
+  `_rayon_densite` — un disque de ce rayon tient toujours dans le
+  voisinage 3×3 quel que soit le point, donc on ne balaie que 9 cases
+  puis on teste la distance exacte sur ces candidats (résultat identique
+  au balayage global). Insertion `_inserer_dans_grille` à `_naitre`,
+  retrait `_retirer_de_grille` à `_liberer_slot` ; `_slot_case_x/z`
+  mémorisent la case de chaque slot pour un retrait O(1) (arbres
+  statiques après naissance, aucune maj de grille par frame).
+  `_tick_banque_graines` fait AU PLUS un comptage par graine par frame
+  (l'horloge est remise à zéro après un test raté, on ne rattrape pas
+  les intervalles accumulés en cas de gros `pas`).
   NAISSANCE : slot libre
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
