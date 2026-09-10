@@ -71,6 +71,7 @@ const Senescence = preload("res://scripts/senescence.gd")
 const Stade = preload("res://scripts/stade.gd")
 const FacteurVariance = preload("res://scripts/facteur_variance.gd")
 const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
+const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
 const CHEMIN_TYPES := "res://data/types.json"
@@ -177,6 +178,7 @@ func _ready() -> void:
 	_charger_reglages_locaux()
 	_rng.seed = _graine_rng
 	_monter_scene()
+	_monter_joueur()
 	_monter_population()
 	_construire_catalogue()
 	_init_tampon()
@@ -306,17 +308,41 @@ func _monter_scene() -> void:
 	sol.mesh = plan
 	sol.position = Vector3(0.0, Y_SOL, 0.0)
 	add_child(sol)
+	# Collision statique du sol : sans elle, le CharacterBody3D du joueur
+	# tomberait indefiniment. Une box tres plate (0.2 m) suffit et evite le
+	# cas limite d'un plan infini a epaisseur nulle.
+	var sol_corps := StaticBody3D.new()
+	sol_corps.position = Vector3(0.0, Y_SOL - 0.1, 0.0)
+	var sol_collision := CollisionShape3D.new()
+	var sol_forme := BoxShape3D.new()
+	sol_forme.size = Vector3(600.0, 0.2, 600.0)
+	sol_collision.shape = sol_forme
+	sol_corps.add_child(sol_collision)
+	add_child(sol_corps)
 	var lumiere := DirectionalLight3D.new()
 	lumiere.rotation = Vector3(deg_to_rad(-55.0), deg_to_rad(30.0), 0.0)
 	lumiere.light_energy = 1.0
 	lumiere.shadow_enabled = false
 	add_child(lumiere)
+	# Camera plongeante conservee mais NON-current : le joueur reprend le
+	# point de vue avec sa propre camera. Le groupe "observateur" reste sur
+	# elle -- aucun consommateur du groupe dans ce banc, verifie au grep.
 	var camera := Camera3D.new()
 	camera.position = Vector3(0.0, 55.0, 55.0)
-	camera.current = true
+	camera.current = false
 	camera.add_to_group(&"observateur")
 	add_child(camera)
 	camera.look_at(Vector3(0.0, Y_SOL, 0.0), Vector3.UP)
+
+# Instancie le joueur jetable (CharacterBody3D + capsule + Camera3D). Pose
+# a 8 m de l'arbre initial pour ne pas naitre coince dans le tronc, un
+# metre au-dessus du sol pour retomber proprement au premier tick de
+# gravite. Exception joueur du CLAUDE.md : seul pont autorise entre le
+# monde data et le rendu Godot.
+func _monter_joueur() -> void:
+	var joueur := JoueurBanc.new()
+	joueur.position = Vector3(8.0, Y_SOL + 1.0, 8.0)
+	add_child(joueur)
 
 # Meshes UNITAIRES : BoxMesh 1x1x1 (tronc), CylinderMesh hauteur 1 rayon-bas
 # 0.5 rayon-haut 0 (cone feuillage).
