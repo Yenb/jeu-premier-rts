@@ -4467,7 +4467,19 @@ Bancs propres au jeu, hors framework. `banc_peuplement.gd` et
 en-tête).
 
 - **`jeu/bancs/banc_peuplement_arbre.gd`** — population d'arbres statiques
-  qui pousse et se reproduit librement. Deux MultiMesh partagées (tronc :
+  qui pousse et se reproduit librement. **Câblage cœur trois couches** :
+  stockage de masse en colonnes parallèles (PackedArrays, la population
+  entière), logique via un Dictionary TAMPON unique réutilisé arbre par
+  arbre pour franchir la frontière vers `scripts/senescence.gd:avancer`
+  (âge) et `scripts/stade.gd:avancer` (stade) — zéro allocation par
+  arbre, patron CollisionLot ; rendu sur deux MultiMesh partagées (le
+  cœur ne touche jamais le rendu). Fabrication via
+  `scripts/objet.gd:fabriquer` : catalogue combiné construit au `_ready`
+  (paquet `dynamique` extrait de `data/types.json` + type LOCAL
+  `arbre_pousse` qui hérite de `dynamique` et pose `stades_config`).
+  Le type framework `arbre` hérite d'`objet_physique` seul (sans
+  `dynamique`), c'est ce manque qui justifie le type local — pas de
+  modification de `data/types.json`. Deux MultiMesh partagées (tronc :
   `BoxMesh` unitaire ; feuillage : `CylinderMesh` top_radius=0), un slot
   par arbre au MÊME index dans les deux. Colonnes parallèles indexées par
   slot (`_ages`, `_horloges`, `_libres`, `_positions_x`, `_positions_z`) ;
