@@ -66,6 +66,8 @@ var _mode_test_rapide: bool = false
 var _graine_rng: int = 20260910
 var _intervalle_graine: float = 10.0
 var _rayon_graine: float = 6.0
+var _stade_fertile_debut: int = 5
+var _stade_fertile_fin: int = 7
 
 var _mm_tronc: MultiMesh = null
 var _mm_feuillage: MultiMesh = null
@@ -124,6 +126,12 @@ func _charger_reglages_locaux() -> void:
 		_intervalle_graine = float(donnees.intervalle_graine)
 	if donnees.has("rayon_graine"):
 		_rayon_graine = float(donnees.rayon_graine)
+	if donnees.has("stade_fertile_debut"):
+		_stade_fertile_debut = int(donnees.stade_fertile_debut)
+	if donnees.has("stade_fertile_fin"):
+		_stade_fertile_fin = int(donnees.stade_fertile_fin)
+	_stade_fertile_debut = clampi(_stade_fertile_debut, 1, 8)
+	_stade_fertile_fin = clampi(_stade_fertile_fin, _stade_fertile_debut, 8)
 	if _stades.size() != 8:
 		push_error("banc_peuplement_arbre : `stades` doit contenir 8 entrees (recu %d)" % _stades.size())
 	if _durees.size() != 7:
@@ -131,14 +139,20 @@ func _charger_reglages_locaux() -> void:
 	_duree_croissance_totale = 0.0
 	for d in _durees:
 		_duree_croissance_totale += float(d)
-	# Fertilite = stades 5 a 7 : debut = fin de la transition 4->5 (somme des
-	# quatre premieres durees), fin = fin de la transition 7->8 (= somme totale).
+	# Bornes de fertilite lues du JSON (stade_fertile_debut/fin, 1..8, inclus) :
+	# debut du stade N = somme des (N-1) premieres durees ; fin du stade N = somme
+	# des N premieres. Ici debut = somme des (stade_fertile_debut - 1) premieres,
+	# fin = somme des stade_fertile_fin premieres, clampe a _duree_croissance_totale.
 	_debut_fertilite = 0.0
 	var k: int = 0
-	while k < 4 and k < _durees.size():
+	while k < _stade_fertile_debut - 1 and k < _durees.size():
 		_debut_fertilite += float(_durees[k])
 		k += 1
-	_fin_fertilite = _duree_croissance_totale
+	_fin_fertilite = 0.0
+	k = 0
+	while k < _stade_fertile_fin and k < _durees.size():
+		_fin_fertilite += float(_durees[k])
+		k += 1
 
 func _monter_scene() -> void:
 	var sol := MeshInstance3D.new()

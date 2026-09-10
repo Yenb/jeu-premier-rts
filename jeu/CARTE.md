@@ -4467,7 +4467,8 @@ en-tête).
   durées de segment dans le JSON) puis phase de mort de `duree_mort`,
   après quoi le slot est libéré (échelle nulle, poussé sur
   `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
-  5 à 7) sème toutes les `intervalle_graine` secondes ; la graine
+  `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème
+  toutes les `intervalle_graine` secondes ; la graine
   (invisible, sans rendu propre) fait naître un arbre au stade 1 dans un
   rayon horizontal `rayon_graine` autour du parent. NAISSANCE : slot libre
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
