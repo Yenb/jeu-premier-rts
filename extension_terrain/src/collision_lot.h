@@ -64,11 +64,21 @@ class CollisionLot : public RefCounted {
 	//   n_paires_dedup    : paires apres dedup vus (une fois par paire non-ordonnee).
 	//   n_appels_nf       : appels effectifs a contact_forme_paire (paires * sous-pas
 	//                       * formes_a * formes_b jusqu'au premier contact trouve).
+	//   n_appels_raccourci: sous-ensemble d'appels_nf qui prennent le chemin
+	//                       rapide boite-boite AABB alignee (pas de GJK/EPA).
+	//                       Compte a l'ENTREE du chemin, non-contact inclus.
+	//   n_appels_gjk      : sous-ensemble d'appels_nf qui tombent dans GJK->EPA.
+	//                       raccourci + gjk == appels_nf par construction.
+	//                       Sur boites non-tournees, presque tout doit etre
+	//                       raccourci ; une part significative en GJK signale
+	//                       un dispatch casse (gain gratuit avant M2).
 	//   n_contacts        : contacts finaux retenus (= contacts_a.size()).
 	// A retirer avec les chronos.
 	mutable int64_t _n_paires_distance = 0;
 	mutable int64_t _n_paires_dedup = 0;
 	mutable int64_t _n_appels_nf = 0;
+	mutable int64_t _n_appels_raccourci = 0;
+	mutable int64_t _n_appels_gjk = 0;
 	mutable int64_t _n_contacts = 0;
 
 protected:

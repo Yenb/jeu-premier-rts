@@ -556,6 +556,8 @@ Dictionary CollisionLot::derniers_compteurs() const {
 	out["paires_distance"] = (int64_t)_n_paires_distance;
 	out["paires_dedup"] = (int64_t)_n_paires_dedup;
 	out["appels_nf"] = (int64_t)_n_appels_nf;
+	out["appels_raccourci"] = (int64_t)_n_appels_raccourci;
+	out["appels_gjk"] = (int64_t)_n_appels_gjk;
 	out["contacts"] = (int64_t)_n_contacts;
 	return out;
 }
@@ -577,6 +579,8 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 	_n_paires_distance = 0;
 	_n_paires_dedup = 0;
 	_n_appels_nf = 0;
+	_n_appels_raccourci = 0;
+	_n_appels_gjk = 0;
 	_n_contacts = 0;
 
 	PackedVector3Array positions = entree["positions"];
@@ -929,6 +933,16 @@ Dictionary CollisionLot::detecter(const Dictionary &entree) const {
 					Vector3 n_pair(0, 0, 0);
 					double prof_pair = 0.0;
 					_n_appels_nf++;
+					// Dispatch dupplique (test identique a celui interne
+					// a contact_forme_paire) pour compter le chemin pris SANS
+					// modifier la signature ni ajouter now()/alloc. La
+					// condition suit exactement le raccourci interne.
+					if (type_a == FORME_BOITE && type_b == FORME_BOITE
+							&& basis_est_identity(ta.basis) && basis_est_identity(tb.basis)) {
+						_n_appels_raccourci++;
+					} else {
+						_n_appels_gjk++;
+					}
 					if (contact_forme_paire(type_a, params_a, ta,
 							type_b, params_b, tb, hull_points_ptr,
 							n_pair, prof_pair)) {

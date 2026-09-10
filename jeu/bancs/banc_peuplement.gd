@@ -40,16 +40,11 @@ extends Node
 #    individu.proprietes._slot, plus d'appel a Peuplement.ecrire_transform*.
 #
 # MONDE (index spatial) BRANCHE derriere @export brancher_monde (defaut true) :
-# les spawns inscrivent chaque unite dans _monde via `Peuplement.spawn(...,
-# _monde, ...)`, et une passe supplementaire par frame recopie cols.position[i]
-# vers individu.position puis appelle _monde.deplacer(individu). Cette
-# duplication TRANSITOIRE tient une frame : les colonnes restent la verite
-# tenue par la physique (aucun autre code ne lit individu.position pendant que
-# la physique tourne), individu.position est un miroir ecrit juste avant chaque
-# deplacer. Sans cette recopie, monde.gd verrait la position d'avant la
-# physique -- l'index divergerait de la position vivante et une requete
-# spatiale echouerait. brancher_monde=false : aucun spawn n'inscrit dans le
-# monde, aucun deplacer par frame, comportement de l'ancien banc.
+# active la passe collision (CollisionLot C++ + SoA stable) et l'inscription
+# unique des entites au spawn (`_monde.ajouter(ent, ..., pos)` dans
+# _fabriquer_lot). Aucune recopie par frame, aucun _monde.deplacer par frame :
+# CollisionLot batit sa propre grille locale interne, il n'interroge pas
+# _monde. brancher_monde=false : _monde=null, aucune passe collision.
 #
 # Camera plongeante, lumiere directionnelle sans ombre, sol visuel decoratif.
 # Groupe "observateur" pose sur la camera par convention du framework.
@@ -90,18 +85,15 @@ const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement.json"
 # GDScript reste l'ORACLE de parite et le rollback ; scripts/test_physique_simple_lot_cpp.gd
 # verrouille la parite bit a bit.
 @export var utilise_cpp: bool = false
-# BRANCHER MONDE (chantier "rebrancher l'index spatial + mesurer monde.deplacer").
-# true : les spawns inscrivent chaque unite dans _monde, et une passe par frame
-# recopie cols.position -> individu.position puis appelle _monde.deplacer.
-# false : _monde = null, aucun spawn n'inscrit dans l'index, aucun deplacer par
-# frame. Le poste `deplacer` du releve reste imprime a 0 sous false.
+# BRANCHER MONDE. true : _monde = Monde.new(), inscription unique de chaque
+# entite au spawn (_monde.ajouter dans _fabriquer_lot), passe collision
+# (CollisionLot) active, passe deplacer (voir deplacer_cpp) active. Aucune
+# recopie ni _monde.deplacer par frame. false : _monde = null, aucune passe.
 @export var brancher_monde: bool = true
-# INDEX SPATIAL EN C++ (chantier "portage C++ deplacer_lot"). true : la boucle
-# for j: _monde.deplacer_simple(individu) est remplacee par UN appel
-# _index_cpp.deplacer_lot(cols.position) -- UNE traversee de frontiere par
-# frame au lieu de 100 000. false : chemin GDScript (deplacer_simple), garde
-# comme oracle et rollback. Verrouille par test_index_spatial_cpp.gd (parite
-# bit a bit des cases entre index C++ et index GDScript).
+# INDEX SPATIAL EN C++. true : _index_cpp.deplacer_lot(cols.position) par
+# frame -- UNE traversee de frontiere pour tout le lot. false : aucune passe
+# deplacer (le banc n'a pas de fallback GDScript ; l'oracle GDScript vit dans
+# scripts/test_index_spatial_cpp.gd, cote test seulement).
 @export var deplacer_cpp: bool = false
 # PAQUETS PARTAGES (chantier "partage COW du paquet par defaut", 2026-09-08).
 # true : Peuplement.spawn passe paquets_partages=true a Objet.fabriquer -- les
@@ -600,20 +592,15 @@ func _physics_process(delta: float) -> void:
 	else:
 		buffer = physique_et_buffer(cols, _pool.buffer, count, GRAVITE_LOT, delta, _carte)
 	# PASSE COLLISION -- CollisionLot C++ (extension_terrain), miroir bit-a-bit
-	# de jeu/Proto/collision.gd::detecter+resoudre. Le SoA stable est fabrique une
-	# fois au _fabriquer_lot ; par frame seule "positions" est posee depuis
-	# cols.position. Sortie : positions mutees, recopiees vers cols.position ET
-	# vers _entites_collision[k].position (l'entite Dict garde sa position vivante
-	# pour un futur consommateur qui interroge _monde). Une seule voie de prod :
-	# aucun appel a jeu/Proto/collision.gd ici.
+	# de jeu/Proto/collision.gd::detecter+resoudre. SoA stable fabrique une fois
+	# au _fabriquer_lot ; par frame seule "positions" est posee depuis
+	# cols.position, sortie mutee affectee directement a cols.position.
+	# n_coll = _entites_collision.size() == cols.position.size() par
+	# construction (fabrication _fabriquer_lot, aucune mutation en cours de vie).
+	# Une seule voie de prod : aucun appel a jeu/Proto/collision.gd ici.
 	if brancher_monde and _monde != null and _collision_cpp != null and not _entites_collision.is_empty():
 		var n_coll: int = _entites_collision.size()
-		var cols_pos: PackedVector3Array = cols.position
-		# _soa_collision_stable.positions est une PackedVector3Array de taille
-		# n_coll. On la remplace par cols_pos tronquee (n_coll == cols_pos.size()
-		# par contrat : _entites_collision.size() == positions_final.size() au
-		# _fabriquer_lot, aucune mutation en cours de vie).
-		_soa_collision_stable["positions"] = cols_pos
+		_soa_collision_stable["positions"] = cols.position
 		_soa_collision_stable["delta"] = delta
 		var sortie_det: Dictionary = _collision_cpp.detecter(_soa_collision_stable)
 		var entree_res := {
@@ -627,16 +614,7 @@ func _physics_process(delta: float) -> void:
 			"contacts_profondeur": sortie_det.contacts_profondeur,
 		}
 		var sortie_res: Dictionary = _collision_cpp.resoudre(entree_res)
-		var positions_mutees: PackedVector3Array = sortie_res.positions
-		# Recopie vers cols.position ET vers les Dict-entites (miroir position
-		# vivante inscrite dans _monde -- un futur consommateur qui interroge
-		# _monde.choses_dans_rayon voit les positions post-collision).
-		var kk: int = 0
-		while kk < n_coll and kk < count:
-			cols_pos[kk] = positions_mutees[kk]
-			(_entites_collision[kk] as Dictionary).position = positions_mutees[kk]
-			kk += 1
-		cols.position = cols_pos
+		cols.position = sortie_res.positions
 		# RELEVE COLLISION cadence, gate actif_releve. Cinq postes chronometres
 		# qui couvrent tout le corps de detecter+resoudre sans trou (voir
 		# collision_lot.h) + compteurs de paires. Sert a identifier le poste
@@ -647,19 +625,15 @@ func _physics_process(delta: float) -> void:
 			_frames_depuis_releve_collision = 0
 			var chronos: Dictionary = _collision_cpp.derniers_chronos()
 			var compteurs: Dictionary = _collision_cpp.derniers_compteurs()
-			print("[peuplement] collision N=%d contacts=%d prepasse=%d us tri=%d us parcours=%d us narrowphase=%d us resoudre=%d us | paires_dist=%d paires_dedup=%d appels_nf=%d" % [
+			print("[peuplement] collision N=%d contacts=%d prepasse=%d us tri=%d us parcours=%d us narrowphase=%d us resoudre=%d us | paires_dist=%d paires_dedup=%d appels_nf=%d raccourci=%d gjk=%d" % [
 				n_coll, int(compteurs.contacts),
 				int(chronos.prepasse), int(chronos.tri), int(chronos.parcours),
 				int(chronos.narrowphase), int(chronos.resoudre),
 				int(compteurs.paires_distance), int(compteurs.paires_dedup), int(compteurs.appels_nf),
+				int(compteurs.appels_raccourci), int(compteurs.appels_gjk),
 			])
 	# PASSE DEPLACER : maj de l'index C++ (deplacer_cpp) avec cols.position
-	# corrige. La branche GDScript _monde.deplacer_simple est retiree : plus
-	# aucun lecteur de l'index _monde n'existe dans ce banc depuis que
-	# CollisionLot.detecter a sa propre grille locale (verifie au grep :
-	# choses_dans_rayon, par_id, resolutions_ouvertes). Rebrancher la maj
-	# ici si un futur mecanisme (perception, chasse, ...) redemande a lire
-	# l'index de _monde. Chemin deplacer_cpp conserve tel quel.
+	# corrige. Seul consommateur de cols.position hors banc.
 	if brancher_monde and deplacer_cpp and _index_cpp != null:
 		_index_cpp.deplacer_lot(cols.position)
 	# PASSE FATIGUE, cadence lente : n'agit QUE toutes les cadence_fatigue_frames
