@@ -1,39 +1,48 @@
 # BANC DE PEUPLEMENT ARBRE.
 #
-# Population d'arbres statiques qui pousse librement : chaque arbre fertile
-# (age dans les stades 5 a 7) seme une graine invisible toutes les
-# `intervalle_graine` secondes, ce qui fait naitre un nouvel arbre au stade
-# 1 pres du parent (rayon horizontal `rayon_graine`). Deux MultiMesh (tronc
-# + feuillage), UN slot par arbre au MEME index dans les deux. Un slot mort
-# est reutilise en priorite (patron FREE-LIST, jeu/PROTOCOLE_MULTIMESH.md
-# § 1) ; sans slot libre, la capacite des deux MultiMesh est doublee et
-# les colonnes redimensionnees. Aucun plafond de population.
+# Population d'arbres statiques qui pousse et se reproduit librement.
+# Chaque arbre fertile (age dans [stade_fertile_debut, stade_fertile_fin])
+# depose une graine toutes les `intervalle_graine` secondes dans un disque
+# uniforme `rayon_graine` autour de lui. La graine LIT un CHAMP DE COUVERT
+# pour decider si elle leve : couvert local strictement inferieur a
+# `seuil_couvert` -> `_naitre` immediat ; sinon la graine entre dans une
+# banque dormante et relit son couvert toutes les `intervalle_retest`
+# secondes jusqu'a ce que l'ombrage local retombe (mort d'un voisin).
+#
+# CHAMP DE COUVERT (`_couvert`, Dictionary Vector2i -> float) : indexe par
+# case, cote de case = `_taille_case`. Chaque arbre y ECRIT son ombrage
+# (depot signe +1 a la naissance, retrait signe -1 a la mort, redepot au
+# changement de stade). L'ombrage d'un arbre au stade N couvre les cases
+# dans un carre de `_ombrage_par_stade[N-1].rayon_cases` autour de sa
+# case, chacune recevant `magnitude`. Le retrait a la mort utilise la
+# MEME formule avec signe inverse -- champ strictement symetrique, pas de
+# derive. La graine LIT en O(1) (une clef du Dictionary) ; l'arbre ne LIT
+# PAS le champ a cette etape (la mort par competition sera un chantier
+# ulterieur).
+#
+# LIGNEE : meme esprit que jeu/Outil de jeu/champ_spatial.gd (case ->
+# scalaire, aucun balayage global, canevas CLAUDE.md § LOCALITE SPATIALE),
+# mais champ inline ici car le partage `champ_spatial` gere un COMPTE
+# entier +1/-1 uniforme, alors qu'ici la magnitude est FLOAT et VARIABLE
+# selon le stade (depot signe couvrant un carre de cases). Une extraction
+# partagee sera envisageable si un autre banc en a besoin.
 #
 # COLONNES PARALLELES indexees par slot : `_ages`, `_horloges`, `_libres`,
-# `_positions_x`, `_positions_z`. Le hot path est UNE boucle par frame sur
-# les slots vivants : lecture/mutation des colonnes, ecriture directe des
-# deux transforms (`set_instance_transform`) par arbre. Aucune allocation
-# heap dans la boucle : `_calc_params` renvoie un Vector4 (type valeur),
-# Transform3D et Basis sont aussi des types valeur. L'agrandissement de
-# capacite est un evenement rare (cout amorti O(1) par naissance) qui vit
-# hors boucle par frame.
+# `_positions_x`, `_positions_z`, `_slot_stade`. Le hot path est UNE
+# boucle par frame sur les slots vivants qui met a jour age, detecte les
+# changements de stade (retrait+depot d'ombrage), fait tirer les graines
+# des fertiles, ecrit les deux transforms. Aucune allocation heap dans la
+# boucle : `_calc_params` renvoie un Vector4 (type valeur), Transform3D
+# et Basis sont aussi des types valeur.
 #
-# POURQUOI DEUX MultiMesh. Une MultiMesh porte UN mesh applique par UNE
-# Transform3D par instance : une Basis n'encode qu'UN triplet d'echelles.
-# Un slot ne peut donc pas scaler independamment tronc et feuillage. Deux
-# MultiMesh a plusieurs slots (une par forme) levent la contrainte -- le
-# meme index dans chaque MultiMesh appartient au meme arbre.
+# DEUX MultiMesh partagees (tronc + feuillage) : un slot par arbre au MEME
+# index dans les deux. Un slot mort est reutilise en priorite (patron
+# FREE-LIST, jeu/PROTOCOLE_MULTIMESH.md § 1) ; sans slot libre, la
+# capacite est doublee et les colonnes redimensionnees.
 #
 # CE BANC NE TOUCHE AUCUN MECANISME DU COEUR. Pas d'appel a
 # scripts/peuplement.gd, scripts/stade.gd, scripts/mesh_catalogue.gd. Pas
-# de fichier partage lu (types.json, mesh.json). Tout vit dans le banc et
-# son JSON local.
-#
-# VERSION GROSSIERE, assumee par le prompt : pas de collision entre arbres,
-# base des troncs au sol fixe Y_SOL, pas de double gate seuil_mere /
-# seuil_cible du canevas `jeu/plantes/vegetation.gd`, pas de champ scalaire
-# de saturation. Reproduction sans limite : la population peut croitre
-# indefiniment.
+# de fichier partage lu. Tout vit dans le banc et son JSON local.
 #
 # ECART FRAMEWORK : ce banc + son catalogue local sont neufs, voir
 # CLAUDE.md § Frontiere.
@@ -52,9 +61,12 @@ const CAPACITE_INITIALE := 8
 # Position horizontale du premier arbre (l'arbre initial).
 const POS_INITIALE := Vector2(0.0, 0.0)
 
-# Cadence du releve population imprime dans la console (une ligne toutes les N
-# frames, ~1/s a 60 fps). Constante -- reglage de debug sans impact hors log.
+# Cadence du releve population imprime dans la console (~1/s a 60 fps).
 const CADENCE_RELEVE_POPULATION_FRAMES := 60
+
+# Seuil de nettoyage d'une case du champ dont le cumul retombe sous cette
+# valeur absolue (evite les zeros residuels de float qui polluent le Dict).
+const EPS_COUVERT := 1.0e-6
 
 var _durees: PackedFloat32Array = PackedFloat32Array()
 var _stades: Array = []
@@ -68,9 +80,10 @@ var _intervalle_graine: float = 10.0
 var _rayon_graine: float = 6.0
 var _stade_fertile_debut: int = 5
 var _stade_fertile_fin: int = 7
-var _rayon_densite: float = 20.0
-var _seuil_densite: int = 3
+var _taille_case: float = 20.0
+var _seuil_couvert: float = 0.5
 var _intervalle_retest: float = 5.0
+var _ombrage_par_stade: Array = []
 
 var _mm_tronc: MultiMesh = null
 var _mm_feuillage: MultiMesh = null
@@ -84,25 +97,22 @@ var _libres: PackedByteArray = PackedByteArray()
 var _positions_x: PackedFloat32Array = PackedFloat32Array()
 var _positions_z: PackedFloat32Array = PackedFloat32Array()
 var _slots_libres: Array = []
+# Stade courant de chaque slot (1..8 vivant, 0 = slot libre). Compare a
+# _calculer_stade(age) chaque frame pour redeposer l'ombrage au franchissement.
+var _slot_stade: PackedInt32Array = PackedInt32Array()
 
 # Population vivante courante, tenue en O(1) : incrementee dans _naitre,
 # decrementee dans _liberer_slot. Aucun scan par frame.
 var _population: int = 0
 var _frames_depuis_releve: int = 0
 
-# Grille spatiale 2D (plan x,z) indexant les arbres vivants par case, pour
-# rendre `_compter_voisins` LOCAL (9 cases 3x3 au lieu de toute la
-# population). Cle = Vector2i(case_x, case_z), valeur = Array d'indices de
-# slots. Taille de case = `_rayon_densite` -> un disque de ce rayon tient
-# dans le voisinage 3x3 quel que soit le point. _slot_case_x/z memorisent
-# la case de chaque slot pour le retrait en O(1) a la mort.
-var _grille: Dictionary = {}
-var _slot_case_x: PackedInt32Array = PackedInt32Array()
-var _slot_case_z: PackedInt32Array = PackedInt32Array()
+# Champ scalaire d'ombrage par case (Vector2i -> float). Une entree est
+# supprimee quand son cumul retombe sous EPS_COUVERT.
+var _couvert: Dictionary = {}
 
 # Banque de graines dormantes -- colonnes distinctes des arbres, sans rendu.
 # Une graine porte une position (x,z) et une horloge de re-test. Retrait par
-# swap-remove quand elle leve (test de densite passe).
+# swap-remove quand elle leve (couvert local descendu sous le seuil).
 var _graines_x: PackedFloat32Array = PackedFloat32Array()
 var _graines_z: PackedFloat32Array = PackedFloat32Array()
 var _graines_horloge: PackedFloat32Array = PackedFloat32Array()
@@ -152,23 +162,24 @@ func _charger_reglages_locaux() -> void:
 		_stade_fertile_fin = int(donnees.stade_fertile_fin)
 	_stade_fertile_debut = clampi(_stade_fertile_debut, 1, 8)
 	_stade_fertile_fin = clampi(_stade_fertile_fin, _stade_fertile_debut, 8)
-	if donnees.has("rayon_densite"):
-		_rayon_densite = float(donnees.rayon_densite)
-	if donnees.has("seuil_densite"):
-		_seuil_densite = int(donnees.seuil_densite)
+	if donnees.has("taille_case"):
+		_taille_case = float(donnees.taille_case)
+	if donnees.has("seuil_couvert"):
+		_seuil_couvert = float(donnees.seuil_couvert)
 	if donnees.has("intervalle_retest"):
 		_intervalle_retest = float(donnees.intervalle_retest)
+	if donnees.has("ombrage_par_stade"):
+		_ombrage_par_stade = donnees.ombrage_par_stade
 	if _stades.size() != 8:
 		push_error("banc_peuplement_arbre : `stades` doit contenir 8 entrees (recu %d)" % _stades.size())
 	if _durees.size() != 7:
 		push_error("banc_peuplement_arbre : `durees_stades` doit contenir 7 entrees (recu %d)" % _durees.size())
+	if _ombrage_par_stade.size() != 8:
+		push_error("banc_peuplement_arbre : `ombrage_par_stade` doit contenir 8 entrees (recu %d)" % _ombrage_par_stade.size())
 	_duree_croissance_totale = 0.0
 	for d in _durees:
 		_duree_croissance_totale += float(d)
-	# Bornes de fertilite lues du JSON (stade_fertile_debut/fin, 1..8, inclus) :
-	# debut du stade N = somme des (N-1) premieres durees ; fin du stade N = somme
-	# des N premieres. Ici debut = somme des (stade_fertile_debut - 1) premieres,
-	# fin = somme des stade_fertile_fin premieres, clampe a _duree_croissance_totale.
+	# Bornes de fertilite lues du JSON (stade_fertile_debut/fin, 1..8, inclus).
 	_debut_fertilite = 0.0
 	var k: int = 0
 	while k < _stade_fertile_debut - 1 and k < _durees.size():
@@ -240,8 +251,7 @@ func _monter_population() -> void:
 	_libres.resize(_capacite)
 	_positions_x.resize(_capacite)
 	_positions_z.resize(_capacite)
-	_slot_case_x.resize(_capacite)
-	_slot_case_z.resize(_capacite)
+	_slot_stade.resize(_capacite)
 	_slots_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
@@ -251,6 +261,7 @@ func _monter_population() -> void:
 		_horloges[i] = 0.0
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
+		_slot_stade[i] = 0
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
@@ -276,11 +287,19 @@ func _process(delta: float) -> void:
 			_liberer_slot(i)
 			i += 1
 			continue
+		# Detection de changement de stade -> maj du champ de couvert.
+		var nouveau_stade: int = _calculer_stade(age_i)
+		var ancien: int = _slot_stade[i]
+		if nouveau_stade != ancien:
+			if ancien > 0:
+				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien, -1)
+			_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_stade, 1)
+			_slot_stade[i] = nouveau_stade
 		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
 			var h: float = _horloges[i] + pas
 			while h >= _intervalle_graine:
 				h -= _intervalle_graine
-				_naitre_pres_de(i)
+				_semer_pres_de(i)
 			_horloges[i] = h
 		_ecrire_slot(i, age_i)
 		i += 1
@@ -288,12 +307,11 @@ func _process(delta: float) -> void:
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
-		print("[arbre] population = %d, dormantes = %d" % [_population, _graines_horloge.size()])
+		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, _graines_horloge.size(), _couvert.size()])
 
 # Trouve le segment de stade contenant `age` et rend un Vector4 (h_tronc,
 # l_tronc, h_feuillage, l_feuillage) interpole lineairement entre le stade
 # courant et le suivant. Age au-dela du dernier segment : fige sur stade 8.
-# Vector4 = type valeur, aucune allocation heap.
 func _calc_params(age: float) -> Vector4:
 	var duree_cumulee: float = 0.0
 	var n: int = _durees.size()
@@ -321,6 +339,19 @@ func _calc_params(age: float) -> Vector4:
 	return Vector4(
 		float(s.tronc.hauteur), float(s.tronc.largeur),
 		float(s.feuillage.hauteur), float(s.feuillage.largeur))
+
+# Stade entier (1..8) correspondant a `age` : premier i tel que
+# somme(_durees[0..i]) > age, avec fallback stade 8 quand age >= somme totale.
+func _calculer_stade(age: float) -> int:
+	var cumul: float = 0.0
+	var n: int = _durees.size()
+	var i: int = 0
+	while i < n:
+		cumul += float(_durees[i])
+		if age < cumul:
+			return i + 1
+		i += 1
+	return 8
 
 # Ecrit les deux transforms du slot depuis les quatre parametres interpoles.
 # Meshes sources UNITAIRES (hauteur 1, largeur 1). Empilement : base du
@@ -358,8 +389,45 @@ func _ecrire_slot_vide(i: int) -> void:
 	_mm_tronc.set_instance_transform(i, t)
 	_mm_feuillage.set_instance_transform(i, t)
 
+# CHAMP DE COUVERT -- depot/retrait strictement symetrique (signe -1 =
+# retrait). L'arbre au stade `stade` couvre les cases dans un carre de
+# `_ombrage_par_stade[stade-1].rayon_cases` autour de sa case, chacune
+# recevant `magnitude * signe`. Une case dont le cumul retombe sous
+# EPS_COUVERT est retiree du Dictionary pour ne pas polluer les lectures.
+func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> void:
+	if stade < 1 or stade > 8:
+		return
+	if _ombrage_par_stade.size() < stade:
+		return
+	var conf: Dictionary = _ombrage_par_stade[stade - 1]
+	var rayon: int = int(conf.get("rayon_cases", 0))
+	var mag: float = float(conf.get("magnitude", 0.0)) * float(signe)
+	if mag == 0.0:
+		return
+	var cx0: int = floori(pos_x / _taille_case)
+	var cz0: int = floori(pos_z / _taille_case)
+	var dcx: int = -rayon
+	while dcx <= rayon:
+		var dcz: int = -rayon
+		while dcz <= rayon:
+			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
+			var v: float = float(_couvert.get(cle, 0.0)) + mag
+			if absf(v) < EPS_COUVERT:
+				_couvert.erase(cle)
+			else:
+				_couvert[cle] = v
+			dcz += 1
+		dcx += 1
+
+func _lire_couvert(pos_x: float, pos_z: float) -> float:
+	var cle: Vector2i = Vector2i(floori(pos_x / _taille_case), floori(pos_z / _taille_case))
+	return float(_couvert.get(cle, 0.0))
+
 func _liberer_slot(i: int) -> void:
-	_retirer_de_grille(i)
+	var stade: int = _slot_stade[i]
+	if stade > 0:
+		_deposer_ombrage(_positions_x[i], _positions_z[i], stade, -1)
+	_slot_stade[i] = 0
 	_libres[i] = 1
 	_ages[i] = 0.0
 	_horloges[i] = 0.0
@@ -368,7 +436,7 @@ func _liberer_slot(i: int) -> void:
 	_population -= 1
 
 # Naissance a une position horizontale donnee. Prend un slot libre en
-# priorite ; agrandit la capacite s'il n'y en a plus.
+# priorite ; agrandit la capacite s'il n'y en a plus. Depot d'ombrage stade 1.
 func _naitre(pos_x: float, pos_z: float) -> void:
 	if _slots_libres.is_empty():
 		_agrandir_capacite()
@@ -378,11 +446,12 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_horloges[i] = 0.0
 	_positions_x[i] = pos_x
 	_positions_z[i] = pos_z
-	_inserer_dans_grille(i, pos_x, pos_z)
+	_slot_stade[i] = 1
+	_deposer_ombrage(pos_x, pos_z, 1, 1)
 	_ecrire_slot(i, 0.0)
 	_population += 1
 
-func _naitre_pres_de(parent_index: int) -> void:
+func _semer_pres_de(parent_index: int) -> void:
 	# Tirage UNIFORME dans le disque : angle uniforme + rayon = sqrt(u) * R.
 	# `randf() * R` seul concentrerait la densite au centre (piege classique
 	# de sampling : la surface annulaire croit lineairement avec r).
@@ -392,90 +461,28 @@ func _naitre_pres_de(parent_index: int) -> void:
 	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
 	_deposer_graine(pos_x, pos_z)
 
-# Semer une graine : test densite immediat -- si voisins < seuil, elle leve
-# tout de suite (`_naitre`), sinon elle entre dans la banque dormante avec
-# horloge = 0.
+# Depot d'une graine : couvert local sous le seuil -> leve immediate ;
+# sinon entree dans la banque dormante (horloge = 0).
 func _deposer_graine(pos_x: float, pos_z: float) -> void:
-	if _compter_voisins(pos_x, pos_z) < _seuil_densite:
+	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
 		return
 	_graines_x.append(pos_x)
 	_graines_z.append(pos_z)
 	_graines_horloge.append(0.0)
 
-# Comptage LOCAL des arbres vivants dans le disque `_rayon_densite` autour
-# de (pos_x, pos_z) : on ne balaie que les 9 cases 3x3 autour du point, puis
-# on teste la distance exacte sur ces candidats. Case_size = _rayon_densite,
-# donc un disque de ce rayon tient toujours dans le 3x3 quel que soit le
-# point. Resultat identique a un balayage global, cout O(voisins reels).
-func _compter_voisins(pos_x: float, pos_z: float) -> int:
-	var r2: float = _rayon_densite * _rayon_densite
-	var cx0: int = floori(pos_x / _rayon_densite)
-	var cz0: int = floori(pos_z / _rayon_densite)
-	var n: int = 0
-	var dcx: int = -1
-	while dcx <= 1:
-		var dcz: int = -1
-		while dcz <= 1:
-			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
-			if _grille.has(cle):
-				var indices: Array = _grille[cle]
-				var m: int = indices.size()
-				var k: int = 0
-				while k < m:
-					var idx: int = indices[k]
-					var dx: float = _positions_x[idx] - pos_x
-					var dz: float = _positions_z[idx] - pos_z
-					if dx * dx + dz * dz <= r2:
-						n += 1
-					k += 1
-			dcz += 1
-		dcx += 1
-	return n
-
-func _inserer_dans_grille(slot_i: int, pos_x: float, pos_z: float) -> void:
-	var cx: int = floori(pos_x / _rayon_densite)
-	var cz: int = floori(pos_z / _rayon_densite)
-	_slot_case_x[slot_i] = cx
-	_slot_case_z[slot_i] = cz
-	var cle: Vector2i = Vector2i(cx, cz)
-	if _grille.has(cle):
-		(_grille[cle] as Array).append(slot_i)
-	else:
-		_grille[cle] = [slot_i]
-
-func _retirer_de_grille(slot_i: int) -> void:
-	var cle: Vector2i = Vector2i(_slot_case_x[slot_i], _slot_case_z[slot_i])
-	if not _grille.has(cle):
-		return
-	var indices: Array = _grille[cle]
-	# Swap-remove pour eviter le decalage O(k) sur `erase`.
-	var dernier: int = indices.size() - 1
-	var pos: int = indices.find(slot_i)
-	if pos < 0:
-		return
-	if pos != dernier:
-		indices[pos] = indices[dernier]
-	indices.resize(dernier)
-	if indices.is_empty():
-		_grille.erase(cle)
-
-# Boucle banque : chaque graine dormante voit son horloge avancer ; a chaque
-# fois qu'elle atteint `_intervalle_retest`, retest de densite. Si les
-# voisins repassent sous le seuil, la graine leve (`_naitre`) et est
-# retiree par swap-remove sur les trois colonnes. Aucune allocation dans la
-# boucle au-dela de l'appel a _naitre lors des levees (rare par frame).
+# Boucle banque : chaque graine dormante voit son horloge avancer ; AU PLUS
+# UN test par graine et par frame quand l'horloge atteint _intervalle_retest
+# (horloge remise a zero apres un test rate, aucun rattrapage). Levee =
+# swap-remove sur les trois colonnes + _naitre.
 func _tick_banque_graines(pas: float) -> void:
 	var i: int = 0
 	while i < _graines_horloge.size():
 		var h: float = _graines_horloge[i] + pas
 		var doit_lever: bool = false
-		# AU PLUS UN comptage par graine et par frame : on ne rattrape pas
-		# les intervalles accumules (freeze, mode_test_rapide), l'horloge est
-		# remise a zero apres un test rate.
 		if h >= _intervalle_retest:
 			h = 0.0
-			if _compter_voisins(_graines_x[i], _graines_z[i]) < _seuil_densite:
+			if _lire_couvert(_graines_x[i], _graines_z[i]) < _seuil_couvert:
 				doit_lever = true
 		if doit_lever:
 			var px: float = _graines_x[i]
@@ -489,7 +496,7 @@ func _tick_banque_graines(pas: float) -> void:
 			_graines_z.resize(dernier)
 			_graines_horloge.resize(dernier)
 			_naitre(px, pz)
-			# On ne fait pas i += 1 : le slot i porte maintenant l'ancien dernier,
+			# i ne s'incremente pas : le slot i porte maintenant l'ancien dernier,
 			# a re-examiner cette meme frame.
 		else:
 			_graines_horloge[i] = h
@@ -509,8 +516,7 @@ func _agrandir_capacite() -> void:
 	_libres.resize(nouvelle)
 	_positions_x.resize(nouvelle)
 	_positions_z.resize(nouvelle)
-	_slot_case_x.resize(nouvelle)
-	_slot_case_z.resize(nouvelle)
+	_slot_stade.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
@@ -521,6 +527,7 @@ func _agrandir_capacite() -> void:
 		_horloges[i] = 0.0
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
+		_slot_stade[i] = 0
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1

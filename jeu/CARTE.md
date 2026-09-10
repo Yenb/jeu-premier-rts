@@ -4468,26 +4468,28 @@ en-tête).
   après quoi le slot est libéré (échelle nulle, poussé sur
   `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
   `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème
-  une graine dans un disque uniforme `rayon_graine`. Chaque graine passe
-  par une BANQUE DORMANTE (colonnes séparées `_graines_x`/`_graines_z`/
-  `_graines_horloge`, sans rendu, sans slot MultiMesh) : test de densité
-  immédiat, si le nombre de voisins vivants dans le disque `rayon_densite`
-  est strictement inférieur à `seuil_densite` la graine lève tout de suite
-  (`_naitre`), sinon elle reste dormante et re-teste sa densité toutes
-  les `intervalle_retest` secondes jusqu'à ce que le voisinage repasse
-  sous le seuil. Retrait par swap-remove sur les trois colonnes à la
-  levée. Le comptage `_compter_voisins` est LOCAL : grille spatiale 2D
-  (`_grille` = Dictionary `Vector2i` → Array d'indices), case_size =
-  `_rayon_densite` — un disque de ce rayon tient toujours dans le
-  voisinage 3×3 quel que soit le point, donc on ne balaie que 9 cases
-  puis on teste la distance exacte sur ces candidats (résultat identique
-  au balayage global). Insertion `_inserer_dans_grille` à `_naitre`,
-  retrait `_retirer_de_grille` à `_liberer_slot` ; `_slot_case_x/z`
-  mémorisent la case de chaque slot pour un retrait O(1) (arbres
-  statiques après naissance, aucune maj de grille par frame).
-  `_tick_banque_graines` fait AU PLUS un comptage par graine par frame
-  (l'horloge est remise à zéro après un test raté, on ne rattrape pas
-  les intervalles accumulés en cas de gros `pas`).
+  une graine dans un disque uniforme `rayon_graine`. Chaque graine passe par une BANQUE DORMANTE
+  (colonnes séparées `_graines_x`/`_graines_z`/`_graines_horloge`, sans
+  rendu, sans slot MultiMesh). GERMINATION VIA CHAMP DE COUVERT :
+  chaque arbre ÉCRIT son ombrage dans un champ scalaire par case
+  (`_couvert` = Dictionary `Vector2i` → float, cote `_taille_case`) — au
+  stade N il couvre les cases dans un carré de
+  `_ombrage_par_stade[N-1].rayon_cases` autour de sa case, chacune
+  recevant `magnitude`. Dépôt à la naissance (`_deposer_ombrage` avec
+  signe +1), retrait à la mort (signe −1, formule identique = champ
+  strictement symétrique, pas de dérive), redépôt au changement de stade
+  détecté dans `_process` via `_slot_stade` comparé à `_calculer_stade`.
+  La graine LIT `_couvert` à SA case en O(1) : couvert < `seuil_couvert`
+  → `_naitre` immédiat ; sinon dormante, re-lecture toutes les
+  `intervalle_retest` secondes (au plus un test par graine par frame,
+  horloge remise à zéro après un test raté). L'arbre ne LIT PAS le champ
+  à cette étape (mort par compétition = chantier suivant). Retrait par
+  swap-remove sur les trois colonnes de la banque à la levée. Zéro
+  comptage de voisins. Champ inline dans l'esprit de
+  `jeu/Outil de jeu/champ_spatial.gd` (canevas CLAUDE.md § LOCALITÉ
+  SPATIALE, pattern (a) champ scalaire) — variante float+signée à
+  dépôt sur un carré de cases, alors que le partagé gère un compte
+  entier +1/−1 uniforme.
   NAISSANCE : slot libre
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
