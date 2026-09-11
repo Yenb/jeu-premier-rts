@@ -4493,14 +4493,18 @@ en-tête).
   Le type framework `arbre` hérite d'`objet_physique` seul (sans
   `dynamique`), c'est ce manque qui justifie le type local — pas de
   modification de `data/types.json`. Deux MultiMesh partagées (tronc :
-  `BoxMesh` unitaire ; feuillage : `CylinderMesh` top_radius=0), un slot
+  `CylinderMesh` unitaire rayon 0.5 hauteur 1 (cylindre droit,
+  diamètre 1 = équivalent scale-pour-scale à l'ancienne `BoxMesh` de
+  largeur 1) ; feuillage : `CylinderMesh` top_radius=0), un slot
   par arbre au MÊME index dans les deux. Colonnes parallèles indexées par
   slot (`_ages`, `_horloges`, `_libres`, `_positions_x`, `_positions_z`) ;
   hot path = UNE boucle par frame sur les slots vivants, écriture directe
   des deux `set_instance_transform`, aucune allocation heap dans la boucle
   (`_calc_params` renvoie un `Vector4`, `Transform3D`/`Basis` sont des
   types valeur). Croissance interpolée sur 8 stades (paramètres et 7
-  durées de segment dans le JSON) puis phase de mort de `duree_mort`,
+  durées de segment dans le JSON — les 4 tailles de chaque stade
+  `stades[i]` sont doublées par rapport à la génération précédente,
+  ajustement purement en donnée) puis phase de mort de `duree_mort`,
   après quoi le slot est libéré (échelle nulle, poussé sur
   `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
   `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème

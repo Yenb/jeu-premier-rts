@@ -4,7 +4,7 @@
 	"duree_mort": 180.0,
 	"mode_test_rapide": true,
 	"demi_carte": 300.0,
-	"joueur_actif": false,
+	"joueur_actif": true,
 	"graine_rng": 20260910,
 	"intervalle_graine": 10.0,
 	"rayon_graine": 200.0,
@@ -31,13 +31,13 @@
 		{ "rayon_cases": 0, "magnitude": 0.00 }
 	],
 	"stades": [
-		{ "tronc": { "hauteur": 0.4, "largeur": 0.08  }, "feuillage": { "hauteur": 0.6, "largeur": 0.5  } },
-		{ "tronc": { "hauteur": 1.2, "largeur": 0.15  }, "feuillage": { "hauteur": 1.4, "largeur": 1.1  } },
-		{ "tronc": { "hauteur": 2.4, "largeur": 0.625 }, "feuillage": { "hauteur": 2.6, "largeur": 3.0  } },
-		{ "tronc": { "hauteur": 3.6, "largeur": 0.875 }, "feuillage": { "hauteur": 3.6, "largeur": 4.2  } },
-		{ "tronc": { "hauteur": 5.0, "largeur": 1.25  }, "feuillage": { "hauteur": 4.6, "largeur": 5.4  } },
-		{ "tronc": { "hauteur": 6.4, "largeur": 1.625 }, "feuillage": { "hauteur": 5.4, "largeur": 6.3  } },
-		{ "tronc": { "hauteur": 7.4, "largeur": 1.875 }, "feuillage": { "hauteur": 5.8, "largeur": 6.6  } },
-		{ "tronc": { "hauteur": 7.4, "largeur": 1.875 }, "feuillage": { "hauteur": 0.0, "largeur": 0.0  } }
+		{ "tronc": { "hauteur": 0.8,  "largeur": 0.16 }, "feuillage": { "hauteur": 1.2,  "largeur": 1.0  } },
+		{ "tronc": { "hauteur": 2.4,  "largeur": 0.30 }, "feuillage": { "hauteur": 2.8,  "largeur": 2.2  } },
+		{ "tronc": { "hauteur": 4.8,  "largeur": 1.25 }, "feuillage": { "hauteur": 5.2,  "largeur": 6.0  } },
+		{ "tronc": { "hauteur": 7.2,  "largeur": 1.75 }, "feuillage": { "hauteur": 7.2,  "largeur": 8.4  } },
+		{ "tronc": { "hauteur": 10.0, "largeur": 2.5  }, "feuillage": { "hauteur": 9.2,  "largeur": 10.8 } },
+		{ "tronc": { "hauteur": 12.8, "largeur": 3.25 }, "feuillage": { "hauteur": 10.8, "largeur": 12.6 } },
+		{ "tronc": { "hauteur": 14.8, "largeur": 3.75 }, "feuillage": { "hauteur": 11.6, "largeur": 13.2 } },
+		{ "tronc": { "hauteur": 14.8, "largeur": 3.75 }, "feuillage": { "hauteur": 0.0,  "largeur": 0.0  } }
 	]
 }

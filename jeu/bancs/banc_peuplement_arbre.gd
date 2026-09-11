@@ -405,17 +405,21 @@ func _monter_joueur() -> void:
 	joueur.position = Vector3(8.0, Y_SOL + 1.0, 8.0)
 	add_child(joueur)
 
-# Meshes UNITAIRES : BoxMesh 1x1x1 (tronc), CylinderMesh hauteur 1 rayon-bas
-# 0.5 rayon-haut 0 (cone feuillage).
+# Meshes UNITAIRES : CylinderMesh hauteur 1 rayon 0.5 (tronc droit,
+# diametre 1 -- equivalent a l'ancienne BoxMesh de largeur 1, le scale
+# par la largeur dans `_ecrire_slot` donne le meme diametre). CylinderMesh
+# hauteur 1 rayon-bas 0.5 rayon-haut 0 (cone feuillage).
 func _monter_population() -> void:
-	var box := BoxMesh.new()
-	box.size = Vector3(1.0, 1.0, 1.0)
+	var tronc_mesh := CylinderMesh.new()
+	tronc_mesh.top_radius = 0.5
+	tronc_mesh.bottom_radius = 0.5
+	tronc_mesh.height = 1.0
 	var mat_tronc := StandardMaterial3D.new()
 	mat_tronc.albedo_color = Color(0.35, 0.22, 0.12)
-	box.material = mat_tronc
+	tronc_mesh.material = mat_tronc
 	_mm_tronc = MultiMesh.new()
 	_mm_tronc.transform_format = MultiMesh.TRANSFORM_3D
-	_mm_tronc.mesh = box
+	_mm_tronc.mesh = tronc_mesh
 	_mm_tronc.instance_count = CAPACITE_INITIALE
 	_noeud_tronc = MultiMeshInstance3D.new()
 	_noeud_tronc.multimesh = _mm_tronc
