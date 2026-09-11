@@ -125,7 +125,19 @@ var _demi_carte: float = 300.0
 # plongeante de la scene devient current.
 var _joueur_actif: bool = true
 var _graine_rng: int = 20260910
-var _intervalle_graine_moyen: float = 10.0
+# NOMBRE MOYEN DE GRAINES PRODUITES PAR ARBRE SUR TOUTE SA VIE FERTILE.
+# Reglage stable de la pression de reproduction : contrairement a un
+# intervalle en secondes, ce nombre NE change PAS quand on modifie les
+# durees des stades ou la variance de croissance. Un arbre lent, fertile
+# plus longtemps, ESPACE ses graines ; un arbre rapide les RESSERRE ;
+# le total moyen par arbre reste `_graines_par_vie` pour tous.
+# L'intervalle effectif par arbre est deduit a la naissance et stocke
+# dans `_intervalle_reprod[i]`.
+var _graines_par_vie: float = 24.0
+# Duree en secondes de sim (age) de la fenetre fertile commune, calculee
+# une fois apres le chargement : `_fin_fertilite - _debut_fertilite`. Sert
+# a deriver l'intervalle effectif de chaque arbre.
+var _fenetre_fertile_age: float = 0.0
 var _rayon_graine: float = 6.0
 var _stade_fertile_debut: int = 5
 var _stade_fertile_fin: int = 7
@@ -231,6 +243,14 @@ var _slots_libres: Array = []
 var _slot_stade: PackedInt32Array = PackedInt32Array()
 var _facteur_croissance: PackedFloat32Array = PackedFloat32Array()
 var _facteur_longevite: PackedFloat32Array = PackedFloat32Array()
+# Intervalle effectif de reproduction (secondes reelles) par slot,
+# calcule a la naissance : `_fenetre_fertile_age /
+# (_annees_par_seconde * _facteur_croissance[i] * _graines_par_vie)`.
+# Un arbre lent (facteur bas) recoit un intervalle plus grand -- ses
+# graines s'espacent d'autant qu'il est fertile plus longtemps, total
+# constant. INF pour un slot invalide (fenetre nulle ou graines_par_vie
+# nul) -> proba nulle, aucune reproduction.
+var _intervalle_reprod: PackedFloat32Array = PackedFloat32Array()
 
 # Population vivante courante, tenue en O(1) : incrementee dans _naitre,
 # decrementee dans _liberer_slot. Aucun scan par frame.
@@ -408,7 +428,9 @@ func _charger_reglages_locaux() -> void:
 	if donnees.has("graine_rng"):
 		_graine_rng = int(donnees.graine_rng)
 	if donnees.has("intervalle_graine_moyen"):
-		_intervalle_graine_moyen = float(donnees.intervalle_graine_moyen)
+		push_warning("banc_peuplement_arbre : cle JSON `intervalle_graine_moyen` obsolete, remplacee par `graines_par_vie` (nombre moyen de graines produites par arbre sur sa vie fertile)")
+	if donnees.has("graines_par_vie"):
+		_graines_par_vie = float(donnees.graines_par_vie)
 	if donnees.has("rayon_graine"):
 		_rayon_graine = float(donnees.rayon_graine)
 	if donnees.has("stade_fertile_debut"):
@@ -475,6 +497,10 @@ func _charger_reglages_locaux() -> void:
 	while k < _stade_fertile_fin and k < _durees.size():
 		_fin_fertilite += float(_durees[k])
 		k += 1
+	# Duree en secondes de sim (age) de la fenetre fertile commune.
+	# L'intervalle effectif de chaque arbre s'en deduit a la naissance
+	# via `_facteur_croissance[i]` -- voir _naitre.
+	_fenetre_fertile_age = maxf(0.0, _fin_fertilite - _debut_fertilite)
 
 # Construit la table passee a Objet.fabriquer : paquet `dynamique` du
 # framework (lu depuis data/types.json) + type local `arbre_pousse`. Aucune
@@ -615,6 +641,7 @@ func _monter_population() -> void:
 	_slot_stade.resize(_capacite)
 	_facteur_croissance.resize(_capacite)
 	_facteur_longevite.resize(_capacite)
+	_intervalle_reprod.resize(_capacite)
 	_choses_arbre.resize(_capacite)
 	_derniere_params.resize(_capacite)
 	_slots_libres.clear()
@@ -628,6 +655,7 @@ func _monter_population() -> void:
 		_slot_stade[i] = -1
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
+		_intervalle_reprod[i] = INF
 		_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		_slots_libres.append(i)
@@ -692,16 +720,21 @@ func _process(delta: float) -> void:
 			# tient si la JSON `ombrage_par_stade` change.
 			if _stade_est_degageant(ancien, nouveau_index):
 				_reveiller_dormantes_autour(_positions_x[i], _positions_z[i])
-		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu) :
-		# a chaque pas, un arbre fertile a une probabilite `pas /
-		# _intervalle_graine_moyen` de semer UNE graine. La cadence
-		# MOYENNE par arbre reste inchangee, mais les instants sont
-		# desynchronises entre individus -- fin des vagues de cohortes
-		# qui semaient au meme tic. Au plus une graine par pas et par
-		# arbre (jamais de rafale). RNG seede : a seed egal, meme foret.
+		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu),
+		# CALEE SUR UN TOTAL DE GRAINES PAR VIE. `_intervalle_reprod[i]`
+		# (secondes reelles) est deduit a la naissance de la fenetre
+		# fertile ET du facteur de croissance individuel : un arbre lent
+		# recoit un intervalle plus grand -- ses graines s'espacent
+		# d'autant qu'il est fertile plus longtemps, TOTAL constant a
+		# `_graines_par_vie` pour tous. Cadence moyenne inchangee au sein
+		# d'une vie, instants desynchronises entre individus -- fin des
+		# vagues de cohortes. Au plus une graine par pas et par arbre.
+		# RNG seede : a seed egal, meme foret.
 		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
-			if _rng.randf() < pas / _intervalle_graine_moyen:
-				_semer_pres_de(i)
+			var intervalle_i: float = _intervalle_reprod[i]
+			if intervalle_i > 0.0 and not is_inf(intervalle_i):
+				if _rng.randf() < pas / intervalle_i:
+					_semer_pres_de(i)
 		_ecrire_slot(i, age_i)
 		i += 1
 	_tick_banque(pas)
@@ -926,6 +959,17 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
 	_facteur_croissance[i] = FacteurVariance.tirer_entre(_rng, _croissance_min, _croissance_max)
 	_facteur_longevite[i] = FacteurVariance.tirer_entre(_rng, _longevite_min, _longevite_max)
+	# Intervalle effectif de reproduction, deduit de la fenetre fertile
+	# et du facteur de croissance individuel : un arbre lent
+	# (facteur bas) est fertile plus longtemps EN TEMPS REEL, son
+	# intervalle est proportionnellement plus grand -- total de
+	# graines par vie = `_graines_par_vie` pour tous. INF si l'un des
+	# denominateurs est nul (pas de reproduction).
+	var denom: float = _annees_par_seconde * _facteur_croissance[i] * _graines_par_vie
+	if _fenetre_fertile_age > 0.0 and denom > 0.0:
+		_intervalle_reprod[i] = _fenetre_fertile_age / denom
+	else:
+		_intervalle_reprod[i] = INF
 	# Inscription dans monde (consequence: monde.gd:ajouter exige un
 	# Dictionary avec `id` et `position` structurels ; plan B: aucun --
 	# rollback = ne pas ajouter le champ, mais le retirer de _liberer_slot
@@ -1299,6 +1343,7 @@ func _agrandir_capacite() -> void:
 	_slot_stade.resize(nouvelle)
 	_facteur_croissance.resize(nouvelle)
 	_facteur_longevite.resize(nouvelle)
+	_intervalle_reprod.resize(nouvelle)
 	_choses_arbre.resize(nouvelle)
 	_derniere_params.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
@@ -1313,6 +1358,7 @@ func _agrandir_capacite() -> void:
 		_slot_stade[i] = -1
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
+		_intervalle_reprod[i] = INF
 		_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		_slots_libres.append(i)

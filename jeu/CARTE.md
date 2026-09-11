@@ -4516,12 +4516,19 @@ en-tête).
   `_slots_libres`). REPRODUCTION STOCHASTIQUE (processus de Poisson par individu) : un
   arbre fertile (âge dans les stades `stade_fertile_debut` à
   `stade_fertile_fin`, JSON, défaut 5 à 7) tire `_rng.randf()` à
-  chaque pas ; s'il est sous `pas / intervalle_graine_moyen`, il sème
+  chaque pas ; s'il est sous `pas / _intervalle_reprod[i]`, il sème
   UNE graine dans un disque uniforme `rayon_graine`. Au plus une
-  graine par pas et par arbre — aucune rafale, aucune horloge partagée
-  (colonne `_horloges` retirée). La cadence MOYENNE par arbre reste
-  `intervalle_graine_moyen`, les instants sont désynchronisés entre
-  individus : fin des vagues de cohortes qui semaient au même tic.
+  graine par pas et par arbre — aucune rafale, aucune horloge partagée.
+  REPRODUCTION CALÉE SUR UN TOTAL DE GRAINES PAR VIE
+  (`graines_par_vie`, JSON, défaut 24) : `_intervalle_reprod[i]` est
+  déduit à la naissance de la fenêtre fertile commune et du facteur
+  de croissance individuel — `_fenetre_fertile_age / (_annees_par_seconde
+  × _facteur_croissance[i] × _graines_par_vie)`. Un arbre lent est
+  fertile plus longtemps EN TEMPS RÉEL, son intervalle est
+  proportionnellement plus grand ; un arbre rapide resserre ; le
+  TOTAL moyen par arbre = `graines_par_vie` pour tous, indépendant
+  des durées de stade et de la variance de croissance. Les instants
+  restent désynchronisés entre individus (tirages RNG par pas).
   RNG seedé : à seed égal, même forêt. Chaque graine passe par une BANQUE DORMANTE
   déléguée au mécanisme framework `scripts/attente_seuil.gd` (registre
   ajouter/retirer/prospects seul). RE-TEST SUR ÉVÉNEMENT DE VOISINAGE
