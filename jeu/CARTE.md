@@ -4539,7 +4539,24 @@ en-tête).
   événement de réveil (elle ne peut que fermer davantage un gate).
   Rayon de réveil calculé une fois dans `_calculer_rayon_reveil` =
   max(`rayon_trouee * facteur_trouee_gros`, portée d'ombrage max en
-  unités monde). `avancer` du mécanisme framework n'est pas utilisé
+  unités monde). GRILLE SPATIALE DES DORMANTES
+  (`_dormantes_par_case`, `Vector2i` → `Array<int>` d'ids ; index
+  inverse `_case_de_dormante`) inscrite à `_deposer_graine`, retirée
+  à la levée dans `_tick_banque`. `_reveiller_dormantes_autour` ne
+  lit que les cases du rectangle `[pos - R, pos + R]` (2 ou 3 cases
+  par axe, cote = `_rayon_reveil`) — plus de balayage global de la
+  banque à chaque événement (patron LOCALITÉ SPATIALE du CLAUDE.md,
+  variante monde-indexé propre à la banque). REQUÊTE CIBLÉE PAR GRAINE
+  au tick : `_tick_banque` appelle `_trouee_saturee(pos)` à la
+  position de chaque graine réveillée avec `rayon_gros` — petite
+  liste, aucun sur-parcours. Un batch par case avait été essayé
+  mais la case des dormantes fait déjà ≥ `rayon_gros` (côte =
+  `_rayon_reveil`), le batch ramenait une grande liste re-filtrée
+  par distance à chaque graine : sur-filtrage, retour au patron
+  standard (spatial hashing = requête locale et bornée, par entité).
+  Les nouveau-nés de la même rafale sont déjà dans `_monde` (ajout
+  live à chaque `_naitre`), la graine suivante les voit naturellement
+  — même effet que le dict `nouvelles` de `vegetation.gd`. `avancer` du mécanisme framework n'est pas utilisé
   (il compare à un seuil unique, sans notion d'événement).
   Chaque graine échue passe par le MÊME gate de trouée que la
   germination directe

@@ -261,6 +261,26 @@ var _banque_graines: RefCounted = null
 # leve est retiree du registre `AttenteSeuil`.
 var _reveils: Dictionary = {}
 
+# GRILLE SPATIALE PROPRE A LA BANQUE (patron LOCALITE SPATIALE du
+# CLAUDE.md, variante monde-indexe adaptee aux ids stables). Cle =
+# Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
+# Array<int> des ids de prospects dormants dans cette case. Insertion a
+# `_deposer_graine`, retrait quand une graine leve (`_tick_banque`).
+# `_reveiller_dormantes_autour` ne lit QUE les cases dans le rectangle
+# `[pos - _rayon_reveil, pos + _rayon_reveil]` -- plus de balayage
+# global de toute la banque a chaque evenement. Cout d'un reveil =
+# O(graines reellement proches), plus lie a la population totale
+# dormante. `_case_de_dormante` (id -> Vector2i) est l'index inverse
+# qui rend le retrait O(1) : pas besoin de rechercher la case en
+# balayant les listes.
+var _dormantes_par_case: Dictionary = {}
+var _case_de_dormante: Dictionary = {}
+# Cote (unites monde) des cases de `_dormantes_par_case`. Fixe a
+# `_rayon_reveil` dans `_calculer_rayon_reveil` : le rectangle d'un
+# reveil couvre alors 2 ou 3 cases par axe (borne stricte), aucun scan
+# 3x3 forfaitaire, aucun overshoot en cases > rayon.
+var _taille_case_dormantes: float = 0.0
+
 # INDEX SPATIAL DU COEUR. Chaque arbre est inscrit a la naissance et retire
 # a la mort ; aucun lecteur du monde dans ce banc aujourd'hui, l'inscription
 # prepare les mecaniques qui interrogeront le voisinage. `structure_simple`
@@ -860,18 +880,16 @@ func _semer_pres_de(parent_index: int) -> void:
 	_deposer_graine(pos_x, pos_z)
 
 # UNIQUE definition du gate de trouee (patron vegetation.gd:trouee_suffisante).
-# Appele par _deposer_graine ET _tick_banque -- si les deux chemins
-# divergent, la banque contourne le gate et les salves synchronisees
-# reviennent par la banque. Les rejets nes plus tot dans la meme frame ou
-# la meme rafale de banque sont deja dans _monde (ajout live a chaque
-# _naitre) et comptes ici -- meme effet que le dict `nouvelles` de
-# vegetation.gd sans dict temporaire.
+# Appele par _deposer_graine (germination directe) ET par _tick_banque
+# (une graine reveillee = une requete ciblee a SA position avec
+# rayon_gros). UN SEUL chemin, une seule fonction -- si deux chemins
+# divergeaient, la banque contournerait le gate et les salves
+# reviendraient par elle. Les rejets nes plus tot dans la meme rafale
+# sont deja dans _monde (ajout live a chaque _naitre) : la graine
+# suivante les voit naturellement via `_monde.choses_dans_rayon`, sans
+# liste locale a maintenir -- meme effet que le dict `nouvelles` de
+# vegetation.gd.
 func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
-	# Deux rayons, UNE seule requete au plus grand (englobe le petit).
-	# Un ADULTE (stade dans [_stade_gros_min, _stade_gros_max]) present
-	# dans le rayon large -> rejet immediat. Les JEUNES ne comptent que
-	# s'ils tombent dans le rayon normal, sommes comparees a
-	# `_trouee_max_voisins`. Rayon large = _rayon_trouee * _facteur_trouee_gros.
 	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
 	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
 	var carre_normal: float = _rayon_trouee * _rayon_trouee
@@ -907,9 +925,11 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	# d'echouer ci-dessus a etabli qu'aucune de ses conditions ne
 	# passe MAINTENANT ; sans changement autour d'elle le resultat ne
 	# changera pas.
-	_banque_graines.ajouter({
+	var id_prospect: int = _banque_graines.ajouter({
 		"position": Vector3(pos_x, Y_SOL, pos_z),
 	})
+	if id_prospect >= 0:
+		_inscrire_dormante(id_prospect, pos_x, pos_z)
 
 # RE-TEST SUR EVENEMENT (patron `vegetation.gd` « L'OMBRE EST UN SIGNAL »).
 # `pas` est ignore : rien de temporise ici, seul le `_reveils` rempli
@@ -933,6 +953,17 @@ func _tick_banque(_pas: float) -> void:
 	var prospects: Dictionary = _banque_graines.prospects()
 	var ids: Array = _reveils.keys()
 	_reveils.clear()
+	# REQUETE CIBLEE PAR GRAINE : chaque graine reveillee appelle
+	# `_trouee_saturee(pos)` a SA position avec rayon_gros -- petite
+	# liste, aucun sur-parcours. Un batch par case avait ete essaye
+	# mais la case des dormantes fait deja >= rayon_gros (cote =
+	# _rayon_reveil), donc le batch ramenait une grande liste que
+	# chaque graine re-filtrait par distance : sur-filtrage,
+	# retour au patron standard (spatial hashing : requete locale,
+	# bornee, par entite). Les nouveau-nes de la meme rafale sont
+	# deja dans `_monde` (ajout live a chaque `_naitre`), la graine
+	# suivante les voit naturellement -- meme effet qu'avant sans
+	# maintenir une liste locale.
 	for id_variant in ids:
 		var id: int = int(id_variant)
 		if not prospects.has(id):
@@ -942,31 +973,88 @@ func _tick_banque(_pas: float) -> void:
 		if _trouee_saturee(pos.x, pos.z) or _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
 			continue
 		_banque_graines.retirer(id)
+		_retirer_dormante(id)
 		_naitre(pos.x, pos.z)
 
 # Reveille les prospects dormants a portee d'un evenement de voisinage
-# (mort d'arbre ou changement de stade). Iteration a plat des prospects
-# actuels du registre + comparaison de distance en Vector2 (plan XZ,
-# Y fixe a Y_SOL sur tous les prospects). Cout : O(N_dormants) par
-# evenement, dominant les distances carrees -- pas de requete spatiale.
-# Dedup naturel par Dictionary : deux evenements successifs qui reveillent
-# le meme prospect ne l'ajoutent qu'une fois.
+# (mort d'arbre ou changement de stade). LECTURE LOCALE via la grille
+# `_dormantes_par_case` : le rectangle [pos - R, pos + R] borne les
+# cases lues, aucun balayage global de la banque -- cout O(dormants
+# reellement dans le rectangle), pas O(N_dormants). Chaque candidat
+# est filtre par distance carree pour ne reveiller que les vraies
+# graines a portee (les cases au bord du rectangle peuvent contenir
+# des graines au dela de R). Dedup par SET `_reveils`.
+#
+# NOTE ORDRE : l'ordre d'insertion dans `_reveils` suit desormais
+# l'ordre cx, cz, id-dans-case (grille) au lieu de l'ordre d'insertion
+# dans le registre `AttenteSeuil` (ordre d'entree en banque). Le RNG
+# consomme par `_naitre` (facteurs variance) voit donc une autre suite
+# -- la foret reste reproductible a seed egal mais differe de la
+# version pre-optim. MEMES graines reveillees (celles a distance <= R
+# du point), MEMES gates passes, MEMES levees ; seul l'ordre des
+# tirages change.
 func _reveiller_dormantes_autour(pos_x: float, pos_z: float) -> void:
-	if _banque_graines == null or _rayon_reveil <= 0.0:
+	if _banque_graines == null or _rayon_reveil <= 0.0 or _taille_case_dormantes <= 0.0:
 		return
-	var prospects: Dictionary = _banque_graines.prospects()
-	if prospects.is_empty():
+	if _dormantes_par_case.is_empty():
 		return
+	var inv_case: float = 1.0 / _taille_case_dormantes
+	var cx_min: int = floori((pos_x - _rayon_reveil) * inv_case)
+	var cx_max: int = floori((pos_x + _rayon_reveil) * inv_case)
+	var cz_min: int = floori((pos_z - _rayon_reveil) * inv_case)
+	var cz_max: int = floori((pos_z + _rayon_reveil) * inv_case)
 	var carre: float = _rayon_reveil * _rayon_reveil
-	for id in prospects:
-		if _reveils.has(id):
-			continue
-		var entree: Dictionary = prospects[id]
-		var pos: Vector3 = entree.position
-		var dx: float = pos.x - pos_x
-		var dz: float = pos.z - pos_z
-		if dx * dx + dz * dz <= carre:
-			_reveils[id] = true
+	var prospects: Dictionary = _banque_graines.prospects()
+	for cx in range(cx_min, cx_max + 1):
+		for cz in range(cz_min, cz_max + 1):
+			var cle: Vector2i = Vector2i(cx, cz)
+			var ids = _dormantes_par_case.get(cle, null)
+			if ids == null:
+				continue
+			for id_variant in ids:
+				var id: int = int(id_variant)
+				if _reveils.has(id):
+					continue
+				if not prospects.has(id):
+					continue
+				var entree: Dictionary = prospects[id]
+				var pos: Vector3 = entree.position
+				var dx: float = pos.x - pos_x
+				var dz: float = pos.z - pos_z
+				if dx * dx + dz * dz <= carre:
+					_reveils[id] = true
+
+# Inscrit une graine dormante dans la grille spatiale (a `_deposer_graine`
+# quand l'entree en banque a rendu un id valide). Cout O(1). `_case_de_dormante`
+# tient l'index inverse id -> Vector2i pour un retrait O(1).
+func _inscrire_dormante(id: int, pos_x: float, pos_z: float) -> void:
+	if _taille_case_dormantes <= 0.0:
+		return
+	var inv_case: float = 1.0 / _taille_case_dormantes
+	var cle: Vector2i = Vector2i(floori(pos_x * inv_case), floori(pos_z * inv_case))
+	var arr = _dormantes_par_case.get(cle, null)
+	if arr == null:
+		arr = []
+		_dormantes_par_case[cle] = arr
+	(arr as Array).append(id)
+	_case_de_dormante[id] = cle
+
+# Retire une graine de la grille spatiale (a `_tick_banque` quand elle
+# leve, apres `_banque_graines.retirer`). Cout O(k) ou k = taille de
+# l'Array de la case (typiquement quelques ids). Silencieux si id
+# inconnu : garde contre un double retrait.
+func _retirer_dormante(id: int) -> void:
+	var cle_v = _case_de_dormante.get(id, null)
+	if cle_v == null:
+		return
+	var cle: Vector2i = cle_v
+	_case_de_dormante.erase(id)
+	var arr = _dormantes_par_case.get(cle, null)
+	if arr == null:
+		return
+	(arr as Array).erase(id)
+	if (arr as Array).is_empty():
+		_dormantes_par_case.erase(cle)
 
 # Rayon d'influence d'un evenement (mort, changement de stade) sur les
 # graines dormantes : max du rayon trouee elargi (voisin adulte)
@@ -986,6 +1074,11 @@ func _calculer_rayon_reveil() -> void:
 	# sqrt(2) : les cases sont carrees dans XZ.
 	var portee_ombrage: float = float(max_rayon_cases + 1) * _taille_case * sqrt(2.0)
 	_rayon_reveil = maxf(rayon_gros, portee_ombrage)
+	# Cote des cases de la grille des dormantes = rayon de reveil. Le
+	# rectangle d'un reveil ([pos - R, pos + R]) fait alors au plus 3
+	# cases par axe (2 ou 3 selon l'alignement), aucun scan forfaitaire
+	# et aucune case > rayon.
+	_taille_case_dormantes = maxf(1.0, _rayon_reveil)
 
 # Double la capacite des deux MultiMesh et des colonnes. Reallouer
 # `instance_count` REINITIALISE le tampon GPU des deux MultiMesh : toute
