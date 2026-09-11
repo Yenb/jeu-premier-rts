@@ -38,13 +38,21 @@
 # `stades_config`) ; c'est ce manque qui justifie le type local.
 #
 # BANQUE DE GRAINES DORMANTES : registre delegue au mecanisme framework
-# `scripts/attente_seuil.gd` (ajouter/retirer/prospects). Le tick de
-# banque itere `prospects()` directement -- chaque graine porte sa
-# propre `prochaine_echeance` (cle libre, `attente_seuil` ne la lit
-# jamais), tiree seedee dans [0, _intervalle_retest[ a l'ajout et
-# repoussee de `_intervalle_retest` a chaque re-test rate. `avancer`
-# n'est plus appele (il compare a un seuil unique, il ne connait pas
-# l'echeance par graine). Les levees s'etalent au lieu de pulser.
+# `scripts/attente_seuil.gd` (ajouter/retirer/prospects). RE-TEST SUR
+# EVENEMENT, jamais a cadence fixe (patron `jeu/plantes/vegetation.gd`
+# « L'OMBRE EST UN SIGNAL, PAS UNE QUESTION »). Une graine dormante
+# reste dormante jusqu'a ce qu'un evenement dans son voisinage
+# (mort d'arbre ou changement de stade d'un voisin) puisse rouvrir
+# son gate. Entre deux tels evenements, ses conditions (trouee,
+# couvert) sont rigoureusement identiques -- re-tester serait
+# retrouver le meme resultat. Cle libre `reveille=false` posee a
+# l'entree en banque ; `_reveiller_dormantes_autour` la passe a true
+# pour les prospects dans le rayon d'un evenement ; `_tick_banque`
+# ne teste que celles dont `reveille=true` et les remet a false
+# apres un rejet. Une naissance N'EST PAS un evenement de reveil :
+# elle AJOUTE de la densite et de l'ombrage, elle ne peut que fermer
+# davantage un gate, jamais l'ouvrir. Le declencheur ecarte
+# (cadence fixe) : voir en-tete de `_tick_banque`.
 #
 # MECANIQUES ENCORE INLINE (manque framework a signaler, ne PAS bricoler
 # davantage) :
@@ -123,7 +131,16 @@ var _stade_fertile_debut: int = 5
 var _stade_fertile_fin: int = 7
 var _taille_case: float = 20.0
 var _seuil_couvert: float = 0.5
-var _intervalle_retest: float = 5.0
+# Rayon (unites monde) autour d'un evenement (mort ou changement de
+# stade) dans lequel les graines dormantes sont reveillees pour
+# re-tester leurs gates. Calcule apres chargement JSON dans
+# _calculer_rayon_reveil : max du rayon trouee elargi (voisin adulte
+# a `_rayon_trouee * _facteur_trouee_gros`) et de la portee maximale
+# d'ombrage (max_rayon_cases * _taille_case, distance Chebyshev entre
+# cases converti en unites monde). Sur-estimation OK : le reveil est
+# une invitation a re-tester, pas une decision -- le gate lu par
+# `_tick_banque` reste la seule autorite.
+var _rayon_reveil: float = 0.0
 # Gate d'etablissement au point de chute (patron vegetation.gd:trouee_suffisante) :
 # rayon en unites monde, seuil en nombre d'arbres. La graine tombee compte
 # les arbres deja inscrits dans _monde autour de son point d'arrivee ;
@@ -226,30 +243,23 @@ var _couvert: Dictionary = {}
 
 # Banque de graines dormantes deleguee au mecanisme framework
 # scripts/attente_seuil.gd : le banc enregistre chaque graine comme
-# prospect avec `position` ET `prochaine_echeance` (temps monde cumule
-# de son prochain re-test). La phase initiale est tiree seedee dans
-# [0, _intervalle_retest[ a l'ajout, puis avance de `_intervalle_retest`
-# a chaque re-test rate. Consequence : les graines ne se reveillent
-# plus toutes au meme tic, les levees s'etalent au lieu de pulser.
-# `attente_seuil.gd` accepte les cles libres par entree, il ne les lit
-# jamais (voir en-tete de attente_seuil.gd) -- `prochaine_echeance`
-# voyage telle quelle, ce banc la mute en place via `prospects()`.
+# prospect avec `position` seule. Aucune horloge par graine : le
+# re-test se declenche sur EVENEMENT de voisinage (mort d'arbre,
+# changement de stade), jamais a cadence fixe. `attente_seuil.gd`
+# accepte les cles libres par entree -- il ne les lit jamais.
 var _banque_graines: RefCounted = null
-# Temps monde cumule dedie a la banque : chaque _tick_banque avance ce
-# compteur et compare a la `prochaine_echeance` de chaque prospect.
-var _temps_banque: float = 0.0
 
-# INDEX D'ECHEANCES TRIE DECROISSANT (le plus mur en dernier) : cote banc,
-# pour eviter le balayage complet de `prospects()` chaque frame juste
-# pour trouver les rares graines mures. `_pop_mur()` accede au minimum en
-# O(1) via pop_back ; `_planifier()` insere en O(log N + N shift) via
-# bsearch_custom. Chaque entree = [echeance:float, id:int]. Comparateur
-# decroissant : `a[0] > b[0]` (echeances hautes en tete d'array, mures
-# en queue). Aucune modification de attente_seuil.gd (une entree y garde
-# sa `prochaine_echeance` en cle libre -- la seule source de verite reste
-# le prospect ; cet index est un CACHE ordonne synchronise a la main aux
-# points ou une echeance est posee ou repoussee).
-var _echeances_triees: Array = []
+# ENSEMBLE DES PROSPECTS REVEILLES a tester au prochain `_tick_banque`.
+# Cle = id du prospect (int, rendu par `AttenteSeuil.ajouter`).
+# Valeur = true (Dictionary utilise comme SET, dedoublonnage naturel :
+# deux evenements successifs qui reveillent le meme prospect ne le
+# testent qu'une fois). Rempli par `_reveiller_dormantes_autour`
+# (appelee sur mort et changement de stade), vide par `_tick_banque`
+# qui teste chaque id present. Une graine qui rate son gate au reveil
+# retombe dormante -- son id est retire du set, elle attend un
+# nouveau signal de son voisinage pour re-tester. Une graine qui
+# leve est retiree du registre `AttenteSeuil`.
+var _reveils: Dictionary = {}
 
 # INDEX SPATIAL DU COEUR. Chaque arbre est inscrit a la naissance et retire
 # a la mort ; aucun lecteur du monde dans ce banc aujourd'hui, l'inscription
@@ -282,6 +292,7 @@ var _tampon: Dictionary = {}
 
 func _ready() -> void:
 	_charger_reglages_locaux()
+	_calculer_rayon_reveil()
 	_rng.seed = _graine_rng
 	_monde = Monde.new()
 	_monde.structure_simple = true
@@ -338,8 +349,6 @@ func _charger_reglages_locaux() -> void:
 		_taille_case = float(donnees.taille_case)
 	if donnees.has("seuil_couvert"):
 		_seuil_couvert = float(donnees.seuil_couvert)
-	if donnees.has("intervalle_retest"):
-		_intervalle_retest = float(donnees.intervalle_retest)
 	if donnees.has("rayon_trouee"):
 		_rayon_trouee = float(donnees.rayon_trouee)
 	if donnees.has("trouee_max_voisins"):
@@ -599,6 +608,12 @@ func _process(delta: float) -> void:
 			if nouveau_index >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
 			_slot_stade[i] = nouveau_index
+			# EVENEMENT DE VOISINAGE : l'ombrage vient de changer autour de
+			# cet arbre (rayon et magnitude peuvent avoir bouge). Les
+			# prospects dormants a portee peuvent voir leur gate couvert
+			# s'ouvrir (baisse d'ombrage : stade 8 = feuillage 0) ou se
+			# fermer (montee : traitement au prochain tick).
+			_reveiller_dormantes_autour(_positions_x[i], _positions_z[i])
 		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu) :
 		# a chaque pas, un arbre fertile a une probabilite `pas /
 		# _intervalle_graine_moyen` de semer UNE graine. La cadence
@@ -762,6 +777,8 @@ func _liberer_slot(i: int) -> void:
 	# un fantome compte a sa place dans toute requete de densite ; risque:
 	# gates de densite futurs trop stricts ; plan B: aucun -- monde.gd:retirer
 	# alarme sur id absent, defaut impossible ici).
+	var pos_x: float = _positions_x[i]
+	var pos_z: float = _positions_z[i]
 	var chose = _choses_arbre[i]
 	if chose != null:
 		_monde.retirer(chose.id)
@@ -769,13 +786,18 @@ func _liberer_slot(i: int) -> void:
 	_derniere_params[i] = Vector4(INF, INF, INF, INF)
 	var index: int = _slot_stade[i]
 	if index >= 0:
-		_deposer_ombrage(_positions_x[i], _positions_z[i], index + 1, -1)
+		_deposer_ombrage(pos_x, pos_z, index + 1, -1)
 	_slot_stade[i] = -1
 	_libres[i] = 1
 	_ages[i] = 0.0
 	_ecrire_slot_vide(i)
 	_slots_libres.append(i)
 	_population -= 1
+	# EVENEMENT DE VOISINAGE : la mort a retire densite et ombrage --
+	# les prospects dormants a portee peuvent voir leur gate s'ouvrir.
+	# Reveille les prospects concernes ; ils testeront au prochain
+	# `_tick_banque`.
+	_reveiller_dormantes_autour(pos_x, pos_z)
 
 # Naissance : prend un slot libre en priorite ; agrandit la capacite s'il
 # n'y en a plus. Fabrique un objet via Objet.fabriquer, extrait
@@ -879,74 +901,91 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
 		return
-	# Phase de re-test tiree seedee dans [0, _intervalle_retest[ : chaque
-	# graine a son propre reveil, la banque ne pulse plus au meme tic.
-	var phase: float = _rng.randf() * _intervalle_retest
-	var echeance: float = _temps_banque + phase
-	var id: int = _banque_graines.ajouter({
+	# Entree en banque, DORMANTE : aucune echeance posee. Elle attendra
+	# qu'un evenement de voisinage (mort ou changement de stade) la
+	# reveille via `_reveiller_dormantes_autour`. Le test qui vient
+	# d'echouer ci-dessus a etabli qu'aucune de ses conditions ne
+	# passe MAINTENANT ; sans changement autour d'elle le resultat ne
+	# changera pas.
+	_banque_graines.ajouter({
 		"position": Vector3(pos_x, Y_SOL, pos_z),
-		"prochaine_echeance": echeance,
 	})
-	if id >= 0:
-		_planifier(id, echeance)
 
-# Re-test DESYNCHRONISE ET ORDONNE : `_echeances_triees` (Array trie
-# decroissant [echeance, id], voir en-tete du champ) rend le prospect le
-# plus mur en O(1) via `back()` / `pop_back()`. On ne balaie plus la
-# banque a chaque frame -- on pop tant que l'echeance en queue est <=
-# `_temps_banque`, puis on s'arrete a la premiere non-mure.
+# RE-TEST SUR EVENEMENT (patron `vegetation.gd` « L'OMBRE EST UN SIGNAL »).
+# `pas` est ignore : rien de temporise ici, seul le `_reveils` rempli
+# par les evenements de voisinage decide qui teste. Pour chaque prospect
+# reveille, meme gate que la germination directe (trouee + couvert). Rate
+# le gate -> reste en banque, sort du set des reveils (attend le
+# prochain signal). Passe le gate -> retire de la banque et naitre. Le
+# gate mord pendant une rafale grace a l'ajout live dans _monde a chaque
+# _naitre et au depot d'ombrage a chaque _slot_stade non nul.
 #
-# Gate applique a chaque graine pop : trouee saturee -> re-echeance
-# repoussee et RE-PLANIFIEE dans l'index (nouvelle position triee).
-# Couvert encore ombrage -> meme geste. Sinon : retirer de la banque et
-# naitre. Le gate mord pendant la rafale grace a l'ajout live dans
-# _monde a chaque _naitre.
-#
-# NOTE ORDRE : l'ordre des naissances intra-tick est desormais celui des
-# echeances croissantes (avant : ordre d'insertion Dictionary). Le RNG
-# consomme dans `_naitre` (facteurs variance) voit donc un ordre
-# different -- la foret reste reproductible a seed egal mais differe de
-# la version pre-optim.
-func _tick_banque(pas: float) -> void:
-	if _echeances_triees.is_empty():
+# NOTE ORDRE : l'ordre des naissances intra-tick est celui d'insertion
+# des ids dans `_reveils` (l'evenement declencheur, puis l'ordre
+# d'iteration du Dictionary -- garanti insertion sous Godot 4). Ordre
+# different de la version pre-optim (echeances triees) : le RNG
+# consomme dans `_naitre` (facteurs variance) voit une autre suite. La
+# foret reste reproductible a seed egal, elle differe seulement de la
+# version pre-optim.
+func _tick_banque(_pas: float) -> void:
+	if _reveils.is_empty():
 		return
-	_temps_banque += pas
 	var prospects: Dictionary = _banque_graines.prospects()
-	while not _echeances_triees.is_empty():
-		var derniere: Array = _echeances_triees[-1]
-		if float(derniere[0]) > _temps_banque:
-			break
-		_echeances_triees.pop_back()
-		var id: int = int(derniere[1])
+	var ids: Array = _reveils.keys()
+	_reveils.clear()
+	for id_variant in ids:
+		var id: int = int(id_variant)
 		if not prospects.has(id):
 			continue
 		var entree: Dictionary = prospects[id]
 		var pos: Vector3 = entree.position
 		if _trouee_saturee(pos.x, pos.z) or _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
-			var nouvelle: float = float(entree.prochaine_echeance) + _intervalle_retest
-			entree["prochaine_echeance"] = nouvelle
-			_planifier(id, nouvelle)
 			continue
-		_banque_graines.retirer(int(id))
+		_banque_graines.retirer(id)
 		_naitre(pos.x, pos.z)
 
-# Insere [echeance, id] dans `_echeances_triees` de sorte que l'array
-# reste trie DECROISSANT par echeance (le plus mur en dernier, accessible
-# via pop_back). Comparateur `_comparer_echeances` (a > b) coherent avec
-# bsearch_custom en ordre decroissant.
-func _planifier(id: int, echeance: float) -> void:
-	var entree: Array = [echeance, id]
-	var pos: int = _echeances_triees.bsearch_custom(entree, _comparer_echeances)
-	_echeances_triees.insert(pos, entree)
+# Reveille les prospects dormants a portee d'un evenement de voisinage
+# (mort d'arbre ou changement de stade). Iteration a plat des prospects
+# actuels du registre + comparaison de distance en Vector2 (plan XZ,
+# Y fixe a Y_SOL sur tous les prospects). Cout : O(N_dormants) par
+# evenement, dominant les distances carrees -- pas de requete spatiale.
+# Dedup naturel par Dictionary : deux evenements successifs qui reveillent
+# le meme prospect ne l'ajoutent qu'une fois.
+func _reveiller_dormantes_autour(pos_x: float, pos_z: float) -> void:
+	if _banque_graines == null or _rayon_reveil <= 0.0:
+		return
+	var prospects: Dictionary = _banque_graines.prospects()
+	if prospects.is_empty():
+		return
+	var carre: float = _rayon_reveil * _rayon_reveil
+	for id in prospects:
+		if _reveils.has(id):
+			continue
+		var entree: Dictionary = prospects[id]
+		var pos: Vector3 = entree.position
+		var dx: float = pos.x - pos_x
+		var dz: float = pos.z - pos_z
+		if dx * dx + dz * dz <= carre:
+			_reveils[id] = true
 
-# Tri DECROISSANT : rend true si `a` doit venir AVANT `b` = si son
-# echeance est STRICTEMENT PLUS GRANDE. Egalites resolues par id
-# (croissant) pour un ordre total stable -- deux prospects poses au meme
-# tick avec la meme phase ne sont pas frequents mais possibles.
-func _comparer_echeances(a: Array, b: Array) -> bool:
-	if float(a[0]) != float(b[0]):
-		return float(a[0]) > float(b[0])
-	return int(a[1]) < int(b[1])
+# Rayon d'influence d'un evenement (mort, changement de stade) sur les
+# graines dormantes : max du rayon trouee elargi (voisin adulte)
+# et de la portee maximale d'ombrage. Une graine plus loin que ce rayon
+# ne peut voir NI son gate trouee ni son gate couvert change par
+# l'evenement. Sur-estimation OK (surface d'ombrage est en cases
+# Chebyshev, convertie en unites monde avec un pas de securite).
+func _calculer_rayon_reveil() -> void:
+	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
+	var max_rayon_cases: int = 0
+	for entree in _ombrage_par_stade:
+		if entree is Dictionary:
+			max_rayon_cases = maxi(max_rayon_cases, int(entree.get("rayon_cases", 0)))
+	# Portee ombrage : distance Chebyshev en cases * taille_case, plus une
+	# case de securite pour couvrir un seed a l'oppose de son propre
+	# centre de case et un arbre a l'oppose du sien. Diagonale plane
+	# sqrt(2) : les cases sont carrees dans XZ.
+	var portee_ombrage: float = float(max_rayon_cases + 1) * _taille_case * sqrt(2.0)
+	_rayon_reveil = maxf(rayon_gros, portee_ombrage)
 
 # Double la capacite des deux MultiMesh et des colonnes. Reallouer
 # `instance_count` REINITIALISE le tampon GPU des deux MultiMesh : toute

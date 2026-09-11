@@ -4524,17 +4524,23 @@ en-tête).
   individus : fin des vagues de cohortes qui semaient au même tic.
   RNG seedé : à seed égal, même forêt. Chaque graine passe par une BANQUE DORMANTE
   déléguée au mécanisme framework `scripts/attente_seuil.gd` (registre
-  ajouter/retirer/prospects seul). RE-TEST DÉSYNCHRONISÉ PAR GRAINE :
-  chaque prospect porte sa propre `prochaine_echeance` (clé libre —
-  `attente_seuil` ne la lit jamais), tirée seedée dans
-  `[0, _intervalle_retest[` à l'entrée en banque via `_rng` et
-  repoussée de `_intervalle_retest` à chaque re-test raté. Le tick de
-  banque pop les graines mûres depuis un INDEX D'ÉCHÉANCES trié
-  décroissant (`_echeances_triees`, `bsearch_custom` à l'insertion,
-  `pop_back` O(1) au tick) — plus de balayage complet de la banque par
-  frame, seules les rares graines effectivement mûres sont testées ;
-  les autres attendent leur tour. `avancer` n'est plus utilisé
-  (il compare à un seuil unique, il ignore l'échéance par graine).
+  ajouter/retirer/prospects seul). RE-TEST SUR ÉVÉNEMENT DE VOISINAGE
+  (patron `jeu/plantes/vegetation.gd` « L'OMBRE EST UN SIGNAL, PAS UNE
+  QUESTION ») : une graine dormante ne re-teste JAMAIS à cadence fixe.
+  Elle attend qu'un événement à portée (mort d'arbre dans
+  `_liberer_slot`, ou changement de stade d'un voisin dans `_process`)
+  la réveille via `_reveiller_dormantes_autour`, qui inscrit son id
+  dans le SET `_reveils`. `_tick_banque` teste chaque prospect
+  réveillé au même gate que la germination directe (`_trouee_saturee`
+  + `_lire_couvert`) et vide le SET : passe → `retirer` + `_naitre` ;
+  rate → reste en banque, attend le prochain signal. Entre deux
+  événements, ses gates ne peuvent pas avoir changé — re-tester
+  serait retrouver le même résultat. Une naissance N'EST PAS un
+  événement de réveil (elle ne peut que fermer davantage un gate).
+  Rayon de réveil calculé une fois dans `_calculer_rayon_reveil` =
+  max(`rayon_trouee * facteur_trouee_gros`, portée d'ombrage max en
+  unités monde). `avancer` du mécanisme framework n'est pas utilisé
+  (il compare à un seuil unique, sans notion d'événement).
   Chaque graine échue passe par le MÊME gate de trouée que la
   germination directe
   (`_trouee_saturee`, patron `jeu/plantes/vegetation.gd:trouee_suffisante`).
@@ -4560,9 +4566,9 @@ en-tête).
   strictement symétrique, pas de dérive), redépôt au changement de stade
   détecté dans `_process` via `_slot_stade` comparé à `_calculer_stade`.
   La graine LIT `_couvert` à SA case en O(1) : couvert < `seuil_couvert`
-  → `_naitre` immédiat ; sinon dormante, re-lecture toutes les
-  `intervalle_retest` secondes (au plus un test par graine par frame,
-  horloge remise à zéro après un test raté). L'arbre ne LIT PAS le champ
+  → `_naitre` immédiat ; sinon dormante, re-lecture uniquement sur
+  événement de voisinage (voir bloc RE-TEST SUR ÉVÉNEMENT ci-dessus).
+  L'arbre ne LIT PAS le champ
   à cette étape (mort par compétition = chantier suivant). Retrait des
   prospects levés directement dans le registre `AttenteSeuil` par id
   stable. Zéro comptage de voisins. Champ inline dans l'esprit de
