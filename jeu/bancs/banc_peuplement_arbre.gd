@@ -212,6 +212,18 @@ var _banque_graines: RefCounted = null
 # compteur et compare a la `prochaine_echeance` de chaque prospect.
 var _temps_banque: float = 0.0
 
+# INDEX D'ECHEANCES TRIE DECROISSANT (le plus mur en dernier) : cote banc,
+# pour eviter le balayage complet de `prospects()` chaque frame juste
+# pour trouver les rares graines mures. `_pop_mur()` accede au minimum en
+# O(1) via pop_back ; `_planifier()` insere en O(log N + N shift) via
+# bsearch_custom. Chaque entree = [echeance:float, id:int]. Comparateur
+# decroissant : `a[0] > b[0]` (echeances hautes en tete d'array, mures
+# en queue). Aucune modification de attente_seuil.gd (une entree y garde
+# sa `prochaine_echeance` en cle libre -- la seule source de verite reste
+# le prospect ; cet index est un CACHE ordonne synchronise a la main aux
+# points ou une echeance est posee ou repoussee).
+var _echeances_triees: Array = []
+
 # INDEX SPATIAL DU COEUR. Chaque arbre est inscrit a la naissance et retire
 # a la mort ; aucun lecteur du monde dans ce banc aujourd'hui, l'inscription
 # prepare les mecaniques qui interrogeront le voisinage. `structure_simple`
@@ -821,45 +833,71 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	# Phase de re-test tiree seedee dans [0, _intervalle_retest[ : chaque
 	# graine a son propre reveil, la banque ne pulse plus au meme tic.
 	var phase: float = _rng.randf() * _intervalle_retest
-	_banque_graines.ajouter({
+	var echeance: float = _temps_banque + phase
+	var id: int = _banque_graines.ajouter({
 		"position": Vector3(pos_x, Y_SOL, pos_z),
-		"prochaine_echeance": _temps_banque + phase,
+		"prochaine_echeance": echeance,
 	})
+	if id >= 0:
+		_planifier(id, echeance)
 
-# Re-test DESYNCHRONISE : chaque graine a sa propre `prochaine_echeance`
-# (temps monde cumule dans `_temps_banque`). Ce tick, on incremente
-# `_temps_banque` puis on ne teste QUE les prospects dont l'echeance est
-# atteinte. Les autres attendent leur tour -- fin des pulses.
+# Re-test DESYNCHRONISE ET ORDONNE : `_echeances_triees` (Array trie
+# decroissant [echeance, id], voir en-tete du champ) rend le prospect le
+# plus mur en O(1) via `back()` / `pop_back()`. On ne balaie plus la
+# banque a chaque frame -- on pop tant que l'echeance en queue est <=
+# `_temps_banque`, puis on s'arrete a la premiere non-mure.
 #
-# `attente_seuil.avancer` n'est plus appele : il compare une valeur lue a
-# un seuil unique, il ne connait pas les cles libres du prospect
-# (`prochaine_echeance`). On itere `prospects()` directement (documente
-# comme lecture ; on ne mute pas la structure -- on mute seulement le
-# champ `prochaine_echeance` de chaque entree, et on retire par id apres
-# la boucle pour ne pas iterer un Dictionary en mutation).
+# Gate applique a chaque graine pop : trouee saturee -> re-echeance
+# repoussee et RE-PLANIFIEE dans l'index (nouvelle position triee).
+# Couvert encore ombrage -> meme geste. Sinon : retirer de la banque et
+# naitre. Le gate mord pendant la rafale grace a l'ajout live dans
+# _monde a chaque _naitre.
 #
-# Gate applique aux levees comme pour _deposer_graine : trouee saturee
-# -> re-echeance repoussee, graine reste en banque. Couvert encore
-# ombrage -> meme geste. Le gate mord pendant la rafale grace a l'ajout
-# live dans _monde a chaque _naitre.
+# NOTE ORDRE : l'ordre des naissances intra-tick est desormais celui des
+# echeances croissantes (avant : ordre d'insertion Dictionary). Le RNG
+# consomme dans `_naitre` (facteurs variance) voit donc un ordre
+# different -- la foret reste reproductible a seed egal mais differe de
+# la version pre-optim.
 func _tick_banque(pas: float) -> void:
-	if _banque_graines == null or _banque_graines.nombre() == 0:
+	if _echeances_triees.is_empty():
 		return
 	_temps_banque += pas
-	var a_retirer: Array = []
 	var prospects: Dictionary = _banque_graines.prospects()
-	for id in prospects:
-		var entree: Dictionary = prospects[id]
-		if float(entree.get("prochaine_echeance", 0.0)) > _temps_banque:
+	while not _echeances_triees.is_empty():
+		var derniere: Array = _echeances_triees[-1]
+		if float(derniere[0]) > _temps_banque:
+			break
+		_echeances_triees.pop_back()
+		var id: int = int(derniere[1])
+		if not prospects.has(id):
 			continue
+		var entree: Dictionary = prospects[id]
 		var pos: Vector3 = entree.position
 		if _trouee_saturee(pos.x, pos.z) or _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
-			entree["prochaine_echeance"] = float(entree.prochaine_echeance) + _intervalle_retest
+			var nouvelle: float = float(entree.prochaine_echeance) + _intervalle_retest
+			entree["prochaine_echeance"] = nouvelle
+			_planifier(id, nouvelle)
 			continue
-		a_retirer.append({"id": int(id), "pos": pos})
-	for r in a_retirer:
-		_banque_graines.retirer(int(r.id))
-		_naitre(r.pos.x, r.pos.z)
+		_banque_graines.retirer(int(id))
+		_naitre(pos.x, pos.z)
+
+# Insere [echeance, id] dans `_echeances_triees` de sorte que l'array
+# reste trie DECROISSANT par echeance (le plus mur en dernier, accessible
+# via pop_back). Comparateur `_comparer_echeances` (a > b) coherent avec
+# bsearch_custom en ordre decroissant.
+func _planifier(id: int, echeance: float) -> void:
+	var entree: Array = [echeance, id]
+	var pos: int = _echeances_triees.bsearch_custom(entree, _comparer_echeances)
+	_echeances_triees.insert(pos, entree)
+
+# Tri DECROISSANT : rend true si `a` doit venir AVANT `b` = si son
+# echeance est STRICTEMENT PLUS GRANDE. Egalites resolues par id
+# (croissant) pour un ordre total stable -- deux prospects poses au meme
+# tick avec la meme phase ne sont pas frequents mais possibles.
+func _comparer_echeances(a: Array, b: Array) -> bool:
+	if float(a[0]) != float(b[0]):
+		return float(a[0]) > float(b[0])
+	return int(a[1]) < int(b[1])
 
 # Double la capacite des deux MultiMesh et des colonnes. Reallouer
 # `instance_count` REINITIALISE le tampon GPU des deux MultiMesh : toute

@@ -4522,9 +4522,11 @@ en-tête).
   `attente_seuil` ne la lit jamais), tirée seedée dans
   `[0, _intervalle_retest[` à l'entrée en banque via `_rng` et
   repoussée de `_intervalle_retest` à chaque re-test raté. Le tick de
-  banque itère `prospects()` directement et ne teste QUE les graines
-  dont l'échéance est atteinte contre `_temps_banque` — les levées
-  s'étalent au lieu de pulser en vagues. `avancer` n'est plus utilisé
+  banque pop les graines mûres depuis un INDEX D'ÉCHÉANCES trié
+  décroissant (`_echeances_triees`, `bsearch_custom` à l'insertion,
+  `pop_back` O(1) au tick) — plus de balayage complet de la banque par
+  frame, seules les rares graines effectivement mûres sont testées ;
+  les autres attendent leur tour. `avancer` n'est plus utilisé
   (il compare à un seuil unique, il ignore l'échéance par graine).
   Chaque graine échue passe par le MÊME gate de trouée que la
   germination directe
