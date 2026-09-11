@@ -71,6 +71,7 @@ const Senescence = preload("res://scripts/senescence.gd")
 const Stade = preload("res://scripts/stade.gd")
 const FacteurVariance = preload("res://scripts/facteur_variance.gd")
 const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
+const Monde = preload("res://scripts/monde.gd")
 const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
@@ -168,6 +169,19 @@ var _couvert: Dictionary = {}
 var _banque_graines: RefCounted = null
 var _temps_depuis_retest: float = 0.0
 
+# INDEX SPATIAL DU COEUR. Chaque arbre est inscrit a la naissance et retire
+# a la mort ; aucun lecteur du monde dans ce banc aujourd'hui, l'inscription
+# prepare les mecaniques qui interrogeront le voisinage. `structure_simple`
+# = true : les arbres ne bougent pas, chaque case reste un Array<id> a plat.
+# Patron : banc_peuplement.gd:318-322.
+var _monde: RefCounted = null
+# Interface avec _monde : monde.gd:ajouter exige un Dictionary avec `id` et
+# `position`. Une entree par slot vivant ({id, position}), null pour un slot
+# libre. Les colonnes restent la source de verite pour age/stade/geometrie ;
+# ce dict ne sert QU'A ajouter/retirer dans monde. Sans retrait, la mort
+# resterait un fantome compte a sa place dans toute requete de densite.
+var _choses_arbre: Array = []
+
 var _rng := RandomNumberGenerator.new()
 
 # Table combinee passee a Objet.fabriquer : paquet `dynamique` (extrait de
@@ -187,6 +201,8 @@ var _tampon: Dictionary = {}
 func _ready() -> void:
 	_charger_reglages_locaux()
 	_rng.seed = _graine_rng
+	_monde = Monde.new()
+	_monde.structure_simple = true
 	_monter_scene()
 	if _joueur_actif:
 		_monter_joueur()
@@ -407,6 +423,7 @@ func _monter_population() -> void:
 	_slot_stade.resize(_capacite)
 	_facteur_croissance.resize(_capacite)
 	_facteur_longevite.resize(_capacite)
+	_choses_arbre.resize(_capacite)
 	_slots_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
@@ -419,6 +436,7 @@ func _monter_population() -> void:
 		_slot_stade[i] = -1
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
+		_choses_arbre[i] = null
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
@@ -605,6 +623,14 @@ func _lire_couvert(pos_x: float, pos_z: float) -> float:
 	return float(_couvert.get(cle, 0.0))
 
 func _liberer_slot(i: int) -> void:
+	# Retrait structurel du monde (consequence: sans lui, la mort resterait
+	# un fantome compte a sa place dans toute requete de densite ; risque:
+	# gates de densite futurs trop stricts ; plan B: aucun -- monde.gd:retirer
+	# alarme sur id absent, defaut impossible ici).
+	var chose = _choses_arbre[i]
+	if chose != null:
+		_monde.retirer(chose.id)
+		_choses_arbre[i] = null
 	var index: int = _slot_stade[i]
 	if index >= 0:
 		_deposer_ombrage(_positions_x[i], _positions_z[i], index + 1, -1)
@@ -645,6 +671,13 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
 	_facteur_croissance[i] = FacteurVariance.tirer(_rng, _variance_croissance)
 	_facteur_longevite[i] = FacteurVariance.tirer(_rng, _variance_longevite)
+	# Inscription dans monde (consequence: monde.gd:ajouter exige un
+	# Dictionary avec `id` et `position` structurels ; plan B: aucun --
+	# rollback = ne pas ajouter le champ, mais le retirer de _liberer_slot
+	# echouerait alors sur push_error id absent).
+	var chose := {"id": "arbre_%d" % i, "position": position}
+	_choses_arbre[i] = chose
+	_monde.ajouter(chose, "arbre", position)
 	_ecrire_slot(i, _ages[i])
 	_population += 1
 
@@ -718,6 +751,7 @@ func _agrandir_capacite() -> void:
 	_slot_stade.resize(nouvelle)
 	_facteur_croissance.resize(nouvelle)
 	_facteur_longevite.resize(nouvelle)
+	_choses_arbre.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
@@ -731,6 +765,7 @@ func _agrandir_capacite() -> void:
 		_slot_stade[i] = -1
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
+		_choses_arbre[i] = null
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
