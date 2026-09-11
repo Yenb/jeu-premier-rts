@@ -4511,7 +4511,15 @@ en-tête).
   Callable de lecture de couvert — le mécanisme ne connaît ni le champ
   ni le contenu, il compare la valeur lue à `_seuil_couvert` (sens
   `"en_dessous"`) et rend les prospects réalisables ; le banc les
-  retire du registre et fait `_naitre`. GERMINATION VIA CHAMP DE COUVERT :
+  passe par le MÊME gate de trouée que la germination directe
+  (`_trouee_saturee` : `_monde.choses_dans_rayon(pos, rayon_trouee).size()
+  <= trouee_max_voisins`, patron `jeu/plantes/vegetation.gd:trouee_suffisante`).
+  Une graine dont le couvert est bon mais la trouée saturée RESTE en
+  banque (pas de `retirer`) ; seules celles qui naissent vraiment sont
+  retirées. Les rejets nés plus tôt dans la même rafale de banque sont
+  déjà dans `_monde` (ajout live à chaque `_naitre`) et comptent
+  naturellement — même effet que le paramètre `nouvelles` de
+  `vegetation.gd`, sans dict temporaire. GERMINATION VIA CHAMP DE COUVERT :
   chaque arbre ÉCRIT son ombrage dans un champ scalaire par case
   (`_couvert` = Dictionary `Vector2i` → float, cote `_taille_case`) — au
   stade N il couvre les cases dans un carré de

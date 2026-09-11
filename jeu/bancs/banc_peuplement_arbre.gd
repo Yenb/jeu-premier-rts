@@ -123,6 +123,12 @@ var _stade_fertile_fin: int = 7
 var _taille_case: float = 20.0
 var _seuil_couvert: float = 0.5
 var _intervalle_retest: float = 5.0
+# Gate d'etablissement au point de chute (patron vegetation.gd:trouee_suffisante) :
+# rayon en unites monde, seuil en nombre d'arbres. La graine tombee compte
+# les arbres deja inscrits dans _monde autour de son point d'arrivee ;
+# au-dela du seuil, elle est perdue.
+var _rayon_trouee: float = 4.0
+var _trouee_max_voisins: int = 1
 var _ombrage_par_stade: Array = []
 var _variance_croissance: float = 0.3
 var _variance_longevite: float = 0.3
@@ -258,6 +264,10 @@ func _charger_reglages_locaux() -> void:
 		_seuil_couvert = float(donnees.seuil_couvert)
 	if donnees.has("intervalle_retest"):
 		_intervalle_retest = float(donnees.intervalle_retest)
+	if donnees.has("rayon_trouee"):
+		_rayon_trouee = float(donnees.rayon_trouee)
+	if donnees.has("trouee_max_voisins"):
+		_trouee_max_voisins = int(donnees.trouee_max_voisins)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
 	if donnees.has("variance_croissance"):
@@ -700,9 +710,25 @@ func _semer_pres_de(parent_index: int) -> void:
 	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
 	_deposer_graine(pos_x, pos_z)
 
+# UNIQUE definition du gate de trouee (patron vegetation.gd:trouee_suffisante).
+# Appele par _deposer_graine ET _tick_banque -- si les deux chemins
+# divergent, la banque contourne le gate et les salves synchronisees
+# reviennent par la banque. Les rejets nes plus tot dans la meme frame ou
+# la meme rafale de banque sont deja dans _monde (ajout live a chaque
+# _naitre) et comptes ici -- meme effet que le dict `nouvelles` de
+# vegetation.gd sans dict temporaire.
+func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
+	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
+	return _monde.choses_dans_rayon(arrivee, _rayon_trouee).size() > _trouee_max_voisins
+
 func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
 	if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
+		return
+	# Rejet trouee sur germination directe = graine perdue (pas de banque :
+	# la banque attend que le COUVERT baisse, pas que la densite physique
+	# se degage).
+	if _trouee_saturee(pos_x, pos_z):
 		return
 	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
@@ -714,7 +740,13 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 # seraient bien plus reactives). Quand le temps accumule atteint la
 # cadence, on appelle `_banque_graines.avancer` avec le Callable de
 # lecture de couvert, seuil = `_seuil_couvert`, sens = "en_dessous" ; les
-# entrees rendues sont retirees du registre et donnent lieu a naissance.
+# entrees rendues passent ENSUITE par le meme gate de trouee que
+# `_deposer_graine`. Une graine dont le couvert est bon MAIS la trouee
+# saturee RESTE en banque (elle est deja dormante, elle attend) --
+# `attente_seuil.avancer` ne retire rien, seul l'appelant retire ; on ne
+# retire donc que celles qui naissent vraiment. Le gate mord pendant la
+# rafale de banque grace a l'ajout live dans _monde a chaque _naitre :
+# la graine i+1 voit deja la graine i qui vient de lever.
 func _tick_banque(pas: float) -> void:
 	if _banque_graines == null or _banque_graines.nombre() == 0:
 		return
@@ -726,6 +758,8 @@ func _tick_banque(pas: float) -> void:
 		Callable(self, "_lire_couvert_v3"), _seuil_couvert, "en_dessous")
 	for r in realisables:
 		var pos: Vector3 = r.entree.position
+		if _trouee_saturee(pos.x, pos.z):
+			continue
 		_banque_graines.retirer(int(r.id))
 		_naitre(pos.x, pos.z)
 
@@ -735,8 +769,12 @@ func _tick_banque(pas: float) -> void:
 func _lire_couvert_v3(pos: Vector3) -> float:
 	return _lire_couvert(pos.x, pos.z)
 
-# Double la capacite des deux MultiMesh et des colonnes. Godot conserve
-# les transforms existantes lors d'une augmentation de instance_count.
+# Double la capacite des deux MultiMesh et des colonnes. Reallouer
+# `instance_count` REINITIALISE le tampon GPU des deux MultiMesh : toute
+# transform ecrite avant est perdue. Il faut donc reecrire, dans le meme
+# appel, TOUS les slots (vivants avec leur vraie transform, libres a
+# echelle nulle) avant qu'une frame ne passe -- sinon les arbres
+# existants clignotent par vagues au doublement (8, 16, 32...).
 # Cout amorti O(1) par naissance grace au doublement.
 func _agrandir_capacite() -> void:
 	var ancienne: int = _capacite
@@ -769,3 +807,12 @@ func _agrandir_capacite() -> void:
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
+	# Reecriture des slots preexistants dont le buffer GPU vient d'etre
+	# reinitialise par le changement d'instance_count ci-dessus.
+	var j: int = 0
+	while j < ancienne:
+		if _libres[j] == 1:
+			_ecrire_slot_vide(j)
+		else:
+			_ecrire_slot(j, _ages[j])
+		j += 1
