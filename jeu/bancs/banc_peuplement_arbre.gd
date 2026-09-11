@@ -145,6 +145,28 @@ var _rayon_competition: float = 3.0
 var _competition_max_voisins: int = 3
 var _temps_competition: float = 0.0
 
+# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE. La sim des arbres (age,
+# stade, reproduction, competition, ecriture MultiMesh) tourne a
+# `_cadence_simulation_hz` fois par seconde, jamais a 60 fps. Le
+# joueur (physics_process) garde son framerate plein -- cette cadence
+# ne s'applique qu'a la boucle du banc. Le delta accumule (`_temps_depuis_maj`)
+# est passe en `pas` a la passe de sim : proba stochastique / cadence
+# banque / cadence competition dependent de `pas`, donc leur cadence
+# moyenne reste identique quel que soit ce reglage.
+var _cadence_simulation_hz: float = 4.0
+var _temps_depuis_maj: float = 0.0
+
+# EPSILON pour skipper l'ecriture MultiMesh quand les 4 params
+# interpoles n'ont pas bouge (arbre au stade 8 fige, croissance lente
+# entre deux passes). Comparaison composante par composante. En unites
+# monde -- 0.001 m = 1 mm, invisible a l'oeil, sur.
+const EPS_TAILLE := 0.001
+
+# Cache des derniers params ecrits par slot (Vector4). Sentinel
+# Vector4(INF,...) = "jamais ecrit" -> premier ecrit force. _ecrire_slot
+# compare et skippe les deux set_instance_transform si delta < EPS.
+var _derniere_params: Array = []
+
 # GATE DE TROUEE ELARGI AUTOUR DES GROS. Un voisin adulte (stade dans
 # [_stade_gros_min, _stade_gros_max]) "occupe" un rayon egal a
 # `_rayon_trouee * _facteur_trouee_gros` -- une graine tombee a cette
@@ -331,6 +353,8 @@ func _charger_reglages_locaux() -> void:
 		_stade_gros_max = int(donnees.stade_gros_max)
 	if donnees.has("facteur_trouee_gros"):
 		_facteur_trouee_gros = float(donnees.facteur_trouee_gros)
+	if donnees.has("cadence_simulation_hz"):
+		_cadence_simulation_hz = float(donnees.cadence_simulation_hz)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
 	if donnees.has("croissance_min"):
@@ -504,6 +528,7 @@ func _monter_population() -> void:
 	_facteur_croissance.resize(_capacite)
 	_facteur_longevite.resize(_capacite)
 	_choses_arbre.resize(_capacite)
+	_derniere_params.resize(_capacite)
 	_slots_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
@@ -516,6 +541,7 @@ func _monter_population() -> void:
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
 		_choses_arbre[i] = null
+		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
@@ -523,7 +549,16 @@ func _monter_population() -> void:
 func _process(delta: float) -> void:
 	if _stades.size() != 8 or _durees.size() != 7 or _stades_config_partagee.is_empty():
 		return
-	var pas: float = delta
+	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
+	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
+	# la passe -- proba stochastique / cadence banque / competition
+	# dependent de `pas`, donc leur cadence moyenne reste identique.
+	_temps_depuis_maj += delta
+	var intervalle_maj: float = 1.0 / _cadence_simulation_hz if _cadence_simulation_hz > 0.0 else 0.0
+	if _temps_depuis_maj < intervalle_maj:
+		return
+	var pas: float = _temps_depuis_maj
+	_temps_depuis_maj = 0.0
 	if _mode_test_rapide:
 		pas *= 4.0
 	# Capacite figee en debut de boucle.
@@ -636,6 +671,17 @@ func _calc_params(age: float) -> Vector4:
 # a echelle nulle -> instance invisible.
 func _ecrire_slot(i: int, age: float) -> void:
 	var p: Vector4 = _calc_params(age)
+	# SKIP GPU si les 4 params sont inchanges au-dela d'EPS_TAILLE
+	# (arbre au stade 8 fige, croissance imperceptible entre deux
+	# passes). La sentinelle Vector4(INF,...) posee au liberer/vide
+	# force le premier ecrit apres naissance ou reagrandissement.
+	var ancien: Vector4 = _derniere_params[i]
+	if absf(p.x - ancien.x) < EPS_TAILLE \
+			and absf(p.y - ancien.y) < EPS_TAILLE \
+			and absf(p.z - ancien.z) < EPS_TAILLE \
+			and absf(p.w - ancien.w) < EPS_TAILLE:
+		return
+	_derniere_params[i] = p
 	var ht: float = p.x
 	var lt: float = p.y
 	var hf: float = p.z
@@ -718,6 +764,7 @@ func _liberer_slot(i: int) -> void:
 	if chose != null:
 		_monde.retirer(chose.id)
 		_choses_arbre[i] = null
+	_derniere_params[i] = Vector4(INF, INF, INF, INF)
 	var index: int = _slot_stade[i]
 	if index >= 0:
 		_deposer_ombrage(_positions_x[i], _positions_z[i], index + 1, -1)
@@ -919,6 +966,7 @@ func _agrandir_capacite() -> void:
 	_facteur_croissance.resize(nouvelle)
 	_facteur_longevite.resize(nouvelle)
 	_choses_arbre.resize(nouvelle)
+	_derniere_params.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
@@ -932,16 +980,21 @@ func _agrandir_capacite() -> void:
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
 		_choses_arbre[i] = null
+		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
 	# Reecriture des slots preexistants dont le buffer GPU vient d'etre
-	# reinitialise par le changement d'instance_count ci-dessus.
+	# reinitialise par le changement d'instance_count ci-dessus. Le cache
+	# `_derniere_params` doit etre INVALIDE pour chaque slot vivant, sinon
+	# `_ecrire_slot` skippe l'ecrit croyant que rien n'a bouge -- alors que
+	# le buffer GPU vient d'etre efface.
 	var j: int = 0
 	while j < ancienne:
 		if _libres[j] == 1:
 			_ecrire_slot_vide(j)
 		else:
+			_derniere_params[j] = Vector4(INF, INF, INF, INF)
 			_ecrire_slot(j, _ages[j])
 		j += 1
 

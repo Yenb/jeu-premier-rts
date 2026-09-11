@@ -4498,8 +4498,15 @@ en-tête).
   largeur 1) ; feuillage : `CylinderMesh` top_radius=0), un slot
   par arbre au MÊME index dans les deux. Colonnes parallèles indexées par
   slot (`_ages`, `_horloges`, `_libres`, `_positions_x`, `_positions_z`) ;
-  hot path = UNE boucle par frame sur les slots vivants, écriture directe
-  des deux `set_instance_transform`, aucune allocation heap dans la boucle
+  hot path = UNE boucle par PASSE DE SIM (cadence lente
+  `cadence_simulation_hz`, défaut 4 Hz — pas 60 fps ; le delta accumulé
+  est passé en `pas` à la boucle, cadence moyenne des mécaniques
+  inchangée). Le joueur (`_physics_process`) garde 60 fps. En plus,
+  `_ecrire_slot` skippe le `set_instance_transform` quand les 4 params
+  interpolés n'ont pas bougé au-delà d'un epsilon (1 mm) — cache
+  `_derniere_params` par slot, sentinelle `INF` posée au libérer /
+  agrandir pour forcer le premier écrit. Écriture directe des deux
+  `set_instance_transform`, aucune allocation heap dans la boucle
   (`_calc_params` renvoie un `Vector4`, `Transform3D`/`Basis` sont des
   types valeur). Croissance interpolée sur 8 stades (paramètres et 7
   durées de segment dans le JSON — les 4 tailles de chaque stade
