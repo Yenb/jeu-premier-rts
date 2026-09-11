@@ -143,7 +143,12 @@ var _cadence_competition: float = 5.0
 var _stade_competition_max: int = 4
 var _rayon_competition: float = 3.0
 var _competition_max_voisins: int = 3
-var _temps_competition: float = 0.0
+# Curseur d'anneau : chaque passe de sim avance de N slots (formule
+# temps : n_slots = ceil(capacite * pas / _cadence_competition)) de
+# sorte que chaque slot soit visite exactement une fois par periode
+# `_cadence_competition` en moyenne. Cout reparti, plus de pic
+# concentre sur une frame.
+var _curseur_competition: int = 0
 
 # CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE. La sim des arbres (age,
 # stade, reproduction, competition, ecriture MultiMesh) tourne a
@@ -607,10 +612,7 @@ func _process(delta: float) -> void:
 		_ecrire_slot(i, age_i)
 		i += 1
 	_tick_banque(pas)
-	_temps_competition += pas
-	if _temps_competition >= _cadence_competition:
-		_temps_competition = 0.0
-		_passe_competition()
+	_avancer_competition(pas)
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
@@ -1000,23 +1002,42 @@ func _agrandir_capacite() -> void:
 
 # Passe rare d'auto-eclaircie. Ne tourne QU'a la cadence lente
 # `_cadence_competition` (pas dans la boucle 60 fps). Seuls les arbres
-# vulnerables (stade + 1 <= _stade_competition_max) sont testes -- les
-# adultes dominent et survivent. Collecte les morts a retirer APRES
-# l'iteration : _liberer_slot mute _libres et pourrait perturber le
-# balayage en cours. Chaque mort passe par _liberer_slot (retrait de
-# monde, retrait ombrage, slot recycle) -- meme geste que la mort de
-# vieillesse.
-func _passe_competition() -> void:
+# PASSE ETALEE EN ANNEAU : au lieu d'un balayage complet toutes les
+# `_cadence_competition` secondes (pic de ~13 ms mesure), chaque passe
+# de sim visite `n_slots = ceil(capacite * pas / _cadence_competition)`
+# slots depuis `_curseur_competition`. Sur une periode de
+# `_cadence_competition` cumulee, la somme visite `_capacite` slots =
+# chaque slot exactement une fois en moyenne, sans jamais concentrer
+# le cout sur une frame.
+#
+# Seuls les vulnerables (stade + 1 <= _stade_competition_max) sont
+# testes -- les adultes dominent. Mortalite immediate au sein de la
+# boucle : `_liberer_slot` mute _libres[i] mais on prend `i =
+# _curseur_competition` puis on avance ; les autres slots ne sont pas
+# affectes par ce tour, aucune collecte differee necessaire.
+#
+# NOTE ORDRE : l'ancienne passe balayait i=0..cap dans l'ordre a
+# chaque appel ; le nouveau curseur avance en anneau. L'ordre des
+# tirages RNG (mortalite) change -- la foret reste reproductible a seed
+# egal mais differe de la version pre-etalement.
+func _avancer_competition(pas: float) -> void:
 	var cap: int = _capacite
-	var a_liberer: Array = []
-	var i: int = 0
-	while i < cap:
+	if cap == 0 or _cadence_competition <= 0.0:
+		return
+	var n_slots: int = int(ceil(float(cap) * pas / _cadence_competition))
+	if n_slots < 1:
+		n_slots = 1
+	if n_slots > cap:
+		n_slots = cap
+	var count: int = 0
+	while count < n_slots:
+		var i: int = _curseur_competition
+		_curseur_competition = (_curseur_competition + 1) % cap
+		count += 1
 		if _libres[i] == 1:
-			i += 1
 			continue
 		var index: int = _slot_stade[i]
 		if index < 0 or index + 1 > _stade_competition_max:
-			i += 1
 			continue
 		var pos := Vector3(_positions_x[i], Y_SOL, _positions_z[i])
 		var voisins: int = _monde.choses_dans_rayon(pos, _rayon_competition).size()
@@ -1025,7 +1046,4 @@ func _passe_competition() -> void:
 			var proba: float = clampf(
 				float(exces) / float(maxi(1, _competition_max_voisins)), 0.0, 1.0)
 			if _rng.randf() < proba:
-				a_liberer.append(i)
-		i += 1
-	for slot in a_liberer:
-		_liberer_slot(int(slot))
+				_liberer_slot(i)

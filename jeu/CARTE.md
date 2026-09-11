@@ -4581,9 +4581,13 @@ en-tête).
   fertilité / géométrie ; le second multiplie le seuil de mort. Casse la
   synchronisation des cohortes — tailles panachées dans un même
   bosquet, morts étalées dans le temps au lieu de trous d'un bloc.
-  MORT PAR COMPÉTITION (auto-éclaircie) : `_passe_competition`,
-  cadencée à `cadence_competition` secondes (jamais dans la boucle
-  60 fps). Seuls les arbres jeunes (stade ≤ `stade_competition_max`,
+  MORT PAR COMPÉTITION (auto-éclaircie) ÉTALÉE EN ANNEAU :
+  `_avancer_competition` appelée à chaque passe de sim, avance un
+  curseur `_curseur_competition` de
+  `n_slots = ceil(capacite * pas / cadence_competition)` slots — sur
+  une période `cadence_competition` cumulée, exactement `capacite`
+  slots sont visités = chaque slot une fois en moyenne, sans pic
+  concentré sur une frame. Seuls les arbres jeunes (stade ≤ `stade_competition_max`,
   défaut 4) sont testés — les adultes dominent et survivent. Chaque
   vulnérable compte ses voisins dans `rayon_competition` via
   `_monde.choses_dans_rayon` ; si le compte dépasse
