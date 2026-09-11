@@ -54,15 +54,14 @@
 # davantage un gate, jamais l'ouvrir. Le declencheur ecarte
 # (cadence fixe) : voir en-tete de `_tick_banque`.
 #
-# MECANIQUES ENCORE INLINE (manque framework a signaler, ne PAS bricoler
-# davantage) :
-# - CHAMP DE COUVERT (`_couvert`, Dictionary Vector2i -> float) : chaque
-#   arbre y ecrit son ombrage a la naissance, retire a la mort, redepose
-#   au changement de stade ; la graine y LIT en O(1). `scripts/champ.gd`
-#   est une force qui deplace, pas un champ scalaire lisible ;
-#   `jeu/Outil de jeu/champ_spatial.gd` est un compte entier +1/-1
-#   uniforme. Un mecanisme cadre `champ_saturation.gd` (float, depot
-#   signe sur carre de cases) manque au coeur.
+# CHAMP DE COUVERT : delegue au mecanisme framework
+# `scripts/champ_saturation.gd` (depot signe a decroissance Chebyshev
+# lineaire, retrait symetrique, nettoyage sous epsilon). Le banc detient
+# une instance `_couvert`, y ecrit a la naissance/mort/changement de
+# stade (`_deposer_ombrage`), la graine y LIT en O(1) (`_lire_couvert`).
+# Le rayon d'ombre est lu en METRES depuis `ombrage_par_stade`, converti
+# en cases par le mecanisme via `_taille_case` : portee physique
+# independante de la finesse du quadrillage.
 #
 # VARIANCES INDIVIDUELLES : `scripts/facteur_variance.gd` (mecanisme cadre
 # neuf, teste hors domaine) deja en place. `_facteur_croissance[i]`
@@ -82,6 +81,7 @@ const FacteurVariance = preload("res://scripts/facteur_variance.gd")
 const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 const Monde = preload("res://scripts/monde.gd")
 const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
+const ChampSaturation = preload("res://scripts/champ_saturation.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
 const CHEMIN_TYPES := "res://data/types.json"
@@ -98,10 +98,6 @@ const POS_INITIALE := Vector2(0.0, 0.0)
 
 # Cadence du releve population imprime dans la console (~1/s a 60 fps).
 const CADENCE_RELEVE_POPULATION_FRAMES := 60
-
-# Seuil de nettoyage d'une case du champ dont le cumul retombe sous cette
-# valeur absolue (evite les zeros residuels de float qui polluent le Dict).
-const EPS_COUVERT := 1.0e-6
 
 # Nom du type local declare dans le catalogue combine et resolu par
 # `Objet.fabriquer`.
@@ -289,9 +285,11 @@ var _chrono_n_naissance: int = 0
 var _chrono_n_expiration: int = 0
 var _chrono_n_ticks: int = 0
 
-# Champ scalaire d'ombrage par case (Vector2i -> float). Une entree est
-# supprimee quand son cumul retombe sous EPS_COUVERT.
-var _couvert: Dictionary = {}
+# Champ scalaire d'ombrage par case, delegue au mecanisme framework
+# scripts/champ_saturation.gd (depot signe a decroissance Chebyshev
+# lineaire, retrait symetrique, nettoyage sous epsilon). Instancie au
+# _ready.
+var _couvert: RefCounted = null
 
 # Banque de graines dormantes deleguee au mecanisme framework
 # scripts/attente_seuil.gd : le banc enregistre chaque graine comme
@@ -398,6 +396,7 @@ func _ready() -> void:
 	_charger_reglages_locaux()
 	_calculer_rayon_reveil()
 	_rng.seed = _graine_rng
+	_couvert = ChampSaturation.new()
 	_monde = Monde.new()
 	_monde.structure_simple = true
 	_monter_scene()
@@ -779,7 +778,7 @@ func _process(delta: float) -> void:
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
 		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
-		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.size()])
+		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.nombre_cases()])
 		# CHRONOS TEMPORAIRES : releve puis reset. A retirer une fois le
 		# poste dominant identifie.
 		print("[arbre.tick_banque] ticks=%d total=%d us | setup=%d us / n=%d | query=%d us / n=%d | gate=%d us / n=%d | naissance=%d us / n=%d | expiration=%d us / n=%d" % [
@@ -927,55 +926,25 @@ func _appliquer_couleur_slot(i: int, stade_index: int) -> void:
 	_mm_tronc.set_instance_color(i, col_tronc)
 	_mm_feuillage.set_instance_color(i, col_feuillage)
 
-# CHAMP DE COUVERT -- depot/retrait strictement symetrique (signe -1 =
-# retrait). `stade` = numero de stade (1..N, index+1) pour lire
-# `_ombrage_par_stade[stade-1]`. La magnitude est le PIC CENTRAL ; a
-# distance d de la case centrale (d = max(|dcx|, |dcz|), norme Chebyshev),
-# l'apport est mag * (1 - d/rayon) -- decroissance lineaire, plein au
-# centre, zero au bord (case skippee). Rayon 0 : seule la case centrale
-# recoit mag. Le retrait rejoue exactement la meme formule (deterministe
-# pour (pos, stade) fixes) : invariant strict, aucune derive du champ.
-# Case dont le cumul retombe sous EPS_COUVERT est retiree du Dict.
+# DEPOT D'OMBRAGE VIA champ_saturation.gd -- signe -1 = retrait strictement
+# symetrique. `stade` = numero de stade (1..N, index+1) pour lire
+# `_ombrage_par_stade[stade-1]` : rayon_ombre_m (metres) + magnitude. Le
+# mecanisme framework porte la loi (decroissance Chebyshev lineaire,
+# nettoyage sous epsilon, conversion metres->cases par ceil).
 func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> void:
 	if stade < 1 or stade > _ombrage_par_stade.size():
 		return
 	var conf: Dictionary = _ombrage_par_stade[stade - 1]
-	# Portee lue en METRES, convertie en rayon de cases au moment de la
-	# pose : la portee physique reste stable quand `_taille_case` change.
-	# Jamais stockee -- la seule source de verite est le JSON en metres.
+	# Portee lue en METRES, convertie en rayon de cases par le mecanisme
+	# framework `champ_saturation.gd` au moment de la pose : la portee
+	# physique reste stable quand `_taille_case` change. La seule source
+	# de verite est le JSON en metres.
 	var rayon_m: float = float(conf.get("rayon_ombre_m", 0.0))
-	var rayon: int = 0
-	if _taille_case > 0.0 and rayon_m > 0.0:
-		rayon = int(ceil(rayon_m / _taille_case))
-	var mag: float = float(conf.get("magnitude", 0.0)) * float(signe)
-	if mag == 0.0:
-		return
-	var cx0: int = floori(pos_x / _taille_case)
-	var cz0: int = floori(pos_z / _taille_case)
-	var dcx: int = -rayon
-	while dcx <= rayon:
-		var dcz: int = -rayon
-		while dcz <= rayon:
-			var d: int = maxi(absi(dcx), absi(dcz))
-			var poids: float = 1.0
-			if rayon > 0:
-				poids = 1.0 - float(d) / float(rayon)
-			if poids <= 0.0:
-				dcz += 1
-				continue
-			var apport: float = mag * poids
-			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
-			var v: float = float(_couvert.get(cle, 0.0)) + apport
-			if absf(v) < EPS_COUVERT:
-				_couvert.erase(cle)
-			else:
-				_couvert[cle] = v
-			dcz += 1
-		dcx += 1
+	var mag: float = float(conf.get("magnitude", 0.0))
+	_couvert.deposer(pos_x, pos_z, rayon_m, _taille_case, mag, signe)
 
 func _lire_couvert(pos_x: float, pos_z: float) -> float:
-	var cle: Vector2i = Vector2i(floori(pos_x / _taille_case), floori(pos_z / _taille_case))
-	return float(_couvert.get(cle, 0.0))
+	return _couvert.lire(pos_x, pos_z, _taille_case)
 
 func _liberer_slot(i: int) -> void:
 	# Retrait structurel du monde (consequence: sans lui, la mort resterait

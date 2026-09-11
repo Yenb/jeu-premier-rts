@@ -4622,11 +4622,13 @@ en-tête).
   L'arbre ne LIT PAS le champ
   à cette étape (mort par compétition = chantier suivant). Retrait des
   prospects levés directement dans le registre `AttenteSeuil` par id
-  stable. Zéro comptage de voisins. Champ inline dans l'esprit de
-  `jeu/Outil de jeu/champ_spatial.gd` (canevas CLAUDE.md § LOCALITÉ
-  SPATIALE, pattern (a) champ scalaire) — variante float+signée à
-  dépôt sur un carré de cases, alors que le partagé gère un compte
-  entier +1/−1 uniforme. VARIANCES INDIVIDUELLES À BORNES INDÉPENDANTES : chaque arbre tire à
+  stable. Zéro comptage de voisins. Champ délégué au mécanisme framework
+  `scripts/champ_saturation.gd` (canevas CLAUDE.md § LOCALITÉ
+  SPATIALE, pattern (a) champ scalaire) — float+signée à
+  dépôt sur un carré de cases, décroissance Chebyshev linéaire,
+  retrait strictement symétrique. Frontière avec `jeu/Outil de jeu/
+  champ_spatial.gd` (compte entier +1/−1 uniforme) et
+  `scripts/champ.gd` (force qui déplace). VARIANCES INDIVIDUELLES À BORNES INDÉPENDANTES : chaque arbre tire à
   la naissance deux facteurs (croissance et longévité) via
   `scripts/facteur_variance.gd:tirer_entre` (mécanisme framework, test
   hors domaine), stockés dans `_facteur_croissance` et

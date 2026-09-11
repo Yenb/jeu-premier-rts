@@ -981,6 +981,24 @@ fichier. Test : `test_somme.gd`.
 - **Frontière avec `fuite.gd`** : celui-ci ne décide rien et rend une
   DIRECTION consommée par un mouvement d'agent ; `champ.gd` déplace lui-même.
 
+### `scripts/champ_saturation.gd` — champ scalaire signé à décroissance Chebyshev (ÉCART FRAMEWORK)
+- **Rôle** : dépôt d'un scalaire float SIGNÉ sur les cases d'une grille XZ
+  autour d'un centre, avec décroissance linéaire en norme Chebyshev (plein
+  au centre, zéro au bord). Dépôt et retrait strictement symétriques :
+  `deposer(...)` avec signe opposé restaure l'état initial.
+- **Fonctions** : `deposer(centre_x, centre_z, rayon_m, taille_case,
+  magnitude, signe)` ; `lire(x, z, taille_case)` → float ; `nombre_cases()`
+  → int (relevé, jamais lu par la logique).
+- **AUCUN NOM DU MONDE** : ni « arbre », ni « ombre », ni « spore ». Le
+  test hors domaine `test_champ_saturation.gd` prouve la généricité (symétrie
+  signée, décroissance Chebyshev, cumul, indépendance à `taille_case`).
+- **Frontière avec `champ.gd`** : celui-ci est une FORCE qui déplace, pas un
+  champ scalaire lisible. Frontière avec `jeu/Outil de jeu/champ_spatial.gd` :
+  compte ENTIER +1/-1 uniforme, pas de décroissance ni de signe float.
+- **ÉCART FRAMEWORK** : ce fichier n'existe pas dans le dépôt Orion, ajouté
+  ici faute d'équivalent générique. Même geste doctrinal que
+  `scripts/monde.gd:retirer` et `scripts/facteur_variance.gd`.
+
 ### `scripts/velocite.gd` — dérivation passive d'une vélocité
 La différence entre deux positions devient une vélocité lisible, une fois par
 tick. `avancer(monde, delta)`. Contrat, pièges et frontières : en-tête du
