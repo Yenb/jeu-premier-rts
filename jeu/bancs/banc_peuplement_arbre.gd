@@ -37,13 +37,14 @@
 # herite de `objet_physique` seul, sans `dynamique` (donc sans `age` ni
 # `stades_config`) ; c'est ce manque qui justifie le type local.
 #
-# BANQUE DE GRAINES DORMANTES : deleguee au mecanisme framework
-# `scripts/attente_seuil.gd`. Le banc enregistre chaque graine comme
-# prospect (position seule) via `_banque_graines.ajouter`, et a la
-# cadence `_intervalle_retest` appelle `_banque_graines.avancer` en
-# fournissant un Callable de lecture de couvert (le mecanisme ne connait
-# ni le champ ni le contenu) ; les prospects rendus realisables sont
-# retires du registre et donnent lieu a `_naitre`.
+# BANQUE DE GRAINES DORMANTES : registre delegue au mecanisme framework
+# `scripts/attente_seuil.gd` (ajouter/retirer/prospects). Le tick de
+# banque itere `prospects()` directement -- chaque graine porte sa
+# propre `prochaine_echeance` (cle libre, `attente_seuil` ne la lit
+# jamais), tiree seedee dans [0, _intervalle_retest[ a l'ajout et
+# repoussee de `_intervalle_retest` a chaque re-test rate. `avancer`
+# n'est plus appele (il compare a un seuil unique, il ne connait pas
+# l'echeance par graine). Les levees s'etalent au lieu de pulser.
 #
 # MECANIQUES ENCORE INLINE (manque framework a signaler, ne PAS bricoler
 # davantage) :
@@ -169,11 +170,18 @@ var _couvert: Dictionary = {}
 
 # Banque de graines dormantes deleguee au mecanisme framework
 # scripts/attente_seuil.gd : le banc enregistre chaque graine comme
-# prospect (position + rien d'autre), l'accumulateur `_temps_depuis_retest`
-# rythme les appels a `avancer` a la cadence `_intervalle_retest` pour
-# preserver le comportement observable de l'ancienne banque en dur.
+# prospect avec `position` ET `prochaine_echeance` (temps monde cumule
+# de son prochain re-test). La phase initiale est tiree seedee dans
+# [0, _intervalle_retest[ a l'ajout, puis avance de `_intervalle_retest`
+# a chaque re-test rate. Consequence : les graines ne se reveillent
+# plus toutes au meme tic, les levees s'etalent au lieu de pulser.
+# `attente_seuil.gd` accepte les cles libres par entree, il ne les lit
+# jamais (voir en-tete de attente_seuil.gd) -- `prochaine_echeance`
+# voyage telle quelle, ce banc la mute en place via `prospects()`.
 var _banque_graines: RefCounted = null
-var _temps_depuis_retest: float = 0.0
+# Temps monde cumule dedie a la banque : chaque _tick_banque avance ce
+# compteur et compare a la `prochaine_echeance` de chaque prospect.
+var _temps_banque: float = 0.0
 
 # INDEX SPATIAL DU COEUR. Chaque arbre est inscrit a la naissance et retire
 # a la mort ; aucun lecteur du monde dans ce banc aujourd'hui, l'inscription
@@ -733,41 +741,48 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 		_naitre(pos_x, pos_z)
 		return
-	_banque_graines.ajouter({"position": Vector3(pos_x, Y_SOL, pos_z)})
+	# Phase de re-test tiree seedee dans [0, _intervalle_retest[ : chaque
+	# graine a son propre reveil, la banque ne pulse plus au meme tic.
+	var phase: float = _rng.randf() * _intervalle_retest
+	_banque_graines.ajouter({
+		"position": Vector3(pos_x, Y_SOL, pos_z),
+		"prochaine_echeance": _temps_banque + phase,
+	})
 
-# Cadence de re-test des prospects : un test par graine tous les
-# `_intervalle_retest` secondes (jamais a chaque frame, sinon les graines
-# seraient bien plus reactives). Quand le temps accumule atteint la
-# cadence, on appelle `_banque_graines.avancer` avec le Callable de
-# lecture de couvert, seuil = `_seuil_couvert`, sens = "en_dessous" ; les
-# entrees rendues passent ENSUITE par le meme gate de trouee que
-# `_deposer_graine`. Une graine dont le couvert est bon MAIS la trouee
-# saturee RESTE en banque (elle est deja dormante, elle attend) --
-# `attente_seuil.avancer` ne retire rien, seul l'appelant retire ; on ne
-# retire donc que celles qui naissent vraiment. Le gate mord pendant la
-# rafale de banque grace a l'ajout live dans _monde a chaque _naitre :
-# la graine i+1 voit deja la graine i qui vient de lever.
+# Re-test DESYNCHRONISE : chaque graine a sa propre `prochaine_echeance`
+# (temps monde cumule dans `_temps_banque`). Ce tick, on incremente
+# `_temps_banque` puis on ne teste QUE les prospects dont l'echeance est
+# atteinte. Les autres attendent leur tour -- fin des pulses.
+#
+# `attente_seuil.avancer` n'est plus appele : il compare une valeur lue a
+# un seuil unique, il ne connait pas les cles libres du prospect
+# (`prochaine_echeance`). On itere `prospects()` directement (documente
+# comme lecture ; on ne mute pas la structure -- on mute seulement le
+# champ `prochaine_echeance` de chaque entree, et on retire par id apres
+# la boucle pour ne pas iterer un Dictionary en mutation).
+#
+# Gate applique aux levees comme pour _deposer_graine : trouee saturee
+# -> re-echeance repoussee, graine reste en banque. Couvert encore
+# ombrage -> meme geste. Le gate mord pendant la rafale grace a l'ajout
+# live dans _monde a chaque _naitre.
 func _tick_banque(pas: float) -> void:
 	if _banque_graines == null or _banque_graines.nombre() == 0:
 		return
-	_temps_depuis_retest += pas
-	if _temps_depuis_retest < _intervalle_retest:
-		return
-	_temps_depuis_retest = 0.0
-	var realisables: Array = _banque_graines.avancer(
-		Callable(self, "_lire_couvert_v3"), _seuil_couvert, "en_dessous")
-	for r in realisables:
-		var pos: Vector3 = r.entree.position
-		if _trouee_saturee(pos.x, pos.z):
+	_temps_banque += pas
+	var a_retirer: Array = []
+	var prospects: Dictionary = _banque_graines.prospects()
+	for id in prospects:
+		var entree: Dictionary = prospects[id]
+		if float(entree.get("prochaine_echeance", 0.0)) > _temps_banque:
 			continue
+		var pos: Vector3 = entree.position
+		if _trouee_saturee(pos.x, pos.z) or _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
+			entree["prochaine_echeance"] = float(entree.prochaine_echeance) + _intervalle_retest
+			continue
+		a_retirer.append({"id": int(id), "pos": pos})
+	for r in a_retirer:
 		_banque_graines.retirer(int(r.id))
-		_naitre(pos.x, pos.z)
-
-# Adapteur pour le Callable passe a `AttenteSeuil.avancer` : le mecanisme
-# framework recoit une position Vector3, le champ de couvert du banc lit
-# en (x, z) plans horizontal.
-func _lire_couvert_v3(pos: Vector3) -> float:
-	return _lire_couvert(pos.x, pos.z)
+		_naitre(r.pos.x, r.pos.z)
 
 # Double la capacite des deux MultiMesh et des colonnes. Reallouer
 # `instance_count` REINITIALISE le tampon GPU des deux MultiMesh : toute

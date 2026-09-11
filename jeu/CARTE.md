@@ -4505,13 +4505,18 @@ en-tête).
   `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
   `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème
   une graine dans un disque uniforme `rayon_graine`. Chaque graine passe par une BANQUE DORMANTE
-  déléguée au mécanisme framework `scripts/attente_seuil.gd` : le banc
-  enregistre chaque graine comme prospect (position seule) et, à la
-  cadence `_intervalle_retest`, appelle `avancer` en fournissant un
-  Callable de lecture de couvert — le mécanisme ne connaît ni le champ
-  ni le contenu, il compare la valeur lue à `_seuil_couvert` (sens
-  `"en_dessous"`) et rend les prospects réalisables ; le banc les
-  passe par le MÊME gate de trouée que la germination directe
+  déléguée au mécanisme framework `scripts/attente_seuil.gd` (registre
+  ajouter/retirer/prospects seul). RE-TEST DÉSYNCHRONISÉ PAR GRAINE :
+  chaque prospect porte sa propre `prochaine_echeance` (clé libre —
+  `attente_seuil` ne la lit jamais), tirée seedée dans
+  `[0, _intervalle_retest[` à l'entrée en banque via `_rng` et
+  repoussée de `_intervalle_retest` à chaque re-test raté. Le tick de
+  banque itère `prospects()` directement et ne teste QUE les graines
+  dont l'échéance est atteinte contre `_temps_banque` — les levées
+  s'étalent au lieu de pulser en vagues. `avancer` n'est plus utilisé
+  (il compare à un seuil unique, il ignore l'échéance par graine).
+  Chaque graine échue passe par le MÊME gate de trouée que la
+  germination directe
   (`_trouee_saturee` : `_monde.choses_dans_rayon(pos, rayon_trouee).size()
   <= trouee_max_voisins`, patron `jeu/plantes/vegetation.gd:trouee_suffisante`).
   Une graine dont le couvert est bon mais la trouée saturée RESTE en
