@@ -122,6 +122,39 @@ const Horloge = preload("res://scripts/horloge.gd")
 
 const CLES_HORLOGE_STRUCTURELLES := ["temps_ecoule", "duree_jour_secondes", "heures_par_jour"]
 
+# AVANCER UN LOT D'AGES en UNE passe : version colonne du meme geste
+# unitaire (age += delta * annees_par_seconde * facteur). Aucune allocation
+# de Dictionary, aucun franchissement de frontiere par entite. Ordre
+# d'operation identique a la version unitaire : (delta * annees_par_seconde)
+# * facteurs[i] -- l'appel unitaire peut se lire comme delta *
+# (annees_par_seconde_effectif), avec annees_par_seconde_effectif =
+# annees_par_seconde * facteurs[i] recompose par l'appelant. Slots libres
+# (libres[i] == 1) : sautes, ages inchanges. Aucun catalogue, aucune
+# horloge : le pose-du-temps-du-monde reste dans la version unitaire
+# `avancer` (banc et manager qui en ont besoin passent leurs entites une
+# a une).
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer les
+# franchissements de frontiere par arbre du banc `jeu/bancs/
+# banc_peuplement_arbre.gd`. Meme geste doctrinal que `retirer()` et que
+# `monde.choses_dans_rayons`.
+static func avancer_lot(ages: PackedFloat32Array, libres: PackedByteArray, delta: float, annees_par_seconde: float, facteurs: PackedFloat32Array) -> void:
+	var n: int = ages.size()
+	if n == 0:
+		return
+	# Ordre exact des multiplications preserve : `delta * (annees_par_seconde
+	# * facteur_i)`, meme sequence que la version unitaire (le banc appelait
+	# `avancer(tampon, delta, annees_par_seconde * facteur_i)` et la fonction
+	# unitaire faisait `age += delta * annees_par_seconde`). La
+	# non-associativite du float 32 imposerait sinon de tolerer un ecart
+	# entre la version lot et la version unitaire.
+	var i: int = 0
+	while i < n:
+		if libres[i] == 0:
+			ages[i] = ages[i] + delta * (annees_par_seconde * facteurs[i])
+		i += 1
+
 static func avancer(entite: Dictionary, delta: float, annees_par_seconde: float, horloge: Dictionary = {}) -> void:
 	var proprietes: Dictionary = entite.get("proprietes", {})
 	if not proprietes.has("age"):

@@ -13,12 +13,12 @@
 # `_facteur_longevite`, `_slots_libres`. La population entiere y vit --
 # aucun Dictionary par arbre.
 #
-# COUCHE LOGIQUE (coeur) : un SEUL Dictionary TAMPON reutilise arbre par
-# arbre pour franchir la frontiere vers les mecanismes du coeur. Le banc
-# remplit le tampon depuis les colonnes de l'arbre i, appelle
-# `Senescence.avancer` (age) puis `Stade.avancer` (stade), relit les deux
-# valeurs mutees vers les colonnes. Zero allocation par arbre dans la
-# boucle : le tampon est alloue UNE fois, ses cles reecrites.
+# COUCHE LOGIQUE (coeur) : franchissement de frontiere en LOT une fois
+# par tick. `Senescence.avancer_lot` mute `_ages` en place ;
+# `Stade.avancer_lot` mute `_slot_stade` (index int, aucun passage par
+# String). La boucle par arbre qui restait pour la detection de
+# transition et le tirage RNG lit directement `_slot_stade_avant` /
+# `_slot_stade` sans jamais reconstruire un Dictionary par entite.
 #
 # COUCHE RENDU (banc) : deux MultiMesh partagees (tronc + feuillage), un
 # slot par arbre au meme index. Le MultiMesh LIT le stade pose par le
@@ -346,6 +346,14 @@ var _transitions_rayon_n: PackedFloat32Array = PackedFloat32Array()
 var _transitions_mag_a: PackedFloat32Array = PackedFloat32Array()
 var _transitions_mag_n: PackedFloat32Array = PackedFloat32Array()
 
+# LOT DE COMPETITION : reutilise appel apres appel de `_avancer_competition`.
+# Deux colonnes paralleles collectees en une passe de l'anneau (positions
+# Vector3 + indices de slot) puis draines par UN appel a
+# `_monde.choses_dans_rayons`. Reutilises tick apres tick (resize/clear
+# au debut de chaque appel a `_avancer_competition`).
+var _competition_positions: Array = []
+var _competition_slots: PackedInt32Array = PackedInt32Array()
+
 # GRILLE SPATIALE PROPRE A LA BANQUE (patron LOCALITE SPATIALE du
 # CLAUDE.md, variante monde-indexe adaptee aux ids stables). Cle =
 # Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
@@ -422,10 +430,6 @@ var _catalogue: Dictionary = {}
 # reference pour toutes les instances). Assignee au premier _naitre.
 var _stades_config_partagee: Array = []
 
-# Dictionary TAMPON reutilise arbre par arbre pour franchir la frontiere
-# vers Senescence.avancer / Stade.avancer. Alloue UNE fois au _ready, ses
-# cles sont reecrites a chaque iteration.
-var _tampon: Dictionary = {}
 
 func _ready() -> void:
 	_charger_reglages_locaux()
@@ -439,7 +443,6 @@ func _ready() -> void:
 		_monter_joueur()
 	_monter_population()
 	_construire_catalogue()
-	_init_tampon()
 	_banque_graines = AttenteSeuil.new()
 	if _stades.size() == 9:
 		_naitre(POS_INITIALE.x, POS_INITIALE.y)
@@ -590,17 +593,6 @@ func _construire_catalogue() -> void:
 	_catalogue[TYPE_ARBRE] = {
 		"herite": ["dynamique"],
 		"stades_config": stades_config,
-	}
-
-func _init_tampon() -> void:
-	_tampon = {
-		"id": "",
-		"position": Vector3.ZERO,
-		"proprietes": {
-			"age": 0.0,
-			"stades_config": [],
-			"stade": "",
-		},
 	}
 
 func _monter_scene() -> void:
@@ -762,6 +754,18 @@ func _process(delta: float) -> void:
 	_transitions_rayon_n.resize(0)
 	_transitions_mag_a.resize(0)
 	_transitions_mag_n.resize(0)
+	# SENESCENCE EN LOT : un seul franchissement de frontiere pour tout le
+	# tick. Mute `_ages` en place, saute les slots libres. Ordre des
+	# multiplications preserve dans le mecanisme (`delta * (aps * facteur)`).
+	Senescence.avancer_lot(_ages, _libres, pas, _annees_par_seconde, _facteur_croissance)
+	# STADE EN LOT : mute `_slot_stade` en place, sans passage par String.
+	# `_slot_stade_avant` capture l'index PRE-tick pour que la detection de
+	# transition et `_liberer_slot` (seuil_mort) lisent bien l'index ANCIEN.
+	# JAMAIS UN RECUL : la mecanique `avancer_lot` respecte l'invariant du
+	# port unitaire (aucun retour arriere), le duplicate ne sert que pour
+	# la comparaison.
+	var _slot_stade_avant: PackedInt32Array = _slot_stade.duplicate()
+	Stade.avancer_lot(_ages, _libres, _slot_stade, _stades_config_partagee)
 	# Capacite figee en debut de boucle.
 	var cap: int = _capacite
 	var i: int = 0
@@ -771,24 +775,19 @@ func _process(delta: float) -> void:
 			continue
 		# Age reel compare au seuil de mort MODULE par la longevite individuelle.
 		var seuil_mort: float = (_duree_croissance_totale + _duree_mort) * _facteur_longevite[i]
-		# FRONTIERE COEUR : remplir le tampon depuis les colonnes de l'arbre i,
-		# appeler Senescence + Stade, relire. Un seul Dictionary vivant, ses
-		# cles reecrites -- aucune allocation par arbre.
-		var tampon_props: Dictionary = _tampon.proprietes
-		tampon_props.age = _ages[i]
-		tampon_props.stades_config = _stades_config_partagee
-		tampon_props.stade = _nom_du_stade(_slot_stade[i])
-		Senescence.avancer(_tampon, pas, _annees_par_seconde * _facteur_croissance[i])
-		Stade.avancer(_tampon)
-		var age_i: float = tampon_props.age
-		_ages[i] = age_i
+		var age_i: float = _ages[i]
 		if age_i >= seuil_mort:
+			# L'arbre meurt AVANT que sa transition de stade prenne effet
+			# (comportement de la version unitaire). On restaure l'index
+			# ancien pour que `_liberer_slot` depose bien -1 sur l'empreinte
+			# du stade ancien, jamais du stade nouvellement franchi.
+			_slot_stade[i] = _slot_stade_avant[i]
 			_liberer_slot(i)
 			i += 1
 			continue
 		# Detection de changement de stade -> maj du champ de couvert.
-		var nouveau_index: int = _index_du_stade_nom(tampon_props.stade)
-		var ancien: int = _slot_stade[i]
+		var ancien: int = _slot_stade_avant[i]
+		var nouveau_index: int = _slot_stade[i]
 		if nouveau_index != ancien:
 			# TRANSITION EN UNE PASSE : un seul appel au champ quand les
 			# deux stades existent (retrait ancien + depot nouveau
@@ -800,7 +799,8 @@ func _process(delta: float) -> void:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien + 1, -1)
 			elif nouveau_index >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
-			_slot_stade[i] = nouveau_index
+			# `_slot_stade[i]` deja mute par `Stade.avancer_lot` a la valeur
+			# `nouveau_index`, plus rien a ecrire ici.
 			# REVEIL SEULEMENT SI DEGAGEMENT : une transition qui augmente
 			# l'ombrage OU fait entrer dans le statut adulte ne peut PAS
 			# ouvrir un gate coince (elle ne peut que le fermer davantage).
@@ -872,23 +872,6 @@ func _process(delta: float) -> void:
 		_chrono_n_naissance = 0
 		_chrono_n_expiration = 0
 		_chrono_n_ticks = 0
-
-# Nom du stade a l'index dans _stades_config_partagee. Index -1 -> "" :
-# aucun stade encore atteint.
-func _nom_du_stade(index: int) -> String:
-	if index < 0 or index >= _stades_config_partagee.size():
-		return ""
-	return _stades_config_partagee[index].get("nom", "")
-
-# Retrouve l'index d'un nom dans _stades_config_partagee (-1 pour ""
-# ou nom absent).
-func _index_du_stade_nom(nom: String) -> int:
-	if nom == "":
-		return -1
-	for i in range(_stades_config_partagee.size()):
-		if _stades_config_partagee[i].get("nom", "") == nom:
-			return i
-	return -1
 
 # Interpolation de taille entre deux entrees consecutives du catalogue
 # `stades` local (rendu, aucun rapport avec stade.gd qui ne pose que le
@@ -1575,8 +1558,8 @@ func _agrandir_capacite() -> void:
 		j += 1
 
 # Passe rare d'auto-eclaircie. Ne tourne QU'a la cadence lente
-# `_cadence_competition` (pas dans la boucle 60 fps). Seuls les arbres
-# PASSE ETALEE EN ANNEAU : au lieu d'un balayage complet toutes les
+# `_cadence_competition` (pas dans la boucle 60 fps). PASSE ETALEE EN
+# ANNEAU : au lieu d'un balayage complet toutes les
 # `_cadence_competition` secondes (pic de ~13 ms mesure), chaque passe
 # de sim visite `n_slots = ceil(capacite * pas / _cadence_competition)`
 # slots depuis `_curseur_competition`. Sur une periode de
@@ -1585,10 +1568,20 @@ func _agrandir_capacite() -> void:
 # le cout sur une frame.
 #
 # Seuls les vulnerables (stade + 1 <= _stade_competition_max) sont
-# testes -- les adultes dominent. Mortalite immediate au sein de la
-# boucle : `_liberer_slot` mute _libres[i] mais on prend `i =
-# _curseur_competition` puis on avance ; les autres slots ne sont pas
-# affectes par ce tour, aucune collecte differee necessaire.
+# testes -- les adultes dominent.
+#
+# REQUETE GROUPEE : la mesure du voisinage passe par UN SEUL appel a
+# `_monde.choses_dans_rayons` sur toutes les positions eligibles, au
+# lieu d'un `choses_dans_rayon` par slot. L'ordre des tirages de
+# mortalite RNG reste celui de l'anneau (foret identique a seed egal).
+# EFFET DE BORD PRESERVE : la version unitaire retirait la mort au fil,
+# donc un slot teste plus tard voyait un voisin de moins si son voisin
+# venait de mourir. Ici la requete groupee est prise AVANT toute mort
+# du tick ; on reproduit le meme compte NET en soustrayant, pour chaque
+# slot testé, les morts precedentes du meme tick presentes dans son
+# batch de voisins (`_competition_morts_du_tick` : Set d'`id` de choses
+# retirees ce tick). Coherent avec le rayon petit (_rayon_competition ~
+# 3 m) qui rend l'effet rare mais preserve.
 #
 # NOTE ORDRE : l'ancienne passe balayait i=0..cap dans l'ordre a
 # chaque appel ; le nouveau curseur avance en anneau. L'ordre des
@@ -1603,6 +1596,9 @@ func _avancer_competition(pas: float) -> void:
 		n_slots = 1
 	if n_slots > cap:
 		n_slots = cap
+	# Premiere passe : collecte des eligibles en ordre d'anneau.
+	_competition_positions.clear()
+	_competition_slots.resize(0)
 	var count: int = 0
 	while count < n_slots:
 		var i: int = _curseur_competition
@@ -1613,11 +1609,34 @@ func _avancer_competition(pas: float) -> void:
 		var index: int = _slot_stade[i]
 		if index < 0 or index + 1 > _stade_competition_max:
 			continue
-		var pos := Vector3(_positions_x[i], Y_SOL, _positions_z[i])
-		var voisins: int = _monde.choses_dans_rayon(pos, _rayon_competition).size()
+		_competition_positions.append(Vector3(_positions_x[i], Y_SOL, _positions_z[i]))
+		_competition_slots.append(i)
+	if _competition_positions.is_empty():
+		return
+	# Requete groupee : UN seul franchissement de frontiere.
+	var voisins_par_slot: Array = _monde.choses_dans_rayons(_competition_positions, _rayon_competition)
+	# Deuxieme passe : mortalite en ordre d'anneau. Soustraction des morts
+	# precedentes du tick pour reproduire l'effet de bord de la version
+	# unitaire (une mort retire son id de `_monde` au fil, un slot teste
+	# plus tard voit un voisin de moins).
+	var morts_du_tick: Dictionary = {}
+	var k: int = 0
+	var m: int = _competition_slots.size()
+	while k < m:
+		var slot: int = _competition_slots[k]
+		var voisins_list: Array = voisins_par_slot[k]
+		var voisins: int = voisins_list.size()
+		if not morts_du_tick.is_empty():
+			for entree in voisins_list:
+				if morts_du_tick.has(entree.chose.id):
+					voisins -= 1
+		k += 1
 		if voisins > _competition_max_voisins:
 			var exces: int = voisins - _competition_max_voisins
 			var proba: float = clampf(
 				float(exces) / float(maxi(1, _competition_max_voisins)), 0.0, 1.0)
 			if _rng.randf() < proba:
-				_liberer_slot(i)
+				var chose = _choses_arbre[slot]
+				if chose != null:
+					morts_du_tick[chose.id] = true
+				_liberer_slot(slot)

@@ -167,20 +167,71 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 			dcz += 1
 		dcx += 1
 
-# LOT DE TRANSITIONS en UNE passe : applique N appels `redeposer` du meme
-# lot, sur des colonnes paralleles (PackedFloat32Array). Ordre = ordre
-# d'insertion dans les colonnes. Meme resultat exact que N appels a
-# `redeposer` dans le meme ordre : chaque cellule accumule les memes
-# apports dans le meme ordre. Toutes les colonnes doivent avoir la meme
-# taille ; taille_case commun a tout le lot.
+# LOT DE TRANSITIONS en UNE passe : applique N transitions sur des
+# colonnes paralleles (PackedFloat32Array). Ordre = ordre d'insertion.
+# Meme resultat exact que N appels a `redeposer` dans le meme ordre.
+# Toutes les colonnes doivent avoir la meme taille ; taille_case commun
+# a tout le lot.
+#
+# LOGIQUE INLINE : le corps de `redeposer` est reproduit ici pour retirer
+# l'appel par transition (~N franchissements de frontiere internes
+# elimines par tick). `redeposer` reste utilisee ailleurs (test d'oracle,
+# appels manager hors boucle) -- duplication assumee, meme discipline
+# que le miroir C++ des fonctions chaudes d'index_spatial.
 func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, anciens_rayons_m: PackedFloat32Array, nouveaux_rayons_m: PackedFloat32Array, taille_case: float, anciennes_magnitudes: PackedFloat32Array, nouvelles_magnitudes: PackedFloat32Array) -> void:
+	if taille_case <= 0.0:
+		return
 	var n: int = centres_x.size()
 	if n == 0:
 		return
 	var k: int = 0
 	while k < n:
-		redeposer(centres_x[k], centres_z[k], anciens_rayons_m[k], nouveaux_rayons_m[k], taille_case, anciennes_magnitudes[k], nouvelles_magnitudes[k])
+		var ancienne_magnitude: float = anciennes_magnitudes[k]
+		var nouvelle_magnitude: float = nouvelles_magnitudes[k]
+		if ancienne_magnitude == 0.0 and nouvelle_magnitude == 0.0:
+			k += 1
+			continue
+		var ancien_rayon_m: float = anciens_rayons_m[k]
+		var nouveau_rayon_m: float = nouveaux_rayons_m[k]
+		var rayon_ancien: int = 0
+		if ancien_rayon_m > 0.0:
+			rayon_ancien = int(ceil(ancien_rayon_m / taille_case))
+		var rayon_nouveau: int = 0
+		if nouveau_rayon_m > 0.0:
+			rayon_nouveau = int(ceil(nouveau_rayon_m / taille_case))
+		var rayon_max: int = maxi(rayon_ancien, rayon_nouveau)
+		var cx0: int = floori(centres_x[k] / taille_case)
+		var cz0: int = floori(centres_z[k] / taille_case)
 		k += 1
+		var dcx: int = -rayon_max
+		while dcx <= rayon_max:
+			var dcz: int = -rayon_max
+			while dcz <= rayon_max:
+				var d: int = maxi(absi(dcx), absi(dcz))
+				var apport: float = 0.0
+				if ancienne_magnitude != 0.0 and d <= rayon_ancien:
+					var poids_a: float = 1.0
+					if rayon_ancien > 0:
+						poids_a = 1.0 - float(d) / float(rayon_ancien)
+					if poids_a > 0.0:
+						apport -= ancienne_magnitude * poids_a
+				if nouvelle_magnitude != 0.0 and d <= rayon_nouveau:
+					var poids_n: float = 1.0
+					if rayon_nouveau > 0:
+						poids_n = 1.0 - float(d) / float(rayon_nouveau)
+					if poids_n > 0.0:
+						apport += nouvelle_magnitude * poids_n
+				if apport == 0.0:
+					dcz += 1
+					continue
+				var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
+				var v: float = float(_champ.get(cle, 0.0)) + apport
+				if absf(v) < EPS_COUVERT:
+					_champ.erase(cle)
+				else:
+					_champ[cle] = v
+				dcz += 1
+			dcx += 1
 
 func lire(x: float, z: float, taille_case: float) -> float:
 	if taille_case <= 0.0:

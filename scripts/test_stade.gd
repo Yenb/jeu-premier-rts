@@ -26,6 +26,8 @@ func _init() -> void:
 	_alarme_sur_age_absent(v)
 	_alarme_sur_stades_config_absent(v)
 	_resumabilite_json_stricte(v)
+	_avancer_lot_equivaut_a_la_boucle_unitaire(v)
+	_avancer_lot_saute_les_libres_et_ne_recule_pas(v)
 	if v.echecs() > 0:
 		quit(1)
 	else:
@@ -115,3 +117,48 @@ func _resumabilite_json_stricte(v) -> void:
 	v.v(relu != null, "JSON.stringify puis parse_string doit reussir sans erreur")
 	v.v(relu.proprietes.stade == e.proprietes.stade,
 		"stade doit survivre identique a l'aller-retour JSON")
+
+# LOT : avancer_lot(ages, libres, stades_actuels_index, stades_config)
+# doit rendre le meme index par entite que la boucle unitaire de
+# `avancer` sur des entites paralleles. Domaine "cristal" pour la
+# genericite.
+func _avancer_lot_equivaut_a_la_boucle_unitaire(v) -> void:
+	var stades_config: Array = _stades_config_invente()
+	var noms: Array = ["", "cristal_dormant", "cristal_actif", "cristal_instable"]
+	# 4 ages : 0.0 (au seuil 0), 5.0 (dormant), 15.0 (actif), 30.0 (instable).
+	var ages_arr: Array = [0.0, 5.0, 15.0, 30.0]
+	# Etat initial : tous au stade -1 (aucun stade encore atteint).
+	var entites: Array = []
+	for i in range(ages_arr.size()):
+		entites.append(_entite("cristal_%d" % i, ages_arr[i], "", stades_config))
+	for i in range(entites.size()):
+		Stade.avancer(entites[i])
+	# Essai lot : colonnes paralleles.
+	var ages: PackedFloat32Array = PackedFloat32Array(ages_arr)
+	var libres: PackedByteArray = PackedByteArray()
+	libres.resize(ages.size())
+	for i in range(libres.size()):
+		libres[i] = 0
+	var index_courant: PackedInt32Array = PackedInt32Array()
+	index_courant.resize(ages.size())
+	for i in range(ages.size()):
+		index_courant[i] = -1
+	Stade.avancer_lot(ages, libres, index_courant, stades_config)
+	for i in range(ages.size()):
+		var nom_oracle: String = entites[i].proprietes.get("stade", "")
+		var index_oracle: int = noms.find(nom_oracle) - 1  # noms[0] = "" -> -1
+		v.v(index_courant[i] == index_oracle,
+			"avancer_lot doit donner le meme index que la boucle unitaire (i=%d : lot=%d oracle=%d nom_oracle=%s)" % [i, index_courant[i], index_oracle, nom_oracle])
+
+# Slots libres : index_courant inchange. Pas de recul (si age chute, on ne
+# revient jamais en arriere -- meme regle que le port unitaire).
+func _avancer_lot_saute_les_libres_et_ne_recule_pas(v) -> void:
+	var stades_config: Array = _stades_config_invente()
+	var ages: PackedFloat32Array = PackedFloat32Array([5.0, 30.0, 0.0])
+	var libres: PackedByteArray = PackedByteArray([0, 1, 0])
+	# Entite 2 : deja au stade 2 (instable), age 0 -> ne doit PAS reculer.
+	var index_courant: PackedInt32Array = PackedInt32Array([-1, 0, 2])
+	Stade.avancer_lot(ages, libres, index_courant, stades_config)
+	v.v(index_courant[0] == 0, "vivant 0 doit avancer au stade 0 (age 5 sous 10)")
+	v.v(index_courant[1] == 0, "libre 1 ne doit PAS bouger (recu %d)" % index_courant[1])
+	v.v(index_courant[2] == 2, "vivant 2 doit rester au stade 2 (jamais reculer, recu %d)" % index_courant[2])

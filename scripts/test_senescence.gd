@@ -44,6 +44,9 @@ func _init() -> void:
 	_l_horloge_est_mondiale_l_age_est_individuel(v)
 	_resumabilite_json_stricte_avec_horloge(v)
 
+	_avancer_lot_equivaut_a_la_boucle_unitaire(v)
+	_avancer_lot_saute_les_libres(v)
+
 	if v.echecs() > 0:
 		quit(1)
 	else:
@@ -214,3 +217,41 @@ func _resumabilite_json_stricte_avec_horloge(v) -> void:
 		"heure_courante est un float nu, il doit survivre identique a l'aller-retour JSON")
 	v.v(relu.proprietes.saison == e.proprietes.saison,
 		"saison est une String nue, elle doit survivre identique a l'aller-retour JSON")
+
+# LOT : avancer_lot(ages, libres, delta, aps, facteurs) doit donner le meme
+# resultat qu'une boucle unitaire de `avancer` sur les memes entites avec
+# `annees_par_seconde` = aps * facteurs[i]. Domaine "cristal" pour la
+# genericite, aucun nom d'Orion.
+func _avancer_lot_equivaut_a_la_boucle_unitaire(v: Verif) -> void:
+	var ages_oracle: Array = [0.0, 12.5, 3.1, 100.0]
+	var facteurs_arr: Array = [1.0, 0.7, 1.4, 2.0]
+	var delta: float = 0.25
+	var aps: float = 0.8
+	# Oracle : appels unitaires par entite avec annees_par_seconde composee.
+	var entites: Array = []
+	for i in range(ages_oracle.size()):
+		entites.append({"id": "cristal_%d" % i, "proprietes": {"age": ages_oracle[i]}})
+	for i in range(entites.size()):
+		Senescence.avancer(entites[i], delta, aps * facteurs_arr[i])
+	# Essai : avancer_lot sur colonnes paralleles.
+	var ages: PackedFloat32Array = PackedFloat32Array(ages_oracle)
+	var libres: PackedByteArray = PackedByteArray()
+	libres.resize(ages.size())
+	for i in range(libres.size()):
+		libres[i] = 0
+	var facteurs: PackedFloat32Array = PackedFloat32Array(facteurs_arr)
+	Senescence.avancer_lot(ages, libres, delta, aps, facteurs)
+	for i in range(ages.size()):
+		var oracle_i: float = float(entites[i].proprietes.age)
+		v.v(is_equal_approx(ages[i], oracle_i),
+			"avancer_lot doit rendre le meme age que la boucle unitaire (i=%d : lot=%f oracle=%f)" % [i, ages[i], oracle_i])
+
+# Slots libres (libres[i]==1) : ages inchanges.
+func _avancer_lot_saute_les_libres(v: Verif) -> void:
+	var ages: PackedFloat32Array = PackedFloat32Array([5.0, 5.0, 5.0])
+	var libres: PackedByteArray = PackedByteArray([0, 1, 0])
+	var facteurs: PackedFloat32Array = PackedFloat32Array([1.0, 1.0, 1.0])
+	Senescence.avancer_lot(ages, libres, 1.0, 1.0, facteurs)
+	v.v(is_equal_approx(ages[0], 6.0), "vivant 0 doit vieillir")
+	v.v(ages[1] == 5.0, "libre 1 ne doit PAS bouger (recu %f)" % ages[1])
+	v.v(is_equal_approx(ages[2], 6.0), "vivant 2 doit vieillir")

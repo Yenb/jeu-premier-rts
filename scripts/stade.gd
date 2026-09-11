@@ -59,6 +59,50 @@ extends RefCounted
 # proprietes.stade est une String nue, proprietes.stades_config un Array de
 # Dictionary a feuilles String/float -- aucun Vector3, aucun Callable.
 
+# AVANCER UN LOT D'INDICES DE STADE en UNE passe : version colonne du
+# meme geste unitaire, sans passage par String. `stades_actuels_index`
+# porte l'index courant (0..stades_config.size()-1, -1 pour « aucun
+# stade encore atteint », meme convention que `_index_du_stade` interne).
+# Pour chaque i vivant, calcule l'index le plus avance dont
+# `stades_config[k].age_seuil <= ages[i]` et mute `stades_actuels_index[i]`
+# a cet index s'il est strictement plus avance que l'index courant --
+# JAMAIS un retour en arriere, meme convention que la version unitaire.
+# Slots libres (libres[i]==1) sautes, aucun etat mute.
+#
+# `stades_config` PARTAGE : passe une seule fois pour tout le lot,
+# meme reference pour toutes les entites (contrat identique au port
+# unitaire qui la lit sur `proprietes.stades_config`).
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer les
+# franchissements de frontiere par arbre du banc `jeu/bancs/
+# banc_peuplement_arbre.gd` et supprimer le round-trip par String
+# (`_nom_du_stade`, `_index_du_stade_nom`). Meme geste doctrinal que
+# `senescence.gd:avancer_lot` et `monde.gd:retirer`.
+static func avancer_lot(ages: PackedFloat32Array, libres: PackedByteArray, stades_actuels_index: PackedInt32Array, stades_config: Array) -> void:
+	var n: int = ages.size()
+	if n == 0:
+		return
+	var m: int = stades_config.size()
+	if m == 0:
+		return
+	var i: int = 0
+	while i < n:
+		if libres[i] == 1:
+			i += 1
+			continue
+		var age: float = ages[i]
+		var index_trouve: int = -1
+		var k: int = 0
+		while k < m:
+			var age_seuil: float = stades_config[k].get("age_seuil", 0.0)
+			if age >= age_seuil:
+				index_trouve = k
+			k += 1
+		if index_trouve > stades_actuels_index[i]:
+			stades_actuels_index[i] = index_trouve
+		i += 1
+
 static func avancer(entite: Dictionary) -> void:
 	var proprietes: Dictionary = entite.get("proprietes", {})
 	if not proprietes.has("age"):

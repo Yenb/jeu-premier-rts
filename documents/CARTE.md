@@ -779,6 +779,11 @@ en-tête du fichier. Test : `test_depense.gd`.
   `annees_par_seconde` est REÇU EN PARAMÈTRE, jamais une constante : c'est au
   CÂBLAGE de choisir à quelle vitesse le temps du jeu vieillit ses entités —
   et c'est ce qui rend une simulation accélérée possible sans toucher le cœur.
+- **`avancer_lot(ages, libres, delta, annees_par_seconde, facteurs)`**
+  (ÉCART FRAMEWORK, tracé dans le fichier) : version colonne du même geste,
+  mute `ages: PackedFloat32Array` en place, saute `libres[i]==1`. Ordre
+  strict des multiplications `delta * (annees_par_seconde * facteurs[i])`
+  → résultat float bit à bit identique à la boucle unitaire.
 - **`horloge` FACULTATIF** = ce monde n'a pas d'horloge : aucune écriture,
   aucune alarme. CAS DU COUPLE : chaque clé devient STRUCTURELLE dès que le
   Dictionary est fourni. **L'ÂGE AVANCE TOUJOURS**, horloge cassée ou non —
@@ -792,6 +797,11 @@ en-tête du fichier. Test : `test_depense.gd`.
   arbre passent par le même mécanisme, seules les données diffèrent.
 - **Fonction** : `avancer(entite)`. NE REÇOIT AUCUN CATALOGUE : la table des
   stades vit sur l'entité.
+- **`avancer_lot(ages, libres, stades_actuels_index, stades_config)`**
+  (ÉCART FRAMEWORK, tracé dans le fichier) : version colonne, mute
+  `stades_actuels_index: PackedInt32Array` en place, aucun passage par
+  String. Pour chaque i vivant, calcule l'index le plus avancé dont
+  `stades_config[k].age_seuil <= ages[i]` et n'avance jamais en arrière.
 - **LE STADE NE RECULE JAMAIS**, garanti par comparaison d'INDEX dans la même
   table — jamais par une hypothèse sur le sens de variation de l'âge.
 - **C'est ce qui en fait un NON-OUTIL pour tout cycle** : une saison, un
