@@ -864,29 +864,9 @@ func _process(delta: float) -> void:
 			if degageant:
 				_reveils_positions_x.append(_positions_x[i])
 				_reveils_positions_z.append(_positions_z[i])
-		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu),
-		# CALEE SUR UN TOTAL DE GRAINES PAR VIE. `_intervalle_reprod[i]`
-		# (secondes reelles) est deduit a la naissance de la fenetre
-		# fertile ET du facteur de croissance individuel : un arbre lent
-		# recoit un intervalle plus grand -- ses graines s'espacent
-		# d'autant qu'il est fertile plus longtemps, TOTAL constant a
-		# `_graines_par_vie` pour tous. Cadence moyenne inchangee au sein
-		# d'une vie, instants desynchronises entre individus -- fin des
-		# vagues de cohortes. Au plus une graine par pas et par arbre.
-		# RNG seede : a seed egal, meme foret.
-		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
-			var intervalle_i: float = _intervalle_reprod[i]
-			if intervalle_i > 0.0 and not is_inf(intervalle_i):
-				if _rng.randf() < pas / intervalle_i:
-					# Tirage disque UNIFORME (angle uniforme + rayon = sqrt(u)
-					# * R), fait INLINE ici pour preserver l'ordre RNG exact
-					# entre arbres. La graine est empilee dans le lot ; le
-					# traitement (garde, gate, naitre/banque) se fait en UNE
-					# passe apres la boucle, dans `_semer_lot`.
-					var angle: float = _rng.randf() * TAU
-					var rayon: float = sqrt(_rng.randf()) * _rayon_graine
-					_graines_lot_x.append(_positions_x[i] + cos(angle) * rayon)
-					_graines_lot_z.append(_positions_z[i] + sin(angle) * rayon)
+		# REPRODUCTION extraite du tree loop -> `_reproduire_lot(pas)`
+		# apres les lots de mort/reveil/couvert (place avant `_semer_lot`
+		# qui draine `_graines_lot_*`).
 		i += 1
 	# MORTS DE VIEILLESSE EN LOT : draine les slots dont l'age a franchi
 	# le seuil de mort ce tick. Un seul appel pour tous, meme resultat
@@ -906,6 +886,12 @@ func _process(delta: float) -> void:
 	# reveilles) pour que le couvert reflete l'etat post-tick.
 	if _transitions_x.size() > 0:
 		_couvert.redeposer_lot(_transitions_x, _transitions_z, _transitions_rayon_a, _transitions_rayon_n, _taille_case, _transitions_mag_a, _transitions_mag_n)
+	# REPRODUCTION EN LOT : passe unique sur les vivants (post-mort_lot,
+	# donc les morts du tick sont deja marques `_libres[i] == 1`). Ordre
+	# RNG strictement identique a la version tree-loop : meme sequence
+	# de `_rng.randf()` sur les memes slots dans le meme ordre d'indice.
+	# Empile dans `_graines_lot_*`, draine par `_semer_lot` juste apres.
+	_reproduire_lot(pas)
 	_semer_lot()
 	_tick_banque(pas)
 	_avancer_competition(pas)
@@ -1175,6 +1161,38 @@ func _lire_couvert(pos_x: float, pos_z: float) -> float:
 # mort append sa position dans `_reveils_positions_x/_z`, le reveil
 # groupe qui suit les traite tous. `_liberer_slot` reste utilise par
 # `_avancer_competition` (chemin de mort par competition).
+# REPRODUCTION EN LOT : passe unique sur les vivants apres liberation
+# des morts du tick. RNG STOCHASTIQUE (processus de Poisson par
+# individu) CALEE SUR UN TOTAL DE GRAINES PAR VIE : `_intervalle_reprod[i]`
+# est deduit a la naissance de la fenetre fertile ET du facteur de
+# croissance individuel -- un arbre lent recoit un intervalle plus
+# grand, ses graines s'espacent, TOTAL constant a `_graines_par_vie`
+# pour tous. Cadence moyenne inchangee, instants desynchronises entre
+# individus (fin des vagues de cohortes). Au plus une graine par pas
+# et par arbre. Ordre RNG STRICTEMENT PRESERVE : meme sequence de
+# `randf()` sur les memes slots dans le meme ordre d'indice qu'une
+# boucle unitaire par arbre -- foret identique a seed egal.
+func _reproduire_lot(pas: float) -> void:
+	var cap: int = _capacite
+	if cap == 0:
+		return
+	var i: int = 0
+	while i < cap:
+		if _libres[i] == 1:
+			i += 1
+			continue
+		var age_i: float = _ages[i]
+		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
+			var intervalle_i: float = _intervalle_reprod[i]
+			if intervalle_i > 0.0 and not is_inf(intervalle_i):
+				if _rng.randf() < pas / intervalle_i:
+					# Tirage disque UNIFORME : angle uniforme + rayon = sqrt(u) * R.
+					var angle: float = _rng.randf() * TAU
+					var rayon: float = sqrt(_rng.randf()) * _rayon_graine
+					_graines_lot_x.append(_positions_x[i] + cos(angle) * rayon)
+					_graines_lot_z.append(_positions_z[i] + sin(angle) * rayon)
+		i += 1
+
 func _liberer_morts_vieillesse_lot() -> void:
 	var n: int = _morts_vieillesse_lot.size()
 	if n == 0:
