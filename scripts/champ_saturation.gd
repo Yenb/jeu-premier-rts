@@ -32,6 +32,13 @@ extends RefCounted
 #   deposer(..., ancienne, -1) puis deposer(..., nouvelle, +1). Utile quand
 #   un centre change de magnitude ou de rayon sans bouger de position.
 #
+# redeposer_lot(centres_x, centres_z, anciens_rayons_m, nouveaux_rayons_m,
+#   taille_case, anciennes_magnitudes, nouvelles_magnitudes) : applique en
+#   UN appel un lot de N transitions (PackedFloat32Array paralleles).
+#   Meme resultat exact que N appels a `redeposer` dans le meme ordre.
+#   Reduit les franchissements de frontiere quand un manager de population
+#   a beaucoup de transitions par tick.
+#
 # lire(x, z, taille_case) : rend le cumul de la case (x, z) en float. 0.0 si
 #   la case n'a jamais recu de depot ou a ete nettoyee.
 #
@@ -159,6 +166,21 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 				_champ[cle] = v
 			dcz += 1
 		dcx += 1
+
+# LOT DE TRANSITIONS en UNE passe : applique N appels `redeposer` du meme
+# lot, sur des colonnes paralleles (PackedFloat32Array). Ordre = ordre
+# d'insertion dans les colonnes. Meme resultat exact que N appels a
+# `redeposer` dans le meme ordre : chaque cellule accumule les memes
+# apports dans le meme ordre. Toutes les colonnes doivent avoir la meme
+# taille ; taille_case commun a tout le lot.
+func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, anciens_rayons_m: PackedFloat32Array, nouveaux_rayons_m: PackedFloat32Array, taille_case: float, anciennes_magnitudes: PackedFloat32Array, nouvelles_magnitudes: PackedFloat32Array) -> void:
+	var n: int = centres_x.size()
+	if n == 0:
+		return
+	var k: int = 0
+	while k < n:
+		redeposer(centres_x[k], centres_z[k], anciens_rayons_m[k], nouveaux_rayons_m[k], taille_case, anciennes_magnitudes[k], nouvelles_magnitudes[k])
+		k += 1
 
 func lire(x: float, z: float, taille_case: float) -> float:
 	if taille_case <= 0.0:

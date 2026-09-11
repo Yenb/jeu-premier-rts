@@ -991,7 +991,11 @@ fichier. Test : `test_somme.gd`.
   nouveau_rayon_m, taille_case, ancienne_magnitude, nouvelle_magnitude)`
   — retrait de l'ancienne empreinte et dépôt de la nouvelle en UNE passe
   sur l'union, bit à bit équivalent à `deposer(..., ancienne, -1)` puis
-  `deposer(..., nouvelle, +1)` ; `lire(x, z, taille_case)` → float ;
+  `deposer(..., nouvelle, +1)` ; `redeposer_lot(centres_x, centres_z,
+  anciens_rayons_m, nouveaux_rayons_m, taille_case, anciennes_magnitudes,
+  nouvelles_magnitudes)` — applique un lot de N transitions
+  (`PackedFloat32Array` parallèles) en UN appel, équivalent à N `redeposer`
+  dans le même ordre ; `lire(x, z, taille_case)` → float ;
   `nombre_cases()` → int (relevé, jamais lu par la logique).
 - **AUCUN NOM DU MONDE** : ni « arbre », ni « ombre », ni « spore ». Le
   test hors domaine `test_champ_saturation.gd` prouve la généricité (symétrie
@@ -1020,7 +1024,10 @@ en-tête du fichier. Test : `test_combustible.gd`.
 
 ### `scripts/monde.gd` — requête spatiale
 Le contenant réellement utilisé en jeu : il rend les choses dans un rayon, et
-une chose par son id. `ajouter`, `par_id`, `choses_dans_rayon`. Contrat,
+une chose par son id. `ajouter`, `par_id`, `choses_dans_rayon`,
+`choses_dans_rayons(positions, rayon)` (requête GROUPÉE, ÉCART FRAMEWORK
+tracé dans le fichier — un seul accès au niveau/`inv_arete` pour un lot de
+points, rend un `Array` de listes parallèle à `positions`). Contrat,
 pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
 
 ### `scripts/etat_effectif.gd` — un état écrase ou module une propriété

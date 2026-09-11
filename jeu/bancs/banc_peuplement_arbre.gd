@@ -320,6 +320,32 @@ var _reveils: Dictionary = {}
 var _graines_lot_x: PackedFloat32Array = PackedFloat32Array()
 var _graines_lot_z: PackedFloat32Array = PackedFloat32Array()
 
+# NOUVEAU-NES DU LOT COURANT : positions XZ des graines qui ont naitre
+# depuis le debut du drainage de `_semer_lot`. Reutilises tick apres
+# tick. Utile parce que la requete GROUPEE `_monde.choses_dans_rayons`
+# est prise UNE fois avant toute naissance du lot -- elle ne voit que
+# les arbres deja inscrits. Les nouveau-nes de la meme rafale doivent
+# etre visibles par les graines suivantes pour que le gate de trouee
+# morde comme avant. Scanne lineairement au traitement de chaque
+# candidat suivant.
+var _naissances_lot_x: PackedFloat32Array = PackedFloat32Array()
+var _naissances_lot_z: PackedFloat32Array = PackedFloat32Array()
+
+# LOT DE TRANSITIONS DE STADE, cumule pendant la boucle des arbres et
+# draine par UN seul appel a `_couvert.redeposer_lot` apres la boucle.
+# Six PackedFloat32Array paralleles reutilises tick apres tick
+# (`resize(0)` au debut du tick, aucune allocation en regime) : position
+# XZ + rayon ancien/nouveau (metres) + magnitude ancienne/nouvelle. Les
+# cas signe seul (naissance / mort) restent en appel direct a
+# `_deposer_ombrage` -- seule la transition ancien->nouveau (les deux
+# stades existent) passe par le lot.
+var _transitions_x: PackedFloat32Array = PackedFloat32Array()
+var _transitions_z: PackedFloat32Array = PackedFloat32Array()
+var _transitions_rayon_a: PackedFloat32Array = PackedFloat32Array()
+var _transitions_rayon_n: PackedFloat32Array = PackedFloat32Array()
+var _transitions_mag_a: PackedFloat32Array = PackedFloat32Array()
+var _transitions_mag_n: PackedFloat32Array = PackedFloat32Array()
+
 # GRILLE SPATIALE PROPRE A LA BANQUE (patron LOCALITE SPATIALE du
 # CLAUDE.md, variante monde-indexe adaptee aux ids stables). Cle =
 # Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
@@ -726,6 +752,16 @@ func _process(delta: float) -> void:
 	# fois le regime atteint).
 	_graines_lot_x.resize(0)
 	_graines_lot_z.resize(0)
+	# LOT DE TRANSITIONS DE STADE : meme discipline, videe en debut de
+	# tick. Draine par UN appel a `_couvert.redeposer_lot` apres la
+	# boucle des arbres, avant `_semer_lot` (les graines candidates
+	# lisent alors le couvert a jour).
+	_transitions_x.resize(0)
+	_transitions_z.resize(0)
+	_transitions_rayon_a.resize(0)
+	_transitions_rayon_n.resize(0)
+	_transitions_mag_a.resize(0)
+	_transitions_mag_n.resize(0)
 	# Capacite figee en debut de boucle.
 	var cap: int = _capacite
 	var i: int = 0
@@ -759,7 +795,7 @@ func _process(delta: float) -> void:
 			# fusionnes par `champ_saturation.gd:redeposer`). Cas
 			# naissance/mort : un seul stade existe -> deposer simple.
 			if ancien >= 0 and nouveau_index >= 0:
-				_transitionner_ombrage(_positions_x[i], _positions_z[i], ancien + 1, nouveau_index + 1)
+				_empiler_transition(_positions_x[i], _positions_z[i], ancien + 1, nouveau_index + 1)
 			elif ancien >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien + 1, -1)
 			elif nouveau_index >= 0:
@@ -800,6 +836,13 @@ func _process(delta: float) -> void:
 					_graines_lot_z.append(_positions_z[i] + sin(angle) * rayon)
 		_ecrire_slot(i, age_i)
 		i += 1
+	# LOT DE TRANSITIONS applique en UNE passe : un seul appel au champ
+	# pour toutes les transitions de stade du tick, au lieu de N appels.
+	# Doit tourner AVANT `_semer_lot` (qui lit `_lire_couvert` sur chaque
+	# candidat) et AVANT `_tick_banque` (idem sur les prospects
+	# reveilles) pour que le couvert reflete l'etat post-tick.
+	if _transitions_x.size() > 0:
+		_couvert.redeposer_lot(_transitions_x, _transitions_z, _transitions_rayon_a, _transitions_rayon_n, _taille_case, _transitions_mag_a, _transitions_mag_n)
 	_semer_lot()
 	_tick_banque(pas)
 	_avancer_competition(pas)
@@ -972,23 +1015,22 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 	var mag: float = float(conf.get("magnitude", 0.0))
 	_couvert.deposer(pos_x, pos_z, rayon_m, _taille_case, mag, signe)
 
-# TRANSITION D'OMBRAGE en UNE PASSE : quand un arbre passe du stade
-# `ancien` au stade `nouveau` (tous deux 1..N), delegue a
-# `champ_saturation.gd:redeposer` qui fusionne le retrait de l'ombrage
-# ancien et le depot de l'ombrage nouveau en un seul balayage. Meme
-# resultat exact que deux `_deposer_ombrage` successifs (-1 puis +1).
-# Gates : stades hors bornes ignores (garde miroir de _deposer_ombrage).
-func _transitionner_ombrage(pos_x: float, pos_z: float, ancien: int, nouveau: int) -> void:
+# EMPILE UNE TRANSITION DE STADE dans le lot draine apres la boucle
+# des arbres par `_couvert.redeposer_lot`. Un seul franchissement de
+# frontiere vers le champ pour tout le lot au lieu de N. Gates : stades
+# hors bornes ignores (miroir des gardes de `_deposer_ombrage`).
+func _empiler_transition(pos_x: float, pos_z: float, ancien: int, nouveau: int) -> void:
 	var n: int = _ombrage_par_stade.size()
 	if ancien < 1 or ancien > n or nouveau < 1 or nouveau > n:
 		return
 	var conf_a: Dictionary = _ombrage_par_stade[ancien - 1]
 	var conf_n: Dictionary = _ombrage_par_stade[nouveau - 1]
-	var rayon_a: float = float(conf_a.get("rayon_ombre_m", 0.0))
-	var rayon_n: float = float(conf_n.get("rayon_ombre_m", 0.0))
-	var mag_a: float = float(conf_a.get("magnitude", 0.0))
-	var mag_n: float = float(conf_n.get("magnitude", 0.0))
-	_couvert.redeposer(pos_x, pos_z, rayon_a, rayon_n, _taille_case, mag_a, mag_n)
+	_transitions_x.append(pos_x)
+	_transitions_z.append(pos_z)
+	_transitions_rayon_a.append(float(conf_a.get("rayon_ombre_m", 0.0)))
+	_transitions_rayon_n.append(float(conf_n.get("rayon_ombre_m", 0.0)))
+	_transitions_mag_a.append(float(conf_a.get("magnitude", 0.0)))
+	_transitions_mag_n.append(float(conf_n.get("magnitude", 0.0)))
 
 func _lire_couvert(pos_x: float, pos_z: float) -> float:
 	return _couvert.lire(pos_x, pos_z, _taille_case)
@@ -1083,16 +1125,15 @@ func _index_pour_age(age: float) -> int:
 			trouve = i
 	return trouve
 
-# UNIQUE definition du gate de trouee (patron vegetation.gd:trouee_suffisante).
-# Appele par _semer_lot (germination directe) ET par _tick_banque
-# (une graine reveillee = une requete ciblee a SA position avec
-# rayon_gros). UN SEUL chemin, une seule fonction -- si deux chemins
-# divergeaient, la banque contournerait le gate et les salves
-# reviendraient par elle. Les rejets nes plus tot dans la meme rafale
-# sont deja dans _monde (ajout live a chaque _naitre) : la graine
-# suivante les voit naturellement via `_monde.choses_dans_rayon`, sans
-# liste locale a maintenir -- meme effet que le dict `nouvelles` de
-# vegetation.gd.
+# GATE DE TROUEE PAR REQUETE PONCTUELLE (patron
+# vegetation.gd:trouee_suffisante). Appele par `_tick_banque` (une
+# graine reveillee = une requete ciblee a SA position avec `rayon_gros`).
+# La germination directe (semis d'un lot depuis `_process`) passe par
+# `_trouee_saturee_lot` sur une requete GROUPEE, avec le meme predicat
+# -- les deux chemins gardent des resultats identiques. Les nouveau-nes
+# eventuels de la rafale sont deja dans `_monde` au moment ou
+# `_tick_banque` s'execute (le lot est draine avant), la lecture reste
+# coherente.
 func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
 	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
 	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
@@ -1111,20 +1152,70 @@ func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
 			compte_normal += 1
 	return compte_normal > _trouee_max_voisins
 
+# GATE DE TROUEE VERSION LOT : les voisins existants sont pre-calcules
+# par la requete groupee `_monde.choses_dans_rayons` (UNE frontiere
+# franchie pour tout le lot), les nouveau-nes de la rafale sont scannes
+# lineairement dans `_naissances_lot_x/_z` (petite liste, filtre AABB
+# implicite via `carre_normal`). Meme predicat que `_trouee_saturee`,
+# meme resultat -- l'union des deux listes reproduit la vue de
+# `_monde.choses_dans_rayon` prise apres les naissances precedentes.
+func _trouee_saturee_lot(pos_x: float, pos_z: float, voisins: Array, carre_normal: float) -> bool:
+	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
+	var compte_normal: int = 0
+	for entree in voisins:
+		var chose = entree.chose
+		var slot: int = int(chose.get("slot", -1))
+		var stade_num: int = 0
+		if slot >= 0 and slot < _slot_stade.size():
+			stade_num = _slot_stade[slot] + 1
+		if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
+			return true
+		var pos_voisin: Vector3 = chose.position
+		if arrivee.distance_squared_to(pos_voisin) <= carre_normal:
+			compte_normal += 1
+	# Nouveau-nes du meme lot : tous au stade 0 (jamais adultes), ne
+	# peuvent qu'incrementer `compte_normal`.
+	var m: int = _naissances_lot_x.size()
+	var j: int = 0
+	while j < m:
+		var dx: float = _naissances_lot_x[j] - pos_x
+		var dz: float = _naissances_lot_z[j] - pos_z
+		if dx * dx + dz * dz <= carre_normal:
+			compte_normal += 1
+		j += 1
+	return compte_normal > _trouee_max_voisins
+
 # TRAITEMENT DU LOT DE GRAINES en UNE passe par tick. Appele une fois
 # depuis `_process` apres la boucle des arbres. Draine
 # `_graines_lot_x/_z` (position XZ empilee inline dans la boucle des
-# arbres, ordre RNG preserve). Pour chaque graine : garde-carte, gate
-# de trouee, lecture couvert -> naitre ou banque. L'ordre est celui d'empilement : une
-# graine plus tot dans le lot qui naitre est deja dans `_monde` quand
-# la suivante appelle `_trouee_saturee` (patron `nouvelles` de
-# `vegetation.gd`, sans dict temporaire).
+# arbres, ordre RNG preserve). UN SEUL appel a
+# `_monde.choses_dans_rayons` pour tout le lot au lieu d'une requete par
+# graine. Les nouveau-nes de la rafale sont tenus dans
+# `_naissances_lot_x/_z` et scannes lineairement au traitement de chaque
+# candidat suivant, pour que le gate de trouee morde comme avant (patron
+# `nouvelles` de `vegetation.gd`, sans dict temporaire).
 func _semer_lot() -> void:
 	var n: int = _graines_lot_x.size()
+	if n == 0:
+		return
+	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
+	var carre_normal: float = _rayon_trouee * _rayon_trouee
+	# Positions Vector3 pour la requete groupee. Reconstruit chaque tick
+	# (contenu de longueur variable, aucun regime stable a maintenir).
+	var positions_vec3: Array = []
+	positions_vec3.resize(n)
 	var k: int = 0
+	while k < n:
+		positions_vec3[k] = Vector3(_graines_lot_x[k], Y_SOL, _graines_lot_z[k])
+		k += 1
+	var voisins_par_graine: Array = _monde.choses_dans_rayons(positions_vec3, rayon_gros)
+	_naissances_lot_x.resize(0)
+	_naissances_lot_z.resize(0)
+	k = 0
 	while k < n:
 		var pos_x: float = _graines_lot_x[k]
 		var pos_z: float = _graines_lot_z[k]
+		var voisins: Array = voisins_par_graine[k]
 		k += 1
 		# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
 		if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
@@ -1132,10 +1223,12 @@ func _semer_lot() -> void:
 		# Rejet trouee sur germination directe = graine perdue (pas de banque :
 		# la banque attend que le COUVERT baisse, pas que la densite physique
 		# se degage).
-		if _trouee_saturee(pos_x, pos_z):
+		if _trouee_saturee_lot(pos_x, pos_z, voisins, carre_normal):
 			continue
 		if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 			_naitre(pos_x, pos_z)
+			_naissances_lot_x.append(pos_x)
+			_naissances_lot_z.append(pos_z)
 			continue
 		# Entree en banque, DORMANTE : aucune echeance posee. Elle attendra
 		# qu'un evenement de voisinage (mort ou changement de stade) la

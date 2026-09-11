@@ -392,6 +392,61 @@ func choses_dans_rayon(position: Vector3, rayon: float) -> Array:
 # Sur une case subdivisee (Dictionary), itere les 8 sous-cases mais ne descend
 # que dans celles dont l'AABB intersecte la sphere de la query. Chaque descente
 # incremente `cases_lues`, pour que le cout reste visible depuis les tests.
+# REQUETE GROUPEE : pour chaque point de `positions`, meme calcul que
+# `choses_dans_rayon(pos, rayon)`, mais UN seul acces au niveau /
+# `inv_arete` / `cases` pour tout le lot -- economise le hashmap lookup
+# du niveau et les bornes de boucle a chaque point. Rend un Array de
+# meme longueur que `positions`, entree k = liste des voisins autour de
+# `positions[k]`. `rayon` commun a tous les points.
+# ECART FRAMEWORK : ce point d'entree n'existe pas dans le depot Orion,
+# ajoute ici sous l'exception CLAUDE.md § Frontiere pour reduire les
+# franchissements de frontiere lors du semis de lot du banc arbre
+# (voir jeu/bancs/banc_peuplement_arbre.gd:_semer_lot). Meme geste
+# doctrinal que retirer() ci-dessus.
+func choses_dans_rayons(positions: Array, rayon: float) -> Array:
+	var resultat: Array = []
+	resultat.resize(positions.size())
+	if positions.is_empty():
+		return resultat
+	var exposant := _exposant_pour(rayon)
+	var niveau := _niveau(exposant)
+	var cases: Dictionary = niveau.cases
+	var inv_a: float = niveau.inv_arete
+	var carre: float = rayon * rayon
+	var offset := Vector3(rayon, rayon, rayon)
+	var k: int = 0
+	var n: int = positions.size()
+	while k < n:
+		var position: Vector3 = positions[k]
+		var liste: Array = []
+		var basse := _case_pour_inv(position - offset, inv_a)
+		var haute := _case_pour_inv(position + offset, inv_a)
+		requetes += 1
+		for cx in range(basse.x, haute.x + 1):
+			for cy in range(basse.y, haute.y + 1):
+				for cz in range(basse.z, haute.z + 1):
+					cases_lues += 1
+					var cle := Vector3i(cx, cy, cz)
+					var contenu = cases.get(cle, null)
+					if contenu == null:
+						continue
+					if contenu is Array:
+						for id in contenu:
+							var entree: Dictionary = choses[id]
+							var pos_vivante: Vector3 = entree.chose.position
+							candidats_mesures += 1
+							if position.distance_squared_to(pos_vivante) <= carre:
+								liste.append({"chose": entree.chose, "type": entree.type, "position": pos_vivante})
+					else:
+						var arete: float = 1.0 / inv_a
+						var origine := Vector3(cle) * arete
+						_collecter(contenu, origine, arete, position, carre, liste)
+		if trier_par_insertion:
+			liste.sort_custom(_avant)
+		resultat[k] = liste
+		k += 1
+	return resultat
+
 func _collecter(contenu, origine: Vector3, arete: float, centre: Vector3, carre_r: float, out: Array) -> void:
 	if contenu is Array:
 		for id in contenu:

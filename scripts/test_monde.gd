@@ -29,6 +29,7 @@ func _init() -> void:
 	_ajouter_refuse_sans_position_et_refuse_un_id_deja_pris()
 	_retirer_sort_une_chose_de_partout()
 	_choses_dans_couloir_ne_lit_que_les_cases_traversees()
+	_choses_dans_rayons_equivaut_a_la_boucle_ponctuelle()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -38,6 +39,39 @@ func _init() -> void:
 		"retirer() ne laisse aucun fantome derriere lui, et choses_dans_couloir suit " +
 		"la longueur du segment (candidats_mesures borne, jamais N)")
 	quit(0)
+
+# REQUETE GROUPEE : choses_dans_rayons(positions, rayon) doit rendre pour
+# chaque point la meme chose que choses_dans_rayon(pos, rayon), meme
+# resultat (memes ids, meme ordre car aucun trier_par_insertion). Prouve
+# aussi que la longueur de la sortie egale la longueur de l'entree.
+func _choses_dans_rayons_equivaut_a_la_boucle_ponctuelle() -> void:
+	var monde := Monde.new()
+	for i in range(50):
+		var pos := Vector3(float(i) * 2.0, 0.0, float((i * 7) % 20))
+		var c := Objet.fabriquer("chose_%d" % i, "type", pos, {})
+		monde.ajouter(c, "type", c.position)
+	var points: Array = [
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(20.0, 0.0, 10.0),
+		Vector3(80.0, 0.0, 5.0),
+		Vector3(1000.0, 0.0, 0.0),
+	]
+	var rayon: float = 5.0
+	var groupe := monde.choses_dans_rayons(points, rayon)
+	verif.v(groupe.size() == points.size(),
+		"choses_dans_rayons doit rendre autant d'entrees que de points (%d vs %d)" % [groupe.size(), points.size()])
+	var i: int = 0
+	while i < points.size():
+		var ponctuel := monde.choses_dans_rayon(points[i], rayon)
+		var batch: Array = groupe[i]
+		verif.v(ponctuel.size() == batch.size(),
+			"point %d : taille batch %d != ponctuel %d" % [i, batch.size(), ponctuel.size()])
+		var j: int = 0
+		while j < ponctuel.size() and j < batch.size():
+			verif.v(ponctuel[j].chose == batch[j].chose,
+				"point %d j=%d : chose differente entre batch et ponctuel" % [i, j])
+			j += 1
+		i += 1
 
 # COUT DE LA REQUETE COULOIR : N=2000 choses eparpillees en anneau tres loin
 # du segment (y=100+/-50), trois choses PILE sur le segment. Le compteur

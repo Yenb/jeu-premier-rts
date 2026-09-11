@@ -24,6 +24,7 @@ func _init() -> void:
 	_case_sous_epsilon_retiree()
 	_magnitude_nulle_no_op()
 	_redeposer_equivaut_retrait_puis_depot()
+	_redeposer_lot_equivaut_a_redeposer_un_par_un()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -146,3 +147,36 @@ func _redeposer_equivaut_retrait_puis_depot() -> void:
 				ecart_max = maxf(ecart_max, absf(vo - ve))
 		verif.v(ecart_max < eps,
 			"redeposer scenario %s : ecart max %f depasse eps %f" % [str(s), ecart_max, eps])
+
+# Invariant : redeposer_lot(N transitions) == redeposer une par une dans
+# le meme ordre. Trois transitions a des centres distincts avec rayons
+# et magnitudes varies, champ initial non vide pour couvrir le cumul.
+func _redeposer_lot_equivaut_a_redeposer_un_par_un() -> void:
+	var cx: PackedFloat32Array = PackedFloat32Array([0.0, 5.0, -3.0])
+	var cz: PackedFloat32Array = PackedFloat32Array([0.0, 2.0, -4.0])
+	var r_a: PackedFloat32Array = PackedFloat32Array([4.0, 3.0, 0.0])
+	var r_n: PackedFloat32Array = PackedFloat32Array([3.0, 5.0, 4.0])
+	var m_a: PackedFloat32Array = PackedFloat32Array([0.8, 1.0, 0.0])
+	var m_n: PackedFloat32Array = PackedFloat32Array([1.2, 0.6, 0.9])
+	var taille_case: float = 1.0
+	var oracle := ChampSaturation.new()
+	oracle.deposer(10.0, 0.0, 4.0, taille_case, 0.5, 1)
+	var essai := ChampSaturation.new()
+	essai.deposer(10.0, 0.0, 4.0, taille_case, 0.5, 1)
+	# Oracle : N appels a redeposer dans l'ordre.
+	var i: int = 0
+	while i < cx.size():
+		oracle.redeposer(cx[i], cz[i], r_a[i], r_n[i], taille_case, m_a[i], m_n[i])
+		i += 1
+	# Essai : un seul appel a redeposer_lot.
+	essai.redeposer_lot(cx, cz, r_a, r_n, taille_case, m_a, m_n)
+	verif.v(oracle.nombre_cases() == essai.nombre_cases(),
+		"redeposer_lot : nombre_cases oracle=%d essai=%d" % [oracle.nombre_cases(), essai.nombre_cases()])
+	var ecart_max: float = 0.0
+	for dx in range(-10, 11):
+		for dz in range(-10, 11):
+			var vo: float = oracle.lire(float(dx) + 0.5, float(dz) + 0.5, taille_case)
+			var ve: float = essai.lire(float(dx) + 0.5, float(dz) + 0.5, taille_case)
+			ecart_max = maxf(ecart_max, absf(vo - ve))
+	verif.v(ecart_max == 0.0,
+		"redeposer_lot doit rendre le meme champ que N redeposer sequentiels (ecart max %f)" % ecart_max)
