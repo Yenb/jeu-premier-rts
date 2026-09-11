@@ -987,8 +987,12 @@ fichier. Test : `test_somme.gd`.
   au centre, zéro au bord). Dépôt et retrait strictement symétriques :
   `deposer(...)` avec signe opposé restaure l'état initial.
 - **Fonctions** : `deposer(centre_x, centre_z, rayon_m, taille_case,
-  magnitude, signe)` ; `lire(x, z, taille_case)` → float ; `nombre_cases()`
-  → int (relevé, jamais lu par la logique).
+  magnitude, signe)` ; `redeposer(centre_x, centre_z, ancien_rayon_m,
+  nouveau_rayon_m, taille_case, ancienne_magnitude, nouvelle_magnitude)`
+  — retrait de l'ancienne empreinte et dépôt de la nouvelle en UNE passe
+  sur l'union, bit à bit équivalent à `deposer(..., ancienne, -1)` puis
+  `deposer(..., nouvelle, +1)` ; `lire(x, z, taille_case)` → float ;
+  `nombre_cases()` → int (relevé, jamais lu par la logique).
 - **AUCUN NOM DU MONDE** : ni « arbre », ni « ombre », ni « spore ». Le
   test hors domaine `test_champ_saturation.gd` prouve la généricité (symétrie
   signée, décroissance Chebyshev, cumul, indépendance à `taille_case`).

@@ -23,6 +23,7 @@ func _init() -> void:
 	_portee_independante_de_taille_case()
 	_case_sous_epsilon_retiree()
 	_magnitude_nulle_no_op()
+	_redeposer_equivaut_retrait_puis_depot()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -111,3 +112,37 @@ func _magnitude_nulle_no_op() -> void:
 	var c := ChampSaturation.new()
 	c.deposer(0.0, 0.0, 5.0, 1.0, 0.0, 1)
 	verif.v(c.nombre_cases() == 0, "magnitude nulle ne doit rien poser")
+
+# Invariant : redeposer(A -> B) == deposer(A, -1) puis deposer(B, +1) sur
+# le meme champ initial. Trois scenarios : (1) rayons differents non nuls,
+# (2) rayon nul cote ancien (naissance simulee), (3) rayon nul cote nouveau
+# (mort simulee). Tolerance = EPS_COUVERT.
+func _redeposer_equivaut_retrait_puis_depot() -> void:
+	var scenarios: Array = [
+		{"ra": 5.0, "rn": 3.0, "ma": 0.8, "mn": 1.2},
+		{"ra": 0.0, "rn": 4.0, "ma": 0.5, "mn": 1.0},
+		{"ra": 4.0, "rn": 0.0, "ma": 1.0, "mn": 0.3},
+		{"ra": 6.0, "rn": 6.0, "ma": 1.0, "mn": 1.0},
+	]
+	var eps: float = 1.0e-6
+	for s in scenarios:
+		var oracle := ChampSaturation.new()
+		# Champ initial non vide pour couvrir le cas cumul sur existant.
+		oracle.deposer(10.0, 0.0, 4.0, 1.0, 0.5, 1)
+		oracle.deposer(0.0, 0.0, float(s["ra"]), 1.0, float(s["ma"]), -1)
+		oracle.deposer(0.0, 0.0, float(s["rn"]), 1.0, float(s["mn"]), 1)
+		var essai := ChampSaturation.new()
+		essai.deposer(10.0, 0.0, 4.0, 1.0, 0.5, 1)
+		essai.redeposer(0.0, 0.0, float(s["ra"]), float(s["rn"]), 1.0, float(s["ma"]), float(s["mn"]))
+		# Meme nombre de cases (a un pres pour cas limite EPS, tolere).
+		verif.v(absi(oracle.nombre_cases() - essai.nombre_cases()) <= 1,
+			"redeposer scenario %s : ecart nombre_cases oracle=%d essai=%d" % [str(s), oracle.nombre_cases(), essai.nombre_cases()])
+		# Comparaison valeur par valeur sur un carre large autour du centre.
+		var ecart_max: float = 0.0
+		for dx in range(-8, 9):
+			for dz in range(-8, 9):
+				var vo: float = oracle.lire(float(dx) + 0.5, float(dz) + 0.5, 1.0)
+				var ve: float = essai.lire(float(dx) + 0.5, float(dz) + 0.5, 1.0)
+				ecart_max = maxf(ecart_max, absf(vo - ve))
+		verif.v(ecart_max < eps,
+			"redeposer scenario %s : ecart max %f depasse eps %f" % [str(s), ecart_max, eps])

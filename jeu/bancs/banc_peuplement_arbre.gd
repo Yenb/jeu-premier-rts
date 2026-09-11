@@ -740,9 +740,15 @@ func _process(delta: float) -> void:
 		var nouveau_index: int = _index_du_stade_nom(tampon_props.stade)
 		var ancien: int = _slot_stade[i]
 		if nouveau_index != ancien:
-			if ancien >= 0:
+			# TRANSITION EN UNE PASSE : un seul appel au champ quand les
+			# deux stades existent (retrait ancien + depot nouveau
+			# fusionnes par `champ_saturation.gd:redeposer`). Cas
+			# naissance/mort : un seul stade existe -> deposer simple.
+			if ancien >= 0 and nouveau_index >= 0:
+				_transitionner_ombrage(_positions_x[i], _positions_z[i], ancien + 1, nouveau_index + 1)
+			elif ancien >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien + 1, -1)
-			if nouveau_index >= 0:
+			elif nouveau_index >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
 			_slot_stade[i] = nouveau_index
 			# REVEIL SEULEMENT SI DEGAGEMENT : une transition qui augmente
@@ -942,6 +948,24 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 	var rayon_m: float = float(conf.get("rayon_ombre_m", 0.0))
 	var mag: float = float(conf.get("magnitude", 0.0))
 	_couvert.deposer(pos_x, pos_z, rayon_m, _taille_case, mag, signe)
+
+# TRANSITION D'OMBRAGE en UNE PASSE : quand un arbre passe du stade
+# `ancien` au stade `nouveau` (tous deux 1..N), delegue a
+# `champ_saturation.gd:redeposer` qui fusionne le retrait de l'ombrage
+# ancien et le depot de l'ombrage nouveau en un seul balayage. Meme
+# resultat exact que deux `_deposer_ombrage` successifs (-1 puis +1).
+# Gates : stades hors bornes ignores (garde miroir de _deposer_ombrage).
+func _transitionner_ombrage(pos_x: float, pos_z: float, ancien: int, nouveau: int) -> void:
+	var n: int = _ombrage_par_stade.size()
+	if ancien < 1 or ancien > n or nouveau < 1 or nouveau > n:
+		return
+	var conf_a: Dictionary = _ombrage_par_stade[ancien - 1]
+	var conf_n: Dictionary = _ombrage_par_stade[nouveau - 1]
+	var rayon_a: float = float(conf_a.get("rayon_ombre_m", 0.0))
+	var rayon_n: float = float(conf_n.get("rayon_ombre_m", 0.0))
+	var mag_a: float = float(conf_a.get("magnitude", 0.0))
+	var mag_n: float = float(conf_n.get("magnitude", 0.0))
+	_couvert.redeposer(pos_x, pos_z, rayon_a, rayon_n, _taille_case, mag_a, mag_n)
 
 func _lire_couvert(pos_x: float, pos_z: float) -> float:
 	return _couvert.lire(pos_x, pos_z, _taille_case)

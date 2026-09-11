@@ -25,6 +25,13 @@ extends RefCounted
 #   retiree du Dictionary. Rayon 0 (rayon_m nul ou taille_case >= rayon_m) :
 #   seule la case centrale recoit magnitude * signe.
 #
+# redeposer(centre_x, centre_z, ancien_rayon_m, nouveau_rayon_m, taille_case,
+#   ancienne_magnitude, nouvelle_magnitude) : applique en UNE PASSE le retrait
+#   de l'empreinte ancienne (signe -1) et le depot de la nouvelle (signe +1)
+#   sur les cases de l'union des deux empreintes. Bit a bit equivalent a
+#   deposer(..., ancienne, -1) puis deposer(..., nouvelle, +1). Utile quand
+#   un centre change de magnitude ou de rayon sans bouger de position.
+#
 # lire(x, z, taille_case) : rend le cumul de la case (x, z) en float. 0.0 si
 #   la case n'a jamais recu de depot ou a ete nettoyee.
 #
@@ -85,6 +92,65 @@ func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: floa
 				dcz += 1
 				continue
 			var apport: float = mag * poids
+			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
+			var v: float = float(_champ.get(cle, 0.0)) + apport
+			if absf(v) < EPS_COUVERT:
+				_champ.erase(cle)
+			else:
+				_champ[cle] = v
+			dcz += 1
+		dcx += 1
+
+# TRANSITION EN UNE PASSE : applique en un seul balayage le retrait de
+# l'empreinte ANCIENNE (signe -1, ancienne_magnitude, ancien_rayon_m) et
+# le depot de la NOUVELLE (signe +1, nouvelle_magnitude, nouveau_rayon_m).
+# Invariant strict : appeler redeposer(A -> B) est equivalent a deposer(A,
+# signe -1) puis deposer(B, signe +1) sur chaque case (le cumul par case
+# est la SOMME des deux apports, la boucle iteration/erase par case garde
+# la meme relation d'ordre). Le carre balaye a pour rayon
+# max(rayon_ancien_cases, rayon_nouveau_cases) : une case hors de la
+# petite empreinte a un poids nul cote empreinte concernee, seule l'autre
+# contribue. Aucun autre effet de bord : deux appels a deposer restent
+# valides pour les cas ou l'ancien ou le nouveau depot n'existe pas
+# (naissance, mort).
+func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_rayon_m: float, taille_case: float, ancienne_magnitude: float, nouvelle_magnitude: float) -> void:
+	if taille_case <= 0.0:
+		return
+	var rayon_ancien: int = 0
+	if ancien_rayon_m > 0.0:
+		rayon_ancien = int(ceil(ancien_rayon_m / taille_case))
+	var rayon_nouveau: int = 0
+	if nouveau_rayon_m > 0.0:
+		rayon_nouveau = int(ceil(nouveau_rayon_m / taille_case))
+	var rayon_max: int = maxi(rayon_ancien, rayon_nouveau)
+	# Rien a poser ni a retirer : chemin degrade des deux magnitudes nulles.
+	if ancienne_magnitude == 0.0 and nouvelle_magnitude == 0.0:
+		return
+	var cx0: int = floori(centre_x / taille_case)
+	var cz0: int = floori(centre_z / taille_case)
+	var dcx: int = -rayon_max
+	while dcx <= rayon_max:
+		var dcz: int = -rayon_max
+		while dcz <= rayon_max:
+			var d: int = maxi(absi(dcx), absi(dcz))
+			# Contribution retrait (empreinte ancienne).
+			var apport: float = 0.0
+			if ancienne_magnitude != 0.0 and d <= rayon_ancien:
+				var poids_a: float = 1.0
+				if rayon_ancien > 0:
+					poids_a = 1.0 - float(d) / float(rayon_ancien)
+				if poids_a > 0.0:
+					apport -= ancienne_magnitude * poids_a
+			# Contribution depot (empreinte nouvelle).
+			if nouvelle_magnitude != 0.0 and d <= rayon_nouveau:
+				var poids_n: float = 1.0
+				if rayon_nouveau > 0:
+					poids_n = 1.0 - float(d) / float(rayon_nouveau)
+				if poids_n > 0.0:
+					apport += nouvelle_magnitude * poids_n
+			if apport == 0.0:
+				dcz += 1
+				continue
 			var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
 			var v: float = float(_champ.get(cle, 0.0)) + apport
 			if absf(v) < EPS_COUVERT:
