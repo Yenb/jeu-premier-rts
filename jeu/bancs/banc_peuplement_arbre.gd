@@ -148,8 +148,8 @@ var _seuil_couvert: float = 0.5
 # re-tester leurs gates. Calcule apres chargement JSON dans
 # _calculer_rayon_reveil : max du rayon trouee elargi (voisin adulte
 # a `_rayon_trouee * _facteur_trouee_gros`) et de la portee maximale
-# d'ombrage (max_rayon_cases * _taille_case, distance Chebyshev entre
-# cases converti en unites monde). Sur-estimation OK : le reveil est
+# d'ombrage (max des `rayon_ombre_m` du JSON, deja en unites monde --
+# la portee physique de l'ombre est independante de `taille_case`). Sur-estimation OK : le reveil est
 # une invitation a re-tester, pas une decision -- le gate lu par
 # `_tick_banque` reste la seule autorite.
 var _rayon_reveil: float = 0.0
@@ -200,6 +200,12 @@ const EPS_TAILLE := 0.001
 # Vector4(INF,...) = "jamais ecrit" -> premier ecrit force. _ecrire_slot
 # compare et skippe les deux set_instance_transform si delta < EPS.
 var _derniere_params: Array = []
+# Cache du dernier stade dont la couleur a ete ecrite pour le slot.
+# Sentinelle -1 = "jamais ecrit" -> premier ecrit force la couleur.
+# La couleur ne depend que du stade : on ne re-ecrit que si le stade
+# change. Invalide au liberer/agrandir (buffer GPU efface par
+# `instance_count`).
+var _derniere_couleur_stade: PackedInt32Array = PackedInt32Array()
 
 # GATE DE TROUEE ELARGI AUTOUR DES GROS. Un voisin adulte (stade dans
 # [_stade_gros_min, _stade_gros_max]) "occupe" un rayon egal a
@@ -211,6 +217,12 @@ var _stade_gros_min: int = 5
 var _stade_gros_max: int = 7
 var _facteur_trouee_gros: float = 2.0
 var _ombrage_par_stade: Array = []
+# COULEURS PAR STADE (patron `_ombrage_par_stade` : tableau indexe par
+# stade, lu, jamais mute). Une entree Color par stade, meme taille que
+# `_stades`. Repli sur les couleurs actuelles (tronc marron, feuillage
+# vert) si les cles JSON sont absentes : ne casse pas.
+var _couleur_tronc_par_stade: PackedColorArray = PackedColorArray()
+var _couleur_feuillage_par_stade: PackedColorArray = PackedColorArray()
 # Bornes independantes pour les deux facteurs individuels (tires seedes
 # a la naissance via facteur_variance.gd:tirer_entre). Asymetriques
 # possibles : ex. longevite [0.5, 2.0] rend l'arbre du double au moitie
@@ -395,7 +407,7 @@ func _ready() -> void:
 	_construire_catalogue()
 	_init_tampon()
 	_banque_graines = AttenteSeuil.new()
-	if _stades.size() == 8:
+	if _stades.size() == 9:
 		_naitre(POS_INITIALE.x, POS_INITIALE.y)
 
 func _charger_reglages_locaux() -> void:
@@ -437,8 +449,8 @@ func _charger_reglages_locaux() -> void:
 		_stade_fertile_debut = int(donnees.stade_fertile_debut)
 	if donnees.has("stade_fertile_fin"):
 		_stade_fertile_fin = int(donnees.stade_fertile_fin)
-	_stade_fertile_debut = clampi(_stade_fertile_debut, 1, 8)
-	_stade_fertile_fin = clampi(_stade_fertile_fin, _stade_fertile_debut, 8)
+	_stade_fertile_debut = clampi(_stade_fertile_debut, 1, 9)
+	_stade_fertile_fin = clampi(_stade_fertile_fin, _stade_fertile_debut, 9)
 	if donnees.has("taille_case"):
 		_taille_case = float(donnees.taille_case)
 	if donnees.has("seuil_couvert"):
@@ -467,6 +479,19 @@ func _charger_reglages_locaux() -> void:
 		_cadence_simulation_hz = float(donnees.cadence_simulation_hz)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
+	# COULEURS PAR STADE : chaque entree JSON est [r, g, b] (floats 0-1),
+	# convertie en Color. Repli sur (marron, vert) pour tous les stades
+	# si la cle est absente -- comportement pre-fix.
+	_couleur_tronc_par_stade = PackedColorArray()
+	if donnees.has("couleur_tronc_par_stade"):
+		for e in donnees.couleur_tronc_par_stade:
+			var arr: Array = e
+			_couleur_tronc_par_stade.append(Color(float(arr[0]), float(arr[1]), float(arr[2])))
+	_couleur_feuillage_par_stade = PackedColorArray()
+	if donnees.has("couleur_feuillage_par_stade"):
+		for e in donnees.couleur_feuillage_par_stade:
+			var arr: Array = e
+			_couleur_feuillage_par_stade.append(Color(float(arr[0]), float(arr[1]), float(arr[2])))
 	if donnees.has("croissance_min"):
 		_croissance_min = float(donnees.croissance_min)
 	if donnees.has("croissance_max"):
@@ -477,16 +502,16 @@ func _charger_reglages_locaux() -> void:
 		_longevite_max = float(donnees.longevite_max)
 	if donnees.has("annees_par_seconde"):
 		_annees_par_seconde = float(donnees.annees_par_seconde)
-	if _stades.size() != 8:
-		push_error("banc_peuplement_arbre : `stades` doit contenir 8 entrees (recu %d)" % _stades.size())
-	if _durees.size() != 7:
-		push_error("banc_peuplement_arbre : `durees_stades` doit contenir 7 entrees (recu %d)" % _durees.size())
-	if _ombrage_par_stade.size() != 8:
-		push_error("banc_peuplement_arbre : `ombrage_par_stade` doit contenir 8 entrees (recu %d)" % _ombrage_par_stade.size())
+	if _stades.size() != 9:
+		push_error("banc_peuplement_arbre : `stades` doit contenir 9 entrees (recu %d)" % _stades.size())
+	if _durees.size() != 8:
+		push_error("banc_peuplement_arbre : `durees_stades` doit contenir 8 entrees (recu %d)" % _durees.size())
+	if _ombrage_par_stade.size() != 9:
+		push_error("banc_peuplement_arbre : `ombrage_par_stade` doit contenir 9 entrees (recu %d)" % _ombrage_par_stade.size())
 	_duree_croissance_totale = 0.0
 	for d in _durees:
 		_duree_croissance_totale += float(d)
-	# Bornes de fertilite lues du JSON (stade_fertile_debut/fin, 1..8, inclus).
+	# Bornes de fertilite lues du JSON (stade_fertile_debut/fin, 1..9, inclus).
 	_debut_fertilite = 0.0
 	var k: int = 0
 	while k < _stade_fertile_debut - 1 and k < _durees.size():
@@ -524,7 +549,7 @@ func _construire_catalogue() -> void:
 	# connait aucun nom, il ne fait que comparer des index).
 	var stades_config: Array = []
 	var cumul: float = 0.0
-	for i in range(8):
+	for i in range(_stades.size()):
 		stades_config.append({"nom": "s%d" % (i + 1), "age_seuil": cumul})
 		if i < _durees.size():
 			cumul += float(_durees[i])
@@ -603,9 +628,14 @@ func _monter_population() -> void:
 	tronc_mesh.height = 1.0
 	var mat_tronc := StandardMaterial3D.new()
 	mat_tronc.albedo_color = Color(0.35, 0.22, 0.12)
+	# Couleur d'instance -> albedo (paire OBLIGATOIRE avec
+	# `_mm_tronc.use_colors = true` : sans les deux, `set_instance_color`
+	# est ignore silencieusement).
+	mat_tronc.vertex_color_use_as_albedo = true
 	tronc_mesh.material = mat_tronc
 	_mm_tronc = MultiMesh.new()
 	_mm_tronc.transform_format = MultiMesh.TRANSFORM_3D
+	_mm_tronc.use_colors = true
 	_mm_tronc.mesh = tronc_mesh
 	_mm_tronc.instance_count = CAPACITE_INITIALE
 	_noeud_tronc = MultiMeshInstance3D.new()
@@ -623,9 +653,13 @@ func _monter_population() -> void:
 	cone.height = 1.0
 	var mat_feuillage := StandardMaterial3D.new()
 	mat_feuillage.albedo_color = Color(0.15, 0.45, 0.2)
+	# Couleur d'instance -> albedo (paire OBLIGATOIRE avec use_colors,
+	# meme raison que pour le tronc).
+	mat_feuillage.vertex_color_use_as_albedo = true
 	cone.material = mat_feuillage
 	_mm_feuillage = MultiMesh.new()
 	_mm_feuillage.transform_format = MultiMesh.TRANSFORM_3D
+	_mm_feuillage.use_colors = true
 	_mm_feuillage.mesh = cone
 	_mm_feuillage.instance_count = CAPACITE_INITIALE
 	_noeud_feuillage = MultiMeshInstance3D.new()
@@ -644,6 +678,7 @@ func _monter_population() -> void:
 	_intervalle_reprod.resize(_capacite)
 	_choses_arbre.resize(_capacite)
 	_derniere_params.resize(_capacite)
+	_derniere_couleur_stade.resize(_capacite)
 	_slots_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
@@ -658,12 +693,13 @@ func _monter_population() -> void:
 		_intervalle_reprod[i] = INF
 		_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
+		_derniere_couleur_stade[i] = -1
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
 
 func _process(delta: float) -> void:
-	if _stades.size() != 8 or _durees.size() != 7 or _stades_config_partagee.is_empty():
+	if _stades.size() != 9 or _durees.size() != 8 or _stades_config_partagee.is_empty():
 		return
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
@@ -809,7 +845,9 @@ func _calc_params(age: float) -> Vector4:
 			return Vector4(ht, lt, hf, lf)
 		duree_cumulee += duree_segment
 		i += 1
-	var s: Dictionary = _stades[7]
+	# Fallback = dernier stade (mort). Lu dynamiquement pour ne pas
+	# presumer le nombre de stades.
+	var s: Dictionary = _stades[_stades.size() - 1]
 	return Vector4(
 		float(s.tronc.hauteur), float(s.tronc.largeur),
 		float(s.feuillage.hauteur), float(s.feuillage.largeur))
@@ -820,9 +858,20 @@ func _calc_params(age: float) -> Vector4:
 # a echelle nulle -> instance invisible.
 func _ecrire_slot(i: int, age: float) -> void:
 	var p: Vector4 = _calc_params(age)
+	# COULEUR : ecrite si le stade a change depuis la derniere pose du
+	# slot. Traitee AVANT le skip GPU des tailles -- le stade peut
+	# bouger sans que les tailles bougent significativement (transition
+	# adulte -> senescent, tronc identique). Sentinelle -1 = "jamais
+	# ecrit" -> premier appel apres naissance/agrandissement force la
+	# pose. Un arbre fige a son stade final ne re-ecrit sa couleur qu'a
+	# la premiere passe apres avoir atteint ce stade, jamais ensuite.
+	var stade_actuel: int = _slot_stade[i]
+	if _derniere_couleur_stade[i] != stade_actuel:
+		_appliquer_couleur_slot(i, stade_actuel)
+		_derniere_couleur_stade[i] = stade_actuel
 	# SKIP GPU si les 4 params sont inchanges au-dela d'EPS_TAILLE
-	# (arbre au stade 8 fige, croissance imperceptible entre deux
-	# passes). La sentinelle Vector4(INF,...) posee au liberer/vide
+	# (arbre au dernier stade fige, croissance imperceptible entre
+	# deux passes). La sentinelle Vector4(INF,...) posee au liberer/vide
 	# force le premier ecrit apres naissance ou reagrandissement.
 	var ancien: Vector4 = _derniere_params[i]
 	if absf(p.x - ancien.x) < EPS_TAILLE \
@@ -853,13 +902,33 @@ func _ecrire_slot(i: int, age: float) -> void:
 	_mm_feuillage.set_instance_transform(i, t_feuillage)
 
 # Slot libre : les deux instances a echelle nulle (invisibles).
+# Le cache couleur du slot est reset : le prochain _ecrire_slot force
+# la pose de couleur.
 func _ecrire_slot_vide(i: int) -> void:
 	var t := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
 	_mm_tronc.set_instance_transform(i, t)
 	_mm_feuillage.set_instance_transform(i, t)
+	if i < _derniere_couleur_stade.size():
+		_derniere_couleur_stade[i] = -1
+
+# Pose la couleur d'instance du slot pour le stade donne (index 0-based
+# dans `_couleur_*_par_stade`). Repli sur les couleurs marron/vert
+# actuelles si l'index est hors table (JSON absent ou entrees
+# insuffisantes) -- ne casse pas.
+const COULEUR_REPLI_TRONC := Color(0.35, 0.22, 0.12)
+const COULEUR_REPLI_FEUILLAGE := Color(0.15, 0.45, 0.2)
+func _appliquer_couleur_slot(i: int, stade_index: int) -> void:
+	var col_tronc: Color = COULEUR_REPLI_TRONC
+	var col_feuillage: Color = COULEUR_REPLI_FEUILLAGE
+	if stade_index >= 0 and stade_index < _couleur_tronc_par_stade.size():
+		col_tronc = _couleur_tronc_par_stade[stade_index]
+	if stade_index >= 0 and stade_index < _couleur_feuillage_par_stade.size():
+		col_feuillage = _couleur_feuillage_par_stade[stade_index]
+	_mm_tronc.set_instance_color(i, col_tronc)
+	_mm_feuillage.set_instance_color(i, col_feuillage)
 
 # CHAMP DE COUVERT -- depot/retrait strictement symetrique (signe -1 =
-# retrait). `stade` = numero de stade (1..8, index+1) pour lire
+# retrait). `stade` = numero de stade (1..N, index+1) pour lire
 # `_ombrage_par_stade[stade-1]`. La magnitude est le PIC CENTRAL ; a
 # distance d de la case centrale (d = max(|dcx|, |dcz|), norme Chebyshev),
 # l'apport est mag * (1 - d/rayon) -- decroissance lineaire, plein au
@@ -868,12 +937,16 @@ func _ecrire_slot_vide(i: int) -> void:
 # pour (pos, stade) fixes) : invariant strict, aucune derive du champ.
 # Case dont le cumul retombe sous EPS_COUVERT est retiree du Dict.
 func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> void:
-	if stade < 1 or stade > 8:
-		return
-	if _ombrage_par_stade.size() < stade:
+	if stade < 1 or stade > _ombrage_par_stade.size():
 		return
 	var conf: Dictionary = _ombrage_par_stade[stade - 1]
-	var rayon: int = int(conf.get("rayon_cases", 0))
+	# Portee lue en METRES, convertie en rayon de cases au moment de la
+	# pose : la portee physique reste stable quand `_taille_case` change.
+	# Jamais stockee -- la seule source de verite est le JSON en metres.
+	var rayon_m: float = float(conf.get("rayon_ombre_m", 0.0))
+	var rayon: int = 0
+	if _taille_case > 0.0 and rayon_m > 0.0:
+		rayon = int(ceil(rayon_m / _taille_case))
 	var mag: float = float(conf.get("magnitude", 0.0)) * float(signe)
 	if mag == 0.0:
 		return
@@ -1294,8 +1367,10 @@ func _stade_est_degageant(ancien: int, nouveau: int) -> bool:
 	var mag_nouveau: float = float(conf_nouveau.get("magnitude", 0.0))
 	if mag_nouveau < mag_ancien:
 		return true
-	var rayon_ancien: int = int(conf_ancien.get("rayon_cases", 0))
-	var rayon_nouveau: int = int(conf_nouveau.get("rayon_cases", 0))
+	# Comparaison sur la portee en METRES : baisse de rayon_ombre_m = baisse
+	# de l'empreinte, quelle que soit la finesse du quadrillage.
+	var rayon_ancien: float = float(conf_ancien.get("rayon_ombre_m", 0.0))
+	var rayon_nouveau: float = float(conf_nouveau.get("rayon_ombre_m", 0.0))
 	if rayon_nouveau < rayon_ancien:
 		return true
 	return false
@@ -1308,15 +1383,17 @@ func _stade_est_degageant(ancien: int, nouveau: int) -> bool:
 # Chebyshev, convertie en unites monde avec un pas de securite).
 func _calculer_rayon_reveil() -> void:
 	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
-	var max_rayon_cases: int = 0
+	# Portee d'ombrage lue directement en METRES depuis `ombrage_par_stade`
+	# -- independante de `_taille_case`.
+	var max_rayon_ombre_m: float = 0.0
 	for entree in _ombrage_par_stade:
 		if entree is Dictionary:
-			max_rayon_cases = maxi(max_rayon_cases, int(entree.get("rayon_cases", 0)))
-	# Portee ombrage : distance Chebyshev en cases * taille_case, plus une
-	# case de securite pour couvrir un seed a l'oppose de son propre
-	# centre de case et un arbre a l'oppose du sien. Diagonale plane
-	# sqrt(2) : les cases sont carrees dans XZ.
-	var portee_ombrage: float = float(max_rayon_cases + 1) * _taille_case * sqrt(2.0)
+			max_rayon_ombre_m = maxf(max_rayon_ombre_m, float(entree.get("rayon_ombre_m", 0.0)))
+	# Une case de securite (Chebyshev) pour couvrir un seed a l'oppose de
+	# son centre de case et un arbre a l'oppose du sien ; diagonale plane
+	# sqrt(2). La case de securite reste indexee sur `_taille_case` (elle
+	# borne le decalage sub-case, pas la portee physique).
+	var portee_ombrage: float = (max_rayon_ombre_m + _taille_case) * sqrt(2.0)
 	_rayon_reveil = maxf(rayon_gros, portee_ombrage)
 	# Cote des cases de la grille des dormantes = rayon de reveil. Le
 	# rectangle d'un reveil ([pos - R, pos + R]) fait alors au plus 3
@@ -1346,6 +1423,7 @@ func _agrandir_capacite() -> void:
 	_intervalle_reprod.resize(nouvelle)
 	_choses_arbre.resize(nouvelle)
 	_derniere_params.resize(nouvelle)
+	_derniere_couleur_stade.resize(nouvelle)
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
@@ -1361,20 +1439,23 @@ func _agrandir_capacite() -> void:
 		_intervalle_reprod[i] = INF
 		_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
+		_derniere_couleur_stade[i] = -1
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
 	# Reecriture des slots preexistants dont le buffer GPU vient d'etre
-	# reinitialise par le changement d'instance_count ci-dessus. Le cache
-	# `_derniere_params` doit etre INVALIDE pour chaque slot vivant, sinon
-	# `_ecrire_slot` skippe l'ecrit croyant que rien n'a bouge -- alors que
-	# le buffer GPU vient d'etre efface.
+	# reinitialise par le changement d'instance_count ci-dessus. Les caches
+	# `_derniere_params` ET `_derniere_couleur_stade` doivent etre INVALIDES
+	# pour chaque slot vivant, sinon `_ecrire_slot` skippe l'ecrit croyant
+	# que rien n'a bouge -- alors que le buffer GPU (transforms ET couleurs)
+	# vient d'etre efface.
 	var j: int = 0
 	while j < ancienne:
 		if _libres[j] == 1:
 			_ecrire_slot_vide(j)
 		else:
 			_derniere_params[j] = Vector4(INF, INF, INF, INF)
+			_derniere_couleur_stade[j] = -1
 			_ecrire_slot(j, _ages[j])
 		j += 1
 

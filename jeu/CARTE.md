@@ -4480,6 +4480,7 @@ Bancs propres au jeu, hors framework. `banc_peuplement.gd` et
 en-tête).
 
 - **`jeu/bancs/banc_peuplement_arbre.gd`** — population d'arbres statiques
+  **9 stades** (7 adultes + 1 sénescent + 1 mort), 8 durées ;
   qui pousse et se reproduit librement. **Câblage cœur trois couches** :
   stockage de masse en colonnes parallèles (PackedArrays, la population
   entière), logique via un Dictionary TAMPON unique réutilisé arbre par
@@ -4608,8 +4609,10 @@ en-tête).
   chaque arbre ÉCRIT son ombrage dans un champ scalaire par case
   (`_couvert` = Dictionary `Vector2i` → float, cote `_taille_case`) — au
   stade N il couvre les cases dans un carré de
-  `_ombrage_par_stade[N-1].rayon_cases` autour de sa case, chacune
-  recevant `magnitude`. Dépôt à la naissance (`_deposer_ombrage` avec
+  rayon Chebyshev `ceil(_ombrage_par_stade[N-1].rayon_ombre_m /
+  _taille_case)` autour de sa case (portee lue en METRES dans le JSON,
+  convertie en cases a la pose : la portee physique reste stable quand
+  `_taille_case` change), chacune recevant `magnitude`. Dépôt à la naissance (`_deposer_ombrage` avec
   signe +1), retrait à la mort (signe −1, formule identique = champ
   strictement symétrique, pas de dérive), redépôt au changement de stade
   détecté dans `_process` via `_slot_stade` comparé à `_calculer_stade`.
@@ -4652,7 +4655,18 @@ en-tête).
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
   amorti O(1) — patron FREE-LIST de `jeu/PROTOCOLE_MULTIMESH.md` § 1).
-  AUCUN plafond de population. `mode_test_rapide` (JSON) multiplie le pas
+  COULEURS PAR STADE (JSON `couleur_tronc_par_stade` et
+  `couleur_feuillage_par_stade`, tableaux de 9 entrées `[r,g,b]` chacun,
+  patron `ombrage_par_stade`) : les deux MultiMesh ont
+  `use_colors = true` et leurs `StandardMaterial3D`
+  `vertex_color_use_as_albedo = true` (paire OBLIGATOIRE : sans les
+  deux, `set_instance_color` est ignoré silencieusement). Le stade
+  sénescent (8) est rendu tronc noir + feuillage orange réduit, la
+  mort (9) tronc noir + feuillage à zéro. Cache
+  `_derniere_couleur_stade[i]` : la couleur n'est réécrite que si le
+  stade a changé, invalidée au liberer/agrandir (le buffer GPU
+  d'instance_count est réinitialisé au ré-agrandissement, transforms
+  ET couleurs). AUCUN plafond de population. `mode_test_rapide` (JSON) multiplie le pas
   de temps par 4 pour observer le cycle. Tirage de position à la naissance
   = disque uniforme (`angle` uniforme + `rayon = sqrt(u) * rayon_graine` —
   `randf() * R` seul concentrerait la densité au centre). Compteur
