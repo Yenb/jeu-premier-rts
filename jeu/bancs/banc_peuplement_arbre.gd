@@ -354,6 +354,23 @@ var _transitions_mag_n: PackedFloat32Array = PackedFloat32Array()
 var _competition_positions: Array = []
 var _competition_slots: PackedInt32Array = PackedInt32Array()
 
+# POSITIONS DE REVEIL DES DORMANTES, collectees pendant la passe de
+# transition et drainees par UN appel a `_reveiller_dormantes_autour_lot`
+# apres la boucle. Reutilisees tick apres tick (`resize(0)` en debut de
+# tick, aucune allocation en regime). Le reveil est un SET par
+# `_reveils` (Dictionary utilise comme Set d'ids), l'ordre de traitement
+# n'affecte pas le contenu final -- batching sur.
+var _reveils_positions_x: PackedFloat32Array = PackedFloat32Array()
+var _reveils_positions_z: PackedFloat32Array = PackedFloat32Array()
+
+# LOT DE MORTS DE VIEILLESSE, collectees pendant la boucle des arbres et
+# drainees par UN appel a `_liberer_morts_vieillesse_lot` apres la
+# boucle. Reutilisee tick apres tick. Le comportement de `_liberer_slot`
+# est reproduit inline dans le drainage (retrait monde, retrait ombrage,
+# append reveil pos, reset colonnes, libre + slot_libres + _ecrire_slot_vide,
+# decrement _population).
+var _morts_vieillesse_lot: PackedInt32Array = PackedInt32Array()
+
 # GRILLE SPATIALE PROPRE A LA BANQUE (patron LOCALITE SPATIALE du
 # CLAUDE.md, variante monde-indexe adaptee aux ids stables). Cle =
 # Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
@@ -754,6 +771,14 @@ func _process(delta: float) -> void:
 	_transitions_rayon_n.resize(0)
 	_transitions_mag_a.resize(0)
 	_transitions_mag_n.resize(0)
+	# LOT DE POSITIONS DE REVEIL des dormantes : meme discipline. Draine
+	# par UN appel a `_reveiller_dormantes_autour_lot` apres la boucle.
+	_reveils_positions_x.resize(0)
+	_reveils_positions_z.resize(0)
+	# LOT DE MORTS DE VIEILLESSE : meme discipline. Draine par UN appel
+	# a `_liberer_morts_vieillesse_lot` apres la boucle, avant le reveil
+	# groupe (les morts appendent des positions de reveil a leur tour).
+	_morts_vieillesse_lot.resize(0)
 	# SENESCENCE EN LOT : un seul franchissement de frontiere pour tout le
 	# tick. Mute `_ages` en place, saute les slots libres. Ordre des
 	# multiplications preserve dans le mecanisme (`delta * (aps * facteur)`).
@@ -779,38 +804,66 @@ func _process(delta: float) -> void:
 		if age_i >= seuil_mort:
 			# L'arbre meurt AVANT que sa transition de stade prenne effet
 			# (comportement de la version unitaire). On restaure l'index
-			# ancien pour que `_liberer_slot` depose bien -1 sur l'empreinte
-			# du stade ancien, jamais du stade nouvellement franchi.
+			# ancien pour que le drainage groupe depose bien -1 sur
+			# l'empreinte du stade ancien, jamais du stade nouvellement
+			# franchi. La liberation reelle (retrait monde, ombrage,
+			# reveil) est differee au drainage `_liberer_morts_vieillesse_lot`
+			# apres la boucle.
 			_slot_stade[i] = _slot_stade_avant[i]
-			_liberer_slot(i)
+			_morts_vieillesse_lot.append(i)
 			i += 1
 			continue
 		# Detection de changement de stade -> maj du champ de couvert.
 		var ancien: int = _slot_stade_avant[i]
 		var nouveau_index: int = _slot_stade[i]
 		if nouveau_index != ancien:
-			# TRANSITION EN UNE PASSE : un seul appel au champ quand les
-			# deux stades existent (retrait ancien + depot nouveau
-			# fusionnes par `champ_saturation.gd:redeposer`). Cas
-			# naissance/mort : un seul stade existe -> deposer simple.
+			# TRANSITION EN UNE PASSE : empilement INLINE (aucun appel de
+			# fonction par arbre). Cas ancien >= 0 ET nouveau >= 0 : empile
+			# une transition qui sera fusionnee par `_couvert.redeposer_lot`.
+			# Cas naissance/mort (un seul stade existe) : `_deposer_ombrage`
+			# simple (rare, chemin degrade).
 			if ancien >= 0 and nouveau_index >= 0:
-				_empiler_transition(_positions_x[i], _positions_z[i], ancien + 1, nouveau_index + 1)
+				var stade_a: int = ancien + 1
+				var stade_n: int = nouveau_index + 1
+				var n_conf: int = _ombrage_par_stade.size()
+				if stade_a >= 1 and stade_a <= n_conf and stade_n >= 1 and stade_n <= n_conf:
+					var conf_a: Dictionary = _ombrage_par_stade[stade_a - 1]
+					var conf_n: Dictionary = _ombrage_par_stade[stade_n - 1]
+					_transitions_x.append(_positions_x[i])
+					_transitions_z.append(_positions_z[i])
+					_transitions_rayon_a.append(float(conf_a.get("rayon_ombre_m", 0.0)))
+					_transitions_rayon_n.append(float(conf_n.get("rayon_ombre_m", 0.0)))
+					_transitions_mag_a.append(float(conf_a.get("magnitude", 0.0)))
+					_transitions_mag_n.append(float(conf_n.get("magnitude", 0.0)))
 			elif ancien >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien + 1, -1)
 			elif nouveau_index >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
-			# `_slot_stade[i]` deja mute par `Stade.avancer_lot` a la valeur
-			# `nouveau_index`, plus rien a ecrire ici.
-			# REVEIL SEULEMENT SI DEGAGEMENT : une transition qui augmente
-			# l'ombrage OU fait entrer dans le statut adulte ne peut PAS
-			# ouvrir un gate coince (elle ne peut que le fermer davantage).
-			# On ne reveille que sur les transitions qui BAISSENT
-			# l'ombrage OU font SORTIR du statut adulte -- les seules qui
-			# peuvent debloquer une dormante. Predicat generique via
-			# `_stade_est_degageant` : aucun index hardcode, l'invariant
-			# tient si la JSON `ombrage_par_stade` change.
-			if _stade_est_degageant(ancien, nouveau_index):
-				_reveiller_dormantes_autour(_positions_x[i], _positions_z[i])
+			# `_slot_stade[i]` deja mute par `Stade.avancer_lot`.
+			# REVEIL SEULEMENT SI DEGAGEMENT (predicat INLINE) : perte du
+			# statut adulte OU baisse de magnitude OU baisse de rayon. Toute
+			# autre transition ne peut que fermer davantage un gate deja
+			# coince, jamais l'ouvrir. Position empilee dans le lot de
+			# reveils ; le traitement se fait en UNE passe apres la boucle
+			# dans `_reveiller_dormantes_autour_lot`.
+			var degageant: bool = false
+			if ancien >= 0 and nouveau_index >= 0:
+				var ancien_adulte: bool = (ancien + 1) >= _stade_gros_min and (ancien + 1) <= _stade_gros_max
+				var nouveau_adulte: bool = (nouveau_index + 1) >= _stade_gros_min and (nouveau_index + 1) <= _stade_gros_max
+				if ancien_adulte and not nouveau_adulte:
+					degageant = true
+				else:
+					var n_conf2: int = _ombrage_par_stade.size()
+					if n_conf2 > ancien and n_conf2 > nouveau_index:
+						var conf_a2: Dictionary = _ombrage_par_stade[ancien]
+						var conf_n2: Dictionary = _ombrage_par_stade[nouveau_index]
+						if float(conf_n2.get("magnitude", 0.0)) < float(conf_a2.get("magnitude", 0.0)):
+							degageant = true
+						elif float(conf_n2.get("rayon_ombre_m", 0.0)) < float(conf_a2.get("rayon_ombre_m", 0.0)):
+							degageant = true
+			if degageant:
+				_reveils_positions_x.append(_positions_x[i])
+				_reveils_positions_z.append(_positions_z[i])
 		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu),
 		# CALEE SUR UN TOTAL DE GRAINES PAR VIE. `_intervalle_reprod[i]`
 		# (secondes reelles) est deduit a la naissance de la fenetre
@@ -834,8 +887,18 @@ func _process(delta: float) -> void:
 					var rayon: float = sqrt(_rng.randf()) * _rayon_graine
 					_graines_lot_x.append(_positions_x[i] + cos(angle) * rayon)
 					_graines_lot_z.append(_positions_z[i] + sin(angle) * rayon)
-		_ecrire_slot(i, age_i)
 		i += 1
+	# MORTS DE VIEILLESSE EN LOT : draine les slots dont l'age a franchi
+	# le seuil de mort ce tick. Un seul appel pour tous, meme resultat
+	# que N appels a `_liberer_slot` dans la boucle des arbres. Chaque
+	# mort append sa position aux `_reveils_positions_*` pour que le
+	# reveil groupe qui suit couvre AUSSI les morts (patron unifie).
+	_liberer_morts_vieillesse_lot()
+	# REVEIL EN LOT : un seul appel pour toutes les transitions degageantes
+	# du tick ET les morts de vieillesse, meme resultat que N appels a
+	# `_reveiller_dormantes_autour` (le contenu de `_reveils` est un Set
+	# d'ids, invariant a l'ordre).
+	_reveiller_dormantes_autour_lot(_reveils_positions_x, _reveils_positions_z)
 	# LOT DE TRANSITIONS applique en UNE passe : un seul appel au champ
 	# pour toutes les transitions de stade du tick, au lieu de N appels.
 	# Doit tourner AVANT `_semer_lot` (qui lit `_lire_couvert` sur chaque
@@ -846,6 +909,13 @@ func _process(delta: float) -> void:
 	_semer_lot()
 	_tick_banque(pas)
 	_avancer_competition(pas)
+	# RENDU EN LOT : un seul appel groupe pour tous les slots vivants. Le
+	# corps de `_ecrire_slot` + `_calc_params` + `_appliquer_couleur_slot`
+	# est reproduit inline dans la boucle interne unique -- zero appel
+	# de fonction par arbre au chemin chaud. `_naitre` et
+	# `_agrandir_capacite` gardent `_ecrire_slot` pour leurs points de
+	# naissance / repose du buffer GPU (chemins rares).
+	_ecrire_slots_lot()
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
@@ -876,6 +946,104 @@ func _process(delta: float) -> void:
 # Interpolation de taille entre deux entrees consecutives du catalogue
 # `stades` local (rendu, aucun rapport avec stade.gd qui ne pose que le
 # nom). Rend un Vector4 (h_tronc, l_tronc, h_feuillage, l_feuillage).
+# RENDU EN LOT : ecrit les transforms et couleurs de TOUS les slots
+# vivants dans les deux MultiMesh en UNE boucle interne. Corps de
+# `_ecrire_slot` + `_calc_params` + `_appliquer_couleur_slot` inline,
+# zero appel de fonction par arbre. Les skips existants sont preserves :
+# EPS_TAILLE sur `_derniere_params` (arbre au dernier stade fige,
+# croissance imperceptible entre deux passes) et cache `_derniere_couleur_stade`
+# par stade (couleur re-ecrite seulement quand le stade change). Duplication
+# assumee avec `_ecrire_slot` -- meme discipline que `redeposer_lot`/
+# `redeposer` : les chemins rares (`_naitre`, `_agrandir_capacite`) gardent
+# la version unitaire.
+func _ecrire_slots_lot() -> void:
+	var cap: int = _capacite
+	if cap == 0:
+		return
+	var n_stades: int = _durees.size()
+	var n_stades_full: int = _stades.size()
+	var i: int = 0
+	while i < cap:
+		if _libres[i] == 1:
+			i += 1
+			continue
+		var age: float = _ages[i]
+		# INLINE _calc_params : interpolation lineaire entre deux stades
+		# consecutifs selon l'age accumule dans les durees.
+		var p: Vector4
+		var trouve: bool = false
+		var duree_cumulee: float = 0.0
+		var j: int = 0
+		while j < n_stades:
+			var duree_segment: float = _durees[j]
+			if age <= duree_cumulee + duree_segment:
+				var t: float = 0.0
+				if duree_segment > 0.0:
+					t = (age - duree_cumulee) / duree_segment
+				if t < 0.0:
+					t = 0.0
+				elif t > 1.0:
+					t = 1.0
+				var a: Dictionary = _stades[j]
+				var b: Dictionary = _stades[j + 1]
+				p = Vector4(
+					lerp(float(a.tronc.hauteur), float(b.tronc.hauteur), t),
+					lerp(float(a.tronc.largeur), float(b.tronc.largeur), t),
+					lerp(float(a.feuillage.hauteur), float(b.feuillage.hauteur), t),
+					lerp(float(a.feuillage.largeur), float(b.feuillage.largeur), t))
+				trouve = true
+				break
+			duree_cumulee += duree_segment
+			j += 1
+		if not trouve:
+			var s: Dictionary = _stades[n_stades_full - 1]
+			p = Vector4(
+				float(s.tronc.hauteur), float(s.tronc.largeur),
+				float(s.feuillage.hauteur), float(s.feuillage.largeur))
+		# INLINE _appliquer_couleur_slot : traitee AVANT le skip GPU des
+		# tailles (le stade peut bouger sans que les tailles bougent).
+		var stade_actuel: int = _slot_stade[i]
+		if _derniere_couleur_stade[i] != stade_actuel:
+			var col_tronc: Color = COULEUR_REPLI_TRONC
+			var col_feuillage: Color = COULEUR_REPLI_FEUILLAGE
+			if stade_actuel >= 0 and stade_actuel < _couleur_tronc_par_stade.size():
+				col_tronc = _couleur_tronc_par_stade[stade_actuel]
+			if stade_actuel >= 0 and stade_actuel < _couleur_feuillage_par_stade.size():
+				col_feuillage = _couleur_feuillage_par_stade[stade_actuel]
+			_mm_tronc.set_instance_color(i, col_tronc)
+			_mm_feuillage.set_instance_color(i, col_feuillage)
+			_derniere_couleur_stade[i] = stade_actuel
+		# SKIP EPS_TAILLE : arbre fige, aucun transform a repousser.
+		var ancien: Vector4 = _derniere_params[i]
+		if absf(p.x - ancien.x) < EPS_TAILLE \
+				and absf(p.y - ancien.y) < EPS_TAILLE \
+				and absf(p.z - ancien.z) < EPS_TAILLE \
+				and absf(p.w - ancien.w) < EPS_TAILLE:
+			i += 1
+			continue
+		_derniere_params[i] = p
+		var ht: float = p.x
+		var lt: float = p.y
+		var hf: float = p.z
+		var lf: float = p.w
+		var pos_x: float = _positions_x[i]
+		var pos_z: float = _positions_z[i]
+		var t_tronc := Transform3D(
+			Basis.IDENTITY.scaled(Vector3(lt, ht, lt)),
+			Vector3(pos_x, Y_SOL + ht * 0.5, pos_z))
+		_mm_tronc.set_instance_transform(i, t_tronc)
+		var t_feuillage: Transform3D
+		if hf <= 0.0 or lf <= 0.0:
+			t_feuillage = Transform3D(
+				Basis.IDENTITY.scaled(Vector3.ZERO),
+				Vector3(pos_x, Y_SOL + ht, pos_z))
+		else:
+			t_feuillage = Transform3D(
+				Basis.IDENTITY.scaled(Vector3(lf, hf, lf)),
+				Vector3(pos_x, Y_SOL + ht + hf * 0.5, pos_z))
+		_mm_feuillage.set_instance_transform(i, t_feuillage)
+		i += 1
+
 func _calc_params(age: float) -> Vector4:
 	var duree_cumulee: float = 0.0
 	var n: int = _durees.size()
@@ -998,25 +1166,45 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 	var mag: float = float(conf.get("magnitude", 0.0))
 	_couvert.deposer(pos_x, pos_z, rayon_m, _taille_case, mag, signe)
 
-# EMPILE UNE TRANSITION DE STADE dans le lot draine apres la boucle
-# des arbres par `_couvert.redeposer_lot`. Un seul franchissement de
-# frontiere vers le champ pour tout le lot au lieu de N. Gates : stades
-# hors bornes ignores (miroir des gardes de `_deposer_ombrage`).
-func _empiler_transition(pos_x: float, pos_z: float, ancien: int, nouveau: int) -> void:
-	var n: int = _ombrage_par_stade.size()
-	if ancien < 1 or ancien > n or nouveau < 1 or nouveau > n:
-		return
-	var conf_a: Dictionary = _ombrage_par_stade[ancien - 1]
-	var conf_n: Dictionary = _ombrage_par_stade[nouveau - 1]
-	_transitions_x.append(pos_x)
-	_transitions_z.append(pos_z)
-	_transitions_rayon_a.append(float(conf_a.get("rayon_ombre_m", 0.0)))
-	_transitions_rayon_n.append(float(conf_n.get("rayon_ombre_m", 0.0)))
-	_transitions_mag_a.append(float(conf_a.get("magnitude", 0.0)))
-	_transitions_mag_n.append(float(conf_n.get("magnitude", 0.0)))
-
 func _lire_couvert(pos_x: float, pos_z: float) -> float:
 	return _couvert.lire(pos_x, pos_z, _taille_case)
+
+# DRAINAGE DES MORTS DE VIEILLESSE en UNE passe. Reproduit `_liberer_slot`
+# inline pour chaque slot du lot, sans appel de fonction par mort. Le
+# reveil des dormantes est UNIFIE avec celui des transitions : chaque
+# mort append sa position dans `_reveils_positions_x/_z`, le reveil
+# groupe qui suit les traite tous. `_liberer_slot` reste utilise par
+# `_avancer_competition` (chemin de mort par competition).
+func _liberer_morts_vieillesse_lot() -> void:
+	var n: int = _morts_vieillesse_lot.size()
+	if n == 0:
+		return
+	var k: int = 0
+	while k < n:
+		var i: int = _morts_vieillesse_lot[k]
+		k += 1
+		var pos_x: float = _positions_x[i]
+		var pos_z: float = _positions_z[i]
+		var chose = _choses_arbre[i]
+		if chose != null:
+			_monde.retirer(chose.id)
+			_choses_arbre[i] = null
+		_derniere_params[i] = Vector4(INF, INF, INF, INF)
+		var index: int = _slot_stade[i]
+		if index >= 0:
+			_deposer_ombrage(pos_x, pos_z, index + 1, -1)
+		_slot_stade[i] = -1
+		_libres[i] = 1
+		_ages[i] = 0.0
+		_ecrire_slot_vide(i)
+		_slots_libres.append(i)
+		_population -= 1
+		# EVENEMENT DE VOISINAGE : la mort a retire densite et ombrage.
+		# Empile la position pour le reveil groupe (identique a l'appel
+		# `_reveiller_dormantes_autour` de la version unitaire, meme Set
+		# `_reveils`, invariant a l'ordre).
+		_reveils_positions_x.append(pos_x)
+		_reveils_positions_z.append(pos_z)
 
 func _liberer_slot(i: int) -> void:
 	# Retrait structurel du monde (consequence: sans lui, la mort resterait
@@ -1372,6 +1560,52 @@ func _reveiller_dormantes_autour(pos_x: float, pos_z: float) -> void:
 				if dx * dx + dz * dz <= carre:
 					_reveils[id] = true
 
+# REVEIL EN LOT : boucle interne unique sur les positions collectees
+# pendant la passe de transition. `_reveils` etant un Set d'ids, l'ordre
+# de traitement des positions n'affecte pas le contenu final. Meme
+# resultat qu'un appel a `_reveiller_dormantes_autour` par position, un
+# seul appel de fonction du banc au lieu de N. Les invariants de la
+# version unitaire (gates sur `_banque_graines == null`, `_rayon_reveil`,
+# `_dormantes_par_case` vide) sont evalues UNE fois avant la boucle.
+func _reveiller_dormantes_autour_lot(positions_x: PackedFloat32Array, positions_z: PackedFloat32Array) -> void:
+	var n: int = positions_x.size()
+	if n == 0:
+		return
+	if _banque_graines == null or _rayon_reveil <= 0.0 or _taille_case_dormantes <= 0.0:
+		return
+	if _dormantes_par_case.is_empty():
+		return
+	var inv_case: float = 1.0 / _taille_case_dormantes
+	var carre: float = _rayon_reveil * _rayon_reveil
+	var prospects: Dictionary = _banque_graines.prospects()
+	var k: int = 0
+	while k < n:
+		var pos_x: float = positions_x[k]
+		var pos_z: float = positions_z[k]
+		k += 1
+		var cx_min: int = floori((pos_x - _rayon_reveil) * inv_case)
+		var cx_max: int = floori((pos_x + _rayon_reveil) * inv_case)
+		var cz_min: int = floori((pos_z - _rayon_reveil) * inv_case)
+		var cz_max: int = floori((pos_z + _rayon_reveil) * inv_case)
+		for cx in range(cx_min, cx_max + 1):
+			for cz in range(cz_min, cz_max + 1):
+				var cle: Vector2i = Vector2i(cx, cz)
+				var ids = _dormantes_par_case.get(cle, null)
+				if ids == null:
+					continue
+				for id_variant in ids:
+					var id: int = int(id_variant)
+					if _reveils.has(id):
+						continue
+					if not prospects.has(id):
+						continue
+					var entree: Dictionary = prospects[id]
+					var pos: Vector3 = entree.position
+					var dx: float = pos.x - pos_x
+					var dz: float = pos.z - pos_z
+					if dx * dx + dz * dz <= carre:
+						_reveils[id] = true
+
 # Inscrit une graine dormante dans la grille spatiale (a `_semer_lot`
 # quand l'entree en banque a rendu un id valide). Cout O(1). `_case_de_dormante`
 # tient l'index inverse id -> Vector2i pour un retrait O(1).
@@ -1430,48 +1664,6 @@ func _drainer_expirations() -> void:
 	if _expirations_head > 1024 and _expirations_head > (_expirations.size() >> 1):
 		_expirations = _expirations.slice(_expirations_head)
 		_expirations_head = 0
-
-# PREDICAT DEGAGEMENT : rend true si la transition ancien -> nouveau
-# peut ouvrir un gate coince (donc merite un reveil des dormantes).
-# Trois causes disjointes suffisent (une seule suffit) :
-#  (a) perte du statut adulte -- l'arbre sort de [_stade_gros_min,
-#      _stade_gros_max] -> la barriere trouee elargie disparait pour
-#      les seeds a portee ;
-#  (b) baisse de la MAGNITUDE d'ombrage -- le pic central baisse
-#      -> chaque case touchee recoit moins d'ombrage ;
-#  (c) baisse du RAYON d'ombrage -- l'empreinte se retrecit -> des
-#      cases jusque-la couvertes ne le sont plus.
-# Toute autre transition (ombrage stable ou en hausse, statut adulte
-# stable ou pris) ne peut que FERMER un gate deja coince, jamais
-# l'ouvrir : reveiller sur ces evenements est pur gaspillage. Aucun
-# index hardcode : l'invariant tient si `ombrage_par_stade` change.
-func _stade_est_degageant(ancien: int, nouveau: int) -> bool:
-	# ancien < 0 = pas de stade franchi avant : rien a comparer, on
-	# considere ce cas non degageant (une NAISSANCE ne degage rien
-	# de toute facon -- traitee separement).
-	if ancien < 0 or nouveau < 0:
-		return false
-	# (a) Perte du statut adulte.
-	var ancien_adulte: bool = (ancien + 1) >= _stade_gros_min and (ancien + 1) <= _stade_gros_max
-	var nouveau_adulte: bool = (nouveau + 1) >= _stade_gros_min and (nouveau + 1) <= _stade_gros_max
-	if ancien_adulte and not nouveau_adulte:
-		return true
-	# (b) et (c) : baisse de magnitude OU de rayon d'ombrage.
-	if _ombrage_par_stade.size() <= ancien or _ombrage_par_stade.size() <= nouveau:
-		return false
-	var conf_ancien: Dictionary = _ombrage_par_stade[ancien]
-	var conf_nouveau: Dictionary = _ombrage_par_stade[nouveau]
-	var mag_ancien: float = float(conf_ancien.get("magnitude", 0.0))
-	var mag_nouveau: float = float(conf_nouveau.get("magnitude", 0.0))
-	if mag_nouveau < mag_ancien:
-		return true
-	# Comparaison sur la portee en METRES : baisse de rayon_ombre_m = baisse
-	# de l'empreinte, quelle que soit la finesse du quadrillage.
-	var rayon_ancien: float = float(conf_ancien.get("rayon_ombre_m", 0.0))
-	var rayon_nouveau: float = float(conf_nouveau.get("rayon_ombre_m", 0.0))
-	if rayon_nouveau < rayon_ancien:
-		return true
-	return false
 
 # Rayon d'influence d'un evenement (mort, changement de stade) sur les
 # graines dormantes : max du rayon trouee elargi (voisin adulte)
