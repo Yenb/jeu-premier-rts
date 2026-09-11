@@ -4537,7 +4537,17 @@ en-tête).
   (`_stade_est_degageant`, prédicat générique sans index hardcodé).
   Une transition qui augmente l'ombrage ou fait entrer dans le
   statut adulte ne peut que fermer davantage un gate, jamais
-  l'ouvrir — réveiller sur ces événements serait pur gaspillage. `_tick_banque` teste chaque prospect
+  l'ouvrir — réveiller sur ces événements serait pur gaspillage.
+  DURÉE DE VIE DES GRAINES DORMANTES (`duree_vie_graine`, JSON,
+  défaut 300 s) : une graine dormante meurt après ce délai sans
+  avoir levé — retirée de la banque et de la grille, sans naître.
+  Sans mortalité la banque n'aurait aucun plafond (beaucoup de
+  graines ne lèvent jamais et resteraient réveillables à l'infini).
+  File FIFO d'échéances propre au banc (`_expirations` + head
+  cursor, ordre d'insertion = ordre d'expiration car durée fixe),
+  drainée par la tête à chaque `_tick_banque` — aucun balayage
+  global. Lazy discard : une graine levée entre-temps est skippée
+  au drain (`prospects.has(id)` → false). `_tick_banque` teste chaque prospect
   réveillé au même gate que la germination directe (`_trouee_saturee`
   + `_lire_couvert`) et vide le SET : passe → `retirer` + `_naitre` ;
   rate → reste en banque, attend le prochain signal. Entre deux

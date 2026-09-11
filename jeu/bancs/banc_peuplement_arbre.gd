@@ -248,11 +248,13 @@ var _chrono_us_setup: int = 0
 var _chrono_us_query: int = 0
 var _chrono_us_gate: int = 0
 var _chrono_us_naissance: int = 0
+var _chrono_us_expiration: int = 0
 var _chrono_us_total: int = 0
 var _chrono_n_setup: int = 0
 var _chrono_n_query: int = 0
 var _chrono_n_gate: int = 0
 var _chrono_n_naissance: int = 0
+var _chrono_n_expiration: int = 0
 var _chrono_n_ticks: int = 0
 
 # Champ scalaire d'ombrage par case (Vector2i -> float). Une entree est
@@ -298,6 +300,38 @@ var _case_de_dormante: Dictionary = {}
 # reveil couvre alors 2 ou 3 cases par axe (borne stricte), aucun scan
 # 3x3 forfaitaire, aucun overshoot en cases > rayon.
 var _taille_case_dormantes: float = 0.0
+
+# DUREE DE VIE DES GRAINES DORMANTES : sans mortalite, la banque
+# n'aurait aucun plafond -- toute graine tombee en zone dense y
+# entrerait et n'en sortirait qu'a une levee. Or beaucoup ne levent
+# JAMAIS (place jamais liberee, couvert jamais bas), et chacune reste
+# alors reveillable a l'infini : chaque evenement voisin la reveille,
+# elle refait une requete spatiale, echoue, replonge. La banque
+# devient un reservoir qui alourdit les reveils sans jamais donner
+# une plante. Une graine dormante finit donc par MOURIR apres
+# `_duree_vie_graine` secondes de temps monde sans lever -- comme
+# dans la nature. Reglable en JSON.
+var _duree_vie_graine: float = 300.0
+
+# TEMPS MONDE DE LA BANQUE (secondes cumulees). Reintroduit
+# uniquement pour dater les echeances de mort des dormantes.
+# Avance a chaque `_tick_banque` de `pas` (le meme delta accumule
+# passe a la sim). Aucun autre role : la reveil des dormantes reste
+# evenementiel, la germination reste sans horloge.
+var _temps_banque: float = 0.0
+
+# FILE FIFO DES ECHEANCES DE MORT : Array de [echeance:float, id:int]
+# range par ORDRE D'INSERTION -- comme `_duree_vie_graine` est fixe,
+# l'ordre d'insertion = l'ordre chronologique d'expiration, aucun tri
+# n'est requis. Curseur `_expirations_head` avance sur les entrees
+# drainees. Trim (`slice(head)`) declenche quand head > 1024 ET
+# head > size/2 pour ne pas laisser l'Array croitre sans borne. Insert
+# O(1) (append), drain O(k) ou k = expirations du tick (typiquement
+# 0-10). Lazy discard : une entree dont l'id n'est plus dans
+# `_banque_graines.prospects()` (graine levee entre-temps) est
+# skippee au drain, aucun retrait synchronise a la levee.
+var _expirations: Array = []
+var _expirations_head: int = 0
 
 # INDEX SPATIAL DU COEUR. Chaque arbre est inscrit a la naissance et retire
 # a la mort ; aucun lecteur du monde dans ce banc aujourd'hui, l'inscription
@@ -387,6 +421,8 @@ func _charger_reglages_locaux() -> void:
 		_taille_case = float(donnees.taille_case)
 	if donnees.has("seuil_couvert"):
 		_seuil_couvert = float(donnees.seuil_couvert)
+	if donnees.has("duree_vie_graine"):
+		_duree_vie_graine = float(donnees.duree_vie_graine)
 	if donnees.has("rayon_trouee"):
 		_rayon_trouee = float(donnees.rayon_trouee)
 	if donnees.has("trouee_max_voisins"):
@@ -677,21 +713,24 @@ func _process(delta: float) -> void:
 		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.size()])
 		# CHRONOS TEMPORAIRES : releve puis reset. A retirer une fois le
 		# poste dominant identifie.
-		print("[arbre.tick_banque] ticks=%d total=%d us | setup=%d us / n=%d | query=%d us / n=%d | gate=%d us / n=%d | naissance=%d us / n=%d" % [
+		print("[arbre.tick_banque] ticks=%d total=%d us | setup=%d us / n=%d | query=%d us / n=%d | gate=%d us / n=%d | naissance=%d us / n=%d | expiration=%d us / n=%d" % [
 			_chrono_n_ticks, _chrono_us_total,
 			_chrono_us_setup, _chrono_n_setup,
 			_chrono_us_query, _chrono_n_query,
 			_chrono_us_gate, _chrono_n_gate,
-			_chrono_us_naissance, _chrono_n_naissance])
+			_chrono_us_naissance, _chrono_n_naissance,
+			_chrono_us_expiration, _chrono_n_expiration])
 		_chrono_us_setup = 0
 		_chrono_us_query = 0
 		_chrono_us_gate = 0
 		_chrono_us_naissance = 0
+		_chrono_us_expiration = 0
 		_chrono_us_total = 0
 		_chrono_n_setup = 0
 		_chrono_n_query = 0
 		_chrono_n_gate = 0
 		_chrono_n_naissance = 0
+		_chrono_n_expiration = 0
 		_chrono_n_ticks = 0
 
 # Nom du stade a l'index dans _stades_config_partagee. Index -1 -> "" :
@@ -970,6 +1009,10 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	})
 	if id_prospect >= 0:
 		_inscrire_dormante(id_prospect, pos_x, pos_z)
+		# Echeance de mort : temps banque courant + duree de vie.
+		# Duree fixe -> ordre d'insertion = ordre d'expiration,
+		# append en queue suffit (aucun tri).
+		_expirations.append([_temps_banque + _duree_vie_graine, id_prospect])
 
 # RE-TEST SUR EVENEMENT (patron `vegetation.gd` « L'OMBRE EST UN SIGNAL »).
 # `pas` est ignore : rien de temporise ici, seul le `_reveils` rempli
@@ -987,14 +1030,25 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 # consomme dans `_naitre` (facteurs variance) voit une autre suite. La
 # foret reste reproductible a seed egal, elle differe seulement de la
 # version pre-optim.
-func _tick_banque(_pas: float) -> void:
-	if _reveils.is_empty():
-		return
+func _tick_banque(pas: float) -> void:
 	# CHRONOS TEMPORAIRES : voir declaration des _chrono_us_* / _chrono_n_*.
 	# La logique du gate est INLINE ici (dupliquee de `_trouee_saturee`)
 	# pour isoler QUERY et GATE en postes distincts. A retirer une fois
 	# le poste dominant identifie -- rebranchement sur `_trouee_saturee`.
 	var t_total: int = Time.get_ticks_usec()
+	# POSTE 5 : EXPIRATION (mort des dormantes de vieillesse). Avance
+	# _temps_banque puis draine les entrees dont l'echeance est atteinte.
+	# Independant de _reveils.is_empty() -- une graine peut expirer meme
+	# si aucun evenement de reveil ne survient ce tick.
+	_temps_banque += pas
+	var t_exp: int = Time.get_ticks_usec()
+	_drainer_expirations()
+	_chrono_us_expiration += Time.get_ticks_usec() - t_exp
+	_chrono_n_expiration += 1
+	if _reveils.is_empty():
+		_chrono_us_total += Time.get_ticks_usec() - t_total
+		_chrono_n_ticks += 1
+		return
 	var prospects: Dictionary = _banque_graines.prospects()
 	var ids: Array = _reveils.keys()
 	_reveils.clear()
@@ -1134,6 +1188,33 @@ func _retirer_dormante(id: int) -> void:
 	(arr as Array).erase(id)
 	if (arr as Array).is_empty():
 		_dormantes_par_case.erase(cle)
+
+# DRAIN DE LA FILE D'ECHEANCES DE MORT : depuis la tete
+# (`_expirations_head`), depile tant que l'echeance est atteinte
+# (echeance <= _temps_banque). Pour chaque id depile, si la graine
+# est encore prospect (pas encore levee), la retire de la banque et
+# de la grille sans naitre. Une graine levee entre-temps n'est plus
+# prospect -> discard silencieux (lazy). Rebuild (`slice`) declenche
+# rarement quand le head grossit trop, pour ne pas laisser l'Array
+# croitre indefiniment.
+func _drainer_expirations() -> void:
+	if _banque_graines == null:
+		return
+	var prospects: Dictionary = _banque_graines.prospects()
+	while _expirations_head < _expirations.size():
+		var entry: Array = _expirations[_expirations_head]
+		if float(entry[0]) > _temps_banque:
+			break
+		_expirations_head += 1
+		var id: int = int(entry[1])
+		if prospects.has(id):
+			_banque_graines.retirer(id)
+			_retirer_dormante(id)
+	# Trim rare pour eviter que l'Array grossisse sans borne. Slice
+	# alloue une copie mais le cout est amorti sur >1024 drains.
+	if _expirations_head > 1024 and _expirations_head > _expirations.size() / 2:
+		_expirations = _expirations.slice(_expirations_head)
+		_expirations_head = 0
 
 # PREDICAT DEGAGEMENT : rend true si la transition ancien -> nouveau
 # peut ouvrir un gate coince (donc merite un reveil des dormantes).
