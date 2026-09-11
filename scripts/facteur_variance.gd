@@ -22,12 +22,12 @@ extends RefCounted
 # amplitude = 0 -> 1.0 exact ; amplitude = 1 -> facteur dans [0, 2] ;
 # amplitude > 1 -> clampe a 1 (aucune valeur negative silencieuse).
 #
-# static tirer_entre(rng, mini, maxi) : rend rng.randf_range(mini, maxi),
+# static tirer_entre(rng, bas, haut) : rend rng.randf_range(bas, haut),
 # tirage ASYMETRIQUE a bornes INDEPENDANTES. Pour desynchroniser une
 # grandeur avec des bornes qu'un tirage symetrique ne peut pas
 # atteindre (ex : longevite dans [0.5, 2.0], impossible autour de 1
-# avec une amplitude unique). mini > maxi : push_error, rend mini.
-# mini == maxi : rend mini exact (aucun tirage). Ce chemin ne clampe
+# avec une amplitude unique). bas > haut : push_error, rend bas.
+# bas == haut : rend bas exact (aucun tirage). Ce chemin ne clampe
 # rien -- l'appelant assume les bornes qu'il fournit, y compris
 # negatives (facteur signe legitime dans certains cas).
 #
@@ -64,10 +64,15 @@ static func tirer(rng: RandomNumberGenerator, amplitude: float) -> float:
 		return 1.0
 	return 1.0 + rng.randf_range(-a, a)
 
-static func tirer_entre(rng: RandomNumberGenerator, mini: float, maxi: float) -> float:
-	if mini > maxi:
-		push_error("facteur_variance.gd : tirer_entre() -- mini %f > maxi %f, rend mini" % [mini, maxi])
-		return mini
-	if mini == maxi:
-		return mini
-	return rng.randf_range(mini, maxi)
+static func tirer_entre(rng: RandomNumberGenerator, bas: float, haut: float) -> float:
+	# Params renommes de mini/maxi -> bas/haut : mini() et maxi() sont
+	# des built-ins Godot, GDScript::reload emettait un warning par
+	# masquage. Ecart framework (voir en-tete du fichier) trace ici
+	# comme scripts/monde.gd:retirer, la copie framework du depot Orion
+	# garde ses noms d'origine.
+	if bas > haut:
+		push_error("facteur_variance.gd : tirer_entre() -- bas %f > haut %f, rend bas" % [bas, haut])
+		return bas
+	if bas == haut:
+		return bas
+	return rng.randf_range(bas, haut)

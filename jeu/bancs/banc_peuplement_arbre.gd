@@ -1329,7 +1329,7 @@ func _drainer_expirations() -> void:
 			_retirer_dormante(id)
 	# Trim rare pour eviter que l'Array grossisse sans borne. Slice
 	# alloue une copie mais le cout est amorti sur >1024 drains.
-	if _expirations_head > 1024 and _expirations_head > _expirations.size() / 2:
+	if _expirations_head > 1024 and _expirations_head > (_expirations.size() >> 1):
 		_expirations = _expirations.slice(_expirations_head)
 		_expirations_head = 0
 
