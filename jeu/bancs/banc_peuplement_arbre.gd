@@ -237,6 +237,24 @@ var _facteur_longevite: PackedFloat32Array = PackedFloat32Array()
 var _population: int = 0
 var _frames_depuis_releve: int = 0
 
+# CHRONOS TEMPORAIRES DE _tick_banque (a retirer une fois le poste
+# dominant identifie -- meme discipline que les chronos de
+# collision_lot.h). Quatre postes disjoints qui couvrent le corps de
+# _tick_banque : SETUP (parcours + acces prospect), QUERY
+# (choses_dans_rayon seul), GATE (boucle voisins + couvert), NAISSANCE
+# (retirer + naitre). Cumul en microsecondes et compte de passages,
+# imprimes sous le meme gate que le releve population.
+var _chrono_us_setup: int = 0
+var _chrono_us_query: int = 0
+var _chrono_us_gate: int = 0
+var _chrono_us_naissance: int = 0
+var _chrono_us_total: int = 0
+var _chrono_n_setup: int = 0
+var _chrono_n_query: int = 0
+var _chrono_n_gate: int = 0
+var _chrono_n_naissance: int = 0
+var _chrono_n_ticks: int = 0
+
 # Champ scalaire d'ombrage par case (Vector2i -> float). Une entree est
 # supprimee quand son cumul retombe sous EPS_COUVERT.
 var _couvert: Dictionary = {}
@@ -628,12 +646,16 @@ func _process(delta: float) -> void:
 			if nouveau_index >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
 			_slot_stade[i] = nouveau_index
-			# EVENEMENT DE VOISINAGE : l'ombrage vient de changer autour de
-			# cet arbre (rayon et magnitude peuvent avoir bouge). Les
-			# prospects dormants a portee peuvent voir leur gate couvert
-			# s'ouvrir (baisse d'ombrage : stade 8 = feuillage 0) ou se
-			# fermer (montee : traitement au prochain tick).
-			_reveiller_dormantes_autour(_positions_x[i], _positions_z[i])
+			# REVEIL SEULEMENT SI DEGAGEMENT : une transition qui augmente
+			# l'ombrage OU fait entrer dans le statut adulte ne peut PAS
+			# ouvrir un gate coince (elle ne peut que le fermer davantage).
+			# On ne reveille que sur les transitions qui BAISSENT
+			# l'ombrage OU font SORTIR du statut adulte -- les seules qui
+			# peuvent debloquer une dormante. Predicat generique via
+			# `_stade_est_degageant` : aucun index hardcode, l'invariant
+			# tient si la JSON `ombrage_par_stade` change.
+			if _stade_est_degageant(ancien, nouveau_index):
+				_reveiller_dormantes_autour(_positions_x[i], _positions_z[i])
 		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu) :
 		# a chaque pas, un arbre fertile a une probabilite `pas /
 		# _intervalle_graine_moyen` de semer UNE graine. La cadence
@@ -653,6 +675,24 @@ func _process(delta: float) -> void:
 		_frames_depuis_releve = 0
 		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
 		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.size()])
+		# CHRONOS TEMPORAIRES : releve puis reset. A retirer une fois le
+		# poste dominant identifie.
+		print("[arbre.tick_banque] ticks=%d total=%d us | setup=%d us / n=%d | query=%d us / n=%d | gate=%d us / n=%d | naissance=%d us / n=%d" % [
+			_chrono_n_ticks, _chrono_us_total,
+			_chrono_us_setup, _chrono_n_setup,
+			_chrono_us_query, _chrono_n_query,
+			_chrono_us_gate, _chrono_n_gate,
+			_chrono_us_naissance, _chrono_n_naissance])
+		_chrono_us_setup = 0
+		_chrono_us_query = 0
+		_chrono_us_gate = 0
+		_chrono_us_naissance = 0
+		_chrono_us_total = 0
+		_chrono_n_setup = 0
+		_chrono_n_query = 0
+		_chrono_n_gate = 0
+		_chrono_n_naissance = 0
+		_chrono_n_ticks = 0
 
 # Nom du stade a l'index dans _stades_config_partagee. Index -1 -> "" :
 # aucun stade encore atteint.
@@ -950,31 +990,70 @@ func _deposer_graine(pos_x: float, pos_z: float) -> void:
 func _tick_banque(_pas: float) -> void:
 	if _reveils.is_empty():
 		return
+	# CHRONOS TEMPORAIRES : voir declaration des _chrono_us_* / _chrono_n_*.
+	# La logique du gate est INLINE ici (dupliquee de `_trouee_saturee`)
+	# pour isoler QUERY et GATE en postes distincts. A retirer une fois
+	# le poste dominant identifie -- rebranchement sur `_trouee_saturee`.
+	var t_total: int = Time.get_ticks_usec()
 	var prospects: Dictionary = _banque_graines.prospects()
 	var ids: Array = _reveils.keys()
 	_reveils.clear()
-	# REQUETE CIBLEE PAR GRAINE : chaque graine reveillee appelle
-	# `_trouee_saturee(pos)` a SA position avec rayon_gros -- petite
-	# liste, aucun sur-parcours. Un batch par case avait ete essaye
-	# mais la case des dormantes fait deja >= rayon_gros (cote =
-	# _rayon_reveil), donc le batch ramenait une grande liste que
-	# chaque graine re-filtrait par distance : sur-filtrage,
-	# retour au patron standard (spatial hashing : requete locale,
-	# bornee, par entite). Les nouveau-nes de la meme rafale sont
-	# deja dans `_monde` (ajout live a chaque `_naitre`), la graine
-	# suivante les voit naturellement -- meme effet qu'avant sans
-	# maintenir une liste locale.
+	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
+	var carre_normal: float = _rayon_trouee * _rayon_trouee
 	for id_variant in ids:
+		# POSTE 1 : SETUP
+		var t0: int = Time.get_ticks_usec()
 		var id: int = int(id_variant)
-		if not prospects.has(id):
+		var a_prospect: bool = prospects.has(id)
+		var entree: Dictionary
+		var pos: Vector3
+		if a_prospect:
+			entree = prospects[id]
+			pos = entree.position
+		_chrono_us_setup += Time.get_ticks_usec() - t0
+		_chrono_n_setup += 1
+		if not a_prospect:
 			continue
-		var entree: Dictionary = prospects[id]
-		var pos: Vector3 = entree.position
-		if _trouee_saturee(pos.x, pos.z) or _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
+		# POSTE 2 : QUERY (choses_dans_rayon seul)
+		var arrivee := Vector3(pos.x, Y_SOL, pos.z)
+		var t1: int = Time.get_ticks_usec()
+		var voisins: Array = _monde.choses_dans_rayon(arrivee, rayon_gros)
+		_chrono_us_query += Time.get_ticks_usec() - t1
+		_chrono_n_query += 1
+		# POSTE 3 : GATE (boucle voisins + couvert)
+		var t2: int = Time.get_ticks_usec()
+		var compte_normal: int = 0
+		var trouee_ko: bool = false
+		for entree_v in voisins:
+			var chose = entree_v.chose
+			var slot: int = int(chose.get("slot", -1))
+			var stade_num: int = 0
+			if slot >= 0 and slot < _slot_stade.size():
+				stade_num = _slot_stade[slot] + 1
+			if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
+				trouee_ko = true
+				break
+			var pos_voisin: Vector3 = chose.position
+			if arrivee.distance_squared_to(pos_voisin) <= carre_normal:
+				compte_normal += 1
+		if not trouee_ko:
+			trouee_ko = compte_normal > _trouee_max_voisins
+		var couvert_ko: bool = false
+		if not trouee_ko:
+			couvert_ko = _lire_couvert(pos.x, pos.z) >= _seuil_couvert
+		_chrono_us_gate += Time.get_ticks_usec() - t2
+		_chrono_n_gate += 1
+		if trouee_ko or couvert_ko:
 			continue
+		# POSTE 4 : NAISSANCE
+		var t3: int = Time.get_ticks_usec()
 		_banque_graines.retirer(id)
 		_retirer_dormante(id)
 		_naitre(pos.x, pos.z)
+		_chrono_us_naissance += Time.get_ticks_usec() - t3
+		_chrono_n_naissance += 1
+	_chrono_us_total += Time.get_ticks_usec() - t_total
+	_chrono_n_ticks += 1
 
 # Reveille les prospects dormants a portee d'un evenement de voisinage
 # (mort d'arbre ou changement de stade). LECTURE LOCALE via la grille
@@ -1055,6 +1134,46 @@ func _retirer_dormante(id: int) -> void:
 	(arr as Array).erase(id)
 	if (arr as Array).is_empty():
 		_dormantes_par_case.erase(cle)
+
+# PREDICAT DEGAGEMENT : rend true si la transition ancien -> nouveau
+# peut ouvrir un gate coince (donc merite un reveil des dormantes).
+# Trois causes disjointes suffisent (une seule suffit) :
+#  (a) perte du statut adulte -- l'arbre sort de [_stade_gros_min,
+#      _stade_gros_max] -> la barriere trouee elargie disparait pour
+#      les seeds a portee ;
+#  (b) baisse de la MAGNITUDE d'ombrage -- le pic central baisse
+#      -> chaque case touchee recoit moins d'ombrage ;
+#  (c) baisse du RAYON d'ombrage -- l'empreinte se retrecit -> des
+#      cases jusque-la couvertes ne le sont plus.
+# Toute autre transition (ombrage stable ou en hausse, statut adulte
+# stable ou pris) ne peut que FERMER un gate deja coince, jamais
+# l'ouvrir : reveiller sur ces evenements est pur gaspillage. Aucun
+# index hardcode : l'invariant tient si `ombrage_par_stade` change.
+func _stade_est_degageant(ancien: int, nouveau: int) -> bool:
+	# ancien < 0 = pas de stade franchi avant : rien a comparer, on
+	# considere ce cas non degageant (une NAISSANCE ne degage rien
+	# de toute facon -- traitee separement).
+	if ancien < 0 or nouveau < 0:
+		return false
+	# (a) Perte du statut adulte.
+	var ancien_adulte: bool = (ancien + 1) >= _stade_gros_min and (ancien + 1) <= _stade_gros_max
+	var nouveau_adulte: bool = (nouveau + 1) >= _stade_gros_min and (nouveau + 1) <= _stade_gros_max
+	if ancien_adulte and not nouveau_adulte:
+		return true
+	# (b) et (c) : baisse de magnitude OU de rayon d'ombrage.
+	if _ombrage_par_stade.size() <= ancien or _ombrage_par_stade.size() <= nouveau:
+		return false
+	var conf_ancien: Dictionary = _ombrage_par_stade[ancien]
+	var conf_nouveau: Dictionary = _ombrage_par_stade[nouveau]
+	var mag_ancien: float = float(conf_ancien.get("magnitude", 0.0))
+	var mag_nouveau: float = float(conf_nouveau.get("magnitude", 0.0))
+	if mag_nouveau < mag_ancien:
+		return true
+	var rayon_ancien: int = int(conf_ancien.get("rayon_cases", 0))
+	var rayon_nouveau: int = int(conf_nouveau.get("rayon_cases", 0))
+	if rayon_nouveau < rayon_ancien:
+		return true
+	return false
 
 # Rayon d'influence d'un evenement (mort, changement de stade) sur les
 # graines dormantes : max du rayon trouee elargi (voisin adulte)

@@ -4530,7 +4530,14 @@ en-tête).
   Elle attend qu'un événement à portée (mort d'arbre dans
   `_liberer_slot`, ou changement de stade d'un voisin dans `_process`)
   la réveille via `_reveiller_dormantes_autour`, qui inscrit son id
-  dans le SET `_reveils`. `_tick_banque` teste chaque prospect
+  dans le SET `_reveils`. RÉVEIL SEULEMENT SUR ÉVÉNEMENT DÉGAGEANT :
+  la mort réveille toujours (retrait pur) ; un changement de stade
+  ne réveille que s'il peut ouvrir un gate coincé — perte du statut
+  adulte OU baisse de magnitude OU baisse de rayon d'ombrage
+  (`_stade_est_degageant`, prédicat générique sans index hardcodé).
+  Une transition qui augmente l'ombrage ou fait entrer dans le
+  statut adulte ne peut que fermer davantage un gate, jamais
+  l'ouvrir — réveiller sur ces événements serait pur gaspillage. `_tick_banque` teste chaque prospect
   réveillé au même gate que la germination directe (`_trouee_saturee`
   + `_lire_couvert`) et vide le SET : passe → `retirer` + `_naitre` ;
   rate → reste en banque, attend le prochain signal. Entre deux
@@ -4556,7 +4563,14 @@ en-tête).
   standard (spatial hashing = requête locale et bornée, par entité).
   Les nouveau-nés de la même rafale sont déjà dans `_monde` (ajout
   live à chaque `_naitre`), la graine suivante les voit naturellement
-  — même effet que le dict `nouvelles` de `vegetation.gd`. `avancer` du mécanisme framework n'est pas utilisé
+  — même effet que le dict `nouvelles` de `vegetation.gd`. CHRONOS
+  TEMPORAIRES dans `_tick_banque` (à retirer après diagnostic —
+  même discipline que les chronos de `collision_lot.h`) : quatre
+  postes disjoints (SETUP / QUERY / GATE / NAISSANCE) mesurés en
+  microsecondes + compte de passages, imprimés sous le même gate
+  que le relevé population. Logique du gate INLINE le temps du
+  diagnostic (duplique `_trouee_saturee`) pour isoler QUERY et
+  GATE. `avancer` du mécanisme framework n'est pas utilisé
   (il compare à un seuil unique, sans notion d'événement).
   Chaque graine échue passe par le MÊME gate de trouée que la
   germination directe
