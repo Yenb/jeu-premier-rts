@@ -4506,9 +4506,16 @@ en-tête).
   `stades[i]` sont doublées par rapport à la génération précédente,
   ajustement purement en donnée) puis phase de mort de `duree_mort`,
   après quoi le slot est libéré (échelle nulle, poussé sur
-  `_slots_libres`). REPRODUCTION : un arbre fertile (âge dans les stades
-  `stade_fertile_debut` à `stade_fertile_fin`, JSON, défaut 5 à 7) sème
-  une graine dans un disque uniforme `rayon_graine`. Chaque graine passe par une BANQUE DORMANTE
+  `_slots_libres`). REPRODUCTION STOCHASTIQUE (processus de Poisson par individu) : un
+  arbre fertile (âge dans les stades `stade_fertile_debut` à
+  `stade_fertile_fin`, JSON, défaut 5 à 7) tire `_rng.randf()` à
+  chaque pas ; s'il est sous `pas / intervalle_graine_moyen`, il sème
+  UNE graine dans un disque uniforme `rayon_graine`. Au plus une
+  graine par pas et par arbre — aucune rafale, aucune horloge partagée
+  (colonne `_horloges` retirée). La cadence MOYENNE par arbre reste
+  `intervalle_graine_moyen`, les instants sont désynchronisés entre
+  individus : fin des vagues de cohortes qui semaient au même tic.
+  RNG seedé : à seed égal, même forêt. Chaque graine passe par une BANQUE DORMANTE
   déléguée au mécanisme framework `scripts/attente_seuil.gd` (registre
   ajouter/retirer/prospects seul). RE-TEST DÉSYNCHRONISÉ PAR GRAINE :
   chaque prospect porte sa propre `prochaine_echeance` (clé libre —
@@ -4559,7 +4566,16 @@ en-tête).
   fertilité / géométrie ; le second multiplie le seuil de mort. Casse la
   synchronisation des cohortes — tailles panachées dans un même
   bosquet, morts étalées dans le temps au lieu de trous d'un bloc.
-  NAISSANCE : slot libre
+  MORT PAR COMPÉTITION (auto-éclaircie) : `_passe_competition`,
+  cadencée à `cadence_competition` secondes (jamais dans la boucle
+  60 fps). Seuls les arbres jeunes (stade ≤ `stade_competition_max`,
+  défaut 4) sont testés — les adultes dominent et survivent. Chaque
+  vulnérable compte ses voisins dans `rayon_competition` via
+  `_monde.choses_dans_rayon` ; si le compte dépasse
+  `competition_max_voisins`, la proba de mort ce pas =
+  `exces / competition_max_voisins` (borne 1). Mort via `_liberer_slot`
+  (mêmes gestes que la mort de vieillesse : retrait de `_monde`, retrait
+  d'ombrage, slot recyclé). RNG seedé. NAISSANCE : slot libre
   en priorité (pop sur `_slots_libres`), sinon la capacité des deux
   MultiMesh est doublée (`_agrandir_capacite`, événement rare, coût
   amorti O(1) — patron FREE-LIST de `jeu/PROTOCOLE_MULTIMESH.md` § 1).

@@ -8,7 +8,7 @@
 # paralleles (PackedArrays), le rendu reste sur deux MultiMesh. Trois
 # couches, jamais confondues.
 #
-# COUCHE STOCKAGE DE MASSE (banc) : `_ages`, `_horloges`, `_libres`,
+# COUCHE STOCKAGE DE MASSE (banc) : `_ages`, `_libres`,
 # `_positions_x/z`, `_slot_stade`, `_facteur_croissance`,
 # `_facteur_longevite`, `_slots_libres`. La population entiere y vit --
 # aucun Dictionary par arbre.
@@ -117,7 +117,7 @@ var _demi_carte: float = 300.0
 # plongeante de la scene devient current.
 var _joueur_actif: bool = true
 var _graine_rng: int = 20260910
-var _intervalle_graine: float = 10.0
+var _intervalle_graine_moyen: float = 10.0
 var _rayon_graine: float = 6.0
 var _stade_fertile_debut: int = 5
 var _stade_fertile_fin: int = 7
@@ -130,6 +130,20 @@ var _intervalle_retest: float = 5.0
 # au-dela du seuil, elle est perdue.
 var _rayon_trouee: float = 4.0
 var _trouee_max_voisins: int = 1
+
+# MORT PAR COMPETITION (auto-eclaircie). Passe rare pilotee par
+# `_cadence_competition` (secondes). Seuls les stades <= `_stade_competition_max`
+# (1..8) sont vulnerables -- les adultes dominent et survivent. Un arbre
+# eligible compte ses voisins dans `_rayon_competition` via monde ; l'exces
+# au-dela de `_competition_max_voisins` fixe la probabilite de mort ce pas
+# (exces / _competition_max_voisins, borne 1). Le compte inclut soi-meme
+# (distance 0), meme convention que vegetation.gd:peut_pousser -- le seuil
+# en tient compte.
+var _cadence_competition: float = 5.0
+var _stade_competition_max: int = 4
+var _rayon_competition: float = 3.0
+var _competition_max_voisins: int = 3
+var _temps_competition: float = 0.0
 var _ombrage_par_stade: Array = []
 # Bornes independantes pour les deux facteurs individuels (tires seedes
 # a la naissance via facteur_variance.gd:tirer_entre). Asymetriques
@@ -152,7 +166,6 @@ var _noeud_feuillage: MultiMeshInstance3D = null
 
 var _capacite: int = 0
 var _ages: PackedFloat32Array = PackedFloat32Array()
-var _horloges: PackedFloat32Array = PackedFloat32Array()
 var _libres: PackedByteArray = PackedByteArray()
 var _positions_x: PackedFloat32Array = PackedFloat32Array()
 var _positions_z: PackedFloat32Array = PackedFloat32Array()
@@ -262,8 +275,8 @@ func _charger_reglages_locaux() -> void:
 		_joueur_actif = bool(donnees.joueur_actif)
 	if donnees.has("graine_rng"):
 		_graine_rng = int(donnees.graine_rng)
-	if donnees.has("intervalle_graine"):
-		_intervalle_graine = float(donnees.intervalle_graine)
+	if donnees.has("intervalle_graine_moyen"):
+		_intervalle_graine_moyen = float(donnees.intervalle_graine_moyen)
 	if donnees.has("rayon_graine"):
 		_rayon_graine = float(donnees.rayon_graine)
 	if donnees.has("stade_fertile_debut"):
@@ -282,6 +295,14 @@ func _charger_reglages_locaux() -> void:
 		_rayon_trouee = float(donnees.rayon_trouee)
 	if donnees.has("trouee_max_voisins"):
 		_trouee_max_voisins = int(donnees.trouee_max_voisins)
+	if donnees.has("cadence_competition"):
+		_cadence_competition = float(donnees.cadence_competition)
+	if donnees.has("stade_competition_max"):
+		_stade_competition_max = int(donnees.stade_competition_max)
+	if donnees.has("rayon_competition"):
+		_rayon_competition = float(donnees.rayon_competition)
+	if donnees.has("competition_max_voisins"):
+		_competition_max_voisins = int(donnees.competition_max_voisins)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
 	if donnees.has("croissance_min"):
@@ -448,7 +469,6 @@ func _monter_population() -> void:
 
 	_capacite = CAPACITE_INITIALE
 	_ages.resize(_capacite)
-	_horloges.resize(_capacite)
 	_libres.resize(_capacite)
 	_positions_x.resize(_capacite)
 	_positions_z.resize(_capacite)
@@ -462,7 +482,6 @@ func _monter_population() -> void:
 	while i >= 0:
 		_libres[i] = 1
 		_ages[i] = 0.0
-		_horloges[i] = 0.0
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
 		_slot_stade[i] = -1
@@ -512,15 +531,23 @@ func _process(delta: float) -> void:
 			if nouveau_index >= 0:
 				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
 			_slot_stade[i] = nouveau_index
+		# REPRODUCTION STOCHASTIQUE (processus de Poisson par individu) :
+		# a chaque pas, un arbre fertile a une probabilite `pas /
+		# _intervalle_graine_moyen` de semer UNE graine. La cadence
+		# MOYENNE par arbre reste inchangee, mais les instants sont
+		# desynchronises entre individus -- fin des vagues de cohortes
+		# qui semaient au meme tic. Au plus une graine par pas et par
+		# arbre (jamais de rafale). RNG seede : a seed egal, meme foret.
 		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
-			var h: float = _horloges[i] + pas
-			while h >= _intervalle_graine:
-				h -= _intervalle_graine
+			if _rng.randf() < pas / _intervalle_graine_moyen:
 				_semer_pres_de(i)
-			_horloges[i] = h
 		_ecrire_slot(i, age_i)
 		i += 1
 	_tick_banque(pas)
+	_temps_competition += pas
+	if _temps_competition >= _cadence_competition:
+		_temps_competition = 0.0
+		_passe_competition()
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
@@ -669,7 +696,6 @@ func _liberer_slot(i: int) -> void:
 	_slot_stade[i] = -1
 	_libres[i] = 1
 	_ages[i] = 0.0
-	_horloges[i] = 0.0
 	_ecrire_slot_vide(i)
 	_slots_libres.append(i)
 	_population -= 1
@@ -693,7 +719,6 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 		_stades_config_partagee = objet.proprietes.get("stades_config", [])
 	_libres[i] = 0
 	_ages[i] = float(objet.proprietes.get("age", 0.0))
-	_horloges[i] = 0.0
 	_positions_x[i] = pos_x
 	_positions_z[i] = pos_z
 	# Index du stade initial (age 0 tombe sur le premier stade dont
@@ -811,7 +836,6 @@ func _agrandir_capacite() -> void:
 	if nouvelle < ancienne + 1:
 		nouvelle = ancienne + 1
 	_ages.resize(nouvelle)
-	_horloges.resize(nouvelle)
 	_libres.resize(nouvelle)
 	_positions_x.resize(nouvelle)
 	_positions_z.resize(nouvelle)
@@ -826,7 +850,6 @@ func _agrandir_capacite() -> void:
 	while i >= ancienne:
 		_libres[i] = 1
 		_ages[i] = 0.0
-		_horloges[i] = 0.0
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
 		_slot_stade[i] = -1
@@ -845,3 +868,35 @@ func _agrandir_capacite() -> void:
 		else:
 			_ecrire_slot(j, _ages[j])
 		j += 1
+
+# Passe rare d'auto-eclaircie. Ne tourne QU'a la cadence lente
+# `_cadence_competition` (pas dans la boucle 60 fps). Seuls les arbres
+# vulnerables (stade + 1 <= _stade_competition_max) sont testes -- les
+# adultes dominent et survivent. Collecte les morts a retirer APRES
+# l'iteration : _liberer_slot mute _libres et pourrait perturber le
+# balayage en cours. Chaque mort passe par _liberer_slot (retrait de
+# monde, retrait ombrage, slot recycle) -- meme geste que la mort de
+# vieillesse.
+func _passe_competition() -> void:
+	var cap: int = _capacite
+	var a_liberer: Array = []
+	var i: int = 0
+	while i < cap:
+		if _libres[i] == 1:
+			i += 1
+			continue
+		var index: int = _slot_stade[i]
+		if index < 0 or index + 1 > _stade_competition_max:
+			i += 1
+			continue
+		var pos := Vector3(_positions_x[i], Y_SOL, _positions_z[i])
+		var voisins: int = _monde.choses_dans_rayon(pos, _rayon_competition).size()
+		if voisins > _competition_max_voisins:
+			var exces: int = voisins - _competition_max_voisins
+			var proba: float = clampf(
+				float(exces) / float(maxi(1, _competition_max_voisins)), 0.0, 1.0)
+			if _rng.randf() < proba:
+				a_liberer.append(i)
+		i += 1
+	for slot in a_liberer:
+		_liberer_slot(int(slot))
