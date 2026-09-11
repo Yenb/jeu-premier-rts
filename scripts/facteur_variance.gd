@@ -18,10 +18,20 @@ extends RefCounted
 # ---- CE QU'IL FAIT ----
 # static tirer(rng, amplitude) : rend 1.0 + rng.randf_range(-a, +a), avec
 # `a = clampf(amplitude, 0.0, 1.0)` pour garantir que le facteur reste
-# dans [0.0, 2.0] (jamais negatif). amplitude = 0 -> 1.0 exact ;
-# amplitude = 1 -> facteur dans [0, 2] ; amplitude > 1 -> clampe a 1
-# (aucune valeur negative silencieuse). Aucun etat interne, aucun cache :
-# l'appelant tire, garde la valeur ou la jette.
+# dans [0.0, 2.0] (jamais negatif). Tirage SYMETRIQUE autour de 1.
+# amplitude = 0 -> 1.0 exact ; amplitude = 1 -> facteur dans [0, 2] ;
+# amplitude > 1 -> clampe a 1 (aucune valeur negative silencieuse).
+#
+# static tirer_entre(rng, mini, maxi) : rend rng.randf_range(mini, maxi),
+# tirage ASYMETRIQUE a bornes INDEPENDANTES. Pour desynchroniser une
+# grandeur avec des bornes qu'un tirage symetrique ne peut pas
+# atteindre (ex : longevite dans [0.5, 2.0], impossible autour de 1
+# avec une amplitude unique). mini > maxi : push_error, rend mini.
+# mini == maxi : rend mini exact (aucun tirage). Ce chemin ne clampe
+# rien -- l'appelant assume les bornes qu'il fournit, y compris
+# negatives (facteur signe legitime dans certains cas).
+#
+# Aucun etat interne, aucun cache : l'appelant tire, garde ou jette.
 #
 # ---- OU LE STOCKER ----
 # L'appelant tire A LA NAISSANCE de l'individu et stocke le facteur dans
@@ -53,3 +63,11 @@ static func tirer(rng: RandomNumberGenerator, amplitude: float) -> float:
 	if a == 0.0:
 		return 1.0
 	return 1.0 + rng.randf_range(-a, a)
+
+static func tirer_entre(rng: RandomNumberGenerator, mini: float, maxi: float) -> float:
+	if mini > maxi:
+		push_error("facteur_variance.gd : tirer_entre() -- mini %f > maxi %f, rend mini" % [mini, maxi])
+		return mini
+	if mini == maxi:
+		return mini
+	return rng.randf_range(mini, maxi)

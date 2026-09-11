@@ -131,8 +131,14 @@ var _intervalle_retest: float = 5.0
 var _rayon_trouee: float = 4.0
 var _trouee_max_voisins: int = 1
 var _ombrage_par_stade: Array = []
-var _variance_croissance: float = 0.3
-var _variance_longevite: float = 0.3
+# Bornes independantes pour les deux facteurs individuels (tires seedes
+# a la naissance via facteur_variance.gd:tirer_entre). Asymetriques
+# possibles : ex. longevite [0.5, 2.0] rend l'arbre du double au moitie
+# de la duree moyenne, hors de portee d'un tirage symetrique.
+var _croissance_min: float = 0.6
+var _croissance_max: float = 1.6
+var _longevite_min: float = 0.5
+var _longevite_max: float = 2.0
 # Facteur d'echelle senescence : delta * annees_par_seconde ajoute a age.
 # Fixe a 1.0 par defaut (unites de temps du banc = "annees" par convention),
 # pour que les seuils de `durees_stades` (secondes ecoulees ici) se lisent
@@ -278,10 +284,14 @@ func _charger_reglages_locaux() -> void:
 		_trouee_max_voisins = int(donnees.trouee_max_voisins)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
-	if donnees.has("variance_croissance"):
-		_variance_croissance = float(donnees.variance_croissance)
-	if donnees.has("variance_longevite"):
-		_variance_longevite = float(donnees.variance_longevite)
+	if donnees.has("croissance_min"):
+		_croissance_min = float(donnees.croissance_min)
+	if donnees.has("croissance_max"):
+		_croissance_max = float(donnees.croissance_max)
+	if donnees.has("longevite_min"):
+		_longevite_min = float(donnees.longevite_min)
+	if donnees.has("longevite_max"):
+		_longevite_max = float(donnees.longevite_max)
 	if donnees.has("annees_par_seconde"):
 		_annees_par_seconde = float(donnees.annees_par_seconde)
 	if _stades.size() != 8:
@@ -687,8 +697,8 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_slot_stade[i] = _index_pour_age(_ages[i])
 	if _slot_stade[i] >= 0:
 		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
-	_facteur_croissance[i] = FacteurVariance.tirer(_rng, _variance_croissance)
-	_facteur_longevite[i] = FacteurVariance.tirer(_rng, _variance_longevite)
+	_facteur_croissance[i] = FacteurVariance.tirer_entre(_rng, _croissance_min, _croissance_max)
+	_facteur_longevite[i] = FacteurVariance.tirer_entre(_rng, _longevite_min, _longevite_max)
 	# Inscription dans monde (consequence: monde.gd:ajouter exige un
 	# Dictionary avec `id` et `position` structurels ; plan B: aucun --
 	# rollback = ne pas ajouter le champ, mais le retirer de _liberer_slot

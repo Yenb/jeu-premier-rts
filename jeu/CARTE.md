@@ -4543,12 +4543,16 @@ en-tête).
   `jeu/Outil de jeu/champ_spatial.gd` (canevas CLAUDE.md § LOCALITÉ
   SPATIALE, pattern (a) champ scalaire) — variante float+signée à
   dépôt sur un carré de cases, alors que le partagé gère un compte
-  entier +1/−1 uniforme. VARIANCES INDIVIDUELLES : chaque arbre tire à
+  entier +1/−1 uniforme. VARIANCES INDIVIDUELLES À BORNES INDÉPENDANTES : chaque arbre tire à
   la naissance deux facteurs (croissance et longévité) via
-  `scripts/facteur_variance.gd` (mécanisme framework, test hors domaine),
-  stockés dans `_facteur_croissance` et `_facteur_longevite`. Le premier
-  multiplie l'âge réel pour l'âge effectif qui pilote stade / fertilité /
-  géométrie ; le second multiplie le seuil de mort. Casse la
+  `scripts/facteur_variance.gd:tirer_entre` (mécanisme framework, test
+  hors domaine), stockés dans `_facteur_croissance` et
+  `_facteur_longevite`. Les quatre bornes viennent du JSON
+  (`croissance_min`/`croissance_max`, `longevite_min`/`longevite_max`,
+  défauts 0.6/1.6 et 0.5/2.0) — asymétriques possibles, ce qu'un tirage
+  symétrique autour de 1 (`tirer` classique) ne peut pas atteindre. Le
+  premier multiplie l'âge réel pour l'âge effectif qui pilote stade /
+  fertilité / géométrie ; le second multiplie le seuil de mort. Casse la
   synchronisation des cohortes — tailles panachées dans un même
   bosquet, morts étalées dans le temps au lieu de trous d'un bloc.
   NAISSANCE : slot libre
