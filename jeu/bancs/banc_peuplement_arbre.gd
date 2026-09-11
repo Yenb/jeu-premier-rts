@@ -114,7 +114,7 @@ var _mode_test_rapide: bool = false
 # `2 * _demi_carte` centre a l'origine ; toute graine dont la position
 # tombe hors [-_demi_carte, +_demi_carte] en x ou z est rejetee (perdue,
 # ne germe pas). UNE seule source de verite -- le sol de _monter_scene
-# et la garde de _deposer_graine derivent tous deux de cette valeur.
+# et la garde de _semer_pres_de derivent tous deux de cette valeur.
 var _demi_carte: float = 300.0
 # Gate : true = le joueur (CharacterBody3D, exception CLAUDE.md) est
 # instancie et sa camera est current ; false = pas de joueur, la camera
@@ -315,7 +315,7 @@ var _reveils: Dictionary = {}
 # CLAUDE.md, variante monde-indexe adaptee aux ids stables). Cle =
 # Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
 # Array<int> des ids de prospects dormants dans cette case. Insertion a
-# `_deposer_graine`, retrait quand une graine leve (`_tick_banque`).
+# `_semer_pres_de`, retrait quand une graine leve (`_tick_banque`).
 # `_reveiller_dormantes_autour` ne lit QUE les cases dans le rectangle
 # `[pos - _rayon_reveil, pos + _rayon_reveil]` -- plus de balayage
 # global de toute la banque a chaque evenement. Cout d'un reveil =
@@ -1060,16 +1060,8 @@ func _index_pour_age(age: float) -> int:
 			trouve = i
 	return trouve
 
-func _semer_pres_de(parent_index: int) -> void:
-	# Tirage UNIFORME dans le disque : angle uniforme + rayon = sqrt(u) * R.
-	var angle: float = _rng.randf() * TAU
-	var rayon: float = sqrt(_rng.randf()) * _rayon_graine
-	var pos_x: float = _positions_x[parent_index] + cos(angle) * rayon
-	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
-	_deposer_graine(pos_x, pos_z)
-
 # UNIQUE definition du gate de trouee (patron vegetation.gd:trouee_suffisante).
-# Appele par _deposer_graine (germination directe) ET par _tick_banque
+# Appele par _semer_pres_de (germination directe) ET par _tick_banque
 # (une graine reveillee = une requete ciblee a SA position avec
 # rayon_gros). UN SEUL chemin, une seule fonction -- si deux chemins
 # divergeaient, la banque contournerait le gate et les salves
@@ -1096,7 +1088,19 @@ func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
 			compte_normal += 1
 	return compte_normal > _trouee_max_voisins
 
-func _deposer_graine(pos_x: float, pos_z: float) -> void:
+# Semis d'UNE graine par un parent : tirage disque uniforme + traitement
+# (garde carte, gate trouee, lecture couvert, naitre/banque). Fusion des
+# ex `_semer_pres_de` et `_deposer_graine` : UN seul appel par graine
+# depuis `_process`, pas deux. Le calcul de position et le traitement
+# restent ecrits l'un apres l'autre, visibles.
+func _semer_pres_de(parent_index: int) -> void:
+	# Tirage UNIFORME dans le disque : angle uniforme + rayon = sqrt(u) * R.
+	# ORDRE RNG PRESERVE : angle avant rayon, comme dans l'ancienne
+	# `_semer_pres_de`. Une foret a seed egal reste identique.
+	var angle: float = _rng.randf() * TAU
+	var rayon: float = sqrt(_rng.randf()) * _rayon_graine
+	var pos_x: float = _positions_x[parent_index] + cos(angle) * rayon
+	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
 	# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
 	if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
 		return
@@ -1267,7 +1271,7 @@ func _reveiller_dormantes_autour(pos_x: float, pos_z: float) -> void:
 				if dx * dx + dz * dz <= carre:
 					_reveils[id] = true
 
-# Inscrit une graine dormante dans la grille spatiale (a `_deposer_graine`
+# Inscrit une graine dormante dans la grille spatiale (a `_semer_pres_de`
 # quand l'entree en banque a rendu un id valide). Cout O(1). `_case_de_dormante`
 # tient l'index inverse id -> Vector2i pour un retrait O(1).
 func _inscrire_dormante(id: int, pos_x: float, pos_z: float) -> void:

@@ -4566,7 +4566,7 @@ en-tête).
   max(`rayon_trouee * facteur_trouee_gros`, portée d'ombrage max en
   unités monde). GRILLE SPATIALE DES DORMANTES
   (`_dormantes_par_case`, `Vector2i` → `Array<int>` d'ids ; index
-  inverse `_case_de_dormante`) inscrite à `_deposer_graine`, retirée
+  inverse `_case_de_dormante`) inscrite à `_semer_pres_de`, retirée
   à la levée dans `_tick_banque`. `_reveiller_dormantes_autour` ne
   lit que les cases du rectangle `[pos - R, pos + R]` (2 ou 3 cases
   par axe, cote = `_rayon_reveil`) — plus de balayage global de la
