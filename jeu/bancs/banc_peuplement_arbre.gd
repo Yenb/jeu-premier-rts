@@ -114,7 +114,7 @@ var _mode_test_rapide: bool = false
 # `2 * _demi_carte` centre a l'origine ; toute graine dont la position
 # tombe hors [-_demi_carte, +_demi_carte] en x ou z est rejetee (perdue,
 # ne germe pas). UNE seule source de verite -- le sol de _monter_scene
-# et la garde de _semer_pres_de derivent tous deux de cette valeur.
+# et la garde de _semer_lot derivent tous deux de cette valeur.
 var _demi_carte: float = 300.0
 # Gate : true = le joueur (CharacterBody3D, exception CLAUDE.md) est
 # instancie et sa camera est current ; false = pas de joueur, la camera
@@ -311,11 +311,20 @@ var _banque_graines: RefCounted = null
 # leve est retiree du registre `AttenteSeuil`.
 var _reveils: Dictionary = {}
 
+# LOT DE GRAINES A SEMER, cumule pendant la boucle des arbres de _process
+# et draine par `_semer_lot` apres la boucle. Deux PackedFloat32Array
+# paralleles (position XZ) reutilisees tick apres tick : resize(0) au
+# debut du tick garde la capacite deja allouee, aucune allocation neuve
+# en regime. Une passe de traitement par tick au lieu d'un appel par
+# arbre.
+var _graines_lot_x: PackedFloat32Array = PackedFloat32Array()
+var _graines_lot_z: PackedFloat32Array = PackedFloat32Array()
+
 # GRILLE SPATIALE PROPRE A LA BANQUE (patron LOCALITE SPATIALE du
 # CLAUDE.md, variante monde-indexe adaptee aux ids stables). Cle =
 # Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
 # Array<int> des ids de prospects dormants dans cette case. Insertion a
-# `_semer_pres_de`, retrait quand une graine leve (`_tick_banque`).
+# `_semer_lot`, retrait quand une graine leve (`_tick_banque`).
 # `_reveiller_dormantes_autour` ne lit QUE les cases dans le rectangle
 # `[pos - _rayon_reveil, pos + _rayon_reveil]` -- plus de balayage
 # global de toute la banque a chaque evenement. Cout d'un reveil =
@@ -712,6 +721,11 @@ func _process(delta: float) -> void:
 	_temps_depuis_maj = 0.0
 	if _mode_test_rapide:
 		pas *= 4.0
+	# LOT DE GRAINES A SEMER : vide en debut de tick. resize(0) garde la
+	# capacite deja allouee (aucune allocation neuve tick apres tick une
+	# fois le regime atteint).
+	_graines_lot_x.resize(0)
+	_graines_lot_z.resize(0)
 	# Capacite figee en debut de boucle.
 	var cap: int = _capacite
 	var i: int = 0
@@ -775,9 +789,18 @@ func _process(delta: float) -> void:
 			var intervalle_i: float = _intervalle_reprod[i]
 			if intervalle_i > 0.0 and not is_inf(intervalle_i):
 				if _rng.randf() < pas / intervalle_i:
-					_semer_pres_de(i)
+					# Tirage disque UNIFORME (angle uniforme + rayon = sqrt(u)
+					# * R), fait INLINE ici pour preserver l'ordre RNG exact
+					# entre arbres. La graine est empilee dans le lot ; le
+					# traitement (garde, gate, naitre/banque) se fait en UNE
+					# passe apres la boucle, dans `_semer_lot`.
+					var angle: float = _rng.randf() * TAU
+					var rayon: float = sqrt(_rng.randf()) * _rayon_graine
+					_graines_lot_x.append(_positions_x[i] + cos(angle) * rayon)
+					_graines_lot_z.append(_positions_z[i] + sin(angle) * rayon)
 		_ecrire_slot(i, age_i)
 		i += 1
+	_semer_lot()
 	_tick_banque(pas)
 	_avancer_competition(pas)
 	_frames_depuis_releve += 1
@@ -1061,7 +1084,7 @@ func _index_pour_age(age: float) -> int:
 	return trouve
 
 # UNIQUE definition du gate de trouee (patron vegetation.gd:trouee_suffisante).
-# Appele par _semer_pres_de (germination directe) ET par _tick_banque
+# Appele par _semer_lot (germination directe) ET par _tick_banque
 # (une graine reveillee = une requete ciblee a SA position avec
 # rayon_gros). UN SEUL chemin, une seule fonction -- si deux chemins
 # divergeaient, la banque contournerait le gate et les salves
@@ -1088,45 +1111,47 @@ func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
 			compte_normal += 1
 	return compte_normal > _trouee_max_voisins
 
-# Semis d'UNE graine par un parent : tirage disque uniforme + traitement
-# (garde carte, gate trouee, lecture couvert, naitre/banque). Fusion des
-# ex `_semer_pres_de` et `_deposer_graine` : UN seul appel par graine
-# depuis `_process`, pas deux. Le calcul de position et le traitement
-# restent ecrits l'un apres l'autre, visibles.
-func _semer_pres_de(parent_index: int) -> void:
-	# Tirage UNIFORME dans le disque : angle uniforme + rayon = sqrt(u) * R.
-	# ORDRE RNG PRESERVE : angle avant rayon, comme dans l'ancienne
-	# `_semer_pres_de`. Une foret a seed egal reste identique.
-	var angle: float = _rng.randf() * TAU
-	var rayon: float = sqrt(_rng.randf()) * _rayon_graine
-	var pos_x: float = _positions_x[parent_index] + cos(angle) * rayon
-	var pos_z: float = _positions_z[parent_index] + sin(angle) * rayon
-	# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
-	if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
-		return
-	# Rejet trouee sur germination directe = graine perdue (pas de banque :
-	# la banque attend que le COUVERT baisse, pas que la densite physique
-	# se degage).
-	if _trouee_saturee(pos_x, pos_z):
-		return
-	if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
-		_naitre(pos_x, pos_z)
-		return
-	# Entree en banque, DORMANTE : aucune echeance posee. Elle attendra
-	# qu'un evenement de voisinage (mort ou changement de stade) la
-	# reveille via `_reveiller_dormantes_autour`. Le test qui vient
-	# d'echouer ci-dessus a etabli qu'aucune de ses conditions ne
-	# passe MAINTENANT ; sans changement autour d'elle le resultat ne
-	# changera pas.
-	var id_prospect: int = _banque_graines.ajouter({
-		"position": Vector3(pos_x, Y_SOL, pos_z),
-	})
-	if id_prospect >= 0:
-		_inscrire_dormante(id_prospect, pos_x, pos_z)
-		# Echeance de mort : temps banque courant + duree de vie.
-		# Duree fixe -> ordre d'insertion = ordre d'expiration,
-		# append en queue suffit (aucun tri).
-		_expirations.append([_temps_banque + _duree_vie_graine, id_prospect])
+# TRAITEMENT DU LOT DE GRAINES en UNE passe par tick. Appele une fois
+# depuis `_process` apres la boucle des arbres. Draine
+# `_graines_lot_x/_z` (position XZ empilee inline dans la boucle des
+# arbres, ordre RNG preserve). Pour chaque graine : garde-carte, gate
+# de trouee, lecture couvert -> naitre ou banque. L'ordre est celui d'empilement : une
+# graine plus tot dans le lot qui naitre est deja dans `_monde` quand
+# la suivante appelle `_trouee_saturee` (patron `nouvelles` de
+# `vegetation.gd`, sans dict temporaire).
+func _semer_lot() -> void:
+	var n: int = _graines_lot_x.size()
+	var k: int = 0
+	while k < n:
+		var pos_x: float = _graines_lot_x[k]
+		var pos_z: float = _graines_lot_z[k]
+		k += 1
+		# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
+		if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
+			continue
+		# Rejet trouee sur germination directe = graine perdue (pas de banque :
+		# la banque attend que le COUVERT baisse, pas que la densite physique
+		# se degage).
+		if _trouee_saturee(pos_x, pos_z):
+			continue
+		if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
+			_naitre(pos_x, pos_z)
+			continue
+		# Entree en banque, DORMANTE : aucune echeance posee. Elle attendra
+		# qu'un evenement de voisinage (mort ou changement de stade) la
+		# reveille via `_reveiller_dormantes_autour`. Le test qui vient
+		# d'echouer ci-dessus a etabli qu'aucune de ses conditions ne
+		# passe MAINTENANT ; sans changement autour d'elle le resultat ne
+		# changera pas.
+		var id_prospect: int = _banque_graines.ajouter({
+			"position": Vector3(pos_x, Y_SOL, pos_z),
+		})
+		if id_prospect >= 0:
+			_inscrire_dormante(id_prospect, pos_x, pos_z)
+			# Echeance de mort : temps banque courant + duree de vie.
+			# Duree fixe -> ordre d'insertion = ordre d'expiration,
+			# append en queue suffit (aucun tri).
+			_expirations.append([_temps_banque + _duree_vie_graine, id_prospect])
 
 # RE-TEST SUR EVENEMENT (patron `vegetation.gd` « L'OMBRE EST UN SIGNAL »).
 # `pas` est ignore : rien de temporise ici, seul le `_reveils` rempli
@@ -1271,7 +1296,7 @@ func _reveiller_dormantes_autour(pos_x: float, pos_z: float) -> void:
 				if dx * dx + dz * dz <= carre:
 					_reveils[id] = true
 
-# Inscrit une graine dormante dans la grille spatiale (a `_semer_pres_de`
+# Inscrit une graine dormante dans la grille spatiale (a `_semer_lot`
 # quand l'entree en banque a rendu un id valide). Cout O(1). `_case_de_dormante`
 # tient l'index inverse id -> Vector2i pour un retrait O(1).
 func _inscrire_dormante(id: int, pos_x: float, pos_z: float) -> void:
