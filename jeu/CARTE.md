@@ -4528,8 +4528,14 @@ en-tête).
   (il compare à un seuil unique, il ignore l'échéance par graine).
   Chaque graine échue passe par le MÊME gate de trouée que la
   germination directe
-  (`_trouee_saturee` : `_monde.choses_dans_rayon(pos, rayon_trouee).size()
-  <= trouee_max_voisins`, patron `jeu/plantes/vegetation.gd:trouee_suffisante`).
+  (`_trouee_saturee`, patron `jeu/plantes/vegetation.gd:trouee_suffisante`).
+  RAYON ÉLARGI AUTOUR DES GROS : un voisin adulte (stade dans
+  [`stade_gros_min`, `stade_gros_max`], défaut 5-7) occupe un rayon
+  `rayon_trouee * facteur_trouee_gros` (défaut ×2) — sa présence dans
+  ce rayon large rejette la graine, même si le compte normal n'est
+  pas dépassé. Les jeunes gardent le rayon normal. Le stade du voisin
+  est lu via `_slot_stade[chose.slot]` (le `slot` est stocké dans le
+  dict `chose` inscrit dans `_monde` au `_naitre`).
   Une graine dont le couvert est bon mais la trouée saturée RESTE en
   banque (pas de `retirer`) ; seules celles qui naissent vraiment sont
   retirées. Les rejets nés plus tôt dans la même rafale de banque sont

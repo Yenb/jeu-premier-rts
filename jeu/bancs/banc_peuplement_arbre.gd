@@ -144,6 +144,16 @@ var _stade_competition_max: int = 4
 var _rayon_competition: float = 3.0
 var _competition_max_voisins: int = 3
 var _temps_competition: float = 0.0
+
+# GATE DE TROUEE ELARGI AUTOUR DES GROS. Un voisin adulte (stade dans
+# [_stade_gros_min, _stade_gros_max]) "occupe" un rayon egal a
+# `_rayon_trouee * _facteur_trouee_gros` -- une graine tombee a cette
+# distance d'un adulte est rejetee, meme si le compte normal n'est pas
+# depasse. Les jeunes gardent le rayon normal `_rayon_trouee`. Effet :
+# rien ne pousse tres pres d'un dominant.
+var _stade_gros_min: int = 5
+var _stade_gros_max: int = 7
+var _facteur_trouee_gros: float = 2.0
 var _ombrage_par_stade: Array = []
 # Bornes independantes pour les deux facteurs individuels (tires seedes
 # a la naissance via facteur_variance.gd:tirer_entre). Asymetriques
@@ -303,6 +313,12 @@ func _charger_reglages_locaux() -> void:
 		_rayon_competition = float(donnees.rayon_competition)
 	if donnees.has("competition_max_voisins"):
 		_competition_max_voisins = int(donnees.competition_max_voisins)
+	if donnees.has("stade_gros_min"):
+		_stade_gros_min = int(donnees.stade_gros_min)
+	if donnees.has("stade_gros_max"):
+		_stade_gros_max = int(donnees.stade_gros_max)
+	if donnees.has("facteur_trouee_gros"):
+		_facteur_trouee_gros = float(donnees.facteur_trouee_gros)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
 	if donnees.has("croissance_min"):
@@ -732,7 +748,10 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	# Dictionary avec `id` et `position` structurels ; plan B: aucun --
 	# rollback = ne pas ajouter le champ, mais le retirer de _liberer_slot
 	# echouerait alors sur push_error id absent).
-	var chose := {"id": "arbre_%d" % i, "position": position}
+	# `slot` stocke dans la `chose` : le gate de trouee elargi le relit
+	# via `_slot_stade[slot]` pour distinguer adulte / jeune. Pas de parse
+	# d'id (fragile).
+	var chose := {"id": "arbre_%d" % i, "position": position, "slot": i}
 	_choses_arbre[i] = chose
 	_monde.ajouter(chose, "arbre", position)
 	_ecrire_slot(i, _ages[i])
@@ -765,8 +784,27 @@ func _semer_pres_de(parent_index: int) -> void:
 # _naitre) et comptes ici -- meme effet que le dict `nouvelles` de
 # vegetation.gd sans dict temporaire.
 func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
+	# Deux rayons, UNE seule requete au plus grand (englobe le petit).
+	# Un ADULTE (stade dans [_stade_gros_min, _stade_gros_max]) present
+	# dans le rayon large -> rejet immediat. Les JEUNES ne comptent que
+	# s'ils tombent dans le rayon normal, sommes comparees a
+	# `_trouee_max_voisins`. Rayon large = _rayon_trouee * _facteur_trouee_gros.
 	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
-	return _monde.choses_dans_rayon(arrivee, _rayon_trouee).size() > _trouee_max_voisins
+	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
+	var carre_normal: float = _rayon_trouee * _rayon_trouee
+	var compte_normal: int = 0
+	for entree in _monde.choses_dans_rayon(arrivee, rayon_gros):
+		var chose = entree.chose
+		var slot: int = int(chose.get("slot", -1))
+		var stade_num: int = 0
+		if slot >= 0 and slot < _slot_stade.size():
+			stade_num = _slot_stade[slot] + 1
+		if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
+			return true
+		var pos_voisin: Vector3 = chose.position
+		if arrivee.distance_squared_to(pos_voisin) <= carre_normal:
+			compte_normal += 1
+	return compte_normal > _trouee_max_voisins
 
 func _deposer_graine(pos_x: float, pos_z: float) -> void:
 	# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
