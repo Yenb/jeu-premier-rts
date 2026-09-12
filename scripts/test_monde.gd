@@ -31,6 +31,7 @@ func _init() -> void:
 	_choses_dans_couloir_ne_lit_que_les_cases_traversees()
 	_choses_dans_rayons_equivaut_a_la_boucle_ponctuelle()
 	_ajouter_lot_equivaut_a_la_boucle_unitaire()
+	_retirer_lot_equivaut_a_la_boucle_unitaire()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -241,3 +242,35 @@ func _ajouter_lot_equivaut_a_la_boucle_unitaire() -> void:
 	var voisins_essai := essai.choses_dans_rayon(Vector3(10.0, 0.0, 0.0), 5.0)
 	verif.v(voisins_oracle.size() == voisins_essai.size(),
 		"voisinage : oracle %d essai %d" % [voisins_oracle.size(), voisins_essai.size()])
+
+# LOT : retirer_lot(ids) doit rendre le meme etat qu'une boucle unitaire
+# de retirer, meme absence des ids dans le monde apres.
+func _retirer_lot_equivaut_a_la_boucle_unitaire() -> void:
+	# Peuple 20 choses.
+	var oracle := Monde.new()
+	var essai := Monde.new()
+	for i in range(20):
+		var pos := Vector3(float(i), 0.0, 0.0)
+		var co := Objet.fabriquer("chose_%d" % i, "type", pos, {})
+		oracle.ajouter(co, "type", co.position)
+		var ce := Objet.fabriquer("chose_%d" % i, "type", pos, {})
+		essai.ajouter(ce, "type", ce.position)
+	# Retire 8 d'entre elles.
+	var ids: Array = ["chose_2", "chose_5", "chose_7", "chose_11", "chose_13", "chose_15", "chose_17", "chose_19"]
+	for id in ids:
+		oracle.retirer(id)
+	essai.retirer_lot(ids)
+	# Verifie que chaque id retire est absent, que ceux restants sont
+	# encore la, et que le voisinage est identique.
+	for id in ids:
+		verif.v(oracle.par_id(id) == null, "oracle : id %s doit etre absent apres retirer" % id)
+		verif.v(essai.par_id(id) == null, "essai : id %s doit etre absent apres retirer_lot" % id)
+	for i in range(20):
+		var id: String = "chose_%d" % i
+		if not ids.has(id):
+			verif.v(oracle.par_id(id) != null and essai.par_id(id) != null,
+				"id restant %s doit etre present dans oracle et essai" % id)
+	# Voisinage identique.
+	var vo := oracle.choses_dans_rayon(Vector3(10.0, 0.0, 0.0), 5.0)
+	var ve := essai.choses_dans_rayon(Vector3(10.0, 0.0, 0.0), 5.0)
+	verif.v(vo.size() == ve.size(), "voisinage post-retirer : oracle %d essai %d" % [vo.size(), ve.size()])

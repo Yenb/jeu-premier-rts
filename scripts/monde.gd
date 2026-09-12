@@ -370,6 +370,32 @@ func par_id(id) -> Variant:
 # Sort une chose du monde : de `choses`, de `_rang`, et de chaque niveau
 # ouvert de l'index spatial. Voir l'en-tete -- un id absent alarme et ne
 # fait rien, jamais un silence.
+# LOT DE RETRAITS en UNE passe : applique N appels `retirer` sur un Array
+# d'ids. Meme resultat exact que N appels a `retirer` dans le meme ordre.
+# Ids inconnus : alarme + skip (comportement identique a la version
+# unitaire, meme id-par-id).
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer les
+# franchissements de frontiere par mort du banc `jeu/bancs/
+# banc_peuplement_arbre.gd`. Meme geste doctrinal que `retirer()` et
+# `ajouter_lot`.
+func retirer_lot(ids: Array) -> void:
+	var n: int = ids.size()
+	if n == 0:
+		return
+	var k: int = 0
+	while k < n:
+		var id = ids[k]
+		k += 1
+		if not choses.has(id):
+			push_error("monde.gd : retirer_lot() -- id '%s' absent" % id)
+			continue
+		for exposant in _niveaux:
+			_deranger(_niveaux[exposant], id)
+		choses.erase(id)
+		_rang.erase(id)
+
 func retirer(id) -> void:
 	if not choses.has(id):
 		push_error("monde.gd : retirer() -- id '%s' absent" % id)

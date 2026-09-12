@@ -261,7 +261,7 @@ var _facteur_longevite: PackedFloat32Array = PackedFloat32Array()
 var _intervalle_reprod: PackedFloat32Array = PackedFloat32Array()
 
 # Population vivante courante, tenue en O(1) : incrementee dans _naitre,
-# decrementee dans _liberer_slot. Aucun scan par frame.
+# decrementee dans _liberer_slots_lot. Aucun scan par frame.
 var _population: int = 0
 var _frames_depuis_releve: int = 0
 
@@ -365,10 +365,10 @@ var _reveils_positions_z: PackedFloat32Array = PackedFloat32Array()
 
 # LOT DE MORTS DE VIEILLESSE, collectees pendant la boucle des arbres et
 # drainees par UN appel a `_liberer_morts_vieillesse_lot` apres la
-# boucle. Reutilisee tick apres tick. Le comportement de `_liberer_slot`
-# est reproduit inline dans le drainage (retrait monde, retrait ombrage,
-# append reveil pos, reset colonnes, libre + slot_libres + _ecrire_slot_vide,
-# decrement _population).
+# boucle. Reutilisee tick apres tick. Le comportement de liberation est
+# reproduit inline dans `_liberer_slots_lot` : retrait monde (groupe),
+# retrait ombrage (groupe), reveil (groupe), reset colonnes, libre +
+# slot_libres + `_ecrire_slot_vide`, decrement `_population`.
 var _morts_vieillesse_lot: PackedInt32Array = PackedInt32Array()
 
 # GRILLE SPATIALE PROPRE A LA BANQUE (patron LOCALITE SPATIALE du
@@ -785,7 +785,7 @@ func _process(delta: float) -> void:
 	Senescence.avancer_lot(_ages, _libres, pas, _annees_par_seconde, _facteur_croissance)
 	# STADE EN LOT : mute `_slot_stade` en place, sans passage par String.
 	# `_slot_stade_avant` capture l'index PRE-tick pour que la detection de
-	# transition et `_liberer_slot` (seuil_mort) lisent bien l'index ANCIEN.
+	# transition et `_liberer_slots_lot` (seuil_mort) lisent bien l'index ANCIEN.
 	# JAMAIS UN RECUL : la mecanique `avancer_lot` respecte l'invariant du
 	# port unitaire (aucun retour arriere), le duplicate ne sert que pour
 	# la comparaison.
@@ -869,15 +869,14 @@ func _process(delta: float) -> void:
 		# qui draine `_graines_lot_*`).
 		i += 1
 	# MORTS DE VIEILLESSE EN LOT : draine les slots dont l'age a franchi
-	# le seuil de mort ce tick. Un seul appel pour tous, meme resultat
-	# que N appels a `_liberer_slot` dans la boucle des arbres. Chaque
-	# mort append sa position aux `_reveils_positions_*` pour que le
-	# reveil groupe qui suit couvre AUSSI les morts (patron unifie).
+	# le seuil de mort ce tick via `_liberer_slots_lot` (qui fait aussi
+	# son propre reveil groupe pour ses morts). Un seul appel groupe
+	# pour tous.
 	_liberer_morts_vieillesse_lot()
-	# REVEIL EN LOT : un seul appel pour toutes les transitions degageantes
-	# du tick ET les morts de vieillesse, meme resultat que N appels a
-	# `_reveiller_dormantes_autour` (le contenu de `_reveils` est un Set
-	# d'ids, invariant a l'ordre).
+	# REVEIL EN LOT : un seul appel pour toutes les transitions
+	# degageantes du tick (les morts de vieillesse et par competition
+	# font leur reveil groupe DANS `_liberer_slots_lot`). `_reveils`
+	# est un Set d'ids, marquer plusieurs fois est idempotent.
 	_reveiller_dormantes_autour_lot(_reveils_positions_x, _reveils_positions_z)
 	# LOT DE TRANSITIONS applique en UNE passe : un seul appel au champ
 	# pour toutes les transitions de stade du tick, au lieu de N appels.
@@ -1162,12 +1161,10 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 func _lire_couvert(pos_x: float, pos_z: float) -> float:
 	return _couvert.lire(pos_x, pos_z, _taille_case)
 
-# DRAINAGE DES MORTS DE VIEILLESSE en UNE passe. Reproduit `_liberer_slot`
-# inline pour chaque slot du lot, sans appel de fonction par mort. Le
-# reveil des dormantes est UNIFIE avec celui des transitions : chaque
-# mort append sa position dans `_reveils_positions_x/_z`, le reveil
-# groupe qui suit les traite tous. `_liberer_slot` reste utilise par
-# `_avancer_competition` (chemin de mort par competition).
+# DRAINAGE DES MORTS DE VIEILLESSE en UNE passe : delegue a
+# `_liberer_slots_lot` qui gere son propre reveil groupe. Meme point
+# d'entree que la mort par competition (`_avancer_competition`) --
+# une seule regle, un seul point de maintenance.
 # REPRODUCTION EN LOT : passe unique sur les vivants apres liberation
 # des morts du tick. RNG STOCHASTIQUE (processus de Poisson par
 # individu) CALEE SUR UN TOTAL DE GRAINES PAR VIE : `_intervalle_reprod[i]`
@@ -1201,62 +1198,71 @@ func _reproduire_lot(pas: float) -> void:
 		i += 1
 
 func _liberer_morts_vieillesse_lot() -> void:
-	var n: int = _morts_vieillesse_lot.size()
+	_liberer_slots_lot(_morts_vieillesse_lot)
+
+# DRAINAGE GROUPE : traite un lot de slots morts. Trois franchissements
+# par tick au total : `_monde.retirer_lot`, `_couvert.deposer_lot`, la
+# boucle interne unique (columns reset, `_ecrire_slot_vide`, reveil
+# append). Utilise par la mort de vieillesse ET par la mort par
+# competition, meme chemin -- une seule regle, un seul point de
+# maintenance.
+func _liberer_slots_lot(slots: PackedInt32Array) -> void:
+	var n: int = slots.size()
 	if n == 0:
 		return
+	var ids_a_retirer: Array = []
+	var dep_x: PackedFloat32Array = PackedFloat32Array()
+	var dep_z: PackedFloat32Array = PackedFloat32Array()
+	var dep_r: PackedFloat32Array = PackedFloat32Array()
+	var dep_m: PackedFloat32Array = PackedFloat32Array()
+	var dep_s: PackedByteArray = PackedByteArray()
+	# Reveils LOCAUX au lot : `_liberer_slots_lot` peut etre appele avant
+	# OU apres l'appel unique `_reveiller_dormantes_autour_lot` de la
+	# passe principale (mort de vieillesse avant, mort par competition
+	# apres) -- traiter les reveils du lot en interne evite qu'un
+	# appelant tardif perde ses reveils. `_reveils` etant un Set d'ids,
+	# marquer plusieurs fois est idempotent.
+	var rev_x: PackedFloat32Array = PackedFloat32Array()
+	var rev_z: PackedFloat32Array = PackedFloat32Array()
+	var n_conf: int = _ombrage_par_stade.size()
 	var k: int = 0
 	while k < n:
-		var i: int = _morts_vieillesse_lot[k]
+		var i: int = slots[k]
 		k += 1
 		var pos_x: float = _positions_x[i]
 		var pos_z: float = _positions_z[i]
 		var chose = _choses_arbre[i]
 		if chose != null:
-			_monde.retirer(chose.id)
+			ids_a_retirer.append(chose.id)
 			_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		var index: int = _slot_stade[i]
 		if index >= 0:
-			_deposer_ombrage(pos_x, pos_z, index + 1, -1)
+			var stade_num: int = index + 1
+			if stade_num >= 1 and stade_num <= n_conf:
+				var conf: Dictionary = _ombrage_par_stade[stade_num - 1]
+				var mag: float = float(conf.get("magnitude", 0.0))
+				if mag != 0.0:
+					dep_x.append(pos_x)
+					dep_z.append(pos_z)
+					dep_r.append(float(conf.get("rayon_ombre_m", 0.0)))
+					dep_m.append(mag)
+					dep_s.append(0)  # signe -1
 		_slot_stade[i] = -1
 		_libres[i] = 1
 		_ages[i] = 0.0
 		_ecrire_slot_vide(i)
 		_slots_libres.append(i)
 		_population -= 1
-		# EVENEMENT DE VOISINAGE : la mort a retire densite et ombrage.
-		# Empile la position pour le reveil groupe (identique a l'appel
-		# `_reveiller_dormantes_autour` de la version unitaire, meme Set
-		# `_reveils`, invariant a l'ordre).
-		_reveils_positions_x.append(pos_x)
-		_reveils_positions_z.append(pos_z)
-
-func _liberer_slot(i: int) -> void:
-	# Retrait structurel du monde (consequence: sans lui, la mort resterait
-	# un fantome compte a sa place dans toute requete de densite ; risque:
-	# gates de densite futurs trop stricts ; plan B: aucun -- monde.gd:retirer
-	# alarme sur id absent, defaut impossible ici).
-	var pos_x: float = _positions_x[i]
-	var pos_z: float = _positions_z[i]
-	var chose = _choses_arbre[i]
-	if chose != null:
-		_monde.retirer(chose.id)
-		_choses_arbre[i] = null
-	_derniere_params[i] = Vector4(INF, INF, INF, INF)
-	var index: int = _slot_stade[i]
-	if index >= 0:
-		_deposer_ombrage(pos_x, pos_z, index + 1, -1)
-	_slot_stade[i] = -1
-	_libres[i] = 1
-	_ages[i] = 0.0
-	_ecrire_slot_vide(i)
-	_slots_libres.append(i)
-	_population -= 1
-	# EVENEMENT DE VOISINAGE : la mort a retire densite et ombrage --
-	# les prospects dormants a portee peuvent voir leur gate s'ouvrir.
-	# Reveille les prospects concernes ; ils testeront au prochain
-	# `_tick_banque`.
-	_reveiller_dormantes_autour(pos_x, pos_z)
+		rev_x.append(pos_x)
+		rev_z.append(pos_z)
+	if ids_a_retirer.size() > 0:
+		_monde.retirer_lot(ids_a_retirer)
+	if dep_x.size() > 0:
+		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
+	# Un seul appel groupe de reveil pour tous les slots libere par ce
+	# lot.
+	_reveiller_dormantes_autour_lot(rev_x, rev_z)
 
 # NAISSANCES EN LOT : draine `_naissances_lot_x/_z` (positions empilees
 # par `_semer_lot` et `_tick_banque` -- les deux chemins deferent
@@ -1393,8 +1399,8 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 		_intervalle_reprod[i] = INF
 	# Inscription dans monde (consequence: monde.gd:ajouter exige un
 	# Dictionary avec `id` et `position` structurels ; plan B: aucun --
-	# rollback = ne pas ajouter le champ, mais le retirer de _liberer_slot
-	# echouerait alors sur push_error id absent).
+	# rollback = ne pas ajouter le champ, mais le retirer de
+	# `_liberer_slots_lot` echouerait alors sur push_error id absent).
 	# `slot` stocke dans la `chose` : le gate de trouee elargi le relit
 	# via `_slot_stade[slot]` pour distinguer adulte / jeune. Pas de parse
 	# d'id (fragile).
@@ -1644,37 +1650,6 @@ func _tick_banque(pas: float) -> void:
 # version pre-optim. MEMES graines reveillees (celles a distance <= R
 # du point), MEMES gates passes, MEMES levees ; seul l'ordre des
 # tirages change.
-func _reveiller_dormantes_autour(pos_x: float, pos_z: float) -> void:
-	if _banque_graines == null or _rayon_reveil <= 0.0 or _taille_case_dormantes <= 0.0:
-		return
-	if _dormantes_par_case.is_empty():
-		return
-	var inv_case: float = 1.0 / _taille_case_dormantes
-	var cx_min: int = floori((pos_x - _rayon_reveil) * inv_case)
-	var cx_max: int = floori((pos_x + _rayon_reveil) * inv_case)
-	var cz_min: int = floori((pos_z - _rayon_reveil) * inv_case)
-	var cz_max: int = floori((pos_z + _rayon_reveil) * inv_case)
-	var carre: float = _rayon_reveil * _rayon_reveil
-	var prospects: Dictionary = _banque_graines.prospects()
-	for cx in range(cx_min, cx_max + 1):
-		for cz in range(cz_min, cz_max + 1):
-			var cle: Vector2i = Vector2i(cx, cz)
-			var ids = _dormantes_par_case.get(cle, null)
-			if ids == null:
-				continue
-			for id_variant in ids:
-				var id: int = int(id_variant)
-				if _reveils.has(id):
-					continue
-				if not prospects.has(id):
-					continue
-				var entree: Dictionary = prospects[id]
-				var pos: Vector3 = entree.position
-				var dx: float = pos.x - pos_x
-				var dz: float = pos.z - pos_z
-				if dx * dx + dz * dz <= carre:
-					_reveils[id] = true
-
 # REVEIL EN LOT : boucle interne unique sur les positions collectees
 # pendant la passe de transition. `_reveils` etant un Set d'ids, l'ordre
 # de traitement des positions n'affecte pas le contenu final. Meme
@@ -1927,6 +1902,7 @@ func _avancer_competition(pas: float) -> void:
 	# unitaire (une mort retire son id de `_monde` au fil, un slot teste
 	# plus tard voit un voisin de moins).
 	var morts_du_tick: Dictionary = {}
+	var morts_slots: PackedInt32Array = PackedInt32Array()
 	var k: int = 0
 	var m: int = _competition_slots.size()
 	while k < m:
@@ -1946,4 +1922,11 @@ func _avancer_competition(pas: float) -> void:
 				var chose = _choses_arbre[slot]
 				if chose != null:
 					morts_du_tick[chose.id] = true
-				_liberer_slot(slot)
+				# Liberation DEFEREE au drainage groupe : append le slot
+				# au lot, `_liberer_slots_lot` fait `_monde.retirer_lot`
+				# + `_couvert.deposer_lot` + reveil groupe une seule fois
+				# en fin de fonction.
+				morts_slots.append(slot)
+	# UN appel groupe pour toutes les morts par competition du tick.
+	if morts_slots.size() > 0:
+		_liberer_slots_lot(morts_slots)

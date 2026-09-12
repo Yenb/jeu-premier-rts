@@ -794,11 +794,14 @@ en-tête du fichier. Test : `test_depense.gd`.
   population appelle `tirer_entre` deux fois par naissance (ordre RNG
   strictement préservé).
 
-### `scripts/monde.gd` — étendu : `ajouter_lot`
+### `scripts/monde.gd` — étendu : `ajouter_lot`, `retirer_lot`
 - **`ajouter_lot(entries: Array)`** (ÉCART FRAMEWORK, tracé dans le
   fichier) : entrées `[{chose, type}, ...]`. Applique N `ajouter` en une
   passe, position lue sur `chose.position`. Même résultat exact que N
   appels unitaires dans le même ordre.
+- **`retirer_lot(ids: Array)`** (ÉCART FRAMEWORK, tracé dans le fichier) :
+  applique N `retirer` en une passe. Ids inconnus : alarme + skip
+  (comportement id-par-id identique à la version unitaire).
 
 ### `scripts/champ_saturation.gd` — étendu : `deposer_lot`
 - **`deposer_lot(centres_x, centres_z, rayons_m, taille_case, magnitudes,
