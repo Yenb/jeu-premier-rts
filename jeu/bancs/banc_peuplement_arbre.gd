@@ -70,6 +70,7 @@
 
 extends Node
 
+const Objet = preload("res://scripts/objet.gd")
 const Senescence = preload("res://scripts/senescence.gd")
 const Stade = preload("res://scripts/stade.gd")
 const FacteurVariance = preload("res://scripts/facteur_variance.gd")
@@ -79,6 +80,7 @@ const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 const ChampSaturation = preload("res://scripts/champ_saturation.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
+const CHEMIN_TYPES := "res://data/types.json"
 
 # Hauteur du sol visuel monte par _monter_scene. La base des troncs y est posee.
 const Y_SOL := 12.0
@@ -92,6 +94,10 @@ const POS_INITIALE := Vector2(0.0, 0.0)
 
 # Cadence du releve population imprime dans la console (~1/s a 60 fps).
 const CADENCE_RELEVE_POPULATION_FRAMES := 60
+
+# Nom du type local declare dans le catalogue combine et resolu par
+# `Objet.fabriquer`.
+const TYPE_ARBRE := "arbre_pousse"
 
 var _durees: PackedFloat32Array = PackedFloat32Array()
 var _stades: Array = []
@@ -408,9 +414,13 @@ var _choses_arbre: Array = []
 
 var _rng := RandomNumberGenerator.new()
 
-# Reference unique de `stades_config` partagee entre toutes les
-# instances (patron `paquets_partages`). Construite au `_ready` par
-# `_construire_stades_config`, avant l'appel `_naitre_lot` initial.
+# Table combinee passee a Objet.fabriquer : paquet `dynamique` (extrait de
+# data/types.json) + type local `arbre_pousse`. Construite une fois au
+# _ready, jamais rechargee.
+var _catalogue: Dictionary = {}
+# Reference vers l'Array stades_config produit par Objet.fabriquer,
+# partagee entre tous les arbres (paquets_partages=true garantit la meme
+# reference pour toutes les instances). Assignee au premier _naitre.
 var _stades_config_partagee: Array = []
 
 
@@ -425,19 +435,10 @@ func _ready() -> void:
 	if _joueur_actif:
 		_monter_joueur()
 	_monter_population()
+	_construire_catalogue()
 	_banque_graines = AttenteSeuil.new()
 	if _stades.size() == 9:
-		# Reference partagee de `stades_config` construite une fois. Le
-		# premier arbre passe par `_naitre_lot` (queue d'un seul
-		# element) : deux `randf_range` (croissance, longevite) via
-		# `FacteurVariance.tirer_paires_entre_lot`.
-		_construire_stades_config()
-		_naissances_lot_x.append(POS_INITIALE.x)
-		_naissances_lot_z.append(POS_INITIALE.y)
-		_naitre_lot()
-		# Rendu immediat pour que le premier frame montre l'arbre initial
-		# avant l'appel `_ecrire_slots_lot` de fin de `_process`.
-		_ecrire_slots_lot()
+		_naitre(POS_INITIALE.x, POS_INITIALE.y)
 
 func _charger_reglages_locaux() -> void:
 	if not FileAccess.file_exists(CHEMIN_CATALOGUE_LOCAL):
@@ -556,19 +557,36 @@ func _charger_reglages_locaux() -> void:
 	# via `_facteur_croissance[i]` -- voir `_naitre_lot`.
 	_fenetre_fertile_age = maxf(0.0, _fin_fertilite - _debut_fertilite)
 
-# Construit `_stades_config_partagee` : suite des seuils cumules a
-# partir de `_durees`. Les noms "s1".."s8" sont arbitraires (stade.gd
-# ne connait aucun nom, il ne fait que comparer des index). Reference
-# unique partagee entre toutes les instances (equivalent au contrat
-# `paquets_partages=true` d'une composition, sans machinerie).
-func _construire_stades_config() -> void:
+# Construit la table passee a Objet.fabriquer : paquet `dynamique` du
+# framework (lu depuis data/types.json) + type local `arbre_pousse`. Aucune
+# modification de data/types.json.
+func _construire_catalogue() -> void:
+	if not FileAccess.file_exists(CHEMIN_TYPES):
+		push_error("banc_peuplement_arbre : %s absent" % CHEMIN_TYPES)
+		return
+	var texte_types := FileAccess.get_file_as_string(CHEMIN_TYPES)
+	var types = JSON.parse_string(texte_types)
+	if not (types is Dictionary):
+		push_error("banc_peuplement_arbre : %s invalide" % CHEMIN_TYPES)
+		return
+	if not types.has("dynamique"):
+		push_error("banc_peuplement_arbre : paquet `dynamique` absent de %s" % CHEMIN_TYPES)
+		return
+	_catalogue = {}
+	_catalogue["dynamique"] = types.dynamique
+	# stades_config du type local = suite des seuils cumules a partir de
+	# durees_stades. Les noms "s1".."s8" sont arbitraires (stade.gd ne
+	# connait aucun nom, il ne fait que comparer des index).
 	var stades_config: Array = []
 	var cumul: float = 0.0
 	for i in range(_stades.size()):
 		stades_config.append({"nom": "s%d" % (i + 1), "age_seuil": cumul})
 		if i < _durees.size():
 			cumul += float(_durees[i])
-	_stades_config_partagee = stades_config
+	_catalogue[TYPE_ARBRE] = {
+		"herite": ["dynamique"],
+		"stades_config": stades_config,
+	}
 
 func _monter_scene() -> void:
 	var sol := MeshInstance3D.new()
@@ -1293,6 +1311,44 @@ func _naitre_lot() -> void:
 	# UN appel groupe au champ pour tous les depots d'ombrage naissance.
 	if dep_x.size() > 0:
 		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
+
+# Naissance UNITAIRE : utilisee pour l'arbre initial au `_ready`
+# (`Objet.fabriquer` pose l'etat de depart complet -- age depuis le
+# paquet `dynamique`, `stades_config` partage, `_deposer_ombrage`
+# inline). Le chemin lot `_naitre_lot` reste pour les naissances de
+# semis/banque en cours de tick.
+func _naitre(pos_x: float, pos_z: float) -> void:
+	if _slots_libres.is_empty():
+		_agrandir_capacite()
+	var i: int = _slots_libres.pop_back()
+	var position := Vector3(pos_x, Y_SOL, pos_z)
+	var objet: Dictionary = Objet.fabriquer(
+		"arbre_%d" % i, TYPE_ARBRE, position, _catalogue, {}, [], {}, [], true)
+	if objet.is_empty():
+		push_error("banc_peuplement_arbre : Objet.fabriquer a rendu {} pour slot %d" % i)
+		_slots_libres.append(i)
+		return
+	if _stades_config_partagee.is_empty():
+		_stades_config_partagee = objet.proprietes.get("stades_config", [])
+	_libres[i] = 0
+	_ages[i] = float(objet.proprietes.get("age", 0.0))
+	_positions_x[i] = pos_x
+	_positions_z[i] = pos_z
+	_slot_stade[i] = _index_pour_age(_ages[i])
+	if _slot_stade[i] >= 0:
+		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
+	_facteur_croissance[i] = FacteurVariance.tirer_entre(_rng, _croissance_min, _croissance_max)
+	_facteur_longevite[i] = FacteurVariance.tirer_entre(_rng, _longevite_min, _longevite_max)
+	var denom: float = _annees_par_seconde * _facteur_croissance[i] * _graines_par_vie
+	if _fenetre_fertile_age > 0.0 and denom > 0.0:
+		_intervalle_reprod[i] = _fenetre_fertile_age / denom
+	else:
+		_intervalle_reprod[i] = INF
+	var chose := {"id": "arbre_%d" % i, "position": position, "slot": i}
+	_choses_arbre[i] = chose
+	_monde.ajouter(chose, "arbre", position)
+	_ecrire_slot(i, _ages[i])
+	_population += 1
 
 # Index du stade dont age_seuil <= age est le plus grand. Meme geste que
 # `stade.gd:avancer` en interne, mais rendu ici pour poser le stade INITIAL
