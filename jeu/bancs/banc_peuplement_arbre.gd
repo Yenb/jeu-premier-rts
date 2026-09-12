@@ -25,17 +25,13 @@
 # coeur et en derive la taille (interpolation entre les entrees
 # `stades[i]` du catalogue local). Le coeur ne touche jamais le rendu.
 #
-# FABRICATION VIA `Objet.fabriquer` : catalogue combine construit une fois
-# au `_ready` (paquet `dynamique` extrait de `data/types.json` + type
-# local `arbre_pousse` qui herite de `dynamique` et pose `stades_config`).
-# Chaque naissance appelle `Objet.fabriquer("arbre_<slot>", "arbre_pousse",
-# position, catalogue, {}, [], {}, [], true)` -- resultat NON stocke
-# (couche stockage tient tout), on extrait `age` initial et on cache
-# `stades_config` la premiere fois. Le type `arbre_pousse` est LOCAL
-# (data/banc_peuplement_arbre.json) -- pas de modification de
-# data/types.json (lecture seule framework). Le type framework `arbre`
-# herite de `objet_physique` seul, sans `dynamique` (donc sans `age` ni
-# `stades_config`) ; c'est ce manque qui justifie le type local.
+# CATALOGUE `stades_config` LOCAL : `_stades_config_partagee` est
+# construit une fois au `_ready` (`_construire_stades_config`) comme
+# suite de seuils cumules a partir de `_durees`. Reference unique
+# partagee entre toutes les instances : chaque `_naitre_lot` en
+# reutilise la meme ref (contrat "paquets_partages" applique sans
+# passer par une machinerie de composition). Le framework ne porte
+# aucun `stades_config` sur son type `arbre`, ce banc porte le sien.
 #
 # BANQUE DE GRAINES DORMANTES : registre delegue au mecanisme framework
 # `scripts/attente_seuil.gd` (ajouter/retirer/prospects). RE-TEST SUR
@@ -46,7 +42,7 @@
 # son gate. Entre deux tels evenements, ses conditions (trouee,
 # couvert) sont rigoureusement identiques -- re-tester serait
 # retrouver le meme resultat. Cle libre `reveille=false` posee a
-# l'entree en banque ; `_reveiller_dormantes_autour` la passe a true
+# l'entree en banque ; `_reveiller_dormantes_autour_lot` la passe a true
 # pour les prospects dans le rayon d'un evenement ; `_tick_banque`
 # ne teste que celles dont `reveille=true` et les remet a false
 # apres un rejet. Une naissance N'EST PAS un evenement de reveil :
@@ -74,7 +70,6 @@
 
 extends Node
 
-const Objet = preload("res://scripts/objet.gd")
 const Senescence = preload("res://scripts/senescence.gd")
 const Stade = preload("res://scripts/stade.gd")
 const FacteurVariance = preload("res://scripts/facteur_variance.gd")
@@ -84,7 +79,6 @@ const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 const ChampSaturation = preload("res://scripts/champ_saturation.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
-const CHEMIN_TYPES := "res://data/types.json"
 
 # Hauteur du sol visuel monte par _monter_scene. La base des troncs y est posee.
 const Y_SOL := 12.0
@@ -98,10 +92,6 @@ const POS_INITIALE := Vector2(0.0, 0.0)
 
 # Cadence du releve population imprime dans la console (~1/s a 60 fps).
 const CADENCE_RELEVE_POPULATION_FRAMES := 60
-
-# Nom du type local declare dans le catalogue combine et resolu par
-# `Objet.fabriquer`.
-const TYPE_ARBRE := "arbre_pousse"
 
 var _durees: PackedFloat32Array = PackedFloat32Array()
 var _stades: Array = []
@@ -260,30 +250,10 @@ var _facteur_longevite: PackedFloat32Array = PackedFloat32Array()
 # nul) -> proba nulle, aucune reproduction.
 var _intervalle_reprod: PackedFloat32Array = PackedFloat32Array()
 
-# Population vivante courante, tenue en O(1) : incrementee dans _naitre,
-# decrementee dans _liberer_slots_lot. Aucun scan par frame.
+# Population vivante courante, tenue en O(1) : incrementee dans
+# _naitre_lot, decrementee dans _liberer_slots_lot. Aucun scan par frame.
 var _population: int = 0
 var _frames_depuis_releve: int = 0
-
-# CHRONOS TEMPORAIRES DE _tick_banque (a retirer une fois le poste
-# dominant identifie -- meme discipline que les chronos de
-# collision_lot.h). Quatre postes disjoints qui couvrent le corps de
-# _tick_banque : SETUP (parcours + acces prospect), QUERY
-# (choses_dans_rayon seul), GATE (boucle voisins + couvert), NAISSANCE
-# (retirer + naitre). Cumul en microsecondes et compte de passages,
-# imprimes sous le meme gate que le releve population.
-var _chrono_us_setup: int = 0
-var _chrono_us_query: int = 0
-var _chrono_us_gate: int = 0
-var _chrono_us_naissance: int = 0
-var _chrono_us_expiration: int = 0
-var _chrono_us_total: int = 0
-var _chrono_n_setup: int = 0
-var _chrono_n_query: int = 0
-var _chrono_n_gate: int = 0
-var _chrono_n_naissance: int = 0
-var _chrono_n_expiration: int = 0
-var _chrono_n_ticks: int = 0
 
 # Champ scalaire d'ombrage par case, delegue au mecanisme framework
 # scripts/champ_saturation.gd (depot signe a decroissance Chebyshev
@@ -303,7 +273,7 @@ var _banque_graines: RefCounted = null
 # Cle = id du prospect (int, rendu par `AttenteSeuil.ajouter`).
 # Valeur = true (Dictionary utilise comme SET, dedoublonnage naturel :
 # deux evenements successifs qui reveillent le meme prospect ne le
-# testent qu'une fois). Rempli par `_reveiller_dormantes_autour`
+# testent qu'une fois). Rempli par `_reveiller_dormantes_autour_lot`
 # (appelee sur mort et changement de stade), vide par `_tick_banque`
 # qui teste chaque id present. Une graine qui rate son gate au reveil
 # retombe dormante -- son id est retire du set, elle attend un
@@ -376,7 +346,7 @@ var _morts_vieillesse_lot: PackedInt32Array = PackedInt32Array()
 # Vector2i (case du plan XZ, cote `_taille_case_dormantes`), valeur =
 # Array<int> des ids de prospects dormants dans cette case. Insertion a
 # `_semer_lot`, retrait quand une graine leve (`_tick_banque`).
-# `_reveiller_dormantes_autour` ne lit QUE les cases dans le rectangle
+# `_reveiller_dormantes_autour_lot` ne lit QUE les cases dans le rectangle
 # `[pos - _rayon_reveil, pos + _rayon_reveil]` -- plus de balayage
 # global de toute la banque a chaque evenement. Cout d'un reveil =
 # O(graines reellement proches), plus lie a la population totale
@@ -438,13 +408,9 @@ var _choses_arbre: Array = []
 
 var _rng := RandomNumberGenerator.new()
 
-# Table combinee passee a Objet.fabriquer : paquet `dynamique` (extrait de
-# data/types.json) + type local `arbre_pousse`. Construite une fois au
-# _ready, jamais rechargee.
-var _catalogue: Dictionary = {}
-# Reference vers l'Array stades_config produit par Objet.fabriquer,
-# partagee entre tous les arbres (paquets_partages=true garantit la meme
-# reference pour toutes les instances). Assignee au premier _naitre.
+# Reference unique de `stades_config` partagee entre toutes les
+# instances (patron `paquets_partages`). Construite au `_ready` par
+# `_construire_stades_config`, avant l'appel `_naitre_lot` initial.
 var _stades_config_partagee: Array = []
 
 
@@ -459,10 +425,19 @@ func _ready() -> void:
 	if _joueur_actif:
 		_monter_joueur()
 	_monter_population()
-	_construire_catalogue()
 	_banque_graines = AttenteSeuil.new()
 	if _stades.size() == 9:
-		_naitre(POS_INITIALE.x, POS_INITIALE.y)
+		# Reference partagee de `stades_config` construite une fois. Le
+		# premier arbre passe par `_naitre_lot` (queue d'un seul
+		# element) : deux `randf_range` (croissance, longevite) via
+		# `FacteurVariance.tirer_paires_entre_lot`.
+		_construire_stades_config()
+		_naissances_lot_x.append(POS_INITIALE.x)
+		_naissances_lot_z.append(POS_INITIALE.y)
+		_naitre_lot()
+		# Rendu immediat pour que le premier frame montre l'arbre initial
+		# avant l'appel `_ecrire_slots_lot` de fin de `_process`.
+		_ecrire_slots_lot()
 
 func _charger_reglages_locaux() -> void:
 	if not FileAccess.file_exists(CHEMIN_CATALOGUE_LOCAL):
@@ -578,39 +553,22 @@ func _charger_reglages_locaux() -> void:
 		k += 1
 	# Duree en secondes de sim (age) de la fenetre fertile commune.
 	# L'intervalle effectif de chaque arbre s'en deduit a la naissance
-	# via `_facteur_croissance[i]` -- voir _naitre.
+	# via `_facteur_croissance[i]` -- voir `_naitre_lot`.
 	_fenetre_fertile_age = maxf(0.0, _fin_fertilite - _debut_fertilite)
 
-# Construit la table passee a Objet.fabriquer : paquet `dynamique` du
-# framework (lu depuis data/types.json) + type local `arbre_pousse`. Aucune
-# modification de data/types.json.
-func _construire_catalogue() -> void:
-	if not FileAccess.file_exists(CHEMIN_TYPES):
-		push_error("banc_peuplement_arbre : %s absent" % CHEMIN_TYPES)
-		return
-	var texte_types := FileAccess.get_file_as_string(CHEMIN_TYPES)
-	var types = JSON.parse_string(texte_types)
-	if not (types is Dictionary):
-		push_error("banc_peuplement_arbre : %s invalide" % CHEMIN_TYPES)
-		return
-	if not types.has("dynamique"):
-		push_error("banc_peuplement_arbre : paquet `dynamique` absent de %s" % CHEMIN_TYPES)
-		return
-	_catalogue = {}
-	_catalogue["dynamique"] = types.dynamique
-	# stades_config du type local = suite des seuils cumules a partir de
-	# durees_stades. Les noms "s1".."s8" sont arbitraires (stade.gd ne
-	# connait aucun nom, il ne fait que comparer des index).
+# Construit `_stades_config_partagee` : suite des seuils cumules a
+# partir de `_durees`. Les noms "s1".."s8" sont arbitraires (stade.gd
+# ne connait aucun nom, il ne fait que comparer des index). Reference
+# unique partagee entre toutes les instances (equivalent au contrat
+# `paquets_partages=true` d'une composition, sans machinerie).
+func _construire_stades_config() -> void:
 	var stades_config: Array = []
 	var cumul: float = 0.0
 	for i in range(_stades.size()):
 		stades_config.append({"nom": "s%d" % (i + 1), "age_seuil": cumul})
 		if i < _durees.size():
 			cumul += float(_durees[i])
-	_catalogue[TYPE_ARBRE] = {
-		"herite": ["dynamique"],
-		"stades_config": stades_config,
-	}
+	_stades_config_partagee = stades_config
 
 func _monter_scene() -> void:
 	var sol := MeshInstance3D.new()
@@ -898,42 +856,21 @@ func _process(delta: float) -> void:
 	# les naissances du tick (alloc slots, tirer variance en paires
 	# interleaved, `monde.ajouter_lot`, `champ.deposer_lot`). Ordre
 	# RNG variance = ordre des naissances dans la queue = ordre naturel
-	# (semer d'abord, puis tick_banque). Objet.fabriquer skippe.
+	# (semer d'abord, puis tick_banque). `stades_config` deja partage.
 	_naitre_lot()
 	_avancer_competition(pas)
 	# RENDU EN LOT : un seul appel groupe pour tous les slots vivants. Le
 	# corps de `_ecrire_slot` + `_calc_params` + `_appliquer_couleur_slot`
 	# est reproduit inline dans la boucle interne unique -- zero appel
-	# de fonction par arbre au chemin chaud. `_naitre` et
-	# `_agrandir_capacite` gardent `_ecrire_slot` pour leurs points de
-	# naissance / repose du buffer GPU (chemins rares).
+	# de fonction par arbre au chemin chaud. `_agrandir_capacite` garde
+	# `_ecrire_slot` pour reposer le buffer GPU quand la capacite double
+	# (chemin rare).
 	_ecrire_slots_lot()
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
 		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
 		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.nombre_cases()])
-		# CHRONOS TEMPORAIRES : releve puis reset. A retirer une fois le
-		# poste dominant identifie.
-		print("[arbre.tick_banque] ticks=%d total=%d us | setup=%d us / n=%d | query=%d us / n=%d | gate=%d us / n=%d | naissance=%d us / n=%d | expiration=%d us / n=%d" % [
-			_chrono_n_ticks, _chrono_us_total,
-			_chrono_us_setup, _chrono_n_setup,
-			_chrono_us_query, _chrono_n_query,
-			_chrono_us_gate, _chrono_n_gate,
-			_chrono_us_naissance, _chrono_n_naissance,
-			_chrono_us_expiration, _chrono_n_expiration])
-		_chrono_us_setup = 0
-		_chrono_us_query = 0
-		_chrono_us_gate = 0
-		_chrono_us_naissance = 0
-		_chrono_us_expiration = 0
-		_chrono_us_total = 0
-		_chrono_n_setup = 0
-		_chrono_n_query = 0
-		_chrono_n_gate = 0
-		_chrono_n_naissance = 0
-		_chrono_n_expiration = 0
-		_chrono_n_ticks = 0
 
 # Interpolation de taille entre deux entrees consecutives du catalogue
 # `stades` local (rendu, aucun rapport avec stade.gd qui ne pose que le
@@ -946,7 +883,7 @@ func _process(delta: float) -> void:
 # croissance imperceptible entre deux passes) et cache `_derniere_couleur_stade`
 # par stade (couleur re-ecrite seulement quand le stade change). Duplication
 # assumee avec `_ecrire_slot` -- meme discipline que `redeposer_lot`/
-# `redeposer` : les chemins rares (`_naitre`, `_agrandir_capacite`) gardent
+# `redeposer` : le chemin rare (`_agrandir_capacite`) garde
 # la version unitaire.
 func _ecrire_slots_lot() -> void:
 	var cap: int = _capacite
@@ -1265,16 +1202,15 @@ func _liberer_slots_lot(slots: PackedInt32Array) -> void:
 	_reveiller_dormantes_autour_lot(rev_x, rev_z)
 
 # NAISSANCES EN LOT : draine `_naissances_lot_x/_z` (positions empilees
-# par `_semer_lot` et `_tick_banque` -- les deux chemins deferent
-# `_naitre` a cette passe unique). Cinq franchissements de frontiere
-# par tick au total, quel que soit le nombre de naissances : alloc
-# slots (banc) + `FacteurVariance.tirer_paires_entre_lot` +
-# `_monde.ajouter_lot` + `_couvert.deposer_lot`. `Objet.fabriquer`
-# est SKIPPE : `_stades_config_partagee` est cache au premier
-# `_naitre` du `_ready`, initial age = 0.0 par contrat du banc.
-# `_ecrire_slot` est SKIPPE : `_ecrire_slots_lot` en fin de tick
-# ecrira les newborns depuis leurs colonnes (sentinelle INF au
-# `_derniere_params` force le premier ecrit).
+# par `_semer_lot` et `_tick_banque`, plus l'arbre initial pose en
+# `_ready`). Cinq franchissements de frontiere par tick au total, quel
+# que soit le nombre de naissances : alloc slots (banc) +
+# `FacteurVariance.tirer_paires_entre_lot` + `_monde.ajouter_lot` +
+# `_couvert.deposer_lot`. `_stades_config_partagee` est construit une
+# fois au `_ready` par `_construire_stades_config`. Age initial = 0.0
+# par contrat du banc. `_ecrire_slot` n'est PAS appele --
+# `_ecrire_slots_lot` en fin de tick ecrira les newborns depuis leurs
+# colonnes (sentinelle INF au `_derniere_params` force le premier ecrit).
 # ORDRE RNG STRICTEMENT PRESERVE : `tirer_paires_entre_lot` produit
 # la meme sequence interleaved (croissance, longevite) que N appels
 # unitaires alternes -- test hors domaine dans
@@ -1333,8 +1269,8 @@ func _naitre_lot() -> void:
 		_slot_stade[slot] = stade_initial
 		_facteur_croissance[slot] = croissance_col[k]
 		_facteur_longevite[slot] = longevite_col[k]
-		# Intervalle effectif de reproduction : meme formule que
-		# `_naitre` unitaire.
+		# Intervalle effectif de reproduction : deduit de la fenetre
+		# fertile et du facteur de croissance individuel.
 		var denom: float = denom_prefixe * croissance_col[k]
 		if _fenetre_fertile_age > 0.0 and denom > 0.0:
 			_intervalle_reprod[slot] = _fenetre_fertile_age / denom
@@ -1358,58 +1294,6 @@ func _naitre_lot() -> void:
 	if dep_x.size() > 0:
 		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
 
-# Naissance UNITAIRE : conserve pour le `_naitre` initial de `_ready`
-# (avant que `_stades_config_partagee` soit cache, obligatoire pour
-# initialiser le cache) et pour tout autre chemin qui exigerait la
-# fabrication complete via `Objet.fabriquer`.
-func _naitre(pos_x: float, pos_z: float) -> void:
-	if _slots_libres.is_empty():
-		_agrandir_capacite()
-	var i: int = _slots_libres.pop_back()
-	var position := Vector3(pos_x, Y_SOL, pos_z)
-	var objet: Dictionary = Objet.fabriquer(
-		"arbre_%d" % i, TYPE_ARBRE, position, _catalogue, {}, [], {}, [], true)
-	if objet.is_empty():
-		push_error("banc_peuplement_arbre : Objet.fabriquer a rendu {} pour slot %d" % i)
-		_slots_libres.append(i)
-		return
-	if _stades_config_partagee.is_empty():
-		_stades_config_partagee = objet.proprietes.get("stades_config", [])
-	_libres[i] = 0
-	_ages[i] = float(objet.proprietes.get("age", 0.0))
-	_positions_x[i] = pos_x
-	_positions_z[i] = pos_z
-	# Index du stade initial (age 0 tombe sur le premier stade dont
-	# age_seuil <= 0, en general "s1").
-	_slot_stade[i] = _index_pour_age(_ages[i])
-	if _slot_stade[i] >= 0:
-		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
-	_facteur_croissance[i] = FacteurVariance.tirer_entre(_rng, _croissance_min, _croissance_max)
-	_facteur_longevite[i] = FacteurVariance.tirer_entre(_rng, _longevite_min, _longevite_max)
-	# Intervalle effectif de reproduction, deduit de la fenetre fertile
-	# et du facteur de croissance individuel : un arbre lent
-	# (facteur bas) est fertile plus longtemps EN TEMPS REEL, son
-	# intervalle est proportionnellement plus grand -- total de
-	# graines par vie = `_graines_par_vie` pour tous. INF si l'un des
-	# denominateurs est nul (pas de reproduction).
-	var denom: float = _annees_par_seconde * _facteur_croissance[i] * _graines_par_vie
-	if _fenetre_fertile_age > 0.0 and denom > 0.0:
-		_intervalle_reprod[i] = _fenetre_fertile_age / denom
-	else:
-		_intervalle_reprod[i] = INF
-	# Inscription dans monde (consequence: monde.gd:ajouter exige un
-	# Dictionary avec `id` et `position` structurels ; plan B: aucun --
-	# rollback = ne pas ajouter le champ, mais le retirer de
-	# `_liberer_slots_lot` echouerait alors sur push_error id absent).
-	# `slot` stocke dans la `chose` : le gate de trouee elargi le relit
-	# via `_slot_stade[slot]` pour distinguer adulte / jeune. Pas de parse
-	# d'id (fragile).
-	var chose := {"id": "arbre_%d" % i, "position": position, "slot": i}
-	_choses_arbre[i] = chose
-	_monde.ajouter(chose, "arbre", position)
-	_ecrire_slot(i, _ages[i])
-	_population += 1
-
 # Index du stade dont age_seuil <= age est le plus grand. Meme geste que
 # `stade.gd:avancer` en interne, mais rendu ici pour poser le stade INITIAL
 # au moment de la naissance (avant tout appel a Stade.avancer).
@@ -1421,40 +1305,16 @@ func _index_pour_age(age: float) -> int:
 			trouve = i
 	return trouve
 
-# GATE DE TROUEE PAR REQUETE PONCTUELLE (patron
-# vegetation.gd:trouee_suffisante). Appele par `_tick_banque` (une
-# graine reveillee = une requete ciblee a SA position avec `rayon_gros`).
-# La germination directe (semis d'un lot depuis `_process`) passe par
-# `_trouee_saturee_lot` sur une requete GROUPEE, avec le meme predicat
-# -- les deux chemins gardent des resultats identiques. Les nouveau-nes
-# eventuels de la rafale sont deja dans `_monde` au moment ou
-# `_tick_banque` s'execute (le lot est draine avant), la lecture reste
-# coherente.
-func _trouee_saturee(pos_x: float, pos_z: float) -> bool:
-	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
-	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
-	var carre_normal: float = _rayon_trouee * _rayon_trouee
-	var compte_normal: int = 0
-	for entree in _monde.choses_dans_rayon(arrivee, rayon_gros):
-		var chose = entree.chose
-		var slot: int = int(chose.get("slot", -1))
-		var stade_num: int = 0
-		if slot >= 0 and slot < _slot_stade.size():
-			stade_num = _slot_stade[slot] + 1
-		if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
-			return true
-		var pos_voisin: Vector3 = chose.position
-		if arrivee.distance_squared_to(pos_voisin) <= carre_normal:
-			compte_normal += 1
-	return compte_normal > _trouee_max_voisins
-
-# GATE DE TROUEE VERSION LOT : les voisins existants sont pre-calcules
-# par la requete groupee `_monde.choses_dans_rayons` (UNE frontiere
-# franchie pour tout le lot), les nouveau-nes de la rafale sont scannes
-# lineairement dans `_naissances_lot_x/_z` (petite liste, filtre AABB
-# implicite via `carre_normal`). Meme predicat que `_trouee_saturee`,
-# meme resultat -- l'union des deux listes reproduit la vue de
-# `_monde.choses_dans_rayon` prise apres les naissances precedentes.
+# GATE DE TROUEE (patron `vegetation.gd:trouee_suffisante`). Predicat :
+# la naissance echoue si un voisin gros adulte est dans le rayon elargi,
+# OU si le compte normal (voisins dans `carre_normal` + nouveau-nes du
+# meme tick a portee) depasse `_trouee_max_voisins`. Les voisins existants
+# sont pre-calcules par `_monde.choses_dans_rayons` (UNE frontiere pour
+# tout le lot du semis) OU par un `choses_dans_rayon` ponctuel (chemin
+# `_tick_banque`, une graine reveillee = une requete). Les nouveau-nes
+# de la rafale (`_naissances_lot_x/_z`) sont scannes lineairement en plus
+# -- les prospects germines plus tot dans le meme tick comptent dans le
+# gate.
 func _trouee_saturee_lot(pos_x: float, pos_z: float, voisins: Array, carre_normal: float) -> bool:
 	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
 	var compte_normal: int = 0
@@ -1532,7 +1392,7 @@ func _semer_lot() -> void:
 			continue
 		# Entree en banque, DORMANTE : aucune echeance posee. Elle attendra
 		# qu'un evenement de voisinage (mort ou changement de stade) la
-		# reveille via `_reveiller_dormantes_autour`. Le test qui vient
+		# reveille via `_reveiller_dormantes_autour_lot`. Le test qui vient
 		# d'echouer ci-dessus a etabli qu'aucune de ses conditions ne
 		# passe MAINTENANT ; sans changement autour d'elle le resultat ne
 		# changera pas.
@@ -1547,39 +1407,28 @@ func _semer_lot() -> void:
 			_expirations.append([_temps_banque + _duree_vie_graine, id_prospect])
 
 # RE-TEST SUR EVENEMENT (patron `vegetation.gd` « L'OMBRE EST UN SIGNAL »).
-# `pas` est ignore : rien de temporise ici, seul le `_reveils` rempli
-# par les evenements de voisinage decide qui teste. Pour chaque prospect
-# reveille, meme gate que la germination directe (trouee + couvert). Rate
-# le gate -> reste en banque, sort du set des reveils (attend le
-# prochain signal). Passe le gate -> retire de la banque et naitre. Le
-# gate mord pendant une rafale grace a l'ajout live dans _monde a chaque
-# _naitre et au depot d'ombrage a chaque _slot_stade non nul.
+# `pas` est utilise seul par la passe EXPIRATION ; le corps qui suit ne
+# teste que les prospects marques dans `_reveils` par un evenement de
+# voisinage (mort d'arbre, changement de stade). Pour chaque prospect
+# reveille, meme gate que la germination directe (`_trouee_saturee_lot`
+# + couvert). Rate le gate -> reste en banque, sort du set des reveils
+# (attend le prochain signal). Passe le gate -> retire de la banque et
+# empile pour `_naitre_lot`. Le gate mord pendant une rafale grace au
+# scan `_naissances_lot_x/_z` par `_trouee_saturee_lot`.
 #
 # NOTE ORDRE : l'ordre des naissances intra-tick est celui d'insertion
 # des ids dans `_reveils` (l'evenement declencheur, puis l'ordre
-# d'iteration du Dictionary -- garanti insertion sous Godot 4). Ordre
-# different de la version pre-optim (echeances triees) : le RNG
-# consomme dans `_naitre` (facteurs variance) voit une autre suite. La
-# foret reste reproductible a seed egal, elle differe seulement de la
-# version pre-optim.
+# d'iteration du Dictionary -- garanti insertion sous Godot 4). Le RNG
+# consomme par `_naitre_lot` (variance interleaved) voit donc une suite
+# deterministe a seed egal.
 func _tick_banque(pas: float) -> void:
-	# CHRONOS TEMPORAIRES : voir declaration des _chrono_us_* / _chrono_n_*.
-	# La logique du gate est INLINE ici (dupliquee de `_trouee_saturee`)
-	# pour isoler QUERY et GATE en postes distincts. A retirer une fois
-	# le poste dominant identifie -- rebranchement sur `_trouee_saturee`.
-	var t_total: int = Time.get_ticks_usec()
-	# POSTE 5 : EXPIRATION (mort des dormantes de vieillesse). Avance
-	# _temps_banque puis draine les entrees dont l'echeance est atteinte.
-	# Independant de _reveils.is_empty() -- une graine peut expirer meme
-	# si aucun evenement de reveil ne survient ce tick.
+	# EXPIRATION (mort des dormantes de vieillesse). Avance
+	# `_temps_banque` puis draine les entrees dont l'echeance est
+	# atteinte. Independant de `_reveils.is_empty()` -- une graine peut
+	# expirer meme si aucun evenement de reveil ne survient ce tick.
 	_temps_banque += pas
-	var t_exp: int = Time.get_ticks_usec()
 	_drainer_expirations()
-	_chrono_us_expiration += Time.get_ticks_usec() - t_exp
-	_chrono_n_expiration += 1
 	if _reveils.is_empty():
-		_chrono_us_total += Time.get_ticks_usec() - t_total
-		_chrono_n_ticks += 1
 		return
 	var prospects: Dictionary = _banque_graines.prospects()
 	var ids: Array = _reveils.keys()
@@ -1587,51 +1436,28 @@ func _tick_banque(pas: float) -> void:
 	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
 	var carre_normal: float = _rayon_trouee * _rayon_trouee
 	for id_variant in ids:
-		# POSTE 1 : SETUP
-		var t0: int = Time.get_ticks_usec()
 		var id: int = int(id_variant)
-		var a_prospect: bool = prospects.has(id)
-		var entree: Dictionary
-		var pos: Vector3
-		if a_prospect:
-			entree = prospects[id]
-			pos = entree.position
-		_chrono_us_setup += Time.get_ticks_usec() - t0
-		_chrono_n_setup += 1
-		if not a_prospect:
+		if not prospects.has(id):
 			continue
-		# POSTE 2 : QUERY (choses_dans_rayon seul)
+		var entree: Dictionary = prospects[id]
+		var pos: Vector3 = entree.position
 		var arrivee := Vector3(pos.x, Y_SOL, pos.z)
-		var t1: int = Time.get_ticks_usec()
 		var voisins: Array = _monde.choses_dans_rayon(arrivee, rayon_gros)
-		_chrono_us_query += Time.get_ticks_usec() - t1
-		_chrono_n_query += 1
-		# POSTE 3 : GATE (delegue a `_trouee_saturee_lot` qui scanne
-		# aussi les pending `_naissances_lot_x/_z` -- les prospects
-		# germines plus tot dans le meme tick comptent dans le gate).
-		var t2: int = Time.get_ticks_usec()
-		var trouee_ko: bool = _trouee_saturee_lot(pos.x, pos.z, voisins, carre_normal)
-		var couvert_ko: bool = false
-		if not trouee_ko:
-			couvert_ko = _lire_couvert(pos.x, pos.z) >= _seuil_couvert
-		_chrono_us_gate += Time.get_ticks_usec() - t2
-		_chrono_n_gate += 1
-		if trouee_ko or couvert_ko:
+		# GATE : delegue a `_trouee_saturee_lot` qui scanne aussi les
+		# `_naissances_lot_x/_z` pending -- les prospects germines plus
+		# tot dans le meme tick comptent dans le gate.
+		if _trouee_saturee_lot(pos.x, pos.z, voisins, carre_normal):
 			continue
-		# POSTE 4 : NAISSANCE DEFEREE au `_naitre_lot` de fin de tick.
-		# La sortie de banque (banque_graines.retirer + retirer_dormante)
-		# reste immediate -- une graine qui passe le gate n'est plus
-		# dormante des maintenant, meme si sa naissance materielle est
-		# groupee.
-		var t3: int = Time.get_ticks_usec()
+		if _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
+			continue
+		# NAISSANCE DEFEREE au `_naitre_lot` de fin de tick. La sortie
+		# de banque (banque_graines.retirer + retirer_dormante) reste
+		# immediate -- une graine qui passe le gate n'est plus dormante
+		# des maintenant, meme si sa naissance materielle est groupee.
 		_banque_graines.retirer(id)
 		_retirer_dormante(id)
 		_naissances_lot_x.append(pos.x)
 		_naissances_lot_z.append(pos.z)
-		_chrono_us_naissance += Time.get_ticks_usec() - t3
-		_chrono_n_naissance += 1
-	_chrono_us_total += Time.get_ticks_usec() - t_total
-	_chrono_n_ticks += 1
 
 # Reveille les prospects dormants a portee d'un evenement de voisinage
 # (mort d'arbre ou changement de stade). LECTURE LOCALE via la grille
@@ -1645,7 +1471,7 @@ func _tick_banque(pas: float) -> void:
 # NOTE ORDRE : l'ordre d'insertion dans `_reveils` suit desormais
 # l'ordre cx, cz, id-dans-case (grille) au lieu de l'ordre d'insertion
 # dans le registre `AttenteSeuil` (ordre d'entree en banque). Le RNG
-# consomme par `_naitre` (facteurs variance) voit donc une autre suite
+# consomme par `_naitre_lot` (facteurs variance interleaved) voit donc une autre suite
 # -- la foret reste reproductible a seed egal mais differe de la
 # version pre-optim. MEMES graines reveillees (celles a distance <= R
 # du point), MEMES gates passes, MEMES levees ; seul l'ordre des
@@ -1653,7 +1479,7 @@ func _tick_banque(pas: float) -> void:
 # REVEIL EN LOT : boucle interne unique sur les positions collectees
 # pendant la passe de transition. `_reveils` etant un Set d'ids, l'ordre
 # de traitement des positions n'affecte pas le contenu final. Meme
-# resultat qu'un appel a `_reveiller_dormantes_autour` par position, un
+# resultat qu'un appel unitaire de reveil par position, un
 # seul appel de fonction du banc au lieu de N. Les invariants de la
 # version unitaire (gates sur `_banque_graines == null`, `_rayon_reveil`,
 # `_dormantes_par_case` vide) sont evalues UNE fois avant la boucle.
