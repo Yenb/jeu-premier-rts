@@ -784,6 +784,27 @@ en-tête du fichier. Test : `test_depense.gd`.
   mute `ages: PackedFloat32Array` en place, saute `libres[i]==1`. Ordre
   strict des multiplications `delta * (annees_par_seconde * facteurs[i])`
   → résultat float bit à bit identique à la boucle unitaire.
+
+### `scripts/facteur_variance.gd` — étendu : `tirer_paires_entre_lot`
+- **`tirer_paires_entre_lot(rng, n, bas1, haut1, bas2, haut2)`** (ÉCART
+  FRAMEWORK, tracé dans le fichier) : rend deux `PackedFloat32Array` de
+  taille n, remplis en INTERLEAVED — pour chaque i, `randf_range(bas1,
+  haut1)` puis `randf_range(bas2, haut2)`. Même séquence RNG que N
+  appels alternés à `tirer_entre`, indispensable quand un manager de
+  population appelle `tirer_entre` deux fois par naissance (ordre RNG
+  strictement préservé).
+
+### `scripts/monde.gd` — étendu : `ajouter_lot`
+- **`ajouter_lot(entries: Array)`** (ÉCART FRAMEWORK, tracé dans le
+  fichier) : entrées `[{chose, type}, ...]`. Applique N `ajouter` en une
+  passe, position lue sur `chose.position`. Même résultat exact que N
+  appels unitaires dans le même ordre.
+
+### `scripts/champ_saturation.gd` — étendu : `deposer_lot`
+- **`deposer_lot(centres_x, centres_z, rayons_m, taille_case, magnitudes,
+  signes)`** : colonnes parallèles + `PackedByteArray` de signes (1 pour
+  +1, 0 pour −1). Applique N dépôts signés en une passe. Utile pour
+  batcher naissances (+1) et morts (−1) d'un tick.
 - **`horloge` FACULTATIF** = ce monde n'a pas d'horloge : aucune écriture,
   aucune alarme. CAS DU COUPLE : chaque clé devient STRUCTURELLE dès que le
   Dictionary est fourni. **L'ÂGE AVANCE TOUJOURS**, horloge cassée ou non —

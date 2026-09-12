@@ -39,6 +39,12 @@ extends RefCounted
 #   Reduit les franchissements de frontiere quand un manager de population
 #   a beaucoup de transitions par tick.
 #
+# deposer_lot(centres_x, centres_z, rayons_m, taille_case, magnitudes,
+#   signes) : applique en UN appel un lot de N depots signes (PackedFloat32Array
+#   paralleles + PackedByteArray signes -- 1 pour +1, 0 pour -1). Meme
+#   resultat exact que N appels a `deposer` dans le meme ordre. Utile
+#   pour les naissances et morts groupees d'un tick.
+#
 # lire(x, z, taille_case) : rend le cumul de la case (x, z) en float. 0.0 si
 #   la case n'a jamais recu de depot ou a ete nettoyee.
 #
@@ -224,6 +230,55 @@ func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array,
 				if apport == 0.0:
 					dcz += 1
 					continue
+				var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
+				var v: float = float(_champ.get(cle, 0.0)) + apport
+				if absf(v) < EPS_COUVERT:
+					_champ.erase(cle)
+				else:
+					_champ[cle] = v
+				dcz += 1
+			dcx += 1
+
+# LOT DE DEPOTS SIGNES en UNE passe : applique N appels `deposer` sur des
+# colonnes paralleles (PackedFloat32Array + PackedByteArray de signes).
+# Ordre = ordre d'insertion. Meme resultat exact que N appels a `deposer`
+# dans le meme ordre. `deposer` (unitaire) reste utilise ailleurs (chemins
+# rares -- test d'oracle, chemins degrades du banc).
+func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, rayons_m: PackedFloat32Array, taille_case: float, magnitudes: PackedFloat32Array, signes: PackedByteArray) -> void:
+	if taille_case <= 0.0:
+		return
+	var n: int = centres_x.size()
+	if n == 0:
+		return
+	var k: int = 0
+	while k < n:
+		var magnitude: float = magnitudes[k]
+		# signes[k] est 0 pour -1, 1 pour +1 (PackedByteArray ne peut pas
+		# porter -1 negatif). Convention documentee dans l'en-tete.
+		var signe: int = 1 if signes[k] == 1 else -1
+		var mag: float = magnitude * float(signe)
+		if mag == 0.0:
+			k += 1
+			continue
+		var rayon_m: float = rayons_m[k]
+		var rayon: int = 0
+		if rayon_m > 0.0:
+			rayon = int(ceil(rayon_m / taille_case))
+		var cx0: int = floori(centres_x[k] / taille_case)
+		var cz0: int = floori(centres_z[k] / taille_case)
+		k += 1
+		var dcx: int = -rayon
+		while dcx <= rayon:
+			var dcz: int = -rayon
+			while dcz <= rayon:
+				var d: int = maxi(absi(dcx), absi(dcz))
+				var poids: float = 1.0
+				if rayon > 0:
+					poids = 1.0 - float(d) / float(rayon)
+				if poids <= 0.0:
+					dcz += 1
+					continue
+				var apport: float = mag * poids
 				var cle: Vector2i = Vector2i(cx0 + dcx, cz0 + dcz)
 				var v: float = float(_champ.get(cle, 0.0)) + apport
 				if absf(v) < EPS_COUVERT:

@@ -69,10 +69,12 @@ const NiveauMonde = preload("res://scripts/niveau_monde.gd")
 # sous structure_simple chaque case est un Array a plat, la branche Dictionary
 # de _collecter est morte et l'origine n'a jamais a etre allouee. La branche
 # Array est aussi inlinee dans choses_dans_rayon (economie de l'appel _collecter
-# + du dispatch `contenu is Array`). Compteurs requetes/cases_lues/
-# candidats_mesures identiques a l'ancien chemin (verrouille par
-# test_monde_structure_simple.gd et test_monde_subdivision.gd). Le depot orion
-# ne porte pas ces retraits.
+# + du dispatch `contenu is Array`). Les trois floori de multiplications qui
+# donnent les cases min/max de la boite englobante d'une requete sont eux aussi
+# INLINE dans choses_dans_rayon et choses_dans_rayons -- zero appel de fonction
+# par point de requete. Compteurs requetes/cases_lues/candidats_mesures
+# identiques a l'ancien chemin (verrouille par test_monde_structure_simple.gd
+# et test_monde_subdivision.gd). Le depot orion ne porte pas ces retraits.
 #
 # ECART AVEC LE DEPOT FRAMEWORK : `structure_simple` (bool, defaut false --
 # comportement historique intact). Sous true, la subdivision adaptative est
@@ -249,6 +251,39 @@ const PROFONDEUR_MAX := 3
 var _rang: Dictionary = {}
 var _prochain_rang: int = 0
 
+# LOT D'AJOUTS en UNE passe : applique N appels `ajouter` sur un Array
+# d'entrees {chose, type}. La position lue est `chose.position`. Meme
+# resultat exact que N appels a `ajouter` dans le meme ordre. `ajouter`
+# (unitaire) reste utilise ailleurs (chemins uniques d'inscription).
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer les
+# franchissements de frontiere par naissance du banc `jeu/bancs/
+# banc_peuplement_arbre.gd`. Meme geste doctrinal que `retirer()` et que
+# `choses_dans_rayons`.
+func ajouter_lot(entries: Array) -> void:
+	var n: int = entries.size()
+	if n == 0:
+		return
+	var k: int = 0
+	while k < n:
+		var entree: Dictionary = entries[k]
+		k += 1
+		var chose = entree.chose
+		var type: String = entree.type
+		if not (chose is Dictionary and chose.has("position")):
+			push_error("monde.gd : ajouter_lot() -- 'chose' sans champ 'position' structurel, non enregistree")
+			continue
+		if choses.has(chose.id):
+			push_error("monde.gd : ajouter_lot() -- id '%s' deja enregistre, non ecrase" % chose.id)
+			continue
+		choses[chose.id] = {"chose": chose, "type": type}
+		_rang[chose.id] = _prochain_rang
+		_prochain_rang += 1
+		var position: Vector3 = chose.position
+		for exposant in _niveaux:
+			_ranger(_niveaux[exposant], int(exposant), chose.id, position)
+
 func ajouter(chose, type: String, position: Vector3) -> void:
 	if not (chose is Dictionary and chose.has("position")):
 		push_error("monde.gd : ajouter() -- 'chose' sans champ 'position' structurel, non enregistree")
@@ -353,8 +388,18 @@ func choses_dans_rayon(position: Vector3, rayon: float) -> Array:
 	# par requete et transforme les 3 divisions de _case_pour en 3
 	# multiplications. Voir ECART FRAMEWORK en tete de fichier.
 	var inv_a: float = niveau.inv_arete
-	var basse := _case_pour_inv(position - Vector3(rayon, rayon, rayon), inv_a)
-	var haute := _case_pour_inv(position + Vector3(rayon, rayon, rayon), inv_a)
+	# _case_pour_inv inline (3 floori de multiplications, meme resultat).
+	# ECART FRAMEWORK : voir bloc en tete de fichier.
+	var pos_bas: Vector3 = position - Vector3(rayon, rayon, rayon)
+	var pos_haut: Vector3 = position + Vector3(rayon, rayon, rayon)
+	var basse := Vector3i(
+		floori(pos_bas.x * inv_a),
+		floori(pos_bas.y * inv_a),
+		floori(pos_bas.z * inv_a))
+	var haute := Vector3i(
+		floori(pos_haut.x * inv_a),
+		floori(pos_haut.y * inv_a),
+		floori(pos_haut.z * inv_a))
 	var carre := rayon * rayon
 	requetes += 1
 	for cx in range(basse.x, haute.x + 1):
@@ -419,8 +464,17 @@ func choses_dans_rayons(positions: Array, rayon: float) -> Array:
 	while k < n:
 		var position: Vector3 = positions[k]
 		var liste: Array = []
-		var basse := _case_pour_inv(position - offset, inv_a)
-		var haute := _case_pour_inv(position + offset, inv_a)
+		# _case_pour_inv inline (voir bloc ECART FRAMEWORK en tete).
+		var pos_bas: Vector3 = position - offset
+		var pos_haut: Vector3 = position + offset
+		var basse := Vector3i(
+			floori(pos_bas.x * inv_a),
+			floori(pos_bas.y * inv_a),
+			floori(pos_bas.z * inv_a))
+		var haute := Vector3i(
+			floori(pos_haut.x * inv_a),
+			floori(pos_haut.y * inv_a),
+			floori(pos_haut.z * inv_a))
 		requetes += 1
 		for cx in range(basse.x, haute.x + 1):
 			for cy in range(basse.y, haute.y + 1):
@@ -605,16 +659,6 @@ func _case_pour(position: Vector3, exposant: int) -> Vector3i:
 		floori(position.x / arete),
 		floori(position.y / arete),
 		floori(position.z / arete))
-
-# Variante qui prend inv_arete deja precalcule (typiquement niveau.inv_arete) :
-# trois floori sur des MULTIPLICATIONS, aucune division, aucun pow. Utilisee par
-# choses_dans_rayon (hot path). Meme resultat que _case_pour a arithmetique
-# equivalente (arete = 1/inv_arete).
-func _case_pour_inv(position: Vector3, inv_arete: float) -> Vector3i:
-	return Vector3i(
-		floori(position.x * inv_arete),
-		floori(position.y * inv_arete),
-		floori(position.z * inv_arete))
 
 # La resolution demandee, batie a la volee si elle n'existe pas encore. Ce
 # premier passage coute une passe sur toute la population -- une fois, pour

@@ -25,6 +25,7 @@ func _init() -> void:
 	_magnitude_nulle_no_op()
 	_redeposer_equivaut_retrait_puis_depot()
 	_redeposer_lot_equivaut_a_redeposer_un_par_un()
+	_deposer_lot_equivaut_a_deposer_un_par_un()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -180,3 +181,31 @@ func _redeposer_lot_equivaut_a_redeposer_un_par_un() -> void:
 			ecart_max = maxf(ecart_max, absf(vo - ve))
 	verif.v(ecart_max == 0.0,
 		"redeposer_lot doit rendre le meme champ que N redeposer sequentiels (ecart max %f)" % ecart_max)
+
+# Invariant : deposer_lot(N depots) == deposer un par un dans le meme
+# ordre, avec signes melanges (+1 et -1).
+func _deposer_lot_equivaut_a_deposer_un_par_un() -> void:
+	var cx: PackedFloat32Array = PackedFloat32Array([0.0, 5.0, -3.0, 2.0])
+	var cz: PackedFloat32Array = PackedFloat32Array([0.0, 2.0, -4.0, 1.0])
+	var r: PackedFloat32Array = PackedFloat32Array([4.0, 3.0, 5.0, 0.0])
+	var m: PackedFloat32Array = PackedFloat32Array([0.8, 1.0, 0.6, 2.0])
+	var s: PackedByteArray = PackedByteArray([1, 0, 1, 0])  # +1, -1, +1, -1
+	var taille_case: float = 1.0
+	var oracle := ChampSaturation.new()
+	oracle.deposer(10.0, 0.0, 4.0, taille_case, 0.5, 1)  # champ initial non vide
+	var essai := ChampSaturation.new()
+	essai.deposer(10.0, 0.0, 4.0, taille_case, 0.5, 1)
+	var i: int = 0
+	while i < cx.size():
+		var signe: int = 1 if s[i] == 1 else -1
+		oracle.deposer(cx[i], cz[i], r[i], taille_case, m[i], signe)
+		i += 1
+	essai.deposer_lot(cx, cz, r, taille_case, m, s)
+	var ecart_max: float = 0.0
+	for dx in range(-10, 11):
+		for dz in range(-10, 11):
+			var vo: float = oracle.lire(float(dx) + 0.5, float(dz) + 0.5, taille_case)
+			var ve: float = essai.lire(float(dx) + 0.5, float(dz) + 0.5, taille_case)
+			ecart_max = maxf(ecart_max, absf(vo - ve))
+	verif.v(ecart_max == 0.0,
+		"deposer_lot doit rendre le meme champ que N deposer sequentiels (ecart max %f)" % ecart_max)

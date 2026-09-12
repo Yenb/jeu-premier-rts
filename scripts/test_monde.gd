@@ -30,6 +30,7 @@ func _init() -> void:
 	_retirer_sort_une_chose_de_partout()
 	_choses_dans_couloir_ne_lit_que_les_cases_traversees()
 	_choses_dans_rayons_equivaut_a_la_boucle_ponctuelle()
+	_ajouter_lot_equivaut_a_la_boucle_unitaire()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -213,3 +214,30 @@ func _filtre_de_distance_nominal() -> void:
 	verif.v(resultat.size() == 1, "attendu 1 chose dans le rayon, recu %d" % resultat.size())
 	if resultat.size() == 1:
 		verif.v(resultat[0].chose.id == "dedans", "la chose dans le rayon doit etre 'dedans'")
+
+# LOT : ajouter_lot(entries) doit rendre le meme etat qu'une boucle
+# unitaire d'ajouter, memes ids, meme voisinage.
+func _ajouter_lot_equivaut_a_la_boucle_unitaire() -> void:
+	# Oracle : ajouter un a un.
+	var oracle := Monde.new()
+	for i in range(20):
+		var pos := Vector3(float(i), 0.0, 0.0)
+		var c := Objet.fabriquer("chose_%d" % i, "type", pos, {})
+		oracle.ajouter(c, "type", c.position)
+	# Essai : ajouter_lot avec entries.
+	var essai := Monde.new()
+	var entries: Array = []
+	for i in range(20):
+		var pos := Vector3(float(i), 0.0, 0.0)
+		var c := Objet.fabriquer("chose_%d" % i, "type", pos, {})
+		entries.append({"chose": c, "type": "type"})
+	essai.ajouter_lot(entries)
+	# Verifie que chaque id est retrouvable et que le voisinage est identique.
+	for i in range(20):
+		var id: String = "chose_%d" % i
+		verif.v(oracle.par_id(id) != null, "oracle : id %s doit etre present" % id)
+		verif.v(essai.par_id(id) != null, "essai : id %s doit etre present" % id)
+	var voisins_oracle := oracle.choses_dans_rayon(Vector3(10.0, 0.0, 0.0), 5.0)
+	var voisins_essai := essai.choses_dans_rayon(Vector3(10.0, 0.0, 0.0), 5.0)
+	verif.v(voisins_oracle.size() == voisins_essai.size(),
+		"voisinage : oracle %d essai %d" % [voisins_oracle.size(), voisins_essai.size()])

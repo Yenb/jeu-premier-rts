@@ -64,6 +64,49 @@ static func tirer(rng: RandomNumberGenerator, amplitude: float) -> float:
 		return 1.0
 	return 1.0 + rng.randf_range(-a, a)
 
+# TIRAGE DE N PAIRES INTERLEAVED : rend deux PackedFloat32Array de taille
+# n, remplis en INTERLEAVED (pour i in 0..n : randf_range(bas1, haut1)
+# dans la premiere colonne, puis randf_range(bas2, haut2) dans la seconde).
+# Meme sequence de randf_range que N appels alternes a `tirer_entre` --
+# indispensable pour preserver l'ordre RNG bit a bit quand un manager
+# de population appelle tirer_entre deux fois par naissance.
+# bas > haut : push_error, colonne remplie de bas.
+# n == 0 : rend deux Arrays vides.
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer les
+# franchissements de frontiere par naissance du banc `jeu/bancs/
+# banc_peuplement_arbre.gd:_naitre_lot`.
+static func tirer_paires_entre_lot(rng: RandomNumberGenerator, n: int, bas1: float, haut1: float, bas2: float, haut2: float) -> Array:
+	var col1: PackedFloat32Array = PackedFloat32Array()
+	var col2: PackedFloat32Array = PackedFloat32Array()
+	if n <= 0:
+		return [col1, col2]
+	col1.resize(n)
+	col2.resize(n)
+	var bornes_c1_ko: bool = bas1 > haut1
+	var bornes_c2_ko: bool = bas2 > haut2
+	if bornes_c1_ko:
+		push_error("facteur_variance.gd : tirer_paires_entre_lot() -- bas1 %f > haut1 %f" % [bas1, haut1])
+	if bornes_c2_ko:
+		push_error("facteur_variance.gd : tirer_paires_entre_lot() -- bas2 %f > haut2 %f" % [bas2, haut2])
+	var i: int = 0
+	while i < n:
+		if bornes_c1_ko:
+			col1[i] = bas1
+		elif bas1 == haut1:
+			col1[i] = bas1
+		else:
+			col1[i] = rng.randf_range(bas1, haut1)
+		if bornes_c2_ko:
+			col2[i] = bas2
+		elif bas2 == haut2:
+			col2[i] = bas2
+		else:
+			col2[i] = rng.randf_range(bas2, haut2)
+		i += 1
+	return [col1, col2]
+
 static func tirer_entre(rng: RandomNumberGenerator, bas: float, haut: float) -> float:
 	# Params renommes de mini/maxi -> bas/haut : mini() et maxi() sont
 	# des built-ins Godot, GDScript::reload emettait un warning par

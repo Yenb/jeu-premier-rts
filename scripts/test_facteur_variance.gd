@@ -25,6 +25,7 @@ func _init() -> void:
 	_tirer_entre_mini_egal_maxi_rend_valeur_exacte()
 	_tirer_entre_meme_seed_reproduit_la_sequence()
 	_tirer_entre_bornes_asymetriques_moyenne_au_centre()
+	_tirer_paires_entre_lot_equivaut_a_la_sequence_alternee()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -148,3 +149,37 @@ func _tirer_entre_bornes_asymetriques_moyenne_au_centre() -> void:
 	# Uniforme sur [mini, maxi] -> moyenne theorique = (mini + maxi) / 2.
 	var centre: float = (mini + maxi) * 0.5
 	verif.v(abs(moyenne - centre) < 0.01, "moyenne %f trop loin du centre %f sur %d tirages" % [moyenne, centre, n])
+
+# LOT INTERLEAVED : tirer_paires_entre_lot doit rendre exactement la meme
+# sequence de valeurs que N appels alternes a tirer_entre (c1, c2, c1, c2,
+# ..., c1, c2). Invariant strict = foret identique a seed egal quand le
+# banc appelle tirer_entre deux fois par naissance.
+func _tirer_paires_entre_lot_equivaut_a_la_sequence_alternee() -> void:
+	var n: int = 6
+	var bas1: float = 0.6
+	var haut1: float = 1.6
+	var bas2: float = 0.5
+	var haut2: float = 2.0
+	# Oracle : boucle unitaire.
+	var rng_o := RandomNumberGenerator.new()
+	rng_o.seed = 20260912
+	var col1_oracle: PackedFloat32Array = PackedFloat32Array()
+	var col2_oracle: PackedFloat32Array = PackedFloat32Array()
+	col1_oracle.resize(n)
+	col2_oracle.resize(n)
+	for i in range(n):
+		col1_oracle[i] = FacteurVariance.tirer_entre(rng_o, bas1, haut1)
+		col2_oracle[i] = FacteurVariance.tirer_entre(rng_o, bas2, haut2)
+	# Essai : lot.
+	var rng_e := RandomNumberGenerator.new()
+	rng_e.seed = 20260912
+	var res: Array = FacteurVariance.tirer_paires_entre_lot(rng_e, n, bas1, haut1, bas2, haut2)
+	var col1_essai: PackedFloat32Array = res[0]
+	var col2_essai: PackedFloat32Array = res[1]
+	verif.v(col1_essai.size() == n and col2_essai.size() == n,
+		"tailles retour : c1 %d c2 %d attendu %d" % [col1_essai.size(), col2_essai.size(), n])
+	for i in range(n):
+		verif.v(col1_essai[i] == col1_oracle[i],
+			"c1[%d] : lot=%f oracle=%f (RNG doit interleaver)" % [i, col1_essai[i], col1_oracle[i]])
+		verif.v(col2_essai[i] == col2_oracle[i],
+			"c2[%d] : lot=%f oracle=%f (RNG doit interleaver)" % [i, col2_essai[i], col2_oracle[i]])

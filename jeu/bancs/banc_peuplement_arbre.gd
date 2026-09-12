@@ -894,6 +894,13 @@ func _process(delta: float) -> void:
 	_reproduire_lot(pas)
 	_semer_lot()
 	_tick_banque(pas)
+	# NAISSANCES EN LOT : draine `_naissances_lot_x/_z` empile par
+	# `_semer_lot` et `_tick_banque`. Un seul appel groupe pour toutes
+	# les naissances du tick (alloc slots, tirer variance en paires
+	# interleaved, `monde.ajouter_lot`, `champ.deposer_lot`). Ordre
+	# RNG variance = ordre des naissances dans la queue = ordre naturel
+	# (semer d'abord, puis tick_banque). Objet.fabriquer skippe.
+	_naitre_lot()
 	_avancer_competition(pas)
 	# RENDU EN LOT : un seul appel groupe pour tous les slots vivants. Le
 	# corps de `_ecrire_slot` + `_calc_params` + `_appliquer_couleur_slot`
@@ -1251,10 +1258,104 @@ func _liberer_slot(i: int) -> void:
 	# `_tick_banque`.
 	_reveiller_dormantes_autour(pos_x, pos_z)
 
-# Naissance : prend un slot libre en priorite ; agrandit la capacite s'il
-# n'y en a plus. Fabrique un objet via Objet.fabriquer, extrait
-# `stades_config` la premiere fois pour le cache partage. Le Dictionary
-# de l'objet n'est PAS stocke -- seules les colonnes tiennent la population.
+# NAISSANCES EN LOT : draine `_naissances_lot_x/_z` (positions empilees
+# par `_semer_lot` et `_tick_banque` -- les deux chemins deferent
+# `_naitre` a cette passe unique). Cinq franchissements de frontiere
+# par tick au total, quel que soit le nombre de naissances : alloc
+# slots (banc) + `FacteurVariance.tirer_paires_entre_lot` +
+# `_monde.ajouter_lot` + `_couvert.deposer_lot`. `Objet.fabriquer`
+# est SKIPPE : `_stades_config_partagee` est cache au premier
+# `_naitre` du `_ready`, initial age = 0.0 par contrat du banc.
+# `_ecrire_slot` est SKIPPE : `_ecrire_slots_lot` en fin de tick
+# ecrira les newborns depuis leurs colonnes (sentinelle INF au
+# `_derniere_params` force le premier ecrit).
+# ORDRE RNG STRICTEMENT PRESERVE : `tirer_paires_entre_lot` produit
+# la meme sequence interleaved (croissance, longevite) que N appels
+# unitaires alternes -- test hors domaine dans
+# `scripts/test_facteur_variance.gd`.
+func _naitre_lot() -> void:
+	var n: int = _naissances_lot_x.size()
+	if n == 0:
+		return
+	# Alloue N slots -- agrandit si necessaire.
+	while _slots_libres.size() < n:
+		_agrandir_capacite()
+	var slots: PackedInt32Array = PackedInt32Array()
+	slots.resize(n)
+	var k: int = 0
+	while k < n:
+		slots[k] = _slots_libres.pop_back()
+		k += 1
+	# TIRAGE DE VARIANCE en UN appel interleaved (ordre RNG identique
+	# a N appels unitaires alternes).
+	var facteurs: Array = FacteurVariance.tirer_paires_entre_lot(
+		_rng, n, _croissance_min, _croissance_max, _longevite_min, _longevite_max)
+	var croissance_col: PackedFloat32Array = facteurs[0]
+	var longevite_col: PackedFloat32Array = facteurs[1]
+	# Prepare les entrees pour `_monde.ajouter_lot` et les colonnes de
+	# depot d'ombrage. Age initial : 0.0 (contrat du banc). Stade
+	# initial : `_index_pour_age(0.0)`, en general 0 (premier stade
+	# franchi des la naissance).
+	var stade_initial: int = _index_pour_age(0.0)
+	var entries_monde: Array = []
+	entries_monde.resize(n)
+	var dep_x: PackedFloat32Array = PackedFloat32Array()
+	var dep_z: PackedFloat32Array = PackedFloat32Array()
+	var dep_r: PackedFloat32Array = PackedFloat32Array()
+	var dep_m: PackedFloat32Array = PackedFloat32Array()
+	var dep_s: PackedByteArray = PackedByteArray()
+	# Reserves de conf_ombrage lues une seule fois si stade initial
+	# valide et dans les bornes du catalogue.
+	var stade_num: int = stade_initial + 1
+	var conf_ombrage_ok: bool = stade_num >= 1 and stade_num <= _ombrage_par_stade.size()
+	var rayon_naissance: float = 0.0
+	var mag_naissance: float = 0.0
+	if conf_ombrage_ok:
+		var conf: Dictionary = _ombrage_par_stade[stade_num - 1]
+		rayon_naissance = float(conf.get("rayon_ombre_m", 0.0))
+		mag_naissance = float(conf.get("magnitude", 0.0))
+	var denom_prefixe: float = _annees_par_seconde * _graines_par_vie
+	k = 0
+	while k < n:
+		var slot: int = slots[k]
+		var pos_x: float = _naissances_lot_x[k]
+		var pos_z: float = _naissances_lot_z[k]
+		_libres[slot] = 0
+		_ages[slot] = 0.0
+		_positions_x[slot] = pos_x
+		_positions_z[slot] = pos_z
+		_slot_stade[slot] = stade_initial
+		_facteur_croissance[slot] = croissance_col[k]
+		_facteur_longevite[slot] = longevite_col[k]
+		# Intervalle effectif de reproduction : meme formule que
+		# `_naitre` unitaire.
+		var denom: float = denom_prefixe * croissance_col[k]
+		if _fenetre_fertile_age > 0.0 and denom > 0.0:
+			_intervalle_reprod[slot] = _fenetre_fertile_age / denom
+		else:
+			_intervalle_reprod[slot] = INF
+		var position := Vector3(pos_x, Y_SOL, pos_z)
+		var chose := {"id": "arbre_%d" % slot, "position": position, "slot": slot}
+		_choses_arbre[slot] = chose
+		entries_monde[k] = {"chose": chose, "type": "arbre"}
+		if conf_ombrage_ok and mag_naissance != 0.0:
+			dep_x.append(pos_x)
+			dep_z.append(pos_z)
+			dep_r.append(rayon_naissance)
+			dep_m.append(mag_naissance)
+			dep_s.append(1)  # signe +1
+		_population += 1
+		k += 1
+	# UN appel groupe au monde.
+	_monde.ajouter_lot(entries_monde)
+	# UN appel groupe au champ pour tous les depots d'ombrage naissance.
+	if dep_x.size() > 0:
+		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
+
+# Naissance UNITAIRE : conserve pour le `_naitre` initial de `_ready`
+# (avant que `_stades_config_partagee` soit cache, obligatoire pour
+# initialiser le cache) et pour tout autre chemin qui exigerait la
+# fabrication complete via `Objet.fabriquer`.
 func _naitre(pos_x: float, pos_z: float) -> void:
 	if _slots_libres.is_empty():
 		_agrandir_capacite()
@@ -1415,7 +1516,11 @@ func _semer_lot() -> void:
 		if _trouee_saturee_lot(pos_x, pos_z, voisins, carre_normal):
 			continue
 		if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
-			_naitre(pos_x, pos_z)
+			# NAISSANCE DEFEREE au `_naitre_lot` de fin de tick : append
+			# la position au meme lot que la scan du gate suivant lit
+			# (`_trouee_saturee_lot` scanne `_naissances_lot_x/_z` en
+			# plus du batch monde), pour que les graines suivantes
+			# comptent ce nouveau-ne dans leur voisinage.
 			_naissances_lot_x.append(pos_x)
 			_naissances_lot_z.append(pos_z)
 			continue
@@ -1495,24 +1600,11 @@ func _tick_banque(pas: float) -> void:
 		var voisins: Array = _monde.choses_dans_rayon(arrivee, rayon_gros)
 		_chrono_us_query += Time.get_ticks_usec() - t1
 		_chrono_n_query += 1
-		# POSTE 3 : GATE (boucle voisins + couvert)
+		# POSTE 3 : GATE (delegue a `_trouee_saturee_lot` qui scanne
+		# aussi les pending `_naissances_lot_x/_z` -- les prospects
+		# germines plus tot dans le meme tick comptent dans le gate).
 		var t2: int = Time.get_ticks_usec()
-		var compte_normal: int = 0
-		var trouee_ko: bool = false
-		for entree_v in voisins:
-			var chose = entree_v.chose
-			var slot: int = int(chose.get("slot", -1))
-			var stade_num: int = 0
-			if slot >= 0 and slot < _slot_stade.size():
-				stade_num = _slot_stade[slot] + 1
-			if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
-				trouee_ko = true
-				break
-			var pos_voisin: Vector3 = chose.position
-			if arrivee.distance_squared_to(pos_voisin) <= carre_normal:
-				compte_normal += 1
-		if not trouee_ko:
-			trouee_ko = compte_normal > _trouee_max_voisins
+		var trouee_ko: bool = _trouee_saturee_lot(pos.x, pos.z, voisins, carre_normal)
 		var couvert_ko: bool = false
 		if not trouee_ko:
 			couvert_ko = _lire_couvert(pos.x, pos.z) >= _seuil_couvert
@@ -1520,11 +1612,16 @@ func _tick_banque(pas: float) -> void:
 		_chrono_n_gate += 1
 		if trouee_ko or couvert_ko:
 			continue
-		# POSTE 4 : NAISSANCE
+		# POSTE 4 : NAISSANCE DEFEREE au `_naitre_lot` de fin de tick.
+		# La sortie de banque (banque_graines.retirer + retirer_dormante)
+		# reste immediate -- une graine qui passe le gate n'est plus
+		# dormante des maintenant, meme si sa naissance materielle est
+		# groupee.
 		var t3: int = Time.get_ticks_usec()
 		_banque_graines.retirer(id)
 		_retirer_dormante(id)
-		_naitre(pos.x, pos.z)
+		_naissances_lot_x.append(pos.x)
+		_naissances_lot_z.append(pos.z)
 		_chrono_us_naissance += Time.get_ticks_usec() - t3
 		_chrono_n_naissance += 1
 	_chrono_us_total += Time.get_ticks_usec() - t_total
