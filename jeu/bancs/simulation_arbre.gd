@@ -915,6 +915,18 @@ func avancer(pas: float) -> void:
 	var _dep_r_lsl: PackedFloat32Array = PackedFloat32Array()
 	var _dep_m_lsl: PackedFloat32Array = PackedFloat32Array()
 	var _dep_s_lsl: PackedByteArray = PackedByteArray()
+	# DOUBLE BUFFER PARTIEL : accumule les writes que AUCUNE lecture du
+	# tick ne consomme (prouve par audit dependances) -- W2 couvert
+	# (naissances +1) et W3 monde+couvert (morts_c). Deverses en UN
+	# appel monde et UN appel couvert a la toute fin de `avancer`, avant
+	# le print releve (qui lit `nombre_cases()`). W1 monde+couvert et
+	# W2 monde restent synchrones (lus par gates semis/banque/competition).
+	var _ids_finaux_m: Array = []
+	var _dep_x_finaux: PackedFloat32Array = PackedFloat32Array()
+	var _dep_z_finaux: PackedFloat32Array = PackedFloat32Array()
+	var _dep_r_finaux: PackedFloat32Array = PackedFloat32Array()
+	var _dep_m_finaux: PackedFloat32Array = PackedFloat32Array()
+	var _dep_s_finaux: PackedByteArray = PackedByteArray()
 	var _slots_lsl: PackedInt32Array = _morts_vieillesse_lot
 	var _n_lsl: int = _slots_lsl.size()
 	if _n_lsl > 0:
@@ -1452,9 +1464,16 @@ func avancer(pas: float) -> void:
 				_dep_s_ntl.append(1)
 			_population += 1
 			_k_ntl += 1
+		# W2 monde SYNCHRONE (competition lit monde et compte naissances).
 		_monde.ajouter_lot(_entries_monde_ntl)
+		# W2 couvert BUFFERISE (aucune lecture couvert apres W2 dans ce
+		# tick -- competition ne lit que monde).
 		if _dep_x_ntl.size() > 0:
-			_couvert.deposer_lot(_dep_x_ntl, _dep_z_ntl, _dep_r_ntl, _taille_case, _dep_m_ntl, _dep_s_ntl)
+			_dep_x_finaux.append_array(_dep_x_ntl)
+			_dep_z_finaux.append_array(_dep_z_ntl)
+			_dep_r_finaux.append_array(_dep_r_ntl)
+			_dep_m_finaux.append_array(_dep_m_ntl)
+			_dep_s_finaux.append_array(_dep_s_ntl)
 		_naissances_lot_x.resize(0)
 		_naissances_lot_z.resize(0)
 	# INLINE _avancer_competition -- morceau 6/N. Vars suffixees `_avc`.
@@ -1553,10 +1572,16 @@ func avancer(pas: float) -> void:
 					_population -= 1
 					_rev_x_avclsl.append(_pos_x_avclsl)
 					_rev_z_avclsl.append(_pos_z_avclsl)
+				# W3 monde+couvert BUFFERISES (aucune lecture apres W3 dans
+				# ce tick -- morts_c ne sont plus jamais interrogees).
 				if _ids_a_retirer_avclsl.size() > 0:
-					_monde.retirer_lot(_ids_a_retirer_avclsl)
+					_ids_finaux_m.append_array(_ids_a_retirer_avclsl)
 				if _dep_x_avclsl.size() > 0:
-					_couvert.deposer_lot(_dep_x_avclsl, _dep_z_avclsl, _dep_r_avclsl, _taille_case, _dep_m_avclsl, _dep_s_avclsl)
+					_dep_x_finaux.append_array(_dep_x_avclsl)
+					_dep_z_finaux.append_array(_dep_z_avclsl)
+					_dep_r_finaux.append_array(_dep_r_avclsl)
+					_dep_m_finaux.append_array(_dep_m_avclsl)
+					_dep_s_finaux.append_array(_dep_s_avclsl)
 				# INLINE _ecrire_slots_vides_lot(_morts_slots_avc) -- suffix _avcev
 				var _t_avcev := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
 				var _taille_couleur_avcev: int = _derniere_couleur_stade.size()
@@ -1689,6 +1714,18 @@ func avancer(pas: float) -> void:
 					Vector3(_pos_x_esl, _y_sol_esl + _ht_esl + _hf_esl * 0.5, _pos_z_esl))
 			_mm_feuillage.set_instance_transform(_i_esl, _t_feuillage_esl)
 			_i_esl += 1
+	# DEVERSEMENT DES BUFFERS FINAUX : UN appel monde (morts_c) et UN
+	# appel couvert (naissances +1 concatenees avec morts_c -1). Ordre des
+	# entrees couvert dans le deposer_lot final = ordre chronologique des
+	# accumulations : naissances (W2) d'abord, puis morts_c (W3) --
+	# strictement identique a la sequence de 2 appels separes couvert
+	# (naissances puis morts_c) qui existait avant le buffer. Aucune
+	# reordonnance, aucune fusion arithmetique intra-case : bit-a-bit
+	# strict.
+	if _ids_finaux_m.size() > 0:
+		_monde.retirer_lot(_ids_finaux_m)
+	if _dep_x_finaux.size() > 0:
+		_couvert.deposer_lot(_dep_x_finaux, _dep_z_finaux, _dep_r_finaux, _taille_case, _dep_m_finaux, _dep_s_finaux)
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
