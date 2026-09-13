@@ -24,6 +24,7 @@
 [ext_resource type="Script" uid="uid://cvwwgdhfl31br" path="res://jeu/Proto/manager_proto_2.gd" id="24_mgr2"]
 [ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="25_prodtest"]
 [ext_resource type="Script" uid="uid://knh5newlawfl" path="res://jeu/bancs/banc_peuplement_arbre.gd" id="26_foret"]
+[ext_resource type="Script" uid="uid://b0cll7l4dilpj" path="res://jeu/plantes/zone_exclusion_arbre.gd" id="27_zone"]
 
 [sub_resource type="StandardMaterial3D" id="Materiau_repere"]
 albedo_color = Color(0.45, 0.36, 0.27, 1)
@@ -122,7 +123,7 @@ utilise_rs_direct = true
 utilise_pipeline_intra_tuile = true
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 14.253365, 272.74768)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -375.97253, 14.253365, -311.75073)
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
@@ -204,7 +205,13 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 251.50307, 15.295289, 161.110
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 252.30437, 14.71185, 159.7741)
 
 [node name="Foret" type="Node3D" parent="." unique_id=810000005]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 14.253365, 272.74768)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 238.87822, 14.253365, 272.74768)
 script = ExtResource("26_foret")
 hote_actif = true
 carte_terrain_ref = ExtResource("3_g2etm")
+
+[node name="ZoneExclusionExemple" type="Node3D" parent="." unique_id=810000006]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 14.253365, 272.74768)
+script = ExtResource("27_zone")
+forme = 0
+rayon = 30.0
