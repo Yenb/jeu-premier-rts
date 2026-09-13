@@ -85,6 +85,27 @@ const CHEMIN_TYPES := "res://data/types.json"
 # Hauteur du sol visuel monte par _monter_scene. La base des troncs y est posee.
 const Y_SOL := 12.0
 
+# MODE HOTE : le banc tourne dans une scene qui apporte deja son sol, sa
+# lumiere, sa camera, son joueur (par exemple `jeu/Proto/verification.tscn`).
+# `hote_actif = true` : `_ready` SAUTE `_monter_scene` et `_monter_joueur`,
+# derive `_demi_carte` de `carte_terrain_ref.metres()` (surcharge le JSON),
+# lit la hauteur du sol reel via `carte_terrain_ref.sommet(x, z)` a la
+# naissance de chaque arbre (colonne `_positions_y`, morceau 2 -- pas
+# encore branche a ce commit). Le monde data (`_monde`) continue de
+# stocker `y = Y_SOL` constant : distance XZ preservee, gate/banque/
+# reveils bit-a-bit identiques au mode isole. Seul le RENDU change.
+# Doctrine CLAUDE.md « Les donnees sont la verite, la physique est un
+# rendu » : le monde ne connait pas le relief, le rendu si.
+# `hote_actif = false` (defaut) : mode banc isole, sol plat a Y_SOL,
+# _monter_scene et _monter_joueur montent leur propre decor -- comportement
+# STRICTEMENT inchange du banc historique.
+@export var hote_actif: bool = false
+# En mode hote, ressource carte_terrain injectee par la scene hote (par
+# exemple `res://jeu/Proto/proto_carte.tres`). Doit exposer `sommet(x, z)`
+# (Y du sol en unites monde) et `metres()` (etendue en unites monde).
+# `null` en mode isole (jamais lu).
+@export var carte_terrain_ref: Resource = null
+
 # Capacite initiale des deux MultiMesh (petite ; doublee par _agrandir_capacite
 # quand aucun slot libre).
 const CAPACITE_INITIALE := 8
@@ -439,9 +460,21 @@ func _ready() -> void:
 	_couvert = ChampSaturation.new()
 	_monde = Monde.new()
 	_monde.structure_simple = true
-	_monter_scene()
-	if _joueur_actif:
-		_monter_joueur()
+	if hote_actif:
+		# MODE HOTE : la scene apporte deja sol, lumiere, camera, joueur.
+		# Skip _monter_scene et _monter_joueur. Derive _demi_carte du
+		# terrain reel (surcharge la valeur JSON).
+		if carte_terrain_ref == null:
+			push_error("banc_peuplement_arbre : hote_actif = true mais carte_terrain_ref manquant, banc inerte")
+			return
+		var etendue_m: float = float(carte_terrain_ref.metres())
+		_demi_carte = etendue_m * 0.5
+	else:
+		# MODE ISOLE : le banc monte son propre decor (comportement
+		# strictement inchange du banc historique).
+		_monter_scene()
+		if _joueur_actif:
+			_monter_joueur()
 	_monter_population()
 	_construire_catalogue()
 	_banque_graines = AttenteSeuil.new()
