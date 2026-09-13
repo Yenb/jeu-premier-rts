@@ -99,11 +99,16 @@ const COULEUR_VISUEL: Color = Color(0.9, 0.2, 0.2, 0.35)
 		_reconstruire_mesh()
 
 func _ready() -> void:
-	# Reconstruit le mesh au chargement de la scene (les setters ne
-	# sont pas rejoues sur les valeurs deja posees). En jeu, s'inscrit
-	# aussi au groupe pour que le peuplement le trouve.
-	_reconstruire_mesh()
-	if not Engine.is_editor_hint():
+	if Engine.is_editor_hint():
+		# EDITEUR : reconstruit la dalle transparente pour que le
+		# designer VOIE l'emprise. Aucune inscription au groupe (pas de
+		# peuplement qui tourne en editeur).
+		_reconstruire_mesh()
+	else:
+		# JEU : la zone est un outil d'edition -- invisible au joueur.
+		# Aucun mesh a poser, `contient()` lit forme + dimensions +
+		# global_position (aucune dependance au mesh).
+		visible = false
 		add_to_group(&"exclusion_arbre")
 
 # Rebati le mesh selon `forme` et les dimensions courantes. Patron
