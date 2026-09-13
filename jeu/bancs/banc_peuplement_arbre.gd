@@ -1196,27 +1196,579 @@ func tick(pas: float) -> void:
 	# prospects reveilles) pour que le couvert reflete l'etat post-tick.
 	if _transitions_x.size() > 0:
 		_couvert.redeposer_lot(_transitions_x, _transitions_z, _transitions_rayon_a, _transitions_rayon_n, _taille_case, _transitions_mag_a, _transitions_mag_n)
-	# REPRODUCTION : fusionnee dans la boucle unique par-arbre (phase 2
-	# morceau 2). Les graines candidates sont deja empilees dans
-	# `_graines_lot_*` par la boucle plus haut ; `_semer_lot` les draine
-	# ici. Ordre RNG (0..cap-1) preserve bit-a-bit.
-	_semer_lot()
-	_tick_banque(pas)
+	# INLINE _semer_lot -- morceau 3/N. Vars suffixees `_sml`. Inclut
+	# l'inline recursif de `_inscrire_dormante` (suffix `_smlind`).
+	var _n_sml: int = _graines_lot_x.size()
+	if _n_sml > 0:
+		var _rayon_gros_sml: float = _rayon_trouee * _facteur_trouee_gros
+		var _carre_normal_sml: float = _rayon_trouee * _rayon_trouee
+		var _indices_valides_sml: PackedInt32Array = PackedInt32Array()
+		var _positions_valides_sml: Array = []
+		var _n_zones_pre_sml: int = _zones_exclusion.size()
+		var _k_sml: int = 0
+		while _k_sml < _n_sml:
+			var _pxp_sml: float = _graines_lot_x[_k_sml]
+			var _pzp_sml: float = _graines_lot_z[_k_sml]
+			if absf(_pxp_sml) > _demi_carte or absf(_pzp_sml) > _demi_carte:
+				_k_sml += 1
+				continue
+			var _dans_zone_pre_sml: bool = false
+			if _n_zones_pre_sml > 0:
+				var _zi_p_sml: int = 0
+				while _zi_p_sml < _n_zones_pre_sml:
+					var _zone_p_sml: Dictionary = _zones_exclusion[_zi_p_sml]
+					_zi_p_sml += 1
+					if int(_zone_p_sml.forme) == 0:
+						var _zdx_p_sml: float = _pxp_sml - float(_zone_p_sml.cx)
+						var _zdz_p_sml: float = _pzp_sml - float(_zone_p_sml.cz)
+						var _r_p_sml: float = float(_zone_p_sml.rayon)
+						if _zdx_p_sml * _zdx_p_sml + _zdz_p_sml * _zdz_p_sml <= _r_p_sml * _r_p_sml:
+							_dans_zone_pre_sml = true
+							break
+					else:
+						if absf(_pxp_sml - float(_zone_p_sml.cx)) <= float(_zone_p_sml.demi_x) and absf(_pzp_sml - float(_zone_p_sml.cz)) <= float(_zone_p_sml.demi_z):
+							_dans_zone_pre_sml = true
+							break
+			if _dans_zone_pre_sml:
+				_k_sml += 1
+				continue
+			_indices_valides_sml.append(_k_sml)
+			_positions_valides_sml.append(Vector3(_pxp_sml, Y_SOL, _pzp_sml))
+			_k_sml += 1
+		if not _positions_valides_sml.is_empty():
+			var _voisins_par_graine_sml: Array = _monde.choses_dans_rayons_brut_xz(_positions_valides_sml, _rayon_gros_sml)
+			var _couverts_sml: PackedFloat32Array = _couvert.lire_lot(_graines_lot_x, _graines_lot_z, _taille_case)
+			var _carre_min_sml: float = _rayon_exclusion * _rayon_exclusion
+			var _stade_gros_min_sml: int = _stade_gros_min
+			var _stade_gros_max_sml: int = _stade_gros_max
+			var _trouee_max_sml: int = _trouee_max_voisins
+			var _taille_slot_stade_sml: int = _slot_stade.size()
+			var _j_lot_sml: int = 0
+			var _nv_sml: int = _indices_valides_sml.size()
+			while _j_lot_sml < _nv_sml:
+				var _kk_sml: int = _indices_valides_sml[_j_lot_sml]
+				var _pos_x_sml: float = _graines_lot_x[_kk_sml]
+				var _pos_z_sml: float = _graines_lot_z[_kk_sml]
+				var _voisins_sml: Array = _voisins_par_graine_sml[_j_lot_sml]
+				_j_lot_sml += 1
+				var _arrivee_sml := Vector3(_pos_x_sml, Y_SOL, _pos_z_sml)
+				var _compte_normal_sml: int = 0
+				var _passe_sml: bool = true
+				for _voisin_sml in _voisins_sml:
+					var _slot_v_sml: int = int(_voisin_sml.get("slot", -1))
+					var _stade_num_sml: int = 0
+					if _slot_v_sml >= 0 and _slot_v_sml < _taille_slot_stade_sml:
+						_stade_num_sml = _slot_stade[_slot_v_sml] + 1
+					if _stade_num_sml >= _stade_gros_min_sml and _stade_num_sml <= _stade_gros_max_sml:
+						_passe_sml = false
+						break
+					var _pos_voisin_sml: Vector3 = _voisin_sml.position
+					var _d2_sml: float = _arrivee_sml.distance_squared_to(_pos_voisin_sml)
+					if _d2_sml < _carre_min_sml:
+						_passe_sml = false
+						break
+					if _d2_sml <= _carre_normal_sml:
+						_compte_normal_sml += 1
+				if _passe_sml:
+					var _m_sml: int = _naissances_lot_x.size()
+					var _j_s_sml: int = 0
+					while _j_s_sml < _m_sml:
+						var _dx_sml: float = _naissances_lot_x[_j_s_sml] - _pos_x_sml
+						var _dz_sml: float = _naissances_lot_z[_j_s_sml] - _pos_z_sml
+						var _d2n_sml: float = _dx_sml * _dx_sml + _dz_sml * _dz_sml
+						if _d2n_sml < _carre_min_sml:
+							_passe_sml = false
+							break
+						if _d2n_sml <= _carre_normal_sml:
+							_compte_normal_sml += 1
+						_j_s_sml += 1
+				if _passe_sml and _compte_normal_sml > _trouee_max_sml:
+					_passe_sml = false
+				if not _passe_sml:
+					continue
+				if _couverts_sml[_kk_sml] < _seuil_couvert:
+					_naissances_lot_x.append(_pos_x_sml)
+					_naissances_lot_z.append(_pos_z_sml)
+					continue
+				var _id_prospect_sml: int = _banque_graines.ajouter({
+					"position": Vector3(_pos_x_sml, Y_SOL, _pos_z_sml),
+				})
+				if _id_prospect_sml >= 0:
+					# INLINE _inscrire_dormante(id, pos_x, pos_z) -- suffix _smlind
+					if _taille_case_dormantes > 0.0:
+						var _inv_case_smlind: float = 1.0 / _taille_case_dormantes
+						var _cle_smlind: Vector2i = Vector2i(floori(_pos_x_sml * _inv_case_smlind), floori(_pos_z_sml * _inv_case_smlind))
+						var _arr_smlind = _dormantes_par_case.get(_cle_smlind, null)
+						if _arr_smlind == null:
+							_arr_smlind = []
+							_dormantes_par_case[_cle_smlind] = _arr_smlind
+						(_arr_smlind as Array).append(_id_prospect_sml)
+						_case_de_dormante[_id_prospect_sml] = _cle_smlind
+					_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_sml])
+	# INLINE _tick_banque -- morceau 4/N. Vars suffixees `_tbq`.
+	# Helpers profonds inlines : _drainer_expirations (suffix _tbqde),
+	# _retirer_dormante (suffix _tbqrd).
+	_temps_banque += pas
+	# INLINE _drainer_expirations() -- suffix _tbqde
+	if _banque_graines != null:
+		var _prospects_tbqde: Dictionary = _banque_graines.prospects()
+		while _expirations_head < _expirations.size():
+			var _entry_tbqde: Array = _expirations[_expirations_head]
+			if float(_entry_tbqde[0]) > _temps_banque:
+				break
+			_expirations_head += 1
+			var _id_tbqde: int = int(_entry_tbqde[1])
+			if _prospects_tbqde.has(_id_tbqde):
+				_banque_graines.retirer(_id_tbqde)
+				# INLINE _retirer_dormante(_id_tbqde) -- suffix _tbqdrd
+				var _cle_v_tbqdrd = _case_de_dormante.get(_id_tbqde, null)
+				if _cle_v_tbqdrd != null:
+					var _cle_tbqdrd: Vector2i = _cle_v_tbqdrd
+					_case_de_dormante.erase(_id_tbqde)
+					var _arr_tbqdrd = _dormantes_par_case.get(_cle_tbqdrd, null)
+					if _arr_tbqdrd != null:
+						(_arr_tbqdrd as Array).erase(_id_tbqde)
+						if (_arr_tbqdrd as Array).is_empty():
+							_dormantes_par_case.erase(_cle_tbqdrd)
+		if _expirations_head > 1024 and _expirations_head > (_expirations.size() >> 1):
+			_expirations = _expirations.slice(_expirations_head)
+			_expirations_head = 0
+	if not _reveils.is_empty():
+		var _prospects_tbq: Dictionary = _banque_graines.prospects()
+		var _ids_tbq: Array = _reveils.keys()
+		_reveils.clear()
+		var _rayon_gros_tbq: float = _rayon_trouee * _facteur_trouee_gros
+		var _carre_normal_tbq: float = _rayon_trouee * _rayon_trouee
+		var _carre_min_tbq: float = _rayon_exclusion * _rayon_exclusion
+		var _stade_gros_min_tbq: int = _stade_gros_min
+		var _stade_gros_max_tbq: int = _stade_gros_max
+		var _trouee_max_tbq: int = _trouee_max_voisins
+		var _taille_slot_stade_tbq: int = _slot_stade.size()
+		var _pros_x_tbq: PackedFloat32Array = PackedFloat32Array()
+		var _pros_z_tbq: PackedFloat32Array = PackedFloat32Array()
+		var _pros_ids_tbq: Array = []
+		for _id_variant_tbq in _ids_tbq:
+			var _id_pre_tbq: int = int(_id_variant_tbq)
+			if not _prospects_tbq.has(_id_pre_tbq):
+				continue
+			var _entree_pre_tbq: Dictionary = _prospects_tbq[_id_pre_tbq]
+			var _pos_pre_tbq: Vector3 = _entree_pre_tbq.position
+			_pros_x_tbq.append(_pos_pre_tbq.x)
+			_pros_z_tbq.append(_pos_pre_tbq.z)
+			_pros_ids_tbq.append(_id_pre_tbq)
+		var _couverts_tbq: PackedFloat32Array = _couvert.lire_lot(_pros_x_tbq, _pros_z_tbq, _taille_case)
+		var _kk_tbq: int = 0
+		var _nn_tbq: int = _pros_ids_tbq.size()
+		while _kk_tbq < _nn_tbq:
+			var _id_tbq: int = int(_pros_ids_tbq[_kk_tbq])
+			var _pos_tbq: Vector3 = Vector3(_pros_x_tbq[_kk_tbq], Y_SOL, _pros_z_tbq[_kk_tbq])
+			var _couvert_b_tbq: float = _couverts_tbq[_kk_tbq]
+			_kk_tbq += 1
+			var _arrivee_tbq := _pos_tbq
+			var _n_zones_tbq: int = _zones_exclusion.size()
+			if _n_zones_tbq > 0:
+				var _dans_zone_tbq: bool = false
+				var _zi_tbq: int = 0
+				while _zi_tbq < _n_zones_tbq:
+					var _zone_tbq: Dictionary = _zones_exclusion[_zi_tbq]
+					_zi_tbq += 1
+					if int(_zone_tbq.forme) == 0:
+						var _zdx_tbq: float = _pos_tbq.x - float(_zone_tbq.cx)
+						var _zdz_tbq: float = _pos_tbq.z - float(_zone_tbq.cz)
+						var _r_tbq: float = float(_zone_tbq.rayon)
+						if _zdx_tbq * _zdx_tbq + _zdz_tbq * _zdz_tbq <= _r_tbq * _r_tbq:
+							_dans_zone_tbq = true
+							break
+					else:
+						if absf(_pos_tbq.x - float(_zone_tbq.cx)) <= float(_zone_tbq.demi_x) and absf(_pos_tbq.z - float(_zone_tbq.cz)) <= float(_zone_tbq.demi_z):
+							_dans_zone_tbq = true
+							break
+				if _dans_zone_tbq:
+					continue
+			var _voisins_tbq: Array = _monde.choses_dans_rayon(_arrivee_tbq, _rayon_gros_tbq)
+			var _compte_normal_tbq: int = 0
+			var _passe_tbq: bool = true
+			for _entree_b_tbq in _voisins_tbq:
+				var _chose_b_tbq = _entree_b_tbq.chose
+				var _slot_b_tbq: int = int(_chose_b_tbq.get("slot", -1))
+				var _stade_num_b_tbq: int = 0
+				if _slot_b_tbq >= 0 and _slot_b_tbq < _taille_slot_stade_tbq:
+					_stade_num_b_tbq = _slot_stade[_slot_b_tbq] + 1
+				if _stade_num_b_tbq >= _stade_gros_min_tbq and _stade_num_b_tbq <= _stade_gros_max_tbq:
+					_passe_tbq = false
+					break
+				var _pos_voisin_b_tbq: Vector3 = _chose_b_tbq.position
+				var _d2_b_tbq: float = _arrivee_tbq.distance_squared_to(_pos_voisin_b_tbq)
+				if _d2_b_tbq < _carre_min_tbq:
+					_passe_tbq = false
+					break
+				if _d2_b_tbq <= _carre_normal_tbq:
+					_compte_normal_tbq += 1
+			if _passe_tbq:
+				var _m_b_tbq: int = _naissances_lot_x.size()
+				var _j_b_tbq: int = 0
+				while _j_b_tbq < _m_b_tbq:
+					var _dx_b_tbq: float = _naissances_lot_x[_j_b_tbq] - _pos_tbq.x
+					var _dz_b_tbq: float = _naissances_lot_z[_j_b_tbq] - _pos_tbq.z
+					var _d2n_b_tbq: float = _dx_b_tbq * _dx_b_tbq + _dz_b_tbq * _dz_b_tbq
+					if _d2n_b_tbq < _carre_min_tbq:
+						_passe_tbq = false
+						break
+					if _d2n_b_tbq <= _carre_normal_tbq:
+						_compte_normal_tbq += 1
+					_j_b_tbq += 1
+			if _passe_tbq and _compte_normal_tbq > _trouee_max_tbq:
+				_passe_tbq = false
+			if not _passe_tbq:
+				continue
+			if _couvert_b_tbq >= _seuil_couvert:
+				continue
+			_banque_graines.retirer(_id_tbq)
+			# INLINE _retirer_dormante(_id_tbq) -- suffix _tbqrd
+			var _cle_v_tbqrd = _case_de_dormante.get(_id_tbq, null)
+			if _cle_v_tbqrd != null:
+				var _cle_tbqrd: Vector2i = _cle_v_tbqrd
+				_case_de_dormante.erase(_id_tbq)
+				var _arr_tbqrd = _dormantes_par_case.get(_cle_tbqrd, null)
+				if _arr_tbqrd != null:
+					(_arr_tbqrd as Array).erase(_id_tbq)
+					if (_arr_tbqrd as Array).is_empty():
+						_dormantes_par_case.erase(_cle_tbqrd)
+			_naissances_lot_x.append(_pos_tbq.x)
+			_naissances_lot_z.append(_pos_tbq.z)
 	# NAISSANCES EN LOT : draine `_naissances_lot_x/_z` empile par
 	# `_semer_lot` et `_tick_banque`. Un seul appel groupe pour toutes
 	# les naissances du tick (alloc slots, tirer variance en paires
 	# interleaved, `monde.ajouter_lot`, `champ.deposer_lot`). Ordre
 	# RNG variance = ordre des naissances dans la queue = ordre naturel
 	# (semer d'abord, puis tick_banque). `stades_config` deja partage.
-	_naitre_lot()
-	_avancer_competition(pas)
+	# INLINE _naitre_lot -- morceau 5/N. Vars suffixees `_ntl`. Helpers
+	# inlines : _index_pour_age (suffix _ntlia), _y_pour_naissance
+	# (suffix _ntlyn). `_agrandir_capacite` reste appel (chemin rare).
+	var _n_ntl: int = _naissances_lot_x.size()
+	if _n_ntl == 0:
+		_naissances_lot_x.resize(0)
+		_naissances_lot_z.resize(0)
+	else:
+		while _slots_libres.size() < _n_ntl:
+			_agrandir_capacite()
+		var _slots_ntl: PackedInt32Array = PackedInt32Array()
+		_slots_ntl.resize(_n_ntl)
+		var _slots_r_ntl: PackedInt32Array = PackedInt32Array()
+		_slots_r_ntl.resize(_n_ntl)
+		var _k_ntl: int = 0
+		while _k_ntl < _n_ntl:
+			_slots_ntl[_k_ntl] = _slots_libres.pop_back()
+			if _slots_rendu_libres.size() > 0:
+				_slots_r_ntl[_k_ntl] = _slots_rendu_libres.pop_back()
+			else:
+				_slots_r_ntl[_k_ntl] = -1
+			_k_ntl += 1
+		var _facteurs_ntl: Array = FacteurVariance.tirer_paires_entre_lot(
+			_rng, _n_ntl, _croissance_min, _croissance_max, _longevite_min, _longevite_max)
+		var _croissance_col_ntl: PackedFloat32Array = _facteurs_ntl[0]
+		var _longevite_col_ntl: PackedFloat32Array = _facteurs_ntl[1]
+		# INLINE _index_pour_age(0.0) -- suffix _ntlia
+		var _stade_initial_ntl: int = -1
+		for _ii_ntlia in range(_stades_config_partagee.size()):
+			var _seuil_ntlia: float = float(_stades_config_partagee[_ii_ntlia].get("age_seuil", 0.0))
+			if 0.0 >= _seuil_ntlia:
+				_stade_initial_ntl = _ii_ntlia
+		var _entries_monde_ntl: Array = []
+		_entries_monde_ntl.resize(_n_ntl)
+		var _dep_x_ntl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_z_ntl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_r_ntl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_m_ntl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_s_ntl: PackedByteArray = PackedByteArray()
+		var _stade_num_ntl: int = _stade_initial_ntl + 1
+		var _conf_ombrage_ok_ntl: bool = _stade_num_ntl >= 1 and _stade_num_ntl <= _ombrage_par_stade.size()
+		var _rayon_naissance_ntl: float = 0.0
+		var _mag_naissance_ntl: float = 0.0
+		if _conf_ombrage_ok_ntl:
+			var _conf_ntl: Dictionary = _ombrage_par_stade[_stade_num_ntl - 1]
+			_rayon_naissance_ntl = float(_conf_ntl.get("rayon_ombre_m", 0.0))
+			_mag_naissance_ntl = float(_conf_ntl.get("magnitude", 0.0))
+		var _denom_prefixe_ntl: float = _annees_par_seconde * _graines_par_vie
+		_k_ntl = 0
+		while _k_ntl < _n_ntl:
+			var _slot_ntl: int = _slots_ntl[_k_ntl]
+			var _pos_x_ntl: float = _naissances_lot_x[_k_ntl]
+			var _pos_z_ntl: float = _naissances_lot_z[_k_ntl]
+			_libres[_slot_ntl] = 0
+			_ages[_slot_ntl] = 0.0
+			_positions_x[_slot_ntl] = _pos_x_ntl
+			_positions_z[_slot_ntl] = _pos_z_ntl
+			# INLINE _y_pour_naissance(_pos_x_ntl, _pos_z_ntl) -- suffix _ntlyn
+			var _y_ntlyn: float = Y_SOL
+			if hote_actif and carte_terrain_ref != null:
+				var _y_variant_ntlyn = carte_terrain_ref.sommet(_pos_x_ntl, _pos_z_ntl)
+				if _y_variant_ntlyn != null:
+					_y_ntlyn = float(_y_variant_ntlyn)
+			_positions_y[_slot_ntl] = _y_ntlyn
+			var _slot_r_naissance_ntl: int = _slots_r_ntl[_k_ntl]
+			_slot_rendu_pour_data[_slot_ntl] = _slot_r_naissance_ntl
+			if _slot_r_naissance_ntl >= 0:
+				_data_pour_slot_rendu[_slot_r_naissance_ntl] = _slot_ntl
+			_slot_stade[_slot_ntl] = _stade_initial_ntl
+			_facteur_croissance[_slot_ntl] = _croissance_col_ntl[_k_ntl]
+			_facteur_longevite[_slot_ntl] = _longevite_col_ntl[_k_ntl]
+			_derniere_params[_slot_ntl] = Vector4(INF, INF, INF, INF)
+			_derniere_couleur_stade[_slot_ntl] = -1
+			var _denom_ntl: float = _denom_prefixe_ntl * _croissance_col_ntl[_k_ntl]
+			if _fenetre_fertile_age > 0.0 and _denom_ntl > 0.0:
+				_intervalle_reprod[_slot_ntl] = _fenetre_fertile_age / _denom_ntl
+			else:
+				_intervalle_reprod[_slot_ntl] = INF
+			var _position_arbre_ntl := Vector3(_pos_x_ntl, Y_SOL, _pos_z_ntl)
+			var _chose_ntl := {"id": "arbre_%d" % _slot_ntl, "position": _position_arbre_ntl, "slot": _slot_ntl}
+			_choses_arbre[_slot_ntl] = _chose_ntl
+			_entries_monde_ntl[_k_ntl] = {"chose": _chose_ntl, "type": "arbre"}
+			if _conf_ombrage_ok_ntl and _mag_naissance_ntl != 0.0:
+				_dep_x_ntl.append(_pos_x_ntl)
+				_dep_z_ntl.append(_pos_z_ntl)
+				_dep_r_ntl.append(_rayon_naissance_ntl)
+				_dep_m_ntl.append(_mag_naissance_ntl)
+				_dep_s_ntl.append(1)
+			_population += 1
+			_k_ntl += 1
+		_monde.ajouter_lot(_entries_monde_ntl)
+		if _dep_x_ntl.size() > 0:
+			_couvert.deposer_lot(_dep_x_ntl, _dep_z_ntl, _dep_r_ntl, _taille_case, _dep_m_ntl, _dep_s_ntl)
+		_naissances_lot_x.resize(0)
+		_naissances_lot_z.resize(0)
+	# INLINE _avancer_competition -- morceau 6/N. Vars suffixees `_avc`.
+	# Inline recursif de _liberer_slots_lot (suffix _avclsl), avec ses
+	# propres inlines _ecrire_slots_vides_lot (_avcev) et
+	# _reveiller_dormantes_autour_lot (_avcrev). Duplication assumee.
+	var _cap_avc: int = _capacite
+	if _cap_avc > 0 and _cadence_competition > 0.0:
+		var _n_slots_avc: int = int(ceil(float(_cap_avc) * pas / _cadence_competition))
+		if _n_slots_avc < 1:
+			_n_slots_avc = 1
+		if _n_slots_avc > _cap_avc:
+			_n_slots_avc = _cap_avc
+		_competition_positions.clear()
+		_competition_slots.resize(0)
+		var _count_avc: int = 0
+		while _count_avc < _n_slots_avc:
+			var _i_avc: int = _curseur_competition
+			_curseur_competition = (_curseur_competition + 1) % _cap_avc
+			_count_avc += 1
+			if _libres[_i_avc] == 1:
+				continue
+			var _index_avc: int = _slot_stade[_i_avc]
+			if _index_avc < 0 or _index_avc + 1 > _stade_competition_max:
+				continue
+			_competition_positions.append(Vector3(_positions_x[_i_avc], Y_SOL, _positions_z[_i_avc]))
+			_competition_slots.append(_i_avc)
+		if not _competition_positions.is_empty():
+			var _voisins_par_slot_avc: Array = _monde.choses_dans_rayons_brut_xz(_competition_positions, _rayon_competition)
+			var _morts_du_tick_avc: Dictionary = {}
+			var _morts_slots_avc: PackedInt32Array = PackedInt32Array()
+			var _k_avc: int = 0
+			var _m_avc: int = _competition_slots.size()
+			while _k_avc < _m_avc:
+				var _slot_avc: int = _competition_slots[_k_avc]
+				var _voisins_list_avc: Array = _voisins_par_slot_avc[_k_avc]
+				var _voisins_n_avc: int = _voisins_list_avc.size()
+				if not _morts_du_tick_avc.is_empty():
+					for _voisin_avc in _voisins_list_avc:
+						if _morts_du_tick_avc.has(_voisin_avc.id):
+							_voisins_n_avc -= 1
+				_k_avc += 1
+				if _voisins_n_avc > _competition_max_voisins:
+					var _exces_avc: int = _voisins_n_avc - _competition_max_voisins
+					var _proba_avc: float = clampf(
+						float(_exces_avc) / float(maxi(1, _competition_max_voisins)), 0.0, 1.0)
+					if _rng.randf() < _proba_avc:
+						var _chose_avc = _choses_arbre[_slot_avc]
+						if _chose_avc != null:
+							_morts_du_tick_avc[_chose_avc.id] = true
+						_morts_slots_avc.append(_slot_avc)
+			# INLINE _liberer_slots_lot(_morts_slots_avc) -- suffix _avclsl
+			var _n_avclsl: int = _morts_slots_avc.size()
+			if _n_avclsl > 0:
+				var _ids_a_retirer_avclsl: Array = []
+				var _dep_x_avclsl: PackedFloat32Array = PackedFloat32Array()
+				var _dep_z_avclsl: PackedFloat32Array = PackedFloat32Array()
+				var _dep_r_avclsl: PackedFloat32Array = PackedFloat32Array()
+				var _dep_m_avclsl: PackedFloat32Array = PackedFloat32Array()
+				var _dep_s_avclsl: PackedByteArray = PackedByteArray()
+				var _rev_x_avclsl: PackedFloat32Array = PackedFloat32Array()
+				var _rev_z_avclsl: PackedFloat32Array = PackedFloat32Array()
+				var _n_conf_avclsl: int = _ombrage_par_stade.size()
+				var _k_avclsl: int = 0
+				while _k_avclsl < _n_avclsl:
+					var _i_avclsl: int = _morts_slots_avc[_k_avclsl]
+					_k_avclsl += 1
+					var _pos_x_avclsl: float = _positions_x[_i_avclsl]
+					var _pos_z_avclsl: float = _positions_z[_i_avclsl]
+					var _chose_avclsl = _choses_arbre[_i_avclsl]
+					if _chose_avclsl != null:
+						_ids_a_retirer_avclsl.append(_chose_avclsl.id)
+						_choses_arbre[_i_avclsl] = null
+					_derniere_params[_i_avclsl] = Vector4(INF, INF, INF, INF)
+					var _index_avclsl: int = _slot_stade[_i_avclsl]
+					if _index_avclsl >= 0:
+						var _stade_num_avclsl: int = _index_avclsl + 1
+						if _stade_num_avclsl >= 1 and _stade_num_avclsl <= _n_conf_avclsl:
+							var _conf_avclsl: Dictionary = _ombrage_par_stade[_stade_num_avclsl - 1]
+							var _mag_avclsl: float = float(_conf_avclsl.get("magnitude", 0.0))
+							if _mag_avclsl != 0.0:
+								_dep_x_avclsl.append(_pos_x_avclsl)
+								_dep_z_avclsl.append(_pos_z_avclsl)
+								_dep_r_avclsl.append(float(_conf_avclsl.get("rayon_ombre_m", 0.0)))
+								_dep_m_avclsl.append(_mag_avclsl)
+								_dep_s_avclsl.append(0)
+					_slot_stade[_i_avclsl] = -1
+					_libres[_i_avclsl] = 1
+					_ages[_i_avclsl] = 0.0
+					_slots_libres.append(_i_avclsl)
+					var _slot_r_libere_avclsl: int = _slot_rendu_pour_data[_i_avclsl]
+					_slot_rendu_pour_data[_i_avclsl] = -1
+					if _slot_r_libere_avclsl >= 0:
+						_data_pour_slot_rendu[_slot_r_libere_avclsl] = -1
+						_slots_rendu_libres.append(_slot_r_libere_avclsl)
+					_population -= 1
+					_rev_x_avclsl.append(_pos_x_avclsl)
+					_rev_z_avclsl.append(_pos_z_avclsl)
+				if _ids_a_retirer_avclsl.size() > 0:
+					_monde.retirer_lot(_ids_a_retirer_avclsl)
+				if _dep_x_avclsl.size() > 0:
+					_couvert.deposer_lot(_dep_x_avclsl, _dep_z_avclsl, _dep_r_avclsl, _taille_case, _dep_m_avclsl, _dep_s_avclsl)
+				# INLINE _ecrire_slots_vides_lot(_morts_slots_avc) -- suffix _avcev
+				var _t_avcev := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
+				var _taille_couleur_avcev: int = _derniere_couleur_stade.size()
+				var _k_avcev: int = 0
+				while _k_avcev < _n_avclsl:
+					var _i_avcev: int = _morts_slots_avc[_k_avcev]
+					_k_avcev += 1
+					_mm_tronc.set_instance_transform(_i_avcev, _t_avcev)
+					_mm_feuillage.set_instance_transform(_i_avcev, _t_avcev)
+					if _i_avcev < _taille_couleur_avcev:
+						_derniere_couleur_stade[_i_avcev] = -1
+				# INLINE _reveiller_dormantes_autour_lot(_rev_x_avclsl, _rev_z_avclsl) -- suffix _avcrev
+				var _n_avcrev: int = _rev_x_avclsl.size()
+				if _n_avcrev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
+					var _inv_case_avcrev: float = 1.0 / _taille_case_dormantes
+					var _carre_avcrev: float = _rayon_reveil * _rayon_reveil
+					var _prospects_avcrev: Dictionary = _banque_graines.prospects()
+					var _kk_avcrev: int = 0
+					while _kk_avcrev < _n_avcrev:
+						var _pos_x_avcrev: float = _rev_x_avclsl[_kk_avcrev]
+						var _pos_z_avcrev: float = _rev_z_avclsl[_kk_avcrev]
+						_kk_avcrev += 1
+						var _cx_min_avcrev: int = floori((_pos_x_avcrev - _rayon_reveil) * _inv_case_avcrev)
+						var _cx_max_avcrev: int = floori((_pos_x_avcrev + _rayon_reveil) * _inv_case_avcrev)
+						var _cz_min_avcrev: int = floori((_pos_z_avcrev - _rayon_reveil) * _inv_case_avcrev)
+						var _cz_max_avcrev: int = floori((_pos_z_avcrev + _rayon_reveil) * _inv_case_avcrev)
+						for _cx_avcrev in range(_cx_min_avcrev, _cx_max_avcrev + 1):
+							for _cz_avcrev in range(_cz_min_avcrev, _cz_max_avcrev + 1):
+								var _cle_avcrev: Vector2i = Vector2i(_cx_avcrev, _cz_avcrev)
+								var _ids_avcrev = _dormantes_par_case.get(_cle_avcrev, null)
+								if _ids_avcrev == null:
+									continue
+								for _id_variant_avcrev in _ids_avcrev:
+									var _id_avcrev: int = int(_id_variant_avcrev)
+									if _reveils.has(_id_avcrev):
+										continue
+									if not _prospects_avcrev.has(_id_avcrev):
+										continue
+									var _entree_avcrev: Dictionary = _prospects_avcrev[_id_avcrev]
+									var _pos_avcrev: Vector3 = _entree_avcrev.position
+									var _dx_avcrev: float = _pos_avcrev.x - _pos_x_avcrev
+									var _dz_avcrev: float = _pos_avcrev.z - _pos_z_avcrev
+									if _dx_avcrev * _dx_avcrev + _dz_avcrev * _dz_avcrev <= _carre_avcrev:
+										_reveils[_id_avcrev] = true
 	# RENDU EN LOT : un seul appel groupe pour tous les slots vivants. Le
 	# corps de `_ecrire_slot` + `_calc_params` + `_appliquer_couleur_slot`
 	# est reproduit inline dans la boucle interne unique -- zero appel
 	# de fonction par arbre au chemin chaud. `_agrandir_capacite` garde
 	# `_ecrire_slot` pour reposer le buffer GPU quand la capacite double
-	# (chemin rare).
-	_ecrire_slots_lot()
+	# (chemin rare). Corps de `_ecrire_slots_lot` inline ci-dessous
+	# (morceau 7, suffixe `_esl`).
+	var _cap_esl: int = _capacite
+	if _cap_esl > 0:
+		var _n_stades_esl: int = _durees.size()
+		var _n_stades_full_esl: int = _stades.size()
+		var _i_esl: int = 0
+		while _i_esl < _cap_esl:
+			if _libres[_i_esl] == 1:
+				_i_esl += 1
+				continue
+			var _age_esl: float = _ages[_i_esl]
+			var _p_esl: Vector4
+			var _trouve_esl: bool = false
+			var _duree_cumulee_esl: float = 0.0
+			var _j_esl: int = 0
+			while _j_esl < _n_stades_esl:
+				var _duree_segment_esl: float = _durees[_j_esl]
+				if _age_esl <= _duree_cumulee_esl + _duree_segment_esl:
+					var _t_esl: float = 0.0
+					if _duree_segment_esl > 0.0:
+						_t_esl = (_age_esl - _duree_cumulee_esl) / _duree_segment_esl
+					if _t_esl < 0.0:
+						_t_esl = 0.0
+					elif _t_esl > 1.0:
+						_t_esl = 1.0
+					var _a_esl: Dictionary = _stades[_j_esl]
+					var _b_esl: Dictionary = _stades[_j_esl + 1]
+					_p_esl = Vector4(
+						lerp(float(_a_esl.tronc.hauteur), float(_b_esl.tronc.hauteur), _t_esl),
+						lerp(float(_a_esl.tronc.largeur), float(_b_esl.tronc.largeur), _t_esl),
+						lerp(float(_a_esl.feuillage.hauteur), float(_b_esl.feuillage.hauteur), _t_esl),
+						lerp(float(_a_esl.feuillage.largeur), float(_b_esl.feuillage.largeur), _t_esl))
+					_trouve_esl = true
+					break
+				_duree_cumulee_esl += _duree_segment_esl
+				_j_esl += 1
+			if not _trouve_esl:
+				var _s_esl: Dictionary = _stades[_n_stades_full_esl - 1]
+				_p_esl = Vector4(
+					float(_s_esl.tronc.hauteur), float(_s_esl.tronc.largeur),
+					float(_s_esl.feuillage.hauteur), float(_s_esl.feuillage.largeur))
+			var _stade_actuel_esl: int = _slot_stade[_i_esl]
+			if _derniere_couleur_stade[_i_esl] != _stade_actuel_esl:
+				var _col_tronc_esl: Color = COULEUR_REPLI_TRONC
+				var _col_feuillage_esl: Color = COULEUR_REPLI_FEUILLAGE
+				if _stade_actuel_esl >= 0 and _stade_actuel_esl < _couleur_tronc_par_stade.size():
+					_col_tronc_esl = _couleur_tronc_par_stade[_stade_actuel_esl]
+				if _stade_actuel_esl >= 0 and _stade_actuel_esl < _couleur_feuillage_par_stade.size():
+					_col_feuillage_esl = _couleur_feuillage_par_stade[_stade_actuel_esl]
+				_mm_tronc.set_instance_color(_i_esl, _col_tronc_esl)
+				_mm_feuillage.set_instance_color(_i_esl, _col_feuillage_esl)
+				_derniere_couleur_stade[_i_esl] = _stade_actuel_esl
+			var _ancien_esl: Vector4 = _derniere_params[_i_esl]
+			if absf(_p_esl.x - _ancien_esl.x) < EPS_TAILLE \
+					and absf(_p_esl.y - _ancien_esl.y) < EPS_TAILLE \
+					and absf(_p_esl.z - _ancien_esl.z) < EPS_TAILLE \
+					and absf(_p_esl.w - _ancien_esl.w) < EPS_TAILLE:
+				_i_esl += 1
+				continue
+			_derniere_params[_i_esl] = _p_esl
+			var _ht_esl: float = _p_esl.x
+			var _lt_esl: float = _p_esl.y
+			var _hf_esl: float = _p_esl.z
+			var _lf_esl: float = _p_esl.w
+			var _pos_x_esl: float = _positions_x[_i_esl]
+			var _pos_z_esl: float = _positions_z[_i_esl]
+			var _y_sol_esl: float = _positions_y[_i_esl]
+			var _t_tronc_esl := Transform3D(
+				Basis.IDENTITY.scaled(Vector3(_lt_esl, _ht_esl, _lt_esl)),
+				Vector3(_pos_x_esl, _y_sol_esl + _ht_esl * 0.5, _pos_z_esl))
+			_mm_tronc.set_instance_transform(_i_esl, _t_tronc_esl)
+			var _t_feuillage_esl: Transform3D
+			if _hf_esl <= 0.0 or _lf_esl <= 0.0:
+				_t_feuillage_esl = Transform3D(
+					Basis.IDENTITY.scaled(Vector3.ZERO),
+					Vector3(_pos_x_esl, _y_sol_esl + _ht_esl, _pos_z_esl))
+			else:
+				_t_feuillage_esl = Transform3D(
+					Basis.IDENTITY.scaled(Vector3(_lf_esl, _hf_esl, _lf_esl)),
+					Vector3(_pos_x_esl, _y_sol_esl + _ht_esl + _hf_esl * 0.5, _pos_z_esl))
+			_mm_feuillage.set_instance_transform(_i_esl, _t_feuillage_esl)
+			_i_esl += 1
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
 		_frames_depuis_releve = 0
