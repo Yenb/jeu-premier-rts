@@ -1204,9 +1204,25 @@ func avancer(pas: float) -> void:
 			_pros_z_tbq.append(_pos_pre_tbq.z)
 			_pros_ids_tbq.append(_id_pre_tbq)
 		var _couverts_tbq: PackedFloat32Array = _couvert.lire_lot(_pros_x_tbq, _pros_z_tbq, _taille_case)
-		var _kk_tbq: int = 0
+		# M3 GROUPE : UNE requete groupee `choses_dans_rayons_brut_xz` sur
+		# TOUTES les positions de prospects reveilles, memes patron que le
+		# semis (`_voisins_par_graine_sml`). Aucun tirage RNG dans la
+		# boucle prospect -> ordre RNG inchange. Ordre des voisins par
+		# prospect strictement identique (tous les arbres a y=Y_SOL, seule
+		# la tranche cy=Y_SOL/arete contient des ids ; l'ordre effectif
+		# cx externe / cz interne est le meme entre `choses_dans_rayon` et
+		# `choses_dans_rayons_brut_xz` sur cette tranche unique).
 		var _nn_tbq: int = _pros_ids_tbq.size()
+		var _pros_positions_tbq: Array = []
+		_pros_positions_tbq.resize(_nn_tbq)
+		var _kk_pre_tbq: int = 0
+		while _kk_pre_tbq < _nn_tbq:
+			_pros_positions_tbq[_kk_pre_tbq] = Vector3(_pros_x_tbq[_kk_pre_tbq], Y_SOL, _pros_z_tbq[_kk_pre_tbq])
+			_kk_pre_tbq += 1
+		var _voisins_par_prospect_tbq: Array = _monde.choses_dans_rayons_brut_xz(_pros_positions_tbq, _rayon_gros_tbq)
+		var _kk_tbq: int = 0
 		while _kk_tbq < _nn_tbq:
+			var _idx_tbq: int = _kk_tbq
 			var _id_tbq: int = int(_pros_ids_tbq[_kk_tbq])
 			var _pos_tbq: Vector3 = Vector3(_pros_x_tbq[_kk_tbq], Y_SOL, _pros_z_tbq[_kk_tbq])
 			var _couvert_b_tbq: float = _couverts_tbq[_kk_tbq]
@@ -1232,19 +1248,23 @@ func avancer(pas: float) -> void:
 							break
 				if _dans_zone_tbq:
 					continue
-			var _voisins_tbq: Array = _monde.choses_dans_rayon(_arrivee_tbq, _rayon_gros_tbq)
+			# M3 GROUPE : lecture indexee du batch pre-calcule (meme patron
+			# que le semis `_voisins_par_graine_sml`). Format brut : chaque
+			# entree est la `chose` direct, pas un wrap `{chose,type,position}`.
+			# Meme reference dict cote monde : `wrap.chose == brut`, valeurs
+			# lues par le gate (`get("slot",-1)`, `.position`) identiques.
+			var _voisins_tbq: Array = _voisins_par_prospect_tbq[_idx_tbq]
 			var _compte_normal_tbq: int = 0
 			var _passe_tbq: bool = true
 			for _entree_b_tbq in _voisins_tbq:
-				var _chose_b_tbq = _entree_b_tbq.chose
-				var _slot_b_tbq: int = int(_chose_b_tbq.get("slot", -1))
+				var _slot_b_tbq: int = int(_entree_b_tbq.get("slot", -1))
 				var _stade_num_b_tbq: int = 0
 				if _slot_b_tbq >= 0 and _slot_b_tbq < _taille_slot_stade_tbq:
 					_stade_num_b_tbq = _slot_stade[_slot_b_tbq] + 1
 				if _stade_num_b_tbq >= _stade_gros_min_tbq and _stade_num_b_tbq <= _stade_gros_max_tbq:
 					_passe_tbq = false
 					break
-				var _pos_voisin_b_tbq: Vector3 = _chose_b_tbq.position
+				var _pos_voisin_b_tbq: Vector3 = _entree_b_tbq.position
 				var _d2_b_tbq: float = _arrivee_tbq.distance_squared_to(_pos_voisin_b_tbq)
 				if _d2_b_tbq < _carre_min_tbq:
 					_passe_tbq = false
