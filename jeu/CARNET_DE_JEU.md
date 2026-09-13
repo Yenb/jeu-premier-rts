@@ -365,6 +365,14 @@ le RENDU lointain a son propre `rayon_cellules`, `taille_tuile_cellules` et
 `semis` (clé → combien), `scenes` (clé → PackedScene), `graine`, `rayon_metres` ;
 `vitesse`, `vitesse_rotation`, `sensibilite_souris`, `inclinaison_max`, `gravite`.
 
+### Zone d'exclusion d'un peuplement (`jeu/plantes/zone_exclusion_arbre.gd`)
+
+Node3D posé dans l'éditeur (groupe `&"exclusion_arbre"`), à côté du peuplement.
+`forme` (0=cercle, 1=carré), `rayon` (cercle), `demi_x`/`demi_z` (carré). La
+position monde du nœud est le centre de l'emprise. Le peuplement lit le groupe
+une fois au `_ready` (mode hôte) et rejette toute naissance dans l'emprise —
+ménage des clairières pour poser des agents.
+
 ---
 
 ## 5. Écrit, testé, et que personne n'appelle encore

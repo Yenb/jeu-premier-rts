@@ -78,6 +78,7 @@ const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 const Monde = preload("res://scripts/monde.gd")
 const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 const ChampSaturation = preload("res://scripts/champ_saturation.gd")
+const ZoneExclusion = preload("res://jeu/plantes/zone_exclusion_arbre.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
 const CHEMIN_TYPES := "res://data/types.json"
@@ -308,6 +309,17 @@ var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
 # (init ordre inverse, pop_back rend le plus petit index d'abord). En
 # morceau 1, allocation en parallele des slots data -> identity.
 var _slots_rendu_libres: Array = []
+
+# ZONES D'EXCLUSION (patron `jeu/plantes/zone_exclusion_arbre.gd`) :
+# des noeuds cercle/carre poses en editeur dans la scene hote, ajoutes
+# au groupe `&"exclusion_arbre"`. Lus UNE fois au `_ready` en mode
+# hote, copies en data legere ici -- aucune reference vivante au noeud
+# dans le hot path, aucun test tree pendant le tick. Chaque entree :
+# { forme: int (0=cercle, 1=carre), cx: float, cz: float, rayon: float,
+# demi_x: float, demi_z: float }. Mode isole : liste vide, aucun effet.
+# Cout par graine = O(N_zones) lineaire ; adapte a une poignee de zones
+# (< 10). Pour beaucoup de zones, prevoir une indexation spatiale.
+var _zones_exclusion: Array = []
 # Index dans _stades_config_partagee du stade courant de chaque slot
 # (0..stades_config.size()-1 pour un vivant, -1 pour un slot libre ou un
 # vivant avant tout franchissement -- meme convention que
@@ -508,6 +520,18 @@ func _ready() -> void:
 			return
 		var etendue_m: float = float(carte_terrain_ref.metres())
 		_demi_carte = etendue_m * 0.5
+		# Zones d'exclusion posees en editeur (patron
+		# `jeu/plantes/zone_exclusion_arbre.gd`). Lues une fois, copiees
+		# en data legere -- aucune reference vivante conservee.
+		for zone_node in get_tree().get_nodes_in_group(&"exclusion_arbre"):
+			_zones_exclusion.append({
+				"forme": int(zone_node.forme),
+				"cx": float(zone_node.global_position.x),
+				"cz": float(zone_node.global_position.z),
+				"rayon": float(zone_node.rayon),
+				"demi_x": float(zone_node.demi_x),
+				"demi_z": float(zone_node.demi_z),
+			})
 	else:
 		# MODE ISOLE : le banc monte son propre decor (comportement
 		# strictement inchange du banc historique).
@@ -1643,6 +1667,30 @@ func _semer_lot() -> void:
 		# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
 		if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
 			continue
+		# ZONE D'EXCLUSION (patron `jeu/plantes/zone_exclusion_arbre.gd`) :
+		# liste vide en mode isole = skip complet, aucun cout. Test
+		# lineaire sur les zones du groupe -- rejet AVANT le gate trouee
+		# pour eviter le calcul de voisins pour rien.
+		var n_zones_s: int = _zones_exclusion.size()
+		if n_zones_s > 0:
+			var dans_zone_s: bool = false
+			var zi_s: int = 0
+			while zi_s < n_zones_s:
+				var zone_s: Dictionary = _zones_exclusion[zi_s]
+				zi_s += 1
+				if int(zone_s.forme) == 0:
+					var zdx_s: float = pos_x - float(zone_s.cx)
+					var zdz_s: float = pos_z - float(zone_s.cz)
+					var r_s: float = float(zone_s.rayon)
+					if zdx_s * zdx_s + zdz_s * zdz_s <= r_s * r_s:
+						dans_zone_s = true
+						break
+				else:
+					if absf(pos_x - float(zone_s.cx)) <= float(zone_s.demi_x) and absf(pos_z - float(zone_s.cz)) <= float(zone_s.demi_z):
+						dans_zone_s = true
+						break
+			if dans_zone_s:
+				continue
 		# GATE DE TROUEE INLINE (voir doc supra). Rejet = graine perdue.
 		var arrivee_s := Vector3(pos_x, Y_SOL, pos_z)
 		var compte_normal_s: int = 0
@@ -1776,6 +1824,28 @@ func _tick_banque(pas: float) -> void:
 		var couvert_b: float = couverts_b[kk_b]
 		kk_b += 1
 		var arrivee := pos
+		# ZONE D'EXCLUSION avant meme la requete voisinage (voir doc en
+		# tete). Liste vide en mode isole = skip complet, aucun cout.
+		var n_zones_b: int = _zones_exclusion.size()
+		if n_zones_b > 0:
+			var dans_zone_bb: bool = false
+			var zi_b: int = 0
+			while zi_b < n_zones_b:
+				var zone_b: Dictionary = _zones_exclusion[zi_b]
+				zi_b += 1
+				if int(zone_b.forme) == 0:
+					var zdx_b: float = pos.x - float(zone_b.cx)
+					var zdz_b: float = pos.z - float(zone_b.cz)
+					var r_b: float = float(zone_b.rayon)
+					if zdx_b * zdx_b + zdz_b * zdz_b <= r_b * r_b:
+						dans_zone_bb = true
+						break
+				else:
+					if absf(pos.x - float(zone_b.cx)) <= float(zone_b.demi_x) and absf(pos.z - float(zone_b.cz)) <= float(zone_b.demi_z):
+						dans_zone_bb = true
+						break
+			if dans_zone_bb:
+				continue
 		var voisins: Array = _monde.choses_dans_rayon(arrivee, rayon_gros)
 		# GATE DE TROUEE INLINE (voir doc supra). Scanne les voisins
 		# monde ponctuels PUIS les `_naissances_lot_x/_z` pending -- les
