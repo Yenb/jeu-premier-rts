@@ -79,6 +79,12 @@ func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: floa
 		rayon = int(ceil(rayon_m / taille_case))
 	var cx0: int = floori(centre_x / taille_case)
 	var cz0: int = floori(centre_z / taille_case)
+	# HOIST des acces attribut (voir en-tete `HOIST HORS BOUCLE CHAUDE`).
+	# 4 lectures attribut Object par case remplacees par 4 lectures locales.
+	var x_min_l: int = _x_min
+	var z_min_l: int = _z_min
+	var largeur_l: int = _largeur
+	var hauteur_l: int = _hauteur
 	var dcx: int = -rayon
 	while dcx <= rayon:
 		var dcz: int = -rayon
@@ -91,10 +97,10 @@ func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: floa
 				dcz += 1
 				continue
 			var apport: float = mag * poids
-			var cx: int = (cx0 + dcx) - _x_min
-			var cz: int = (cz0 + dcz) - _z_min
-			if cx >= 0 and cx < _largeur and cz >= 0 and cz < _hauteur:
-				var idx: int = cz * _largeur + cx
+			var cx: int = (cx0 + dcx) - x_min_l
+			var cz: int = (cz0 + dcz) - z_min_l
+			if cx >= 0 and cx < largeur_l and cz >= 0 and cz < hauteur_l:
+				var idx: int = cz * largeur_l + cx
 				var ancien: float = float(_valeurs[idx])
 				var v: float = ancien + apport
 				var etait_non_nulle: bool = absf(ancien) >= EPS_COUVERT
@@ -123,6 +129,11 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 		return
 	var cx0: int = floori(centre_x / taille_case)
 	var cz0: int = floori(centre_z / taille_case)
+	# HOIST des acces attribut hors boucle chaude.
+	var x_min_l: int = _x_min
+	var z_min_l: int = _z_min
+	var largeur_l: int = _largeur
+	var hauteur_l: int = _hauteur
 	var dcx: int = -rayon_max
 	while dcx <= rayon_max:
 		var dcz: int = -rayon_max
@@ -144,10 +155,10 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 			if apport == 0.0:
 				dcz += 1
 				continue
-			var cx: int = (cx0 + dcx) - _x_min
-			var cz: int = (cz0 + dcz) - _z_min
-			if cx >= 0 and cx < _largeur and cz >= 0 and cz < _hauteur:
-				var idx: int = cz * _largeur + cx
+			var cx: int = (cx0 + dcx) - x_min_l
+			var cz: int = (cz0 + dcz) - z_min_l
+			if cx >= 0 and cx < largeur_l and cz >= 0 and cz < hauteur_l:
+				var idx: int = cz * largeur_l + cx
 				var ancien: float = float(_valeurs[idx])
 				var v: float = ancien + apport
 				var etait_non_nulle: bool = absf(ancien) >= EPS_COUVERT
@@ -168,6 +179,12 @@ func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array,
 	var n: int = centres_x.size()
 	if n == 0:
 		return
+	# HOIST des acces attribut hors DOUBLE boucle (lot + case) : lus
+	# largeur*hauteur*n fois si mis en attribut, largeur*hauteur+1 en locale.
+	var x_min_l: int = _x_min
+	var z_min_l: int = _z_min
+	var largeur_l: int = _largeur
+	var hauteur_l: int = _hauteur
 	var k: int = 0
 	while k < n:
 		var ancienne_magnitude: float = anciennes_magnitudes[k]
@@ -208,10 +225,10 @@ func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array,
 				if apport == 0.0:
 					dcz += 1
 					continue
-				var cx: int = (cx0 + dcx) - _x_min
-				var cz: int = (cz0 + dcz) - _z_min
-				if cx >= 0 and cx < _largeur and cz >= 0 and cz < _hauteur:
-					var idx: int = cz * _largeur + cx
+				var cx: int = (cx0 + dcx) - x_min_l
+				var cz: int = (cz0 + dcz) - z_min_l
+				if cx >= 0 and cx < largeur_l and cz >= 0 and cz < hauteur_l:
+					var idx: int = cz * largeur_l + cx
 					var ancien: float = float(_valeurs[idx])
 					var v: float = ancien + apport
 					var etait_non_nulle: bool = absf(ancien) >= EPS_COUVERT
@@ -232,6 +249,11 @@ func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, r
 	var n: int = centres_x.size()
 	if n == 0:
 		return
+	# HOIST des acces attribut hors DOUBLE boucle (lot + case).
+	var x_min_l: int = _x_min
+	var z_min_l: int = _z_min
+	var largeur_l: int = _largeur
+	var hauteur_l: int = _hauteur
 	var k: int = 0
 	while k < n:
 		var magnitude: float = magnitudes[k]
@@ -259,10 +281,10 @@ func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, r
 					dcz += 1
 					continue
 				var apport: float = mag * poids
-				var cx: int = (cx0 + dcx) - _x_min
-				var cz: int = (cz0 + dcz) - _z_min
-				if cx >= 0 and cx < _largeur and cz >= 0 and cz < _hauteur:
-					var idx: int = cz * _largeur + cx
+				var cx: int = (cx0 + dcx) - x_min_l
+				var cz: int = (cz0 + dcz) - z_min_l
+				if cx >= 0 and cx < largeur_l and cz >= 0 and cz < hauteur_l:
+					var idx: int = cz * largeur_l + cx
 					var ancien: float = float(_valeurs[idx])
 					var v: float = ancien + apport
 					var etait_non_nulle: bool = absf(ancien) >= EPS_COUVERT
