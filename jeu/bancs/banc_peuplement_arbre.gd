@@ -999,9 +999,25 @@ func _process(delta: float) -> void:
 			if degageant:
 				_reveils_positions_x.append(_positions_x[i])
 				_reveils_positions_z.append(_positions_z[i])
-		# REPRODUCTION extraite du tree loop -> `_reproduire_lot(pas)`
-		# apres les lots de mort/reveil/couvert (place avant `_semer_lot`
-		# qui draine `_graines_lot_*`).
+		# REPRODUCTION INLINE (phase 2 morceau 2 : fusion `_reproduire_lot`
+		# dans la boucle unique). Ordre RNG strictement identique a l'ex
+		# `_reproduire_lot` (iteration 0..cap-1, meme sequence de
+		# `_rng.randf()` sur les memes slots). Rien entre les deux passes
+		# supprimees ne modifie age/stade/fertilite d'un vivant : les
+		# transitions ombrage (`_couvert.redeposer_lot`) et les reveils
+		# n'affectent pas ces colonnes. Une mort de vieillesse a deja
+		# `continue` plus haut, donc le slot mort n'atteint pas la
+		# reproduction -- meme resultat qu'un skip `_libres[i]==1` post-
+		# `_liberer_morts_vieillesse_lot`. Tirage disque UNIFORME : angle
+		# uniforme + rayon = sqrt(u) * R.
+		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
+			var intervalle_i: float = _intervalle_reprod[i]
+			if intervalle_i > 0.0 and not is_inf(intervalle_i):
+				if _rng.randf() < pas / intervalle_i:
+					var angle_r: float = _rng.randf() * TAU
+					var rayon_r: float = sqrt(_rng.randf()) * _rayon_graine
+					_graines_lot_x.append(_positions_x[i] + cos(angle_r) * rayon_r)
+					_graines_lot_z.append(_positions_z[i] + sin(angle_r) * rayon_r)
 		i += 1
 	# MORTS DE VIEILLESSE EN LOT : draine les slots dont l'age a franchi
 	# le seuil de mort ce tick via `_liberer_slots_lot` (qui fait aussi
@@ -1020,12 +1036,10 @@ func _process(delta: float) -> void:
 	# prospects reveilles) pour que le couvert reflete l'etat post-tick.
 	if _transitions_x.size() > 0:
 		_couvert.redeposer_lot(_transitions_x, _transitions_z, _transitions_rayon_a, _transitions_rayon_n, _taille_case, _transitions_mag_a, _transitions_mag_n)
-	# REPRODUCTION EN LOT : passe unique sur les vivants (post-mort_lot,
-	# donc les morts du tick sont deja marques `_libres[i] == 1`). Ordre
-	# RNG strictement identique a la version tree-loop : meme sequence
-	# de `_rng.randf()` sur les memes slots dans le meme ordre d'indice.
-	# Empile dans `_graines_lot_*`, draine par `_semer_lot` juste apres.
-	_reproduire_lot(pas)
+	# REPRODUCTION : fusionnee dans la boucle unique par-arbre (phase 2
+	# morceau 2). Les graines candidates sont deja empilees dans
+	# `_graines_lot_*` par la boucle plus haut ; `_semer_lot` les draine
+	# ici. Ordre RNG (0..cap-1) preserve bit-a-bit.
 	_semer_lot()
 	_tick_banque(pas)
 	# NAISSANCES EN LOT : draine `_naissances_lot_x/_z` empile par
@@ -1330,27 +1344,6 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 # et par arbre. Ordre RNG STRICTEMENT PRESERVE : meme sequence de
 # `randf()` sur les memes slots dans le meme ordre d'indice qu'une
 # boucle unitaire par arbre -- foret identique a seed egal.
-func _reproduire_lot(pas: float) -> void:
-	var cap: int = _capacite
-	if cap == 0:
-		return
-	var i: int = 0
-	while i < cap:
-		if _libres[i] == 1:
-			i += 1
-			continue
-		var age_i: float = _ages[i]
-		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
-			var intervalle_i: float = _intervalle_reprod[i]
-			if intervalle_i > 0.0 and not is_inf(intervalle_i):
-				if _rng.randf() < pas / intervalle_i:
-					# Tirage disque UNIFORME : angle uniforme + rayon = sqrt(u) * R.
-					var angle: float = _rng.randf() * TAU
-					var rayon: float = sqrt(_rng.randf()) * _rayon_graine
-					_graines_lot_x.append(_positions_x[i] + cos(angle) * rayon)
-					_graines_lot_z.append(_positions_z[i] + sin(angle) * rayon)
-		i += 1
-
 func _liberer_morts_vieillesse_lot() -> void:
 	_liberer_slots_lot(_morts_vieillesse_lot)
 
