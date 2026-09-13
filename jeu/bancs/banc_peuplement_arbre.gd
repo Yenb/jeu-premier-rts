@@ -520,18 +520,16 @@ func _ready() -> void:
 			return
 		var etendue_m: float = float(carte_terrain_ref.metres())
 		_demi_carte = etendue_m * 0.5
-		# Zones d'exclusion posees en editeur (patron
-		# `jeu/plantes/zone_exclusion_arbre.gd`). Lues une fois, copiees
-		# en data legere -- aucune reference vivante conservee.
-		for zone_node in get_tree().get_nodes_in_group(&"exclusion_arbre"):
-			_zones_exclusion.append({
-				"forme": int(zone_node.forme),
-				"cx": float(zone_node.global_position.x),
-				"cz": float(zone_node.global_position.z),
-				"rayon": float(zone_node.rayon),
-				"demi_x": float(zone_node.demi_x),
-				"demi_z": float(zone_node.demi_z),
-			})
+		# Zones d'exclusion : DIFFERE le chargement a la fin du frame.
+		# Un noeud d'exclusion frere dans la scene s'inscrit au groupe
+		# `&"exclusion_arbre"` dans SON `_ready` -- Godot execute les
+		# `_ready` dans l'ordre des freres du .tscn, le banc peut ainsi
+		# lire le groupe AVANT que les zones s'y soient inscrites (piege
+		# paye : les zones lues vides, aucun arbre rejete). Solution :
+		# `call_deferred` execute apres TOUS les `_ready` du frame et
+		# avant le premier `_process` -- l'ordre des noeuds dans le
+		# `.tscn` devient indifferent.
+		call_deferred(&"_charger_zones_exclusion")
 	else:
 		# MODE ISOLE : le banc monte son propre decor (comportement
 		# strictement inchange du banc historique).
@@ -549,6 +547,23 @@ func _ready() -> void:
 	# l'arbre initial est plante a cette position.
 	if _stades.size() == 9:
 		_naitre(global_position.x, global_position.z)
+
+# Lit une fois le groupe `&"exclusion_arbre"` et copie chaque zone en
+# dict data legere dans `_zones_exclusion` (aucune reference vivante
+# au noeud dans le hot path). Appele par `_ready` en mode hote via
+# `call_deferred` -- garantit que TOUS les noeuds d'exclusion freres
+# ont deja execute leur propre `_ready` (donc `add_to_group`) au
+# moment ou on lit le groupe.
+func _charger_zones_exclusion() -> void:
+	for zone_node in get_tree().get_nodes_in_group(&"exclusion_arbre"):
+		_zones_exclusion.append({
+			"forme": int(zone_node.forme),
+			"cx": float(zone_node.global_position.x),
+			"cz": float(zone_node.global_position.z),
+			"rayon": float(zone_node.rayon),
+			"demi_x": float(zone_node.demi_x),
+			"demi_z": float(zone_node.demi_z),
+		})
 
 func _charger_reglages_locaux() -> void:
 	if not FileAccess.file_exists(CHEMIN_CATALOGUE_LOCAL):
