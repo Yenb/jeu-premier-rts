@@ -151,6 +151,14 @@ var _rayon_reveil: float = 0.0
 # au-dela du seuil, elle est perdue.
 var _rayon_trouee: float = 4.0
 var _trouee_max_voisins: int = 1
+# EXCLUSION STRICTE DE SUPERPOSITION : toute naissance dont un voisin
+# (monde OU `_naissances_lot`) est a distance XZ strictement inferieure
+# a `_rayon_exclusion` est rejetee d'office, quel que soit le compte
+# `_trouee_max_voisins`. Empeche deux graines tombees au meme point
+# (ou tres proches) de passer toutes deux le gate. Sans ca, avec
+# `_trouee_max_voisins=1`, deux graines coincidentes donnent compte=1
+# > 1 faux -> les deux naissent superposees.
+var _rayon_exclusion: float = 1.5
 
 # MORT PAR COMPETITION (auto-eclaircie). Passe rare pilotee par
 # `_cadence_competition` (secondes). Seuls les stades <= `_stade_competition_max`
@@ -491,6 +499,8 @@ func _charger_reglages_locaux() -> void:
 		_rayon_trouee = float(donnees.rayon_trouee)
 	if donnees.has("trouee_max_voisins"):
 		_trouee_max_voisins = int(donnees.trouee_max_voisins)
+	if donnees.has("rayon_exclusion"):
+		_rayon_exclusion = float(donnees.rayon_exclusion)
 	if donnees.has("cadence_competition"):
 		_cadence_competition = float(donnees.cadence_competition)
 	if donnees.has("stade_competition_max"):
@@ -1287,6 +1297,14 @@ func _naitre_lot() -> void:
 		_slot_stade[slot] = stade_initial
 		_facteur_croissance[slot] = croissance_col[k]
 		_facteur_longevite[slot] = longevite_col[k]
+		# INVALIDATION DU CACHE DE RENDU pour ce slot : un slot libere
+		# par un arbre mort (feuillage a echelle 0 aux stades 8-9) et
+		# reutilise ici garde `_derniere_params[slot]` du mort. Sans
+		# invalidation, `_ecrire_slots_lot` peut SKIPPER l'ecriture du
+		# feuillage du nouveau-ne quand ses params feuillage coincident
+		# avec ceux du mort. Force la reecriture transform+couleur.
+		_derniere_params[slot] = Vector4(INF, INF, INF, INF)
+		_derniere_couleur_stade[slot] = -1
 		# Intervalle effectif de reproduction : deduit de la fenetre
 		# fertile et du facteur de croissance individuel.
 		var denom: float = denom_prefixe * croissance_col[k]
@@ -1311,6 +1329,14 @@ func _naitre_lot() -> void:
 	# UN appel groupe au champ pour tous les depots d'ombrage naissance.
 	if dep_x.size() > 0:
 		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
+	# VIDAGE DE LA QUEUE : le consommateur (`_naitre_lot`) vide ce qu'il
+	# vient de draîner. Une seule source de verite pour ce vidage --
+	# `_semer_lot` et `_tick_banque` empilent, `_trouee_saturee_lot`
+	# scanne, `_naitre_lot` cree PUIS vide. Sans ce vidage, une entree
+	# residuelle est re-drainee au tick suivant (arbres empiles au meme
+	# point).
+	_naissances_lot_x.resize(0)
+	_naissances_lot_z.resize(0)
 
 # Naissance UNITAIRE : utilisee pour l'arbre initial au `_ready`
 # (`Objet.fabriquer` pose l'etat de depart complet -- age depuis le
@@ -1347,6 +1373,11 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	var chose := {"id": "arbre_%d" % i, "position": position, "slot": i}
 	_choses_arbre[i] = chose
 	_monde.ajouter(chose, "arbre", position)
+	# INVALIDATION CACHE RENDU par coherence avec `_naitre_lot` : force
+	# `_ecrire_slot` a repousser transform+couleur sans risquer un skip
+	# EPS sur un cache herite d'un slot precedent.
+	_derniere_params[i] = Vector4(INF, INF, INF, INF)
+	_derniere_couleur_stade[i] = -1
 	_ecrire_slot(i, _ages[i])
 	_population += 1
 
@@ -1373,6 +1404,7 @@ func _index_pour_age(age: float) -> int:
 # gate.
 func _trouee_saturee_lot(pos_x: float, pos_z: float, voisins: Array, carre_normal: float) -> bool:
 	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
+	var carre_min: float = _rayon_exclusion * _rayon_exclusion
 	var compte_normal: int = 0
 	for entree in voisins:
 		var chose = entree.chose
@@ -1383,16 +1415,25 @@ func _trouee_saturee_lot(pos_x: float, pos_z: float, voisins: Array, carre_norma
 		if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
 			return true
 		var pos_voisin: Vector3 = chose.position
-		if arrivee.distance_squared_to(pos_voisin) <= carre_normal:
+		var d2: float = arrivee.distance_squared_to(pos_voisin)
+		# EXCLUSION STRICTE : un voisin dans le rayon minimal d'arbre
+		# rejette d'office (empeche la superposition XZ).
+		if d2 < carre_min:
+			return true
+		if d2 <= carre_normal:
 			compte_normal += 1
 	# Nouveau-nes du meme lot : tous au stade 0 (jamais adultes), ne
-	# peuvent qu'incrementer `compte_normal`.
+	# peuvent qu'incrementer `compte_normal`, mais un nouveau-ne dans
+	# le rayon min rejette aussi d'office.
 	var m: int = _naissances_lot_x.size()
 	var j: int = 0
 	while j < m:
 		var dx: float = _naissances_lot_x[j] - pos_x
 		var dz: float = _naissances_lot_z[j] - pos_z
-		if dx * dx + dz * dz <= carre_normal:
+		var d2n: float = dx * dx + dz * dz
+		if d2n < carre_min:
+			return true
+		if d2n <= carre_normal:
 			compte_normal += 1
 		j += 1
 	return compte_normal > _trouee_max_voisins
@@ -1421,8 +1462,8 @@ func _semer_lot() -> void:
 		positions_vec3[k] = Vector3(_graines_lot_x[k], Y_SOL, _graines_lot_z[k])
 		k += 1
 	var voisins_par_graine: Array = _monde.choses_dans_rayons(positions_vec3, rayon_gros)
-	_naissances_lot_x.resize(0)
-	_naissances_lot_z.resize(0)
+	# `_naissances_lot_x/_z` a deja ete vide par `_naitre_lot` en fin de
+	# tick precedent (source de verite unique du vidage).
 	k = 0
 	while k < n:
 		var pos_x: float = _graines_lot_x[k]
@@ -1689,6 +1730,8 @@ func _agrandir_capacite() -> void:
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
+	# INIT NEW SLOTS : par defaut libres, sentinelle INF pour cache
+	# rendu, `_ecrire_slot_vide` push zero-scale sur le buffer neuf.
 	var i: int = nouvelle - 1
 	while i >= ancienne:
 		_libres[i] = 1
@@ -1705,19 +1748,23 @@ func _agrandir_capacite() -> void:
 		_slots_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
-	# Reecriture des slots preexistants dont le buffer GPU vient d'etre
-	# reinitialise par le changement d'instance_count ci-dessus. Les caches
-	# `_derniere_params` ET `_derniere_couleur_stade` doivent etre INVALIDES
-	# pour chaque slot vivant, sinon `_ecrire_slot` skippe l'ecrit croyant
-	# que rien n'a bouge -- alors que le buffer GPU (transforms ET couleurs)
-	# vient d'etre efface.
+	# REPOSE DES SLOTS PREEXISTANTS : `instance_count` a REINITIALISE le
+	# buffer GPU des deux MultiMesh. Tout transform et couleur ecrits avant
+	# sont perdus. Il faut INVALIDER `_derniere_params` ET
+	# `_derniere_couleur_stade` de CHAQUE slot preexistant (vivant comme
+	# libre), sinon `_ecrire_slots_lot` en fin de tick verrait un cache
+	# valide et SKIPPERAIT la reecriture -- laissant le slot a la
+	# transform par defaut du buffer neuf. `_ecrire_slot_vide` immediat
+	# pour les libres, `_ecrire_slot` immediat pour les vivants
+	# (garantit un buffer coherent avant meme le prochain
+	# `_ecrire_slots_lot`).
 	var j: int = 0
 	while j < ancienne:
+		_derniere_params[j] = Vector4(INF, INF, INF, INF)
+		_derniere_couleur_stade[j] = -1
 		if _libres[j] == 1:
 			_ecrire_slot_vide(j)
 		else:
-			_derniere_params[j] = Vector4(INF, INF, INF, INF)
-			_derniere_couleur_stade[j] = -1
 			_ecrire_slot(j, _ages[j])
 		j += 1
 
