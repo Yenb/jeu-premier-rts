@@ -279,6 +279,35 @@ var _positions_z: PackedFloat32Array = PackedFloat32Array()
 # physique est un rendu ».
 var _positions_y: PackedFloat32Array = PackedFloat32Array()
 var _slots_libres: Array = []
+
+# ---- SEPARATION SLOT DATA / SLOT RENDU (streaming, morceau 1/3) ----
+#
+# Slot DATA (index dans les colonnes ci-dessus, borne par la population
+# totale) vs slot RENDU (index MultiMesh, borne par la fenetre autour de
+# l'observateur en mode hote streame). Aujourd'hui (morceau 1), IDENTITY
+# mapping : chaque naissance alloue en parallele un slot data et un slot
+# rendu au meme index -- comportement bit-a-bit inchange. Les morceaux
+# 2/3 romperont l'identity : mapping dynamique quand un arbre entre/sort
+# du cercle autour de l'observateur, capacite MultiMesh bornee par le
+# cercle et non par la population totale. Le rendu ecrit deja avec un
+# index qui pourra alors etre lu depuis `_slot_rendu_pour_data[i]` sans
+# toucher aux fonctions d'ecriture (transparence de l'indirection).
+#
+# Mode isole (`hote_actif = false`) : identity mapping toujours,
+# `_capacite_rendu = _capacite`, ordre d'allocation identique aux
+# `_slots_libres` -> `_slot_rendu_pour_data[i] = i`.
+var _capacite_rendu: int = 0
+# Slot data i -> slot rendu (index MultiMesh), -1 si l'arbre data n'est
+# pas rendu (sortie du cercle en mode hote streame). En morceau 1,
+# identity : posee a `i` a la naissance, -1 a la mort.
+var _slot_rendu_pour_data: PackedInt32Array = PackedInt32Array()
+# Inverse : slot rendu j -> slot data, -1 si le slot rendu est libre.
+# Sert au morceau 2 pour effacer visuellement un arbre sorti du cercle.
+var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
+# Pile des slots rendu libres, memes conventions que `_slots_libres`
+# (init ordre inverse, pop_back rend le plus petit index d'abord). En
+# morceau 1, allocation en parallele des slots data -> identity.
+var _slots_rendu_libres: Array = []
 # Index dans _stades_config_partagee du stade courant de chaque slot
 # (0..stades_config.size()-1 pour un vivant, -1 pour un slot libre ou un
 # vivant avant tout franchissement -- meme convention que
@@ -740,11 +769,14 @@ func _monter_population() -> void:
 	add_child(_noeud_feuillage)
 
 	_capacite = CAPACITE_INITIALE
+	_capacite_rendu = CAPACITE_INITIALE
 	_ages.resize(_capacite)
 	_libres.resize(_capacite)
 	_positions_x.resize(_capacite)
 	_positions_z.resize(_capacite)
 	_positions_y.resize(_capacite)
+	_slot_rendu_pour_data.resize(_capacite)
+	_data_pour_slot_rendu.resize(_capacite_rendu)
 	_slot_stade.resize(_capacite)
 	_facteur_croissance.resize(_capacite)
 	_facteur_longevite.resize(_capacite)
@@ -753,6 +785,7 @@ func _monter_population() -> void:
 	_derniere_params.resize(_capacite)
 	_derniere_couleur_stade.resize(_capacite)
 	_slots_libres.clear()
+	_slots_rendu_libres.clear()
 	# Ordre inverse : pop_back rendra les slots dans l'ordre croissant.
 	var i: int = _capacite - 1
 	while i >= 0:
@@ -768,7 +801,10 @@ func _monter_population() -> void:
 		_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		_derniere_couleur_stade[i] = -1
+		_slot_rendu_pour_data[i] = -1
+		_data_pour_slot_rendu[i] = -1
 		_slots_libres.append(i)
+		_slots_rendu_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
 
@@ -1302,6 +1338,14 @@ func _liberer_slots_lot(slots: PackedInt32Array) -> void:
 		_libres[i] = 1
 		_ages[i] = 0.0
 		_slots_libres.append(i)
+		# Libere le slot rendu associe (mapping SEPARATION). En morceau 1
+		# identity ; en morceaux 2/3 le slot rendu peut deja etre -1 si
+		# l'arbre etait hors du cercle a sa mort.
+		var slot_r_libere: int = _slot_rendu_pour_data[i]
+		_slot_rendu_pour_data[i] = -1
+		if slot_r_libere >= 0:
+			_data_pour_slot_rendu[slot_r_libere] = -1
+			_slots_rendu_libres.append(slot_r_libere)
 		_population -= 1
 		rev_x.append(pos_x)
 		rev_z.append(pos_z)
@@ -1341,14 +1385,25 @@ func _naitre_lot() -> void:
 		_naissances_lot_x.resize(0)
 		_naissances_lot_z.resize(0)
 		return
-	# Alloue N slots -- agrandit si necessaire.
+	# Alloue N slots data ET N slots rendu -- agrandit si necessaire.
 	while _slots_libres.size() < n:
 		_agrandir_capacite()
 	var slots: PackedInt32Array = PackedInt32Array()
 	slots.resize(n)
+	var slots_r: PackedInt32Array = PackedInt32Array()
+	slots_r.resize(n)
 	var k: int = 0
 	while k < n:
 		slots[k] = _slots_libres.pop_back()
+		# En morceau 1 (identity), les slots rendu sont alloues en
+		# parallele des slots data et dans le meme ordre -- indexes
+		# egaux par construction. Les morceaux 2/3 casseront cette
+		# equivalence : le slot rendu sera pris parmi ceux du cercle
+		# ou reste -1 si l'arbre nait hors du cercle.
+		if _slots_rendu_libres.size() > 0:
+			slots_r[k] = _slots_rendu_libres.pop_back()
+		else:
+			slots_r[k] = -1
 		k += 1
 	# TIRAGE DE VARIANCE en UN appel interleaved (ordre RNG identique
 	# a N appels unitaires alternes).
@@ -1388,11 +1443,14 @@ func _naitre_lot() -> void:
 		_ages[slot] = 0.0
 		_positions_x[slot] = pos_x
 		_positions_z[slot] = pos_z
-		# Hauteur Y du sol pour le rendu de ce slot : mode isole = Y_SOL
-		# constant (bit-a-bit inchange), mode hote = `sommet(x,z)` du
-		# terrain reel (lu UNE fois a la naissance, jamais recalcule au
-		# rendu). Voir doc de `_positions_y` en tete de fichier.
 		_positions_y[slot] = _y_pour_naissance(pos_x, pos_z)
+		# Mapping slot data -> slot rendu (voir bloc SEPARATION en tete).
+		# En morceau 1 identity, en morceaux 2/3 -1 si l'arbre nait hors
+		# du cercle.
+		var slot_r_naissance: int = slots_r[k]
+		_slot_rendu_pour_data[slot] = slot_r_naissance
+		if slot_r_naissance >= 0:
+			_data_pour_slot_rendu[slot_r_naissance] = slot
 		_slot_stade[slot] = stade_initial
 		_facteur_croissance[slot] = croissance_col[k]
 		_facteur_longevite[slot] = longevite_col[k]
@@ -1461,6 +1519,14 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_positions_z[i] = pos_z
 	# Hauteur Y du sol pour le rendu de ce slot (voir doc de `_positions_y`).
 	_positions_y[i] = _y_pour_naissance(pos_x, pos_z)
+	# Mapping slot data -> slot rendu (voir bloc SEPARATION en tete). En
+	# morceau 1 identity, morceaux 2/3 casseront cette equivalence.
+	var slot_r_ini: int = -1
+	if _slots_rendu_libres.size() > 0:
+		slot_r_ini = _slots_rendu_libres.pop_back()
+	_slot_rendu_pour_data[i] = slot_r_ini
+	if slot_r_ini >= 0:
+		_data_pour_slot_rendu[slot_r_ini] = i
 	_slot_stade[i] = _index_pour_age(_ages[i])
 	if _slot_stade[i] >= 0:
 		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
@@ -1915,6 +1981,8 @@ func _agrandir_capacite() -> void:
 	_positions_x.resize(nouvelle)
 	_positions_z.resize(nouvelle)
 	_positions_y.resize(nouvelle)
+	_slot_rendu_pour_data.resize(nouvelle)
+	_data_pour_slot_rendu.resize(nouvelle)
 	_slot_stade.resize(nouvelle)
 	_facteur_croissance.resize(nouvelle)
 	_facteur_longevite.resize(nouvelle)
@@ -1925,6 +1993,8 @@ func _agrandir_capacite() -> void:
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
+	# En morceau 1 (identity), capacite rendu suit capacite data.
+	_capacite_rendu = nouvelle
 	# INIT NEW SLOTS : par defaut libres, sentinelle INF pour cache
 	# rendu, `_ecrire_slot_vide` push zero-scale sur le buffer neuf.
 	var i: int = nouvelle - 1
@@ -1941,7 +2011,10 @@ func _agrandir_capacite() -> void:
 		_choses_arbre[i] = null
 		_derniere_params[i] = Vector4(INF, INF, INF, INF)
 		_derniere_couleur_stade[i] = -1
+		_slot_rendu_pour_data[i] = -1
+		_data_pour_slot_rendu[i] = -1
 		_slots_libres.append(i)
+		_slots_rendu_libres.append(i)
 		_ecrire_slot_vide(i)
 		i -= 1
 	# REPOSE DES SLOTS PREEXISTANTS : `instance_count` a REINITIALISE le
