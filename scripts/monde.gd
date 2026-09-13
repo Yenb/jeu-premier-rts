@@ -72,9 +72,15 @@ const NiveauMonde = preload("res://scripts/niveau_monde.gd")
 # + du dispatch `contenu is Array`). Les trois floori de multiplications qui
 # donnent les cases min/max de la boite englobante d'une requete sont eux aussi
 # INLINE dans choses_dans_rayon et choses_dans_rayons -- zero appel de fonction
-# par point de requete. Compteurs requetes/cases_lues/candidats_mesures
-# identiques a l'ancien chemin (verrouille par test_monde_structure_simple.gd
-# et test_monde_subdivision.gd). Le depot orion ne porte pas ces retraits.
+# par point de requete. MEME GESTE COTE INSERTION/RETRAIT : `_ranger` et
+# `deplacer` (mode subdivision) lisent `niveau.inv_arete` et `niveau.arete` au
+# lieu de rappeler `_case_pour` et `_arete` -- zero appel de fonction par
+# element du tick d'insertion/deplacement. Les fonctions `_case_pour` et
+# `_arete` restent gardees pour leurs appelants rares (`choses_dans_couloir`,
+# `_batir`, `resolutions_ouvertes`). Compteurs requetes/cases_lues/
+# candidats_mesures identiques a l'ancien chemin (verrouille par
+# test_monde_structure_simple.gd et test_monde_subdivision.gd). Le depot orion
+# ne porte pas ces retraits.
 #
 # ECART AVEC LE DEPOT FRAMEWORK : `structure_simple` (bool, defaut false --
 # comportement historique intact). Sous true, la subdivision adaptative est
@@ -322,7 +328,15 @@ func deplacer(chose) -> void:
 		return
 	for exposant in _niveaux:
 		var niveau = _niveaux[exposant]
-		var visee := _case_pour(chose.position, int(exposant))
+		# _case_pour inline via niveau.inv_arete (voir bloc ECART FRAMEWORK
+		# en tete) : evite `pow(2, exposant)` et l'appel _case_pour par
+		# element de tick sur ce chemin subdivision.
+		var inv_a_d: float = niveau.inv_arete
+		var pos_d: Vector3 = chose.position
+		var visee := Vector3i(
+			floori(pos_d.x * inv_a_d),
+			floori(pos_d.y * inv_a_d),
+			floori(pos_d.z * inv_a_d))
 		var chemin_actuel: Array = niveau.case_de.get(chose.id, [])
 		# Optim conservee UNIQUEMENT quand la case globale n'a pas change ET que la
 		# case n'est pas subdivisee (chemin de longueur 1). Sur une case subdivisee,
@@ -717,7 +731,15 @@ func _batir(exposant: int) -> Object:
 
 func _ranger(niveau, exposant: int, id, position: Vector3) -> void:
 	var cases: Dictionary = niveau.cases
-	var case_globale := _case_pour(position, exposant)
+	# _case_pour inline via niveau.inv_arete (voir bloc ECART FRAMEWORK en
+	# tete) : par-element du tick d'insertion, evite `pow(2, exposant)` et
+	# l'appel _case_pour. Meme resultat bit a bit (inv_arete = 1/pow(2, exp),
+	# puissance de 2 exacte en IEEE 754).
+	var inv_a_r: float = niveau.inv_arete
+	var case_globale := Vector3i(
+		floori(position.x * inv_a_r),
+		floori(position.y * inv_a_r),
+		floori(position.z * inv_a_r))
 	if not cases.has(case_globale):
 		cases[case_globale] = []
 	# BRANCHE STRUCTURE SIMPLE : append id + index inverse, jamais _inserer
@@ -737,8 +759,12 @@ func _ranger(niveau, exposant: int, id, position: Vector3) -> void:
 	# dans les Dictionary de subdivision, et _splitter l'etend aussi pour l'id
 	# courant s'il declenche un split de la case terminale.
 	niveau.case_de[id] = [case_globale]
-	var origine_racine := Vector3(case_globale) * _arete(exposant)
-	_inserer(cases, case_globale, id, position, origine_racine, _arete(exposant), 0, niveau)
+	# _arete inline via niveau.arete (voir bloc ECART FRAMEWORK en tete) :
+	# deja precalcule au _batir, evite `pow(2, exposant)` par-element sur le
+	# chemin subdivision.
+	var arete_r: float = niveau.arete
+	var origine_racine := Vector3(case_globale) * arete_r
+	_inserer(cases, case_globale, id, position, origine_racine, arete_r, 0, niveau)
 
 # Descend dans le contenu de parent[cle] et insere id a la bonne place.
 # - Contenu terminal (Array) : append + split si depasse SEUIL_SPLIT et
