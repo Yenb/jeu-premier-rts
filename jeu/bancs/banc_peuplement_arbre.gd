@@ -1505,8 +1505,8 @@ func _naitre_lot() -> void:
 			_intervalle_reprod[slot] = _fenetre_fertile_age / denom
 		else:
 			_intervalle_reprod[slot] = INF
-		var position := Vector3(pos_x, Y_SOL, pos_z)
-		var chose := {"id": "arbre_%d" % slot, "position": position, "slot": slot}
+		var position_arbre := Vector3(pos_x, Y_SOL, pos_z)
+		var chose := {"id": "arbre_%d" % slot, "position": position_arbre, "slot": slot}
 		_choses_arbre[slot] = chose
 		entries_monde[k] = {"chose": chose, "type": "arbre"}
 		if conf_ombrage_ok and mag_naissance != 0.0:
@@ -1540,9 +1540,9 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	if _slots_libres.is_empty():
 		_agrandir_capacite()
 	var i: int = _slots_libres.pop_back()
-	var position := Vector3(pos_x, Y_SOL, pos_z)
+	var position_arbre := Vector3(pos_x, Y_SOL, pos_z)
 	var objet: Dictionary = Objet.fabriquer(
-		"arbre_%d" % i, TYPE_ARBRE, position, _catalogue, {}, [], {}, [], true)
+		"arbre_%d" % i, TYPE_ARBRE, position_arbre, _catalogue, {}, [], {}, [], true)
 	if objet.is_empty():
 		push_error("banc_peuplement_arbre : Objet.fabriquer a rendu {} pour slot %d" % i)
 		_slots_libres.append(i)
@@ -1573,9 +1573,9 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 		_intervalle_reprod[i] = _fenetre_fertile_age / denom
 	else:
 		_intervalle_reprod[i] = INF
-	var chose := {"id": "arbre_%d" % i, "position": position, "slot": i}
+	var chose := {"id": "arbre_%d" % i, "position": position_arbre, "slot": i}
 	_choses_arbre[i] = chose
-	_monde.ajouter(chose, "arbre", position)
+	_monde.ajouter(chose, "arbre", position_arbre)
 	# INVALIDATION CACHE RENDU par coherence avec `_naitre_lot` : force
 	# `_ecrire_slot` a repousser transform+couleur sans risquer un skip
 	# EPS sur un cache herite d'un slot precedent.

@@ -751,7 +751,7 @@ func _batir(exposant: int) -> Object:
 		_ranger(niveau, exposant, id, choses[id].chose.position)
 	return niveau
 
-func _ranger(niveau, exposant: int, id, position: Vector3) -> void:
+func _ranger(niveau, _exposant: int, id, position: Vector3) -> void:
 	var cases: Dictionary = niveau.cases
 	# _case_pour inline via niveau.inv_arete (voir bloc ECART FRAMEWORK en
 	# tete) : par-element du tick d'insertion, evite `pow(2, exposant)` et
@@ -799,7 +799,7 @@ func _ranger(niveau, exposant: int, id, position: Vector3) -> void:
 # ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer le
 # franchissement de frontiere par entite dans `ajouter_lot`. Meme geste
 # doctrinal que `retirer()`, `ajouter_lot`, `choses_dans_rayons`.
-func ranger_lot(niveau, exposant: int, ids: Array, positions: Array) -> void:
+func ranger_lot(niveau, _exposant: int, ids: Array, positions: Array) -> void:
 	var n: int = ids.size()
 	if n == 0:
 		return
