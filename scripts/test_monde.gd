@@ -30,6 +30,7 @@ func _init() -> void:
 	_retirer_sort_une_chose_de_partout()
 	_choses_dans_couloir_ne_lit_que_les_cases_traversees()
 	_choses_dans_rayons_equivaut_a_la_boucle_ponctuelle()
+	_choses_dans_rayons_brut_rend_les_memes_ids_que_la_version_wrap()
 	_ajouter_lot_equivaut_a_la_boucle_unitaire()
 	_retirer_lot_equivaut_a_la_boucle_unitaire()
 	if verif.echecs() > 0:
@@ -72,6 +73,42 @@ func _choses_dans_rayons_equivaut_a_la_boucle_ponctuelle() -> void:
 		while j < ponctuel.size() and j < batch.size():
 			verif.v(ponctuel[j].chose == batch[j].chose,
 				"point %d j=%d : chose differente entre batch et ponctuel" % [i, j])
+			j += 1
+		i += 1
+
+# VARIANTE ALLOCATION-REDUITE : choses_dans_rayons_brut(positions, rayon)
+# doit rendre EXACTEMENT les memes choses (par identite Dictionary) que
+# choses_dans_rayons(positions, rayon), meme ordre. Prouve que la variante
+# brute couvre les memes voisins.
+func _choses_dans_rayons_brut_rend_les_memes_ids_que_la_version_wrap() -> void:
+	var monde := Monde.new()
+	for i in range(50):
+		var pos := Vector3(float(i) * 2.0, 0.0, float((i * 7) % 20))
+		var c := Objet.fabriquer("chose_%d" % i, "type", pos, {})
+		monde.ajouter(c, "type", c.position)
+	var points: Array = [
+		Vector3(0.0, 0.0, 0.0),
+		Vector3(20.0, 0.0, 10.0),
+		Vector3(80.0, 0.0, 5.0),
+		Vector3(1000.0, 0.0, 0.0),
+	]
+	var rayon: float = 5.0
+	var wrap := monde.choses_dans_rayons(points, rayon)
+	var brut := monde.choses_dans_rayons_brut(points, rayon)
+	verif.v(wrap.size() == brut.size(),
+		"choses_dans_rayons_brut doit rendre autant d'entrees que la version wrap")
+	var i: int = 0
+	while i < points.size():
+		var wp: Array = wrap[i]
+		var bp: Array = brut[i]
+		verif.v(wp.size() == bp.size(),
+			"point %d : taille brut %d != taille wrap %d" % [i, bp.size(), wp.size()])
+		var j: int = 0
+		while j < wp.size() and j < bp.size():
+			# La chose brute doit etre EXACTEMENT le meme Dictionary
+			# que wrap[i][j].chose (meme reference).
+			verif.v(bp[j] == wp[j].chose,
+				"point %d j=%d : chose brute != wrap.chose (meme reference attendue)" % [i, j])
 			j += 1
 		i += 1
 

@@ -563,6 +563,78 @@ func choses_dans_rayons(positions: Array, rayon: float) -> Array:
 		k += 1
 	return resultat
 
+# VARIANTE ALLOCATION-REDUITE de `choses_dans_rayons` : rend par point
+# un Array de CHOSES BRUTES (le Dictionary `chose` deja alloue en
+# amont a la naissance) au lieu du wrap `{chose, type, position}` --
+# elimine 1 nouveau Dict par voisin retenu. L'appelant lit
+# `voisin.get("slot", -1)`, `voisin.position`, `voisin.id` directement
+# sur la chose brute. Meme couverture, memes voisins retenus, memes
+# compteurs `requetes`/`cases_lues`/`candidats_mesures` que la version
+# wrap.
+#
+# ECART FRAMEWORK : ce point d'entree n'existe pas dans le depot Orion,
+# ajoute ici sous l'exception CLAUDE.md § Frontiere pour reduire le
+# cout d'allocation des requetes groupees du banc arbre
+# (`_semer_lot`, `_avancer_competition`). Meme geste doctrinal que
+# `choses_dans_rayons` et `retirer()`.
+#
+# BRANCHE SUBDIVISION : `_collecter` retombe sur le wrap `{chose, type,
+# position}` -- inhomogeneite du resultat sous subdivision. Le banc
+# arbre tourne en `structure_simple=true` (branche Array uniquement),
+# la branche Dictionary est morte pour lui. Un appelant subdivision
+# doit rester sur la version wrap `choses_dans_rayons`.
+func choses_dans_rayons_brut(positions: Array, rayon: float) -> Array:
+	var resultat: Array = []
+	resultat.resize(positions.size())
+	if positions.is_empty():
+		return resultat
+	var exposant := _exposant_pour(rayon)
+	var niveau := _niveau(exposant)
+	var cases: Dictionary = niveau.cases
+	var inv_a: float = niveau.inv_arete
+	var carre: float = rayon * rayon
+	var offset := Vector3(rayon, rayon, rayon)
+	var k: int = 0
+	var n: int = positions.size()
+	while k < n:
+		var position: Vector3 = positions[k]
+		var liste: Array = []
+		var pos_bas: Vector3 = position - offset
+		var pos_haut: Vector3 = position + offset
+		var basse := Vector3i(
+			floori(pos_bas.x * inv_a),
+			floori(pos_bas.y * inv_a),
+			floori(pos_bas.z * inv_a))
+		var haute := Vector3i(
+			floori(pos_haut.x * inv_a),
+			floori(pos_haut.y * inv_a),
+			floori(pos_haut.z * inv_a))
+		requetes += 1
+		for cx in range(basse.x, haute.x + 1):
+			for cy in range(basse.y, haute.y + 1):
+				for cz in range(basse.z, haute.z + 1):
+					cases_lues += 1
+					var cle := Vector3i(cx, cy, cz)
+					var contenu = cases.get(cle, null)
+					if contenu == null:
+						continue
+					if contenu is Array:
+						for id in contenu:
+							var entree: Dictionary = choses[id]
+							var pos_vivante: Vector3 = entree.chose.position
+							candidats_mesures += 1
+							if position.distance_squared_to(pos_vivante) <= carre:
+								# BRUT : append la chose seule (deja allouee), zero nouveau Dict.
+								liste.append(entree.chose)
+					else:
+						var arete: float = 1.0 / inv_a
+						var origine := Vector3(cle) * arete
+						# Branche subdivision : fallback wrap (voir doc supra).
+						_collecter(contenu, origine, arete, position, carre, liste)
+		resultat[k] = liste
+		k += 1
+	return resultat
+
 func _collecter(contenu, origine: Vector3, arete: float, centre: Vector3, carre_r: float, out: Array) -> void:
 	if contenu is Array:
 		for id in contenu:

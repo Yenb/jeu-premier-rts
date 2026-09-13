@@ -1061,8 +1061,12 @@ Le contenant réellement utilisé en jeu : il rend les choses dans un rayon, et
 une chose par son id. `ajouter`, `par_id`, `choses_dans_rayon`,
 `choses_dans_rayons(positions, rayon)` (requête GROUPÉE, ÉCART FRAMEWORK
 tracé dans le fichier — un seul accès au niveau/`inv_arete` pour un lot de
-points, rend un `Array` de listes parallèle à `positions`). Contrat,
-pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
+points, rend un `Array` de listes parallèle à `positions`) ;
+`choses_dans_rayons_brut(positions, rayon)` (variante ALLOCATION-RÉDUITE,
+ÉCART FRAMEWORK — rend les `chose` brutes déjà allouées en amont au lieu
+du wrap `{chose, type, position}`, économise un Dict par voisin retenu ;
+branche subdivision garde le wrap, structure_simple entièrement brut).
+Contrat, pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
 
 ### `scripts/etat_effectif.gd` — un état écrase ou module une propriété
 Les états actifs d'une chose écrasent ou multiplient la valeur de base d'une

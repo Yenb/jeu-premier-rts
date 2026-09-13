@@ -1664,24 +1664,56 @@ func _semer_lot() -> void:
 		return
 	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
 	var carre_normal: float = _rayon_trouee * _rayon_trouee
-	# Positions Vector3 pour la requete groupee. Reconstruit chaque tick
-	# (contenu de longueur variable, aucun regime stable a maintenir).
-	var positions_vec3: Array = []
-	positions_vec3.resize(n)
+	# PRE-FILTRAGE (piste 3) : les gardes hors-carte et zone d'exclusion
+	# passent AVANT la requete au monde. Chaque point vou au rejet
+	# epargne un balayage 3x3 dans `choses_dans_rayons_brut` -- non
+	# negligeable si une grande zone d'exclusion couvre une bonne part
+	# de la carte. Les indices survivants sont mappes vers leur position
+	# d'origine dans `_graines_lot_x/_z` pour lire le couvert par indice.
+	var indices_valides: PackedInt32Array = PackedInt32Array()
+	var positions_valides: Array = []
+	var n_zones_pre: int = _zones_exclusion.size()
 	var k: int = 0
 	while k < n:
-		positions_vec3[k] = Vector3(_graines_lot_x[k], Y_SOL, _graines_lot_z[k])
+		var pxp: float = _graines_lot_x[k]
+		var pzp: float = _graines_lot_z[k]
+		if absf(pxp) > _demi_carte or absf(pzp) > _demi_carte:
+			k += 1
+			continue
+		var dans_zone_pre: bool = false
+		if n_zones_pre > 0:
+			var zi_p: int = 0
+			while zi_p < n_zones_pre:
+				var zone_p: Dictionary = _zones_exclusion[zi_p]
+				zi_p += 1
+				if int(zone_p.forme) == 0:
+					var zdx_p: float = pxp - float(zone_p.cx)
+					var zdz_p: float = pzp - float(zone_p.cz)
+					var r_p: float = float(zone_p.rayon)
+					if zdx_p * zdx_p + zdz_p * zdz_p <= r_p * r_p:
+						dans_zone_pre = true
+						break
+				else:
+					if absf(pxp - float(zone_p.cx)) <= float(zone_p.demi_x) and absf(pzp - float(zone_p.cz)) <= float(zone_p.demi_z):
+						dans_zone_pre = true
+						break
+		if dans_zone_pre:
+			k += 1
+			continue
+		indices_valides.append(k)
+		positions_valides.append(Vector3(pxp, Y_SOL, pzp))
 		k += 1
-	var voisins_par_graine: Array = _monde.choses_dans_rayons(positions_vec3, rayon_gros)
-	# LECTURE COUVERT EN LOT : UN appel `lire_lot` pour toutes les
-	# positions du lot au lieu d'un `_lire_couvert` par graine. Le couvert
-	# ne bouge pas durant la boucle -- les depots d'ombrage des naissances
-	# du tick sont deferes a `_naitre_lot` (fin de tick). Les positions
-	# rejetees (hors carte ou gate) paient un lookup dict trivial ; aucun
-	# biais bit a bit puisque leur valeur n'est jamais consultee.
+	if positions_valides.is_empty():
+		return
+	# REQUETE BRUTE (piste 1) : `choses_dans_rayons_brut` rend les
+	# `chose` deja allouees en amont, evite le wrap `{chose, type,
+	# position}` par voisin retenu. Le gate lit `voisin.get("slot",-1)`
+	# et `voisin.position` directement.
+	var voisins_par_graine: Array = _monde.choses_dans_rayons_brut(positions_valides, rayon_gros)
+	# LECTURE COUVERT EN LOT sur TOUTES les positions du tick (lookup
+	# Dict trivial, negligeable de pre-filtrer). Le couvert ne bouge pas
+	# durant la boucle -- depots differes a `_naitre_lot`.
 	var couverts: PackedFloat32Array = _couvert.lire_lot(_graines_lot_x, _graines_lot_z, _taille_case)
-	# `_naissances_lot_x/_z` a deja ete vide par `_naitre_lot` en fin de
-	# tick precedent (source de verite unique du vidage).
 	# INVARIANTS DU GATE hoistes hors de la boucle par graine (voir doc
 	# du gate inline supra) : ne bougent pas au fil des graines candidates
 	# du tick.
@@ -1690,53 +1722,27 @@ func _semer_lot() -> void:
 	var stade_gros_max_l: int = _stade_gros_max
 	var trouee_max_l: int = _trouee_max_voisins
 	var taille_slot_stade_l: int = _slot_stade.size()
-	k = 0
-	while k < n:
-		var pos_x: float = _graines_lot_x[k]
-		var pos_z: float = _graines_lot_z[k]
-		var voisins: Array = voisins_par_graine[k]
-		k += 1
-		# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
-		if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
-			continue
-		# ZONE D'EXCLUSION (patron `jeu/plantes/zone_exclusion_arbre.gd`) :
-		# liste vide en mode isole = skip complet, aucun cout. Test
-		# lineaire sur les zones du groupe -- rejet AVANT le gate trouee
-		# pour eviter le calcul de voisins pour rien.
-		var n_zones_s: int = _zones_exclusion.size()
-		if n_zones_s > 0:
-			var dans_zone_s: bool = false
-			var zi_s: int = 0
-			while zi_s < n_zones_s:
-				var zone_s: Dictionary = _zones_exclusion[zi_s]
-				zi_s += 1
-				if int(zone_s.forme) == 0:
-					var zdx_s: float = pos_x - float(zone_s.cx)
-					var zdz_s: float = pos_z - float(zone_s.cz)
-					var r_s: float = float(zone_s.rayon)
-					if zdx_s * zdx_s + zdz_s * zdz_s <= r_s * r_s:
-						dans_zone_s = true
-						break
-				else:
-					if absf(pos_x - float(zone_s.cx)) <= float(zone_s.demi_x) and absf(pos_z - float(zone_s.cz)) <= float(zone_s.demi_z):
-						dans_zone_s = true
-						break
-			if dans_zone_s:
-				continue
+	var j_lot: int = 0
+	var nv: int = indices_valides.size()
+	while j_lot < nv:
+		var kk: int = indices_valides[j_lot]
+		var pos_x: float = _graines_lot_x[kk]
+		var pos_z: float = _graines_lot_z[kk]
+		var voisins: Array = voisins_par_graine[j_lot]
+		j_lot += 1
 		# GATE DE TROUEE INLINE (voir doc supra). Rejet = graine perdue.
 		var arrivee_s := Vector3(pos_x, Y_SOL, pos_z)
 		var compte_normal_s: int = 0
 		var passe_s: bool = true
-		for entree_s in voisins:
-			var chose_s = entree_s.chose
-			var slot_s: int = int(chose_s.get("slot", -1))
+		for voisin_s in voisins:
+			var slot_s: int = int(voisin_s.get("slot", -1))
 			var stade_num_s: int = 0
 			if slot_s >= 0 and slot_s < taille_slot_stade_l:
 				stade_num_s = _slot_stade[slot_s] + 1
 			if stade_num_s >= stade_gros_min_l and stade_num_s <= stade_gros_max_l:
 				passe_s = false
 				break
-			var pos_voisin_s: Vector3 = chose_s.position
+			var pos_voisin_s: Vector3 = voisin_s.position
 			var d2_s: float = arrivee_s.distance_squared_to(pos_voisin_s)
 			# EXCLUSION STRICTE : voisin dans le rayon minimal d'arbre
 			# rejette d'office (empeche la superposition XZ).
@@ -1765,9 +1771,8 @@ func _semer_lot() -> void:
 			passe_s = false
 		if not passe_s:
 			continue
-		# COUVERT PRE-LU en lot (voir `_couvert.lire_lot` supra) : index
-		# `k - 1` car `k` a deja ete incremente en tete de boucle.
-		if couverts[k - 1] < _seuil_couvert:
+		# COUVERT PRE-LU en lot -- lecture par indice original `kk`.
+		if couverts[kk] < _seuil_couvert:
 			# NAISSANCE DEFEREE au `_naitre_lot` de fin de tick : append
 			# la position au meme lot que la scan du gate suivant lit
 			# (le gate inline scanne `_naissances_lot_x/_z` en plus du
@@ -2207,8 +2212,11 @@ func _avancer_competition(pas: float) -> void:
 		_competition_slots.append(i)
 	if _competition_positions.is_empty():
 		return
-	# Requete groupee : UN seul franchissement de frontiere.
-	var voisins_par_slot: Array = _monde.choses_dans_rayons(_competition_positions, _rayon_competition)
+	# Requete groupee BRUTE : rend les `chose` sans wrap (voir
+	# `choses_dans_rayons_brut`). Competition ne lit que la cardinalite
+	# et l'id des voisins pour dedup morts intra-tick -- aucune position
+	# ni slot, le format brut suffit et epargne un Dict par voisin.
+	var voisins_par_slot: Array = _monde.choses_dans_rayons_brut(_competition_positions, _rayon_competition)
 	# Deuxieme passe : mortalite en ordre d'anneau. Soustraction des morts
 	# precedentes du tick pour reproduire l'effet de bord de la version
 	# unitaire (une mort retire son id de `_monde` au fil, un slot teste
@@ -2222,8 +2230,8 @@ func _avancer_competition(pas: float) -> void:
 		var voisins_list: Array = voisins_par_slot[k]
 		var voisins: int = voisins_list.size()
 		if not morts_du_tick.is_empty():
-			for entree in voisins_list:
-				if morts_du_tick.has(entree.chose.id):
+			for voisin in voisins_list:
+				if morts_du_tick.has(voisin.id):
 					voisins -= 1
 		k += 1
 		if voisins > _competition_max_voisins:
