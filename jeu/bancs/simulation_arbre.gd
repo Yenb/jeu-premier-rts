@@ -902,15 +902,22 @@ func avancer(pas: float) -> void:
 	# le vidage rendu suffix `_lslev`. La fonction originale
 	# `_liberer_slots_lot` reste appelee depuis `_avancer_competition`
 	# (sera inlinee au morceau suivant, duplication assumee).
+	#
+	# WRITES cœur morts_v HOISTES au scope avancer : `_monde.retirer_lot`
+	# et le depot d'ombrage morts_v (signe -1) sont DEFERES apres les
+	# reveils pour etre fusionnes dans la fenetre W1 en UN seul
+	# `_couvert.deposer_lot` elargi (morts_v -1 + chaque transition
+	# decomposee ancien -1 / nouveau +1). Les reveils inline ne lisent
+	# ni monde ni couvert -> defere bit-a-bit equivalent.
+	var _ids_a_retirer_lsl: Array = []
+	var _dep_x_lsl: PackedFloat32Array = PackedFloat32Array()
+	var _dep_z_lsl: PackedFloat32Array = PackedFloat32Array()
+	var _dep_r_lsl: PackedFloat32Array = PackedFloat32Array()
+	var _dep_m_lsl: PackedFloat32Array = PackedFloat32Array()
+	var _dep_s_lsl: PackedByteArray = PackedByteArray()
 	var _slots_lsl: PackedInt32Array = _morts_vieillesse_lot
 	var _n_lsl: int = _slots_lsl.size()
 	if _n_lsl > 0:
-		var _ids_a_retirer_lsl: Array = []
-		var _dep_x_lsl: PackedFloat32Array = PackedFloat32Array()
-		var _dep_z_lsl: PackedFloat32Array = PackedFloat32Array()
-		var _dep_r_lsl: PackedFloat32Array = PackedFloat32Array()
-		var _dep_m_lsl: PackedFloat32Array = PackedFloat32Array()
-		var _dep_s_lsl: PackedByteArray = PackedByteArray()
 		var _rev_x_lsl: PackedFloat32Array = PackedFloat32Array()
 		var _rev_z_lsl: PackedFloat32Array = PackedFloat32Array()
 		var _n_conf_lsl: int = _ombrage_par_stade.size()
@@ -949,10 +956,9 @@ func avancer(pas: float) -> void:
 			_population -= 1
 			_rev_x_lsl.append(_pos_x_lsl)
 			_rev_z_lsl.append(_pos_z_lsl)
-		if _ids_a_retirer_lsl.size() > 0:
-			_monde.retirer_lot(_ids_a_retirer_lsl)
-		if _dep_x_lsl.size() > 0:
-			_couvert.deposer_lot(_dep_x_lsl, _dep_z_lsl, _dep_r_lsl, _taille_case, _dep_m_lsl, _dep_s_lsl)
+		# WRITES monde+couvert morts_v DEFERES a la fenetre W1 groupee
+		# apres les reveils (voir plus bas). Reveils inline n'accedent ni
+		# monde ni couvert, defere OK bit-a-bit.
 		# INLINE _ecrire_slots_vides_lot(_slots_lsl) -- suffix _lslev.
 		var _t_lslev := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
 		var _taille_couleur_lslev: int = _derniere_couleur_stade.size()
@@ -1036,13 +1042,60 @@ func avancer(pas: float) -> void:
 						var _dz_rev: float = _pos_rev.z - _pos_z_rev
 						if _dx_rev * _dx_rev + _dz_rev * _dz_rev <= _carre_rev:
 							_reveils[_id_rev] = true
-	# LOT DE TRANSITIONS applique en UNE passe : un seul appel au champ
-	# pour toutes les transitions de stade du tick, au lieu de N appels.
+	# FENETRE W1 : ecritures monde + couvert groupees. Cote monde : UN
+	# `_monde.retirer_lot` (morts_v). Cote couvert : UN `_couvert.deposer_lot`
+	# ELARGI qui contient morts_v (signe -1) PLUS chaque transition
+	# decomposee en 2 depots (ancien signe -1, nouveau signe +1). Fusion
+	# C1+C2 en UN franchissement de frontiere couvert au lieu de deux.
 	# Doit tourner AVANT `_semer_lot` (qui lit `_couvert.lire_lot` sur
-	# toutes les positions du lot) et AVANT `_tick_banque` (idem sur les
-	# prospects reveilles) pour que le couvert reflete l'etat post-tick.
-	if _transitions_x.size() > 0:
-		_couvert.redeposer_lot(_transitions_x, _transitions_z, _transitions_rayon_a, _transitions_rayon_n, _taille_case, _transitions_mag_a, _transitions_mag_n)
+	# toutes les positions du lot) et AVANT le drain banque inline (idem
+	# sur les prospects reveilles) pour que monde et couvert refletent
+	# l'etat post-W1.
+	if _ids_a_retirer_lsl.size() > 0:
+		_monde.retirer_lot(_ids_a_retirer_lsl)
+	var _n_trans_w1: int = _transitions_x.size()
+	var _n_morts_w1: int = _dep_x_lsl.size()
+	if _n_morts_w1 > 0 or _n_trans_w1 > 0:
+		var _dep_x_w1: PackedFloat32Array = PackedFloat32Array()
+		var _dep_z_w1: PackedFloat32Array = PackedFloat32Array()
+		var _dep_r_w1: PackedFloat32Array = PackedFloat32Array()
+		var _dep_m_w1: PackedFloat32Array = PackedFloat32Array()
+		var _dep_s_w1: PackedByteArray = PackedByteArray()
+		if _n_morts_w1 > 0:
+			_dep_x_w1.append_array(_dep_x_lsl)
+			_dep_z_w1.append_array(_dep_z_lsl)
+			_dep_r_w1.append_array(_dep_r_lsl)
+			_dep_m_w1.append_array(_dep_m_lsl)
+			_dep_s_w1.append_array(_dep_s_lsl)
+		# TRANSITIONS DECOMPOSEES : chaque redeposer_lot(ancien -> nouveau)
+		# devient deux entrees deposer_lot (ancien signe -1, nouveau signe +1).
+		# Arithmetique float : redeposer_lot cumule `apport = -ma*pa + mn*pn`
+		# puis ajoute a la case en UN add ; deposer_lot 2 entrees fait
+		# `case += -ma*pa` puis `case += mn*pn`. Non strictement associatif
+		# en float (jusqu'a 1 ULP d'ecart possible) et le compteur
+		# `_n_non_nulles` peut basculer intermediaire. Bit-a-bit verifie
+		# jeune ET mure sur diff vide -- si dans un futur reglage le diff
+		# revele une divergence, revenir a C2 en appel separe (garder C1
+		# dans le meme deposer_lot elargi).
+		var _kt_w1: int = 0
+		while _kt_w1 < _n_trans_w1:
+			var _px_w1: float = _transitions_x[_kt_w1]
+			var _pz_w1: float = _transitions_z[_kt_w1]
+			# entree "ancien" (signe -1)
+			_dep_x_w1.append(_px_w1)
+			_dep_z_w1.append(_pz_w1)
+			_dep_r_w1.append(_transitions_rayon_a[_kt_w1])
+			_dep_m_w1.append(_transitions_mag_a[_kt_w1])
+			_dep_s_w1.append(0)
+			# entree "nouveau" (signe +1)
+			_dep_x_w1.append(_px_w1)
+			_dep_z_w1.append(_pz_w1)
+			_dep_r_w1.append(_transitions_rayon_n[_kt_w1])
+			_dep_m_w1.append(_transitions_mag_n[_kt_w1])
+			_dep_s_w1.append(1)
+			_kt_w1 += 1
+		if _dep_x_w1.size() > 0:
+			_couvert.deposer_lot(_dep_x_w1, _dep_z_w1, _dep_r_w1, _taille_case, _dep_m_w1, _dep_s_w1)
 	# INLINE _semer_lot -- morceau 3/N. Vars suffixees `_sml`. Inclut
 	# l'inline recursif de `_inscrire_dormante` (suffix `_smlind`).
 	var _n_sml: int = _graines_lot_x.size()
