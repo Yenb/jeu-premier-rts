@@ -1245,7 +1245,13 @@ func _liberer_slots_lot(slots: PackedInt32Array) -> void:
 # `scripts/test_facteur_variance.gd`.
 func _naitre_lot() -> void:
 	var n: int = _naissances_lot_x.size()
+	# INVARIANT : le consommateur vide TOUJOURS la queue, quel que soit n
+	# (0 inclus). Sans cette garde, une entree residuelle survivrait a un
+	# early-return et serait re-drainee au tick suivant (motif du bug
+	# reel corrige precedemment).
 	if n == 0:
+		_naissances_lot_x.resize(0)
+		_naissances_lot_z.resize(0)
 		return
 	# Alloue N slots -- agrandit si necessaire.
 	while _slots_libres.size() < n:
