@@ -1090,6 +1090,28 @@ func _ecrire_slot_vide(i: int) -> void:
 	if i < _derniere_couleur_stade.size():
 		_derniere_couleur_stade[i] = -1
 
+# LOT DE VIDAGES DE SLOTS en UNE passe : applique le corps de
+# `_ecrire_slot_vide` inline dans une boucle interne, zero appel de
+# fonction par slot. Meme transform t (identity scaled zero a Y_SOL),
+# meme reset cache couleur. Appele par `_liberer_slots_lot` pour tous
+# les slots liberes du tick en un seul geste. `_ecrire_slot_vide`
+# (unitaire) reste utilise ailleurs (`_monter_population` init,
+# `_agrandir_capacite`).
+func _ecrire_slots_vides_lot(slots: PackedInt32Array) -> void:
+	var n: int = slots.size()
+	if n == 0:
+		return
+	var t := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
+	var taille_couleur: int = _derniere_couleur_stade.size()
+	var k: int = 0
+	while k < n:
+		var i: int = slots[k]
+		k += 1
+		_mm_tronc.set_instance_transform(i, t)
+		_mm_feuillage.set_instance_transform(i, t)
+		if i < taille_couleur:
+			_derniere_couleur_stade[i] = -1
+
 # Pose la couleur d'instance du slot pour le stade donne (index 0-based
 # dans `_couleur_*_par_stade`). Repli sur les couleurs marron/vert
 # actuelles si l'index est hors table (JSON absent ou entrees
@@ -1213,7 +1235,6 @@ func _liberer_slots_lot(slots: PackedInt32Array) -> void:
 		_slot_stade[i] = -1
 		_libres[i] = 1
 		_ages[i] = 0.0
-		_ecrire_slot_vide(i)
 		_slots_libres.append(i)
 		_population -= 1
 		rev_x.append(pos_x)
@@ -1222,6 +1243,10 @@ func _liberer_slots_lot(slots: PackedInt32Array) -> void:
 		_monde.retirer_lot(ids_a_retirer)
 	if dep_x.size() > 0:
 		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
+	# UN appel groupe de vidage rendu pour tous les slots liberes du lot
+	# (au lieu d'un `_ecrire_slot_vide` par slot). Meme transform pousse,
+	# meme reset cache couleur.
+	_ecrire_slots_vides_lot(slots)
 	# Un seul appel groupe de reveil pour tous les slots libere par ce
 	# lot.
 	_reveiller_dormantes_autour_lot(rev_x, rev_z)
