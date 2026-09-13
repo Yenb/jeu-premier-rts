@@ -1054,11 +1054,44 @@ func tick(pas: float) -> void:
 	# son propre reveil groupe pour ses morts). Un seul appel groupe
 	# pour tous.
 	_liberer_morts_vieillesse_lot()
-	# REVEIL EN LOT : un seul appel pour toutes les transitions
-	# degageantes du tick (les morts de vieillesse et par competition
-	# font leur reveil groupe DANS `_liberer_slots_lot`). `_reveils`
-	# est un Set d'ids, marquer plusieurs fois est idempotent.
-	_reveiller_dormantes_autour_lot(_reveils_positions_x, _reveils_positions_z)
+	# REVEIL EN LOT INLINE (corps de `_reveiller_dormantes_autour_lot`
+	# recopie ici -- morceau 1/N de l'inlining des fonctions banc dans
+	# tick). Fonction originale conservee : appelee depuis
+	# `_liberer_slots_lot` (mort vieillesse + competition), sera inlinee
+	# aux morceaux suivants. Vars suffixees `_rev` pour eviter collisions
+	# GDScript function-scope avec les autres inlines du tick.
+	var _n_rev: int = _reveils_positions_x.size()
+	if _n_rev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
+		var _inv_case_rev: float = 1.0 / _taille_case_dormantes
+		var _carre_rev: float = _rayon_reveil * _rayon_reveil
+		var _prospects_rev: Dictionary = _banque_graines.prospects()
+		var _k_rev: int = 0
+		while _k_rev < _n_rev:
+			var _pos_x_rev: float = _reveils_positions_x[_k_rev]
+			var _pos_z_rev: float = _reveils_positions_z[_k_rev]
+			_k_rev += 1
+			var _cx_min_rev: int = floori((_pos_x_rev - _rayon_reveil) * _inv_case_rev)
+			var _cx_max_rev: int = floori((_pos_x_rev + _rayon_reveil) * _inv_case_rev)
+			var _cz_min_rev: int = floori((_pos_z_rev - _rayon_reveil) * _inv_case_rev)
+			var _cz_max_rev: int = floori((_pos_z_rev + _rayon_reveil) * _inv_case_rev)
+			for _cx_rev in range(_cx_min_rev, _cx_max_rev + 1):
+				for _cz_rev in range(_cz_min_rev, _cz_max_rev + 1):
+					var _cle_rev: Vector2i = Vector2i(_cx_rev, _cz_rev)
+					var _ids_rev = _dormantes_par_case.get(_cle_rev, null)
+					if _ids_rev == null:
+						continue
+					for _id_variant_rev in _ids_rev:
+						var _id_rev: int = int(_id_variant_rev)
+						if _reveils.has(_id_rev):
+							continue
+						if not _prospects_rev.has(_id_rev):
+							continue
+						var _entree_rev: Dictionary = _prospects_rev[_id_rev]
+						var _pos_rev: Vector3 = _entree_rev.position
+						var _dx_rev: float = _pos_rev.x - _pos_x_rev
+						var _dz_rev: float = _pos_rev.z - _pos_z_rev
+						if _dx_rev * _dx_rev + _dz_rev * _dz_rev <= _carre_rev:
+							_reveils[_id_rev] = true
 	# LOT DE TRANSITIONS applique en UNE passe : un seul appel au champ
 	# pour toutes les transitions de stade du tick, au lieu de N appels.
 	# Doit tourner AVANT `_semer_lot` (qui lit `_couvert.lire_lot` sur
