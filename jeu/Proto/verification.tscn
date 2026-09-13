@@ -23,6 +23,7 @@
 [ext_resource type="Resource" uid="uid://gf82gs84nva3" path="res://jeu/Outil de jeu/profils_blocs/bloc_beche.tres" id="23_pbeche"]
 [ext_resource type="Script" uid="uid://cvwwgdhfl31br" path="res://jeu/Proto/manager_proto_2.gd" id="24_mgr2"]
 [ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="25_prodtest"]
+[ext_resource type="Script" uid="uid://knh5newlawfl" path="res://jeu/bancs/banc_peuplement_arbre.gd" id="26_foret"]
 
 [sub_resource type="StandardMaterial3D" id="Materiau_repere"]
 albedo_color = Color(0.45, 0.36, 0.27, 1)
@@ -201,3 +202,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 251.50307, 15.295289, 161.110
 
 [node name="BecheSpawn0" type="Marker3D" parent="SpawnsOutils" unique_id=1390820174 groups=["spawn_beche"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 252.30437, 14.71185, 159.7741)
+
+[node name="Foret" type="Node" parent="." unique_id=810000005]
+script = ExtResource("26_foret")
+hote_actif = true
+carte_terrain_ref = ExtResource("3_g2etm")
