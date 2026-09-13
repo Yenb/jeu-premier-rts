@@ -34,7 +34,7 @@ window/vsync/vsync_mode=0
 
 common/physics_ticks_per_second=30
 common/physics_jitter_fix=0.0
-3d/physics_engine="Jolt Physics"
+3d/physics_engine="GodotPhysics"
 common/physics_interpolation=true
 common/enable_object_picking=false
 
