@@ -889,6 +889,21 @@ func _process(delta: float) -> void:
 	_temps_depuis_maj = 0.0
 	if _mode_test_rapide:
 		pas *= 4.0
+	tick(pas)
+
+# Fait avancer la foret d'UN pas de simulation. Point d'entree UNIQUE
+# du tick -- `_process` ne connait plus l'ordre interne, il ne fait
+# que gerer la cadence puis passe la commande. `tick(pas)` enferme
+# TOUTE la sequence : vidage des lots, boucle unique par slot vivant
+# (senescence + stade + detection transition + mort-vieillesse +
+# reproduction), puis la chaine d'effets groupes dans son ordre
+# actuel (`_liberer_morts_vieillesse_lot` -> `_reveiller_dormantes_autour_lot`
+# -> `_couvert.redeposer_lot` -> `_semer_lot` -> `_tick_banque` ->
+# `_naitre_lot` -> `_avancer_competition` -> `_ecrire_slots_lot`).
+# L'ordre des effets n'est PAS modifie : chaque effet reste un seul
+# appel groupe, une seule fois par tick. Un point d'entree testable
+# et portable en bloc.
+func tick(pas: float) -> void:
 	# LOT DE GRAINES A SEMER : vide en debut de tick. resize(0) garde la
 	# capacite deja allouee (aucune allocation neuve tick apres tick une
 	# fois le regime atteint).
