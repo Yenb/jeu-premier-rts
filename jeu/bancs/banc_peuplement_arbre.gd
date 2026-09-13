@@ -1049,11 +1049,108 @@ func tick(pas: float) -> void:
 					_graines_lot_x.append(_positions_x[i] + cos(angle_r) * rayon_r)
 					_graines_lot_z.append(_positions_z[i] + sin(angle_r) * rayon_r)
 		i += 1
-	# MORTS DE VIEILLESSE EN LOT : draine les slots dont l'age a franchi
-	# le seuil de mort ce tick via `_liberer_slots_lot` (qui fait aussi
-	# son propre reveil groupe pour ses morts). Un seul appel groupe
-	# pour tous.
-	_liberer_morts_vieillesse_lot()
+	# INLINE _liberer_morts_vieillesse_lot -> _liberer_slots_lot(
+	# _morts_vieillesse_lot) -- morceau 2/N. Vars suffixees `_lsl`
+	# (liberer slots lot). Le reveil recursif utilise suffix `_lslrev`,
+	# le vidage rendu suffix `_lslev`. La fonction originale
+	# `_liberer_slots_lot` reste appelee depuis `_avancer_competition`
+	# (sera inlinee au morceau suivant, duplication assumee).
+	var _slots_lsl: PackedInt32Array = _morts_vieillesse_lot
+	var _n_lsl: int = _slots_lsl.size()
+	if _n_lsl > 0:
+		var _ids_a_retirer_lsl: Array = []
+		var _dep_x_lsl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_z_lsl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_r_lsl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_m_lsl: PackedFloat32Array = PackedFloat32Array()
+		var _dep_s_lsl: PackedByteArray = PackedByteArray()
+		var _rev_x_lsl: PackedFloat32Array = PackedFloat32Array()
+		var _rev_z_lsl: PackedFloat32Array = PackedFloat32Array()
+		var _n_conf_lsl: int = _ombrage_par_stade.size()
+		var _k_lsl: int = 0
+		while _k_lsl < _n_lsl:
+			var _i_lsl: int = _slots_lsl[_k_lsl]
+			_k_lsl += 1
+			var _pos_x_lsl: float = _positions_x[_i_lsl]
+			var _pos_z_lsl: float = _positions_z[_i_lsl]
+			var _chose_lsl = _choses_arbre[_i_lsl]
+			if _chose_lsl != null:
+				_ids_a_retirer_lsl.append(_chose_lsl.id)
+				_choses_arbre[_i_lsl] = null
+			_derniere_params[_i_lsl] = Vector4(INF, INF, INF, INF)
+			var _index_lsl: int = _slot_stade[_i_lsl]
+			if _index_lsl >= 0:
+				var _stade_num_lsl: int = _index_lsl + 1
+				if _stade_num_lsl >= 1 and _stade_num_lsl <= _n_conf_lsl:
+					var _conf_lsl: Dictionary = _ombrage_par_stade[_stade_num_lsl - 1]
+					var _mag_lsl: float = float(_conf_lsl.get("magnitude", 0.0))
+					if _mag_lsl != 0.0:
+						_dep_x_lsl.append(_pos_x_lsl)
+						_dep_z_lsl.append(_pos_z_lsl)
+						_dep_r_lsl.append(float(_conf_lsl.get("rayon_ombre_m", 0.0)))
+						_dep_m_lsl.append(_mag_lsl)
+						_dep_s_lsl.append(0)
+			_slot_stade[_i_lsl] = -1
+			_libres[_i_lsl] = 1
+			_ages[_i_lsl] = 0.0
+			_slots_libres.append(_i_lsl)
+			var _slot_r_libere_lsl: int = _slot_rendu_pour_data[_i_lsl]
+			_slot_rendu_pour_data[_i_lsl] = -1
+			if _slot_r_libere_lsl >= 0:
+				_data_pour_slot_rendu[_slot_r_libere_lsl] = -1
+				_slots_rendu_libres.append(_slot_r_libere_lsl)
+			_population -= 1
+			_rev_x_lsl.append(_pos_x_lsl)
+			_rev_z_lsl.append(_pos_z_lsl)
+		if _ids_a_retirer_lsl.size() > 0:
+			_monde.retirer_lot(_ids_a_retirer_lsl)
+		if _dep_x_lsl.size() > 0:
+			_couvert.deposer_lot(_dep_x_lsl, _dep_z_lsl, _dep_r_lsl, _taille_case, _dep_m_lsl, _dep_s_lsl)
+		# INLINE _ecrire_slots_vides_lot(_slots_lsl) -- suffix _lslev.
+		var _t_lslev := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
+		var _taille_couleur_lslev: int = _derniere_couleur_stade.size()
+		var _k_lslev: int = 0
+		while _k_lslev < _n_lsl:
+			var _i_lslev: int = _slots_lsl[_k_lslev]
+			_k_lslev += 1
+			_mm_tronc.set_instance_transform(_i_lslev, _t_lslev)
+			_mm_feuillage.set_instance_transform(_i_lslev, _t_lslev)
+			if _i_lslev < _taille_couleur_lslev:
+				_derniere_couleur_stade[_i_lslev] = -1
+		# INLINE _reveiller_dormantes_autour_lot(_rev_x_lsl, _rev_z_lsl)
+		# -- suffix _lslrev. Reveils locaux au lot des morts.
+		var _n_lslrev: int = _rev_x_lsl.size()
+		if _n_lslrev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
+			var _inv_case_lslrev: float = 1.0 / _taille_case_dormantes
+			var _carre_lslrev: float = _rayon_reveil * _rayon_reveil
+			var _prospects_lslrev: Dictionary = _banque_graines.prospects()
+			var _kk_lslrev: int = 0
+			while _kk_lslrev < _n_lslrev:
+				var _pos_x_lslrev: float = _rev_x_lsl[_kk_lslrev]
+				var _pos_z_lslrev: float = _rev_z_lsl[_kk_lslrev]
+				_kk_lslrev += 1
+				var _cx_min_lslrev: int = floori((_pos_x_lslrev - _rayon_reveil) * _inv_case_lslrev)
+				var _cx_max_lslrev: int = floori((_pos_x_lslrev + _rayon_reveil) * _inv_case_lslrev)
+				var _cz_min_lslrev: int = floori((_pos_z_lslrev - _rayon_reveil) * _inv_case_lslrev)
+				var _cz_max_lslrev: int = floori((_pos_z_lslrev + _rayon_reveil) * _inv_case_lslrev)
+				for _cx_lslrev in range(_cx_min_lslrev, _cx_max_lslrev + 1):
+					for _cz_lslrev in range(_cz_min_lslrev, _cz_max_lslrev + 1):
+						var _cle_lslrev: Vector2i = Vector2i(_cx_lslrev, _cz_lslrev)
+						var _ids_lslrev = _dormantes_par_case.get(_cle_lslrev, null)
+						if _ids_lslrev == null:
+							continue
+						for _id_variant_lslrev in _ids_lslrev:
+							var _id_lslrev: int = int(_id_variant_lslrev)
+							if _reveils.has(_id_lslrev):
+								continue
+							if not _prospects_lslrev.has(_id_lslrev):
+								continue
+							var _entree_lslrev: Dictionary = _prospects_lslrev[_id_lslrev]
+							var _pos_lslrev: Vector3 = _entree_lslrev.position
+							var _dx_lslrev: float = _pos_lslrev.x - _pos_x_lslrev
+							var _dz_lslrev: float = _pos_lslrev.z - _pos_z_lslrev
+							if _dx_lslrev * _dx_lslrev + _dz_lslrev * _dz_lslrev <= _carre_lslrev:
+								_reveils[_id_lslrev] = true
 	# REVEIL EN LOT INLINE (corps de `_reveiller_dormantes_autour_lot`
 	# recopie ici -- morceau 1/N de l'inlining des fonctions banc dans
 	# tick). Fonction originale conservee : appelee depuis
