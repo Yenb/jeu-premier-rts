@@ -1337,8 +1337,8 @@ func _naitre_lot() -> void:
 		_couvert.deposer_lot(dep_x, dep_z, dep_r, _taille_case, dep_m, dep_s)
 	# VIDAGE DE LA QUEUE : le consommateur (`_naitre_lot`) vide ce qu'il
 	# vient de draîner. Une seule source de verite pour ce vidage --
-	# `_semer_lot` et `_tick_banque` empilent, `_trouee_saturee_lot`
-	# scanne, `_naitre_lot` cree PUIS vide. Sans ce vidage, une entree
+	# `_semer_lot` et `_tick_banque` empilent, le gate inline (voir doc
+	# du gate supra) scanne, `_naitre_lot` cree PUIS vide. Sans ce vidage, une entree
 	# residuelle est re-drainee au tick suivant (arbres empiles au meme
 	# point).
 	_naissances_lot_x.resize(0)
@@ -1400,49 +1400,25 @@ func _index_pour_age(age: float) -> int:
 
 # GATE DE TROUEE (patron `vegetation.gd:trouee_suffisante`). Predicat :
 # la naissance echoue si un voisin gros adulte est dans le rayon elargi,
-# OU si le compte normal (voisins dans `carre_normal` + nouveau-nes du
-# meme tick a portee) depasse `_trouee_max_voisins`. Les voisins existants
+# OU si un voisin (monde OU nouveau-ne du meme tick) est dans le rayon
+# strict `_rayon_exclusion`, OU si le compte des voisins dans
+# `carre_normal` depasse `_trouee_max_voisins`. Les voisins existants
 # sont pre-calcules par `_monde.choses_dans_rayons` (UNE frontiere pour
 # tout le lot du semis) OU par un `choses_dans_rayon` ponctuel (chemin
 # `_tick_banque`, une graine reveillee = une requete). Les nouveau-nes
 # de la rafale (`_naissances_lot_x/_z`) sont scannes lineairement en plus
 # -- les prospects germines plus tot dans le meme tick comptent dans le
 # gate.
-func _trouee_saturee_lot(pos_x: float, pos_z: float, voisins: Array, carre_normal: float) -> bool:
-	var arrivee := Vector3(pos_x, Y_SOL, pos_z)
-	var carre_min: float = _rayon_exclusion * _rayon_exclusion
-	var compte_normal: int = 0
-	for entree in voisins:
-		var chose = entree.chose
-		var slot: int = int(chose.get("slot", -1))
-		var stade_num: int = 0
-		if slot >= 0 and slot < _slot_stade.size():
-			stade_num = _slot_stade[slot] + 1
-		if stade_num >= _stade_gros_min and stade_num <= _stade_gros_max:
-			return true
-		var pos_voisin: Vector3 = chose.position
-		var d2: float = arrivee.distance_squared_to(pos_voisin)
-		# EXCLUSION STRICTE : un voisin dans le rayon minimal d'arbre
-		# rejette d'office (empeche la superposition XZ).
-		if d2 < carre_min:
-			return true
-		if d2 <= carre_normal:
-			compte_normal += 1
-	# Nouveau-nes du meme lot : tous au stade 0 (jamais adultes), ne
-	# peuvent qu'incrementer `compte_normal`, mais un nouveau-ne dans
-	# le rayon min rejette aussi d'office.
-	var m: int = _naissances_lot_x.size()
-	var j: int = 0
-	while j < m:
-		var dx: float = _naissances_lot_x[j] - pos_x
-		var dz: float = _naissances_lot_z[j] - pos_z
-		var d2n: float = dx * dx + dz * dz
-		if d2n < carre_min:
-			return true
-		if d2n <= carre_normal:
-			compte_normal += 1
-		j += 1
-	return compte_normal > _trouee_max_voisins
+#
+# GATE INLINE DANS `_semer_lot` ET `_tick_banque` (duplication assumee,
+# meme discipline que `redeposer` / `redeposer_lot`). L'ancienne fonction
+# `_trouee_saturee_lot` a ete supprimee : elle etait appelee une fois par
+# graine candidate, dominante au profileur (~1111 appels/tick). La voie
+# "un seul appel par tick sur tout le lot" a ete ecartee car le gate
+# doit voir les nouveau-nes precedents du meme lot, or ces nouveau-nes
+# sont conditionnes au couvert (couvert<seuil -> naitre, couvert>=seuil
+# -> banque) -- pre-calculer les verdicts sans embarquer le couvert
+# changerait la sequence des rejets a seed egal.
 
 # TRAITEMENT DU LOT DE GRAINES en UNE passe par tick. Appele une fois
 # depuis `_process` apres la boucle des arbres. Draine
@@ -1470,6 +1446,14 @@ func _semer_lot() -> void:
 	var voisins_par_graine: Array = _monde.choses_dans_rayons(positions_vec3, rayon_gros)
 	# `_naissances_lot_x/_z` a deja ete vide par `_naitre_lot` en fin de
 	# tick precedent (source de verite unique du vidage).
+	# INVARIANTS DU GATE hoistes hors de la boucle par graine (voir doc
+	# du gate inline supra) : ne bougent pas au fil des graines candidates
+	# du tick.
+	var carre_min: float = _rayon_exclusion * _rayon_exclusion
+	var stade_gros_min_l: int = _stade_gros_min
+	var stade_gros_max_l: int = _stade_gros_max
+	var trouee_max_l: int = _trouee_max_voisins
+	var taille_slot_stade_l: int = _slot_stade.size()
 	k = 0
 	while k < n:
 		var pos_x: float = _graines_lot_x[k]
@@ -1479,17 +1463,54 @@ func _semer_lot() -> void:
 		# Graine hors carte : perdue. Ne germe pas, n'entre pas en banque.
 		if absf(pos_x) > _demi_carte or absf(pos_z) > _demi_carte:
 			continue
-		# Rejet trouee sur germination directe = graine perdue (pas de banque :
-		# la banque attend que le COUVERT baisse, pas que la densite physique
-		# se degage).
-		if _trouee_saturee_lot(pos_x, pos_z, voisins, carre_normal):
+		# GATE DE TROUEE INLINE (voir doc supra). Rejet = graine perdue.
+		var arrivee_s := Vector3(pos_x, Y_SOL, pos_z)
+		var compte_normal_s: int = 0
+		var passe_s: bool = true
+		for entree_s in voisins:
+			var chose_s = entree_s.chose
+			var slot_s: int = int(chose_s.get("slot", -1))
+			var stade_num_s: int = 0
+			if slot_s >= 0 and slot_s < taille_slot_stade_l:
+				stade_num_s = _slot_stade[slot_s] + 1
+			if stade_num_s >= stade_gros_min_l and stade_num_s <= stade_gros_max_l:
+				passe_s = false
+				break
+			var pos_voisin_s: Vector3 = chose_s.position
+			var d2_s: float = arrivee_s.distance_squared_to(pos_voisin_s)
+			# EXCLUSION STRICTE : voisin dans le rayon minimal d'arbre
+			# rejette d'office (empeche la superposition XZ).
+			if d2_s < carre_min:
+				passe_s = false
+				break
+			if d2_s <= carre_normal:
+				compte_normal_s += 1
+		if passe_s:
+			# Nouveau-nes du meme lot : tous au stade 0 (jamais adultes),
+			# ne peuvent qu'incrementer `compte_normal`, mais un nouveau-ne
+			# dans le rayon min rejette aussi d'office.
+			var m_s: int = _naissances_lot_x.size()
+			var j_s: int = 0
+			while j_s < m_s:
+				var dx_s: float = _naissances_lot_x[j_s] - pos_x
+				var dz_s: float = _naissances_lot_z[j_s] - pos_z
+				var d2n_s: float = dx_s * dx_s + dz_s * dz_s
+				if d2n_s < carre_min:
+					passe_s = false
+					break
+				if d2n_s <= carre_normal:
+					compte_normal_s += 1
+				j_s += 1
+		if passe_s and compte_normal_s > trouee_max_l:
+			passe_s = false
+		if not passe_s:
 			continue
 		if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
 			# NAISSANCE DEFEREE au `_naitre_lot` de fin de tick : append
 			# la position au meme lot que la scan du gate suivant lit
-			# (`_trouee_saturee_lot` scanne `_naissances_lot_x/_z` en
-			# plus du batch monde), pour que les graines suivantes
-			# comptent ce nouveau-ne dans leur voisinage.
+			# (le gate inline scanne `_naissances_lot_x/_z` en plus du
+			# batch monde), pour que les graines suivantes comptent ce
+			# nouveau-ne dans leur voisinage.
 			_naissances_lot_x.append(pos_x)
 			_naissances_lot_z.append(pos_z)
 			continue
@@ -1513,11 +1534,11 @@ func _semer_lot() -> void:
 # `pas` est utilise seul par la passe EXPIRATION ; le corps qui suit ne
 # teste que les prospects marques dans `_reveils` par un evenement de
 # voisinage (mort d'arbre, changement de stade). Pour chaque prospect
-# reveille, meme gate que la germination directe (`_trouee_saturee_lot`
-# + couvert). Rate le gate -> reste en banque, sort du set des reveils
-# (attend le prochain signal). Passe le gate -> retire de la banque et
-# empile pour `_naitre_lot`. Le gate mord pendant une rafale grace au
-# scan `_naissances_lot_x/_z` par `_trouee_saturee_lot`.
+# reveille, meme gate que la germination directe (gate inline en tete
+# de fonction + couvert). Rate le gate -> reste en banque, sort du set
+# des reveils (attend le prochain signal). Passe le gate -> retire de
+# la banque et empile pour `_naitre_lot`. Le gate mord pendant une
+# rafale grace au scan `_naissances_lot_x/_z` par le gate inline.
 #
 # NOTE ORDRE : l'ordre des naissances intra-tick est celui d'insertion
 # des ids dans `_reveils` (l'evenement declencheur, puis l'ordre
@@ -1538,6 +1559,14 @@ func _tick_banque(pas: float) -> void:
 	_reveils.clear()
 	var rayon_gros: float = _rayon_trouee * _facteur_trouee_gros
 	var carre_normal: float = _rayon_trouee * _rayon_trouee
+	# INVARIANTS DU GATE hoistes hors de la boucle par prospect reveille
+	# (voir doc du gate inline supra) : ne bougent pas au fil des
+	# prospects du tick.
+	var carre_min_b: float = _rayon_exclusion * _rayon_exclusion
+	var stade_gros_min_b: int = _stade_gros_min
+	var stade_gros_max_b: int = _stade_gros_max
+	var trouee_max_b: int = _trouee_max_voisins
+	var taille_slot_stade_b: int = _slot_stade.size()
 	for id_variant in ids:
 		var id: int = int(id_variant)
 		if not prospects.has(id):
@@ -1546,10 +1575,44 @@ func _tick_banque(pas: float) -> void:
 		var pos: Vector3 = entree.position
 		var arrivee := Vector3(pos.x, Y_SOL, pos.z)
 		var voisins: Array = _monde.choses_dans_rayon(arrivee, rayon_gros)
-		# GATE : delegue a `_trouee_saturee_lot` qui scanne aussi les
-		# `_naissances_lot_x/_z` pending -- les prospects germines plus
-		# tot dans le meme tick comptent dans le gate.
-		if _trouee_saturee_lot(pos.x, pos.z, voisins, carre_normal):
+		# GATE DE TROUEE INLINE (voir doc supra). Scanne les voisins
+		# monde ponctuels PUIS les `_naissances_lot_x/_z` pending -- les
+		# prospects germines plus tot dans le meme tick comptent dans le
+		# gate.
+		var compte_normal_b: int = 0
+		var passe_b: bool = true
+		for entree_b in voisins:
+			var chose_b = entree_b.chose
+			var slot_b: int = int(chose_b.get("slot", -1))
+			var stade_num_b: int = 0
+			if slot_b >= 0 and slot_b < taille_slot_stade_b:
+				stade_num_b = _slot_stade[slot_b] + 1
+			if stade_num_b >= stade_gros_min_b and stade_num_b <= stade_gros_max_b:
+				passe_b = false
+				break
+			var pos_voisin_b: Vector3 = chose_b.position
+			var d2_b: float = arrivee.distance_squared_to(pos_voisin_b)
+			if d2_b < carre_min_b:
+				passe_b = false
+				break
+			if d2_b <= carre_normal:
+				compte_normal_b += 1
+		if passe_b:
+			var m_b: int = _naissances_lot_x.size()
+			var j_b: int = 0
+			while j_b < m_b:
+				var dx_b: float = _naissances_lot_x[j_b] - pos.x
+				var dz_b: float = _naissances_lot_z[j_b] - pos.z
+				var d2n_b: float = dx_b * dx_b + dz_b * dz_b
+				if d2n_b < carre_min_b:
+					passe_b = false
+					break
+				if d2n_b <= carre_normal:
+					compte_normal_b += 1
+				j_b += 1
+		if passe_b and compte_normal_b > trouee_max_b:
+			passe_b = false
+		if not passe_b:
 			continue
 		if _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
 			continue
