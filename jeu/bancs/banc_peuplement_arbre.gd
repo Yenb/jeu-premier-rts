@@ -897,28 +897,46 @@ func _process(delta: float) -> void:
 	# a `_liberer_morts_vieillesse_lot` apres la boucle, avant le reveil
 	# groupe (les morts appendent des positions de reveil a leur tour).
 	_morts_vieillesse_lot.resize(0)
-	# SENESCENCE EN LOT : un seul franchissement de frontiere pour tout le
-	# tick. Mute `_ages` en place, saute les slots libres. Ordre des
-	# multiplications preserve dans le mecanisme (`delta * (aps * facteur)`).
-	Senescence.avancer_lot(_ages, _libres, pas, _annees_par_seconde, _facteur_croissance)
-	# STADE EN LOT : mute `_slot_stade` en place, sans passage par String.
-	# `_slot_stade_avant` capture l'index PRE-tick pour que la detection de
-	# transition et `_liberer_slots_lot` (seuil_mort) lisent bien l'index ANCIEN.
-	# JAMAIS UN RECUL : la mecanique `avancer_lot` respecte l'invariant du
-	# port unitaire (aucun retour arriere), le duplicate ne sert que pour
-	# la comparaison.
-	var _slot_stade_avant: PackedInt32Array = _slot_stade.duplicate()
-	Stade.avancer_lot(_ages, _libres, _slot_stade, _stades_config_partagee)
+	# FUSION SENESCENCE + STADE + DETECTION dans la boucle unique par
+	# arbre : trois passes precedentes (Senescence.avancer_lot,
+	# Stade.avancer_lot, boucle detection) fusionnees en UN seul
+	# parcours memoire des colonnes. `_slot_stade_avant` supprime --
+	# l'index ancien vit en variable locale `ancien` par slot. Les
+	# fonctions coeur `Senescence.avancer_lot` et `Stade.avancer_lot`
+	# ne sont PAS modifiees (les tests hors domaine tiennent) : leur
+	# corps est inline mot pour mot ici. Ordre des multiplications
+	# senescence preserve strictement (`pas * (aps * facteur)`, meme
+	# sequence que `Senescence.avancer_lot`). Regle stade « jamais un
+	# recul » preservee (comparaison INDEX trouve vs INDEX courant).
 	# Capacite figee en debut de boucle.
 	var cap: int = _capacite
+	var n_stades_config: int = _stades_config_partagee.size()
 	var i: int = 0
 	while i < cap:
 		if _libres[i] == 1:
 			i += 1
 			continue
+		# SENESCENCE INLINE (equivalent Senescence.avancer_lot pour ce
+		# slot). Ordre `pas * (aps * facteur)` strictement identique.
+		_ages[i] = _ages[i] + pas * (_annees_par_seconde * _facteur_croissance[i])
+		var age_i: float = _ages[i]
+		# STADE INLINE (equivalent Stade.avancer_lot pour ce slot).
+		# `ancien` capture l'index AVANT mutation (remplace la lecture
+		# de `_slot_stade_avant[i]`). Jamais un recul : mutation SEULE
+		# si `index_trouve > ancien`.
+		var ancien: int = _slot_stade[i]
+		if n_stades_config > 0:
+			var index_trouve: int = -1
+			var k: int = 0
+			while k < n_stades_config:
+				var age_seuil: float = _stades_config_partagee[k].get("age_seuil", 0.0)
+				if age_i >= age_seuil:
+					index_trouve = k
+				k += 1
+			if index_trouve > ancien:
+				_slot_stade[i] = index_trouve
 		# Age reel compare au seuil de mort MODULE par la longevite individuelle.
 		var seuil_mort: float = (_duree_croissance_totale + _duree_mort) * _facteur_longevite[i]
-		var age_i: float = _ages[i]
 		if age_i >= seuil_mort:
 			# L'arbre meurt AVANT que sa transition de stade prenne effet
 			# (comportement de la version unitaire). On restaure l'index
@@ -927,12 +945,11 @@ func _process(delta: float) -> void:
 			# franchi. La liberation reelle (retrait monde, ombrage,
 			# reveil) est differee au drainage `_liberer_morts_vieillesse_lot`
 			# apres la boucle.
-			_slot_stade[i] = _slot_stade_avant[i]
+			_slot_stade[i] = ancien
 			_morts_vieillesse_lot.append(i)
 			i += 1
 			continue
 		# Detection de changement de stade -> maj du champ de couvert.
-		var ancien: int = _slot_stade_avant[i]
 		var nouveau_index: int = _slot_stade[i]
 		if nouveau_index != ancien:
 			# TRANSITION EN UNE PASSE : empilement INLINE (aucun appel de
