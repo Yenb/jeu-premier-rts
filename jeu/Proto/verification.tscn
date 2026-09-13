@@ -210,7 +210,7 @@ script = ExtResource("26_foret")
 hote_actif = true
 carte_terrain_ref = ExtResource("3_g2etm")
 
-[node name="ZoneExclusionExemple" type="Node3D" parent="." unique_id=810000006]
+[node name="ZoneExclusionExemple" type="MeshInstance3D" parent="." unique_id=810000006]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 14.253365, 272.74768)
 script = ExtResource("27_zone")
 forme = 0
