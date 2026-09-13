@@ -203,7 +203,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 251.50307, 15.295289, 161.110
 [node name="BecheSpawn0" type="Marker3D" parent="SpawnsOutils" unique_id=1390820174 groups=["spawn_beche"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 252.30437, 14.71185, 159.7741)
 
-[node name="Foret" type="Node" parent="." unique_id=810000005]
+[node name="Foret" type="Node3D" parent="." unique_id=810000005]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 14.253365, 272.74768)
 script = ExtResource("26_foret")
 hote_actif = true
 carte_terrain_ref = ExtResource("3_g2etm")

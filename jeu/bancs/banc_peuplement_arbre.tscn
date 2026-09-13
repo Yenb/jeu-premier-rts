@@ -2,5 +2,5 @@
 
 [ext_resource type="Script" path="res://jeu/bancs/banc_peuplement_arbre.gd" id="1_bppa"]
 
-[node name="BancPeuplementArbre" type="Node"]
+[node name="BancPeuplementArbre" type="Node3D"]
 script = ExtResource("1_bppa")

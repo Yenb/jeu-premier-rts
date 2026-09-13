@@ -68,7 +68,7 @@
 # ECART FRAMEWORK : ce banc + son catalogue local sont neufs, voir
 # CLAUDE.md § Frontiere.
 
-extends Node
+extends Node3D
 
 const Objet = preload("res://scripts/objet.gd")
 const Senescence = preload("res://scripts/senescence.gd")
@@ -517,8 +517,14 @@ func _ready() -> void:
 	_monter_population()
 	_construire_catalogue()
 	_banque_graines = AttenteSeuil.new()
+	# Position monde de l'arbre INITIAL : lit `global_position.xz` du
+	# noeud Foret pose dans la scene par Yael. Mode isole : le tscn du
+	# banc n'a pas de transform, `global_position = Vector3.ZERO`, donc
+	# arbre initial en (0, Y_SOL, 0) -- comportement inchange. Mode
+	# hote : le noeud Foret est positionne dans verification.tscn,
+	# l'arbre initial est plante a cette position.
 	if _stades.size() == 9:
-		_naitre(POS_INITIALE.x, POS_INITIALE.y)
+		_naitre(global_position.x, global_position.z)
 
 func _charger_reglages_locaux() -> void:
 	if not FileAccess.file_exists(CHEMIN_CATALOGUE_LOCAL):
@@ -741,6 +747,11 @@ func _monter_population() -> void:
 	_mm_tronc.instance_count = CAPACITE_INITIALE
 	_noeud_tronc = MultiMeshInstance3D.new()
 	_noeud_tronc.multimesh = _mm_tronc
+	# TOP_LEVEL : le multimesh ne suit PAS la transform du banc (les
+	# instances sont ecrites en coordonnees monde par leurs positions
+	# _positions_x/z/y). Sans ce flag, deplacer le noeud Foret dans la
+	# scene deplacerait aussi visuellement tous les arbres.
+	_noeud_tronc.top_level = true
 	# `_ecrire_slot` mute les transforms depuis `_process` (rendu par frame),
 	# pas `_physics_process` : desactiver l'interpolation physique evite le
 	# warning "MultiMesh interpolation triggered from outside physics process"
@@ -765,6 +776,7 @@ func _monter_population() -> void:
 	_mm_feuillage.instance_count = CAPACITE_INITIALE
 	_noeud_feuillage = MultiMeshInstance3D.new()
 	_noeud_feuillage.multimesh = _mm_feuillage
+	_noeud_feuillage.top_level = true
 	_noeud_feuillage.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_noeud_feuillage)
 
