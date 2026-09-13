@@ -1041,6 +1041,32 @@ fichier. Test : `test_somme.gd`.
   ici faute d'équivalent générique. Même geste doctrinal que
   `scripts/monde.gd:retirer` et `scripts/facteur_variance.gd`.
 
+### `scripts/champ_saturation_plat.gd` — variante ALLOCATION-RÉDUITE (ÉCART FRAMEWORK)
+- **Rôle** : même API que `champ_saturation.gd` (`deposer`, `deposer_lot`,
+  `redeposer`, `redeposer_lot`, `lire`, `lire_lot`, `nombre_cases`) avec un
+  stockage `PackedFloat32Array` indexé plat (`z * largeur + x`) au lieu de
+  `Dictionary<Vector2i, float>` — élimine le hash par case, lookup et
+  écriture O(1) direct. Réduit fortement le coût de `redeposer_lot` sur les
+  populations denses (poste dominant au profileur du banc arbre).
+- **Configuration** : `configurer(x_min, z_min, x_max, z_max)` à appeler
+  UNE fois avant tout dépôt, bornes inclusives en INDICES de case. Sans
+  configuration, la grille est vide, dépôts et lectures inertes. Une case
+  hors bornes est silencieusement skippée au dépôt et rend `0.0` en lecture
+  (équivalent à `champ_saturation.gd` Dictionary : hors bornes = case absente).
+- **Limite mémoire** : `largeur * hauteur * 4` octets alloués au `configurer`.
+  1.4 Mo pour 601×601 (`demi_carte=300`, `taille_case=1`). Une carte plus
+  grande à `taille_case=1` (100 km² = 400 Mo) doit soit augmenter
+  `taille_case`, soit rester sur `champ_saturation.gd` (Dictionary).
+- **Ordre des opérations** : même séquence que `champ_saturation.gd`, avec
+  UNE variante — `1.0 - float(d) / float(rayon)` remplacé par
+  `1.0 - float(d) * inv_rayon` (pré-calc de l'inverse hors boucle interne).
+  Résultat float peut différer de 1 ULP sur certaines valeurs ; test hors
+  domaine `test_champ_saturation_plat.gd` tolère jusqu'à 1e-5 par case.
+- **ÉCART FRAMEWORK** : ce fichier n'existe pas dans le dépôt Orion, ajouté
+  ici sous l'exception CLAUDE.md § Frontière pour réduire le poste
+  `champ_saturation.gd:redeposer_lot` du banc arbre. Même geste doctrinal
+  que `scripts/monde.gd:choses_dans_rayons_brut`.
+
 ### `scripts/velocite.gd` — dérivation passive d'une vélocité
 La différence entre deux positions devient une vélocité lisible, une fois par
 tick. `avancer(monde, delta)`. Contrat, pièges et frontières : en-tête du
