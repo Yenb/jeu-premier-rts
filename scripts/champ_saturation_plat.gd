@@ -35,14 +35,13 @@
 # `ChampSaturation` (Dictionary).
 #
 # ---- ORDRE DES OPERATIONS ----
-# Meme sequence bit a bit que `ChampSaturation`, avec UNE variante :
-# `1.0 - float(d) / float(rayon)` remplace par
-# `1.0 - float(d) * inv_rayon` (pre-calc de l'inverse hors boucle
-# interne). Pour `rayon` entier non nul, le resultat float peut
-# differer de 1 ULP sur certaines valeurs (l'inversion 1.0/rayon puis
-# multiplication n'est pas strictement egale a la division directe en
-# IEEE 754). Test hors domaine tolere jusqu'a 1e-5 de difference par
-# case cumulee.
+# Sequence bit a bit STRICTEMENT identique a `ChampSaturation` :
+# `1.0 - float(d) / float(rayon)` (division directe conservee, pas de
+# pre-calc `inv_rayon` qui pourrait diverger de 1 ULP). Seul le
+# stockage change (PackedFloat32Array indexe plat au lieu de
+# Dictionary). Test hors domaine verifie l'equivalence exacte a
+# tolerance 1e-5 (marge de securite pour d'eventuels ecarts flottants
+# residuels dans les additions repetees).
 #
 # PAS de class_name (doctrine CLAUDE.md).
 
@@ -80,9 +79,6 @@ func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: floa
 		rayon = int(ceil(rayon_m / taille_case))
 	var cx0: int = floori(centre_x / taille_case)
 	var cz0: int = floori(centre_z / taille_case)
-	var inv_rayon: float = 0.0
-	if rayon > 0:
-		inv_rayon = 1.0 / float(rayon)
 	var dcx: int = -rayon
 	while dcx <= rayon:
 		var dcz: int = -rayon
@@ -90,7 +86,7 @@ func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: floa
 			var d: int = maxi(absi(dcx), absi(dcz))
 			var poids: float = 1.0
 			if rayon > 0:
-				poids = 1.0 - float(d) * inv_rayon
+				poids = 1.0 - float(d) / float(rayon)
 			if poids <= 0.0:
 				dcz += 1
 				continue
@@ -127,12 +123,6 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 		return
 	var cx0: int = floori(centre_x / taille_case)
 	var cz0: int = floori(centre_z / taille_case)
-	var inv_rayon_ancien: float = 0.0
-	if rayon_ancien > 0:
-		inv_rayon_ancien = 1.0 / float(rayon_ancien)
-	var inv_rayon_nouveau: float = 0.0
-	if rayon_nouveau > 0:
-		inv_rayon_nouveau = 1.0 / float(rayon_nouveau)
 	var dcx: int = -rayon_max
 	while dcx <= rayon_max:
 		var dcz: int = -rayon_max
@@ -142,13 +132,13 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 			if ancienne_magnitude != 0.0 and d <= rayon_ancien:
 				var poids_a: float = 1.0
 				if rayon_ancien > 0:
-					poids_a = 1.0 - float(d) * inv_rayon_ancien
+					poids_a = 1.0 - float(d) / float(rayon_ancien)
 				if poids_a > 0.0:
 					apport -= ancienne_magnitude * poids_a
 			if nouvelle_magnitude != 0.0 and d <= rayon_nouveau:
 				var poids_n: float = 1.0
 				if rayon_nouveau > 0:
-					poids_n = 1.0 - float(d) * inv_rayon_nouveau
+					poids_n = 1.0 - float(d) / float(rayon_nouveau)
 				if poids_n > 0.0:
 					apport += nouvelle_magnitude * poids_n
 			if apport == 0.0:
@@ -197,12 +187,6 @@ func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array,
 		var cx0: int = floori(centres_x[k] / taille_case)
 		var cz0: int = floori(centres_z[k] / taille_case)
 		k += 1
-		var inv_rayon_ancien: float = 0.0
-		if rayon_ancien > 0:
-			inv_rayon_ancien = 1.0 / float(rayon_ancien)
-		var inv_rayon_nouveau: float = 0.0
-		if rayon_nouveau > 0:
-			inv_rayon_nouveau = 1.0 / float(rayon_nouveau)
 		var dcx: int = -rayon_max
 		while dcx <= rayon_max:
 			var dcz: int = -rayon_max
@@ -212,13 +196,13 @@ func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array,
 				if ancienne_magnitude != 0.0 and d <= rayon_ancien:
 					var poids_a: float = 1.0
 					if rayon_ancien > 0:
-						poids_a = 1.0 - float(d) * inv_rayon_ancien
+						poids_a = 1.0 - float(d) / float(rayon_ancien)
 					if poids_a > 0.0:
 						apport -= ancienne_magnitude * poids_a
 				if nouvelle_magnitude != 0.0 and d <= rayon_nouveau:
 					var poids_n: float = 1.0
 					if rayon_nouveau > 0:
-						poids_n = 1.0 - float(d) * inv_rayon_nouveau
+						poids_n = 1.0 - float(d) / float(rayon_nouveau)
 					if poids_n > 0.0:
 						apport += nouvelle_magnitude * poids_n
 				if apport == 0.0:
@@ -263,9 +247,6 @@ func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, r
 		var cx0: int = floori(centres_x[k] / taille_case)
 		var cz0: int = floori(centres_z[k] / taille_case)
 		k += 1
-		var inv_rayon: float = 0.0
-		if rayon > 0:
-			inv_rayon = 1.0 / float(rayon)
 		var dcx: int = -rayon
 		while dcx <= rayon:
 			var dcz: int = -rayon
@@ -273,7 +254,7 @@ func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, r
 				var d: int = maxi(absi(dcx), absi(dcz))
 				var poids: float = 1.0
 				if rayon > 0:
-					poids = 1.0 - float(d) * inv_rayon
+					poids = 1.0 - float(d) / float(rayon)
 				if poids <= 0.0:
 					dcz += 1
 					continue

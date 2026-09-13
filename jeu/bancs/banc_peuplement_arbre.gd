@@ -78,6 +78,7 @@ const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 const Monde = preload("res://scripts/monde.gd")
 const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 const ChampSaturation = preload("res://scripts/champ_saturation.gd")
+const ChampSaturationPlat = preload("res://scripts/champ_saturation_plat.gd")
 const ZoneExclusion = preload("res://jeu/plantes/zone_exclusion_arbre.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
@@ -508,7 +509,21 @@ func _ready() -> void:
 	_charger_reglages_locaux()
 	_calculer_rayon_reveil()
 	_rng.seed = _graine_rng
-	_couvert = ChampSaturation.new()
+	# Bascule ChampSaturationPlat (variante allocation-reduite,
+	# stockage PackedFloat32Array indexe plat). Bornes derivees de
+	# `_demi_carte / _taille_case` + marge = ceil(max_rayon_ombre_m /
+	# _taille_case), pour couvrir les depots d'arbres pres du bord de
+	# la carte.
+	var max_rayon_ombre_m: float = 0.0
+	for entree in _ombrage_par_stade:
+		if entree is Dictionary:
+			max_rayon_ombre_m = maxf(max_rayon_ombre_m, float(entree.get("rayon_ombre_m", 0.0)))
+	var demi_cases: int = int(ceil(_demi_carte / _taille_case))
+	var marge_cases: int = int(ceil(max_rayon_ombre_m / _taille_case))
+	var borne_cases: int = demi_cases + marge_cases
+	var couvert_plat = ChampSaturationPlat.new()
+	couvert_plat.configurer(-borne_cases, -borne_cases, borne_cases, borne_cases)
+	_couvert = couvert_plat
 	_monde = Monde.new()
 	_monde.structure_simple = true
 	if hote_actif:
