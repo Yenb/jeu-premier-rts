@@ -1717,7 +1717,7 @@ func _semer_lot() -> void:
 	# `chose` deja allouees en amont, evite le wrap `{chose, type,
 	# position}` par voisin retenu. Le gate lit `voisin.get("slot",-1)`
 	# et `voisin.position` directement.
-	var voisins_par_graine: Array = _monde.choses_dans_rayons_brut(positions_valides, rayon_gros)
+	var voisins_par_graine: Array = _monde.choses_dans_rayons_brut_xz(positions_valides, rayon_gros)
 	# LECTURE COUVERT EN LOT sur TOUTES les positions du tick (lookup
 	# Dict trivial, negligeable de pre-filtrer). Le couvert ne bouge pas
 	# durant la boucle -- depots differes a `_naitre_lot`.
@@ -2224,7 +2224,7 @@ func _avancer_competition(pas: float) -> void:
 	# `choses_dans_rayons_brut`). Competition ne lit que la cardinalite
 	# et l'id des voisins pour dedup morts intra-tick -- aucune position
 	# ni slot, le format brut suffit et epargne un Dict par voisin.
-	var voisins_par_slot: Array = _monde.choses_dans_rayons_brut(_competition_positions, _rayon_competition)
+	var voisins_par_slot: Array = _monde.choses_dans_rayons_brut_xz(_competition_positions, _rayon_competition)
 	# Deuxieme passe : mortalite en ordre d'anneau. Soustraction des morts
 	# precedentes du tick pour reproduire l'effet de bord de la version
 	# unitaire (une mort retire son id de `_monde` au fil, un slot teste

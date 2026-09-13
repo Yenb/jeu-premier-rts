@@ -1091,7 +1091,11 @@ points, rend un `Array` de listes parallèle à `positions`) ;
 `choses_dans_rayons_brut(positions, rayon)` (variante ALLOCATION-RÉDUITE,
 ÉCART FRAMEWORK — rend les `chose` brutes déjà allouées en amont au lieu
 du wrap `{chose, type, position}`, économise un Dict par voisin retenu ;
-branche subdivision garde le wrap, structure_simple entièrement brut).
+branche subdivision garde le wrap, structure_simple entièrement brut) ;
+`choses_dans_rayons_brut_xz(positions, rayon)` (variante Y-ÉCRASÉ, ÉCART
+FRAMEWORK — ne balaie qu'UNE tranche Y au dispatch racine, celle de la
+position ; appelant garantit que toutes les choses sont à la même tranche
+Y ; gain mesuré facteur ~3 sur cases_lues pour une population plane).
 Contrat, pièges et frontières : en-tête du fichier. Test : `test_monde.gd`.
 
 ### `scripts/etat_effectif.gd` — un état écrase ou module une propriété

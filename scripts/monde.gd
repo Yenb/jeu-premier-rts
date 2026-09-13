@@ -635,6 +635,84 @@ func choses_dans_rayons_brut(positions: Array, rayon: float) -> Array:
 		k += 1
 	return resultat
 
+# VARIANTE Y-ECRASE de `choses_dans_rayons_brut` : ne balaie qu'UNE
+# tranche Y (celle contenant `position.y`), pas [basse.y, haute.y].
+# L'appelant garantit que TOUTES les choses inscrites sont a la meme
+# tranche Y que le point requete (population plane). Sans cet
+# invariant, les choses hors de la tranche seraient invisibles a la
+# requete.
+#
+# ECART FRAMEWORK : cette variante n'existe pas dans le depot Orion,
+# ajoutee sous l'exception CLAUDE.md § Frontiere pour reduire le
+# balayage 3D du banc arbre (mesure : cases_lues/position = 27 =
+# 3x3x3 sous `choses_dans_rayons_brut` alors que les arbres sont
+# tous a y=Y_SOL -- 2 des 3 tranches Y sont TOUJOURS vides). Gain
+# attendu : facteur ~3 sur cases_lues, verifie au profileur. Meme
+# geste doctrinal que `choses_dans_rayons_brut` et
+# `choses_dans_rayons`.
+#
+# BRANCHE SUBDIVISION : `_collecter` retombe sur le wrap {chose, type,
+# position} et EXPLORE en 3D (sub-cases 3D). L'ecrasement Y ne
+# s'applique QU'AU dispatch racine (une seule tranche cy). Sous une
+# case subdivisee, la recursion `_collecter` peut descendre dans des
+# sub-cases hors de la tranche Y de la requete -- mais seulement
+# celles dont l'AABB touche la sphere de rayon `rayon` centree sur
+# la requete, donc a distance <= rayon en Y (banc arbre tous a
+# y=Y_SOL, donc distance Y = 0). Comportement compatible avec
+# l'invariant "toutes les choses a la meme Y". Sous `structure_simple`
+# la branche subdivision est morte.
+func choses_dans_rayons_brut_xz(positions: Array, rayon: float) -> Array:
+	var resultat: Array = []
+	resultat.resize(positions.size())
+	if positions.is_empty():
+		return resultat
+	var exposant := _exposant_pour(rayon)
+	var niveau := _niveau(exposant)
+	var cases: Dictionary = niveau.cases
+	var inv_a: float = niveau.inv_arete
+	var carre: float = rayon * rayon
+	var offset := Vector3(rayon, rayon, rayon)
+	var k: int = 0
+	var n: int = positions.size()
+	while k < n:
+		var position: Vector3 = positions[k]
+		var liste: Array = []
+		var pos_bas: Vector3 = position - offset
+		var pos_haut: Vector3 = position + offset
+		var basse := Vector3i(
+			floori(pos_bas.x * inv_a),
+			floori(pos_bas.y * inv_a),
+			floori(pos_bas.z * inv_a))
+		var haute := Vector3i(
+			floori(pos_haut.x * inv_a),
+			floori(pos_haut.y * inv_a),
+			floori(pos_haut.z * inv_a))
+		# ECRASEMENT Y : une seule tranche cy = celle de la position,
+		# au lieu de [basse.y, haute.y]. Voir doc supra.
+		var cy: int = floori(position.y * inv_a)
+		requetes += 1
+		for cx in range(basse.x, haute.x + 1):
+			for cz in range(basse.z, haute.z + 1):
+				cases_lues += 1
+				var cle := Vector3i(cx, cy, cz)
+				var contenu = cases.get(cle, null)
+				if contenu == null:
+					continue
+				if contenu is Array:
+					for id in contenu:
+						var entree: Dictionary = choses[id]
+						var pos_vivante: Vector3 = entree.chose.position
+						candidats_mesures += 1
+						if position.distance_squared_to(pos_vivante) <= carre:
+							liste.append(entree.chose)
+					continue
+				var arete: float = 1.0 / inv_a
+				var origine := Vector3(cle) * arete
+				_collecter(contenu, origine, arete, position, carre, liste)
+		resultat[k] = liste
+		k += 1
+	return resultat
+
 func _collecter(contenu, origine: Vector3, arete: float, centre: Vector3, carre_r: float, out: Array) -> void:
 	if contenu is Array:
 		for id in contenu:
