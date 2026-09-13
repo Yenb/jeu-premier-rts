@@ -54,7 +54,7 @@
 # `scripts/champ_saturation.gd` (depot signe a decroissance Chebyshev
 # lineaire, retrait symetrique, nettoyage sous epsilon). Le banc detient
 # une instance `_couvert`, y ecrit a la naissance/mort/changement de
-# stade (`_deposer_ombrage`), la graine y LIT en O(1) (`_lire_couvert`).
+# stade (`_deposer_ombrage`), les graines y LISENT EN LOT via `_couvert.lire_lot`.
 # Le rayon d'ombre est lu en METRES depuis `ombrage_par_stade`, converti
 # en cases par le mecanisme via `_taille_case` : portee physique
 # independante de la finesse du quadrillage.
@@ -866,9 +866,9 @@ func _process(delta: float) -> void:
 	_reveiller_dormantes_autour_lot(_reveils_positions_x, _reveils_positions_z)
 	# LOT DE TRANSITIONS applique en UNE passe : un seul appel au champ
 	# pour toutes les transitions de stade du tick, au lieu de N appels.
-	# Doit tourner AVANT `_semer_lot` (qui lit `_lire_couvert` sur chaque
-	# candidat) et AVANT `_tick_banque` (idem sur les prospects
-	# reveilles) pour que le couvert reflete l'etat post-tick.
+	# Doit tourner AVANT `_semer_lot` (qui lit `_couvert.lire_lot` sur
+	# toutes les positions du lot) et AVANT `_tick_banque` (idem sur les
+	# prospects reveilles) pour que le couvert reflete l'etat post-tick.
 	if _transitions_x.size() > 0:
 		_couvert.redeposer_lot(_transitions_x, _transitions_z, _transitions_rayon_a, _transitions_rayon_n, _taille_case, _transitions_mag_a, _transitions_mag_n)
 	# REPRODUCTION EN LOT : passe unique sur les vivants (post-mort_lot,
@@ -1122,9 +1122,6 @@ func _deposer_ombrage(pos_x: float, pos_z: float, stade: int, signe: int) -> voi
 	var rayon_m: float = float(conf.get("rayon_ombre_m", 0.0))
 	var mag: float = float(conf.get("magnitude", 0.0))
 	_couvert.deposer(pos_x, pos_z, rayon_m, _taille_case, mag, signe)
-
-func _lire_couvert(pos_x: float, pos_z: float) -> float:
-	return _couvert.lire(pos_x, pos_z, _taille_case)
 
 # DRAINAGE DES MORTS DE VIEILLESSE en UNE passe : delegue a
 # `_liberer_slots_lot` qui gere son propre reveil groupe. Meme point
@@ -1444,6 +1441,13 @@ func _semer_lot() -> void:
 		positions_vec3[k] = Vector3(_graines_lot_x[k], Y_SOL, _graines_lot_z[k])
 		k += 1
 	var voisins_par_graine: Array = _monde.choses_dans_rayons(positions_vec3, rayon_gros)
+	# LECTURE COUVERT EN LOT : UN appel `lire_lot` pour toutes les
+	# positions du lot au lieu d'un `_lire_couvert` par graine. Le couvert
+	# ne bouge pas durant la boucle -- les depots d'ombrage des naissances
+	# du tick sont deferes a `_naitre_lot` (fin de tick). Les positions
+	# rejetees (hors carte ou gate) paient un lookup dict trivial ; aucun
+	# biais bit a bit puisque leur valeur n'est jamais consultee.
+	var couverts: PackedFloat32Array = _couvert.lire_lot(_graines_lot_x, _graines_lot_z, _taille_case)
 	# `_naissances_lot_x/_z` a deja ete vide par `_naitre_lot` en fin de
 	# tick precedent (source de verite unique du vidage).
 	# INVARIANTS DU GATE hoistes hors de la boucle par graine (voir doc
@@ -1505,7 +1509,9 @@ func _semer_lot() -> void:
 			passe_s = false
 		if not passe_s:
 			continue
-		if _lire_couvert(pos_x, pos_z) < _seuil_couvert:
+		# COUVERT PRE-LU en lot (voir `_couvert.lire_lot` supra) : index
+		# `k - 1` car `k` a deja ete incremente en tete de boucle.
+		if couverts[k - 1] < _seuil_couvert:
 			# NAISSANCE DEFEREE au `_naitre_lot` de fin de tick : append
 			# la position au meme lot que la scan du gate suivant lit
 			# (le gate inline scanne `_naissances_lot_x/_z` en plus du
@@ -1567,13 +1573,33 @@ func _tick_banque(pas: float) -> void:
 	var stade_gros_max_b: int = _stade_gros_max
 	var trouee_max_b: int = _trouee_max_voisins
 	var taille_slot_stade_b: int = _slot_stade.size()
+	# PRE-COLLECTE : positions des prospects reellement presents dans la
+	# banque (les entrees deja levees entre-temps sont sautees ici, comme
+	# avant). Le lookup couvert se fait ensuite EN LOT.
+	var pros_x_b: PackedFloat32Array = PackedFloat32Array()
+	var pros_z_b: PackedFloat32Array = PackedFloat32Array()
+	var pros_ids_b: Array = []
 	for id_variant in ids:
-		var id: int = int(id_variant)
-		if not prospects.has(id):
+		var id_pre: int = int(id_variant)
+		if not prospects.has(id_pre):
 			continue
-		var entree: Dictionary = prospects[id]
-		var pos: Vector3 = entree.position
-		var arrivee := Vector3(pos.x, Y_SOL, pos.z)
+		var entree_pre: Dictionary = prospects[id_pre]
+		var pos_pre: Vector3 = entree_pre.position
+		pros_x_b.append(pos_pre.x)
+		pros_z_b.append(pos_pre.z)
+		pros_ids_b.append(id_pre)
+	# LECTURE COUVERT EN LOT : UN appel `lire_lot` pour tous les prospects
+	# reveilles au lieu d'un `_lire_couvert` par prospect. Le couvert ne
+	# bouge pas durant la boucle (depots differes a `_naitre_lot`).
+	var couverts_b: PackedFloat32Array = _couvert.lire_lot(pros_x_b, pros_z_b, _taille_case)
+	var kk_b: int = 0
+	var nn_b: int = pros_ids_b.size()
+	while kk_b < nn_b:
+		var id: int = int(pros_ids_b[kk_b])
+		var pos: Vector3 = Vector3(pros_x_b[kk_b], Y_SOL, pros_z_b[kk_b])
+		var couvert_b: float = couverts_b[kk_b]
+		kk_b += 1
+		var arrivee := pos
 		var voisins: Array = _monde.choses_dans_rayon(arrivee, rayon_gros)
 		# GATE DE TROUEE INLINE (voir doc supra). Scanne les voisins
 		# monde ponctuels PUIS les `_naissances_lot_x/_z` pending -- les
@@ -1614,7 +1640,8 @@ func _tick_banque(pas: float) -> void:
 			passe_b = false
 		if not passe_b:
 			continue
-		if _lire_couvert(pos.x, pos.z) >= _seuil_couvert:
+		# COUVERT PRE-LU en lot (voir `_couvert.lire_lot` supra).
+		if couvert_b >= _seuil_couvert:
 			continue
 		# NAISSANCE DEFEREE au `_naitre_lot` de fin de tick. La sortie
 		# de banque (banque_graines.retirer + retirer_dormante) reste

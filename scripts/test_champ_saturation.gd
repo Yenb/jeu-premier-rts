@@ -26,6 +26,7 @@ func _init() -> void:
 	_redeposer_equivaut_retrait_puis_depot()
 	_redeposer_lot_equivaut_a_redeposer_un_par_un()
 	_deposer_lot_equivaut_a_deposer_un_par_un()
+	_lire_lot_equivaut_a_lire_un_par_un()
 	if verif.echecs() > 0:
 		print("ECHEC: %d assertion(s) ratee(s)" % verif.echecs())
 		quit(1)
@@ -209,3 +210,43 @@ func _deposer_lot_equivaut_a_deposer_un_par_un() -> void:
 			ecart_max = maxf(ecart_max, absf(vo - ve))
 	verif.v(ecart_max == 0.0,
 		"deposer_lot doit rendre le meme champ que N deposer sequentiels (ecart max %f)" % ecart_max)
+
+# LOT : lire_lot(positions_x, positions_z, taille_case) doit rendre un
+# tableau strictement egal a N appels a `lire` dans le meme ordre.
+# Bit a bit (meme division `x / taille_case`).
+func _lire_lot_equivaut_a_lire_un_par_un() -> void:
+	var c := ChampSaturation.new()
+	c.deposer(0.0, 0.0, 4.0, 1.0, 0.8, 1)
+	c.deposer(6.0, 3.0, 3.0, 1.0, 1.2, 1)
+	c.deposer(-4.0, -2.0, 5.0, 1.0, 0.5, -1)
+	# Positions variees couvrant l'empreinte des trois depots + hors champ.
+	var positions_x: PackedFloat32Array = PackedFloat32Array([0.5, 1.5, 6.5, -3.5, 20.0, -7.5, 3.0, 2.0])
+	var positions_z: PackedFloat32Array = PackedFloat32Array([0.5, -1.5, 3.5, -2.5, 20.0, 4.5, 0.0, -1.0])
+	var taille_case: float = 1.0
+	var attendu := PackedFloat32Array()
+	attendu.resize(positions_x.size())
+	var i: int = 0
+	while i < positions_x.size():
+		attendu[i] = c.lire(positions_x[i], positions_z[i], taille_case)
+		i += 1
+	var obtenu: PackedFloat32Array = c.lire_lot(positions_x, positions_z, taille_case)
+	verif.v(obtenu.size() == attendu.size(),
+		"lire_lot doit rendre un tableau de meme longueur que positions_x")
+	var ecart_max: float = 0.0
+	var k: int = 0
+	while k < obtenu.size():
+		ecart_max = maxf(ecart_max, absf(obtenu[k] - attendu[k]))
+		k += 1
+	verif.v(ecart_max == 0.0,
+		"lire_lot doit rendre les MEMES valeurs que N lire sequentiels (ecart max %f)" % ecart_max)
+	# taille_case invalide : lire_lot rend des zeros de meme longueur.
+	var out_invalide: PackedFloat32Array = c.lire_lot(positions_x, positions_z, 0.0)
+	verif.v(out_invalide.size() == positions_x.size(),
+		"lire_lot(taille_case<=0) doit rendre un tableau de meme longueur")
+	var somme: float = 0.0
+	var j: int = 0
+	while j < out_invalide.size():
+		somme += absf(out_invalide[j])
+		j += 1
+	verif.v(somme == 0.0,
+		"lire_lot(taille_case<=0) doit rendre des zeros (somme abs %f)" % somme)

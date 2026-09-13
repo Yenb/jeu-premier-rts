@@ -294,5 +294,28 @@ func lire(x: float, z: float, taille_case: float) -> float:
 	var cle: Vector2i = Vector2i(floori(x / taille_case), floori(z / taille_case))
 	return float(_champ.get(cle, 0.0))
 
+# LOT DE LECTURES en UNE passe : applique N lookups sur des colonnes
+# paralleles (`positions_x`, `positions_z`) au meme `taille_case`.
+# Corps de `lire` INLINE : meme division `x / taille_case` bit a bit,
+# meme lookup Dictionary. Meme resultat exact que N appels a `lire`
+# dans le meme ordre. Rend un PackedFloat32Array de meme longueur que
+# `positions_x`. `taille_case` <= 0 : rend un tableau de zeros
+# (comportement identique a N appels unitaires).
+#
+# `lire` (unitaire) reste utilise ailleurs (chemins uniques -- lecture
+# ponctuelle, tests, chemins degrades).
+func lire_lot(positions_x: PackedFloat32Array, positions_z: PackedFloat32Array, taille_case: float) -> PackedFloat32Array:
+	var n: int = positions_x.size()
+	var out := PackedFloat32Array()
+	out.resize(n)
+	if taille_case <= 0.0:
+		return out
+	var k: int = 0
+	while k < n:
+		var cle: Vector2i = Vector2i(floori(positions_x[k] / taille_case), floori(positions_z[k] / taille_case))
+		out[k] = float(_champ.get(cle, 0.0))
+		k += 1
+	return out
+
 func nombre_cases() -> int:
 	return _champ.size()
