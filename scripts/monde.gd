@@ -271,6 +271,11 @@ func ajouter_lot(entries: Array) -> void:
 	var n: int = entries.size()
 	if n == 0:
 		return
+	# Pre-collecte : validation + snapshot ids/positions. Chaque niveau
+	# ouvert re-utilise la meme liste (evite de reboucler entries * niveaux
+	# sur les validations Dictionary/id_deja_present).
+	var ids_valides: Array = []
+	var positions_valides: Array = []
 	var k: int = 0
 	while k < n:
 		var entree: Dictionary = entries[k]
@@ -286,9 +291,13 @@ func ajouter_lot(entries: Array) -> void:
 		choses[chose.id] = {"chose": chose, "type": type}
 		_rang[chose.id] = _prochain_rang
 		_prochain_rang += 1
-		var position: Vector3 = chose.position
-		for exposant in _niveaux:
-			_ranger(_niveaux[exposant], int(exposant), chose.id, position)
+		ids_valides.append(chose.id)
+		positions_valides.append(chose.position)
+	# UN appel `ranger_lot` par niveau (zero appel `_ranger` par entite --
+	# corps inline dans la boucle interne du lot). Voir bloc ECART
+	# FRAMEWORK en tete de fichier.
+	for exposant in _niveaux:
+		ranger_lot(_niveaux[exposant], int(exposant), ids_valides, positions_valides)
 
 func ajouter(chose, type: String, position: Vector3) -> void:
 	if not (chose is Dictionary and chose.has("position")):
@@ -398,6 +407,9 @@ func retirer_lot(ids: Array) -> void:
 	var n: int = ids.size()
 	if n == 0:
 		return
+	# Pre-collecte des ids valides : chaque niveau re-utilise la meme liste
+	# (evite de reboucler ids * niveaux sur la validation d'existence).
+	var ids_valides: Array = []
 	var k: int = 0
 	while k < n:
 		var id = ids[k]
@@ -405,10 +417,20 @@ func retirer_lot(ids: Array) -> void:
 		if not choses.has(id):
 			push_error("monde.gd : retirer_lot() -- id '%s' absent" % id)
 			continue
-		for exposant in _niveaux:
-			_deranger(_niveaux[exposant], id)
-		choses.erase(id)
-		_rang.erase(id)
+		ids_valides.append(id)
+	# UN appel `deranger_lot` par niveau (zero appel `_deranger` par
+	# entite -- corps inline dans la boucle interne du lot). Voir bloc
+	# ECART FRAMEWORK en tete de fichier. La suppression de `choses` et
+	# `_rang` reste unitaire (op Dict, aucun appel de fonction utilisateur).
+	for exposant in _niveaux:
+		deranger_lot(_niveaux[exposant], ids_valides)
+	var kk: int = 0
+	var nn: int = ids_valides.size()
+	while kk < nn:
+		var id2 = ids_valides[kk]
+		kk += 1
+		choses.erase(id2)
+		_rang.erase(id2)
 
 func retirer(id) -> void:
 	if not choses.has(id):
@@ -765,6 +787,112 @@ func _ranger(niveau, exposant: int, id, position: Vector3) -> void:
 	var arete_r: float = niveau.arete
 	var origine_racine := Vector3(case_globale) * arete_r
 	_inserer(cases, case_globale, id, position, origine_racine, arete_r, 0, niveau)
+
+# LOT DE RANGEMENTS en UNE passe : applique N appels `_ranger` sur des
+# colonnes paralleles (`ids`, `positions`). Corps INLINE (branches simple
+# et subdivision), zero appel `_ranger` par entite. Meme resultat exact
+# que N appels a `_ranger` dans le meme ordre. `_ranger` (unitaire) reste
+# utilise ailleurs (chemins uniques -- `ajouter`, `deplacer`,
+# `deplacer_simple`).
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer le
+# franchissement de frontiere par entite dans `ajouter_lot`. Meme geste
+# doctrinal que `retirer()`, `ajouter_lot`, `choses_dans_rayons`.
+func ranger_lot(niveau, exposant: int, ids: Array, positions: Array) -> void:
+	var n: int = ids.size()
+	if n == 0:
+		return
+	var cases: Dictionary = niveau.cases
+	var inv_a: float = niveau.inv_arete
+	# INVARIANTS hoistes hors de la boucle par entite : ne bougent pas
+	# durant le lot.
+	var arete_r: float = niveau.arete
+	var simple: bool = structure_simple
+	var idx_dc = niveau.idx_dans_case
+	var case_de_l = niveau.case_de
+	var k: int = 0
+	while k < n:
+		var id = ids[k]
+		var position: Vector3 = positions[k]
+		k += 1
+		# _case_pour inline via niveau.inv_arete (meme geste que
+		# `_ranger` unitaire, voir bloc ECART FRAMEWORK en tete).
+		var case_globale := Vector3i(
+			floori(position.x * inv_a),
+			floori(position.y * inv_a),
+			floori(position.z * inv_a))
+		if not cases.has(case_globale):
+			cases[case_globale] = []
+		if simple:
+			var arr: Array = cases[case_globale]
+			idx_dc[id] = arr.size()
+			arr.append(id)
+			case_de_l[id] = case_globale
+			continue
+		# Chemin subdivision : chemin initial = [case_globale], _inserer
+		# etend au fil de la descente. _inserer reste par entite --
+		# structure recursive, ne se boucle pas trivialement, appelee
+		# rarement (semis initial + naissance).
+		case_de_l[id] = [case_globale]
+		var origine_racine := Vector3(case_globale) * arete_r
+		_inserer(cases, case_globale, id, position, origine_racine, arete_r, 0, niveau)
+
+# LOT DE DERANGEMENTS en UNE passe : applique N appels `_deranger` sur
+# une colonne d'ids. Corps INLINE (branches simple et subdivision), zero
+# appel `_deranger` par entite. Meme resultat exact que N appels a
+# `_deranger` dans le meme ordre. `_deranger` (unitaire) reste utilise
+# ailleurs (`retirer`, `deplacer`, `deplacer_simple`).
+#
+# ECART FRAMEWORK : cette signature lot n'existe pas dans le depot Orion,
+# ajoutee ici sous l'exception CLAUDE.md § Frontiere pour retirer le
+# franchissement de frontiere par entite dans `retirer_lot`. Meme geste
+# doctrinal que `retirer()`, `retirer_lot`, `choses_dans_rayons`.
+func deranger_lot(niveau, ids: Array) -> void:
+	var n: int = ids.size()
+	if n == 0:
+		return
+	var simple: bool = structure_simple
+	var case_de_l = niveau.case_de
+	var cases: Dictionary = niveau.cases
+	var idx_dc = niveau.idx_dans_case
+	var k: int = 0
+	while k < n:
+		var id = ids[k]
+		k += 1
+		if not case_de_l.has(id):
+			continue
+		if simple:
+			var cle_globale: Vector3i = case_de_l[id]
+			case_de_l.erase(id)
+			if not cases.has(cle_globale):
+				continue
+			var contenu: Array = cases[cle_globale]
+			var idx: int = int(idx_dc.get(id, -1))
+			idx_dc.erase(id)
+			if idx < 0 or idx >= contenu.size():
+				continue
+			var dernier: int = contenu.size() - 1
+			if idx != dernier:
+				var autre_id = contenu[dernier]
+				contenu[idx] = autre_id
+				idx_dc[autre_id] = idx
+			contenu.resize(dernier)
+			if contenu.is_empty():
+				cases.erase(cle_globale)
+			continue
+		# Chemin subdivision : chemin case_de[id] est un Array complet,
+		# _retirer_par_chemin descend et purge en remontant. Fonction
+		# recursive gardee (meme raison que _inserer).
+		var chemin: Array = case_de_l[id]
+		case_de_l.erase(id)
+		if chemin.is_empty():
+			continue
+		_retirer_par_chemin(cases, chemin, 0, id)
+		var cle_globale_sd = chemin[0]
+		if cases.has(cle_globale_sd) and cases[cle_globale_sd] is Dictionary:
+			if _totaliser(cases[cle_globale_sd]) < SEUIL_MERGE:
+				_merger(cases, cle_globale_sd, niveau)
 
 # Descend dans le contenu de parent[cle] et insere id a la bonne place.
 # - Contenu terminal (Array) : append + split si depasse SEUIL_SPLIT et
