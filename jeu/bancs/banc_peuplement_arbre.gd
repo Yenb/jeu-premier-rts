@@ -268,6 +268,16 @@ var _ages: PackedFloat32Array = PackedFloat32Array()
 var _libres: PackedByteArray = PackedByteArray()
 var _positions_x: PackedFloat32Array = PackedFloat32Array()
 var _positions_z: PackedFloat32Array = PackedFloat32Array()
+# Hauteur Y du sol pour le rendu de chaque slot. Colonne par slot,
+# posee a la naissance. Mode isole (`hote_actif = false`) : toujours
+# Y_SOL, meme rendu qu'avant. Mode hote : `carte_terrain_ref.sommet(x,z)`
+# lu a la naissance, jamais recalcule au rendu (les arbres ne bougent
+# pas ; la hauteur du sol sous un arbre reste stable dans la vie du
+# slot). Le monde data (`_monde`) continue de stocker `y = Y_SOL` --
+# distance XZ preservee, gate/banque/reveils bit-a-bit identiques dans
+# les deux modes. Doctrine CLAUDE.md « Les donnees sont la verite, la
+# physique est un rendu ».
+var _positions_y: PackedFloat32Array = PackedFloat32Array()
 var _slots_libres: Array = []
 # Index dans _stades_config_partagee du stade courant de chaque slot
 # (0..stades_config.size()-1 pour un vivant, -1 pour un slot libre ou un
@@ -734,6 +744,7 @@ func _monter_population() -> void:
 	_libres.resize(_capacite)
 	_positions_x.resize(_capacite)
 	_positions_z.resize(_capacite)
+	_positions_y.resize(_capacite)
 	_slot_stade.resize(_capacite)
 	_facteur_croissance.resize(_capacite)
 	_facteur_longevite.resize(_capacite)
@@ -749,6 +760,7 @@ func _monter_population() -> void:
 		_ages[i] = 0.0
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
+		_positions_y[i] = Y_SOL
 		_slot_stade[i] = -1
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
@@ -933,6 +945,21 @@ func _process(delta: float) -> void:
 		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
 		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.nombre_cases()])
 
+# Hauteur Y du sol pour une naissance. Mode isole (`hote_actif = false`)
+# : Y_SOL constant, comportement bit-a-bit inchange du banc historique.
+# Mode hote : lit `carte_terrain_ref.sommet(pos_x, pos_z)` -- si null
+# (hors emprise du terrain, cas de bord flottant), fallback Y_SOL. Lue
+# UNE fois par naissance, jamais recalculee au rendu.
+func _y_pour_naissance(pos_x: float, pos_z: float) -> float:
+	if not hote_actif:
+		return Y_SOL
+	if carte_terrain_ref == null:
+		return Y_SOL
+	var y_variant = carte_terrain_ref.sommet(pos_x, pos_z)
+	if y_variant == null:
+		return Y_SOL
+	return float(y_variant)
+
 # Interpolation de taille entre deux entrees consecutives du catalogue
 # `stades` local (rendu, aucun rapport avec stade.gd qui ne pose que le
 # nom). Rend un Vector4 (h_tronc, l_tronc, h_feuillage, l_feuillage).
@@ -1018,19 +1045,23 @@ func _ecrire_slots_lot() -> void:
 		var lf: float = p.w
 		var pos_x: float = _positions_x[i]
 		var pos_z: float = _positions_z[i]
+		# Y du sol lue en colonne (voir `_positions_y`). Mode isole :
+		# Y_SOL constant, bit-a-bit inchange. Mode hote : sommet(x,z) du
+		# terrain reel, pose une fois a la naissance.
+		var y_sol: float = _positions_y[i]
 		var t_tronc := Transform3D(
 			Basis.IDENTITY.scaled(Vector3(lt, ht, lt)),
-			Vector3(pos_x, Y_SOL + ht * 0.5, pos_z))
+			Vector3(pos_x, y_sol + ht * 0.5, pos_z))
 		_mm_tronc.set_instance_transform(i, t_tronc)
 		var t_feuillage: Transform3D
 		if hf <= 0.0 or lf <= 0.0:
 			t_feuillage = Transform3D(
 				Basis.IDENTITY.scaled(Vector3.ZERO),
-				Vector3(pos_x, Y_SOL + ht, pos_z))
+				Vector3(pos_x, y_sol + ht, pos_z))
 		else:
 			t_feuillage = Transform3D(
 				Basis.IDENTITY.scaled(Vector3(lf, hf, lf)),
-				Vector3(pos_x, Y_SOL + ht + hf * 0.5, pos_z))
+				Vector3(pos_x, y_sol + ht + hf * 0.5, pos_z))
 		_mm_feuillage.set_instance_transform(i, t_feuillage)
 		i += 1
 
@@ -1098,19 +1129,21 @@ func _ecrire_slot(i: int, age: float) -> void:
 	var lf: float = p.w
 	var pos_x: float = _positions_x[i]
 	var pos_z: float = _positions_z[i]
+	# Y du sol lue en colonne (voir `_positions_y`).
+	var y_sol: float = _positions_y[i]
 	var t_tronc := Transform3D(
 		Basis.IDENTITY.scaled(Vector3(lt, ht, lt)),
-		Vector3(pos_x, Y_SOL + ht * 0.5, pos_z))
+		Vector3(pos_x, y_sol + ht * 0.5, pos_z))
 	_mm_tronc.set_instance_transform(i, t_tronc)
 	var t_feuillage: Transform3D
 	if hf <= 0.0 or lf <= 0.0:
 		t_feuillage = Transform3D(
 			Basis.IDENTITY.scaled(Vector3.ZERO),
-			Vector3(pos_x, Y_SOL + ht, pos_z))
+			Vector3(pos_x, y_sol + ht, pos_z))
 	else:
 		t_feuillage = Transform3D(
 			Basis.IDENTITY.scaled(Vector3(lf, hf, lf)),
-			Vector3(pos_x, Y_SOL + ht + hf * 0.5, pos_z))
+			Vector3(pos_x, y_sol + ht + hf * 0.5, pos_z))
 	_mm_feuillage.set_instance_transform(i, t_feuillage)
 
 # Slot libre : les deux instances a echelle nulle (invisibles).
@@ -1355,6 +1388,11 @@ func _naitre_lot() -> void:
 		_ages[slot] = 0.0
 		_positions_x[slot] = pos_x
 		_positions_z[slot] = pos_z
+		# Hauteur Y du sol pour le rendu de ce slot : mode isole = Y_SOL
+		# constant (bit-a-bit inchange), mode hote = `sommet(x,z)` du
+		# terrain reel (lu UNE fois a la naissance, jamais recalcule au
+		# rendu). Voir doc de `_positions_y` en tete de fichier.
+		_positions_y[slot] = _y_pour_naissance(pos_x, pos_z)
 		_slot_stade[slot] = stade_initial
 		_facteur_croissance[slot] = croissance_col[k]
 		_facteur_longevite[slot] = longevite_col[k]
@@ -1421,6 +1459,8 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	_ages[i] = float(objet.proprietes.get("age", 0.0))
 	_positions_x[i] = pos_x
 	_positions_z[i] = pos_z
+	# Hauteur Y du sol pour le rendu de ce slot (voir doc de `_positions_y`).
+	_positions_y[i] = _y_pour_naissance(pos_x, pos_z)
 	_slot_stade[i] = _index_pour_age(_ages[i])
 	if _slot_stade[i] >= 0:
 		_deposer_ombrage(pos_x, pos_z, _slot_stade[i] + 1, 1)
@@ -1874,6 +1914,7 @@ func _agrandir_capacite() -> void:
 	_libres.resize(nouvelle)
 	_positions_x.resize(nouvelle)
 	_positions_z.resize(nouvelle)
+	_positions_y.resize(nouvelle)
 	_slot_stade.resize(nouvelle)
 	_facteur_croissance.resize(nouvelle)
 	_facteur_longevite.resize(nouvelle)
@@ -1892,6 +1933,7 @@ func _agrandir_capacite() -> void:
 		_ages[i] = 0.0
 		_positions_x[i] = 0.0
 		_positions_z[i] = 0.0
+		_positions_y[i] = Y_SOL
 		_slot_stade[i] = -1
 		_facteur_croissance[i] = 1.0
 		_facteur_longevite[i] = 1.0
