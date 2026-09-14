@@ -147,7 +147,38 @@ func _init() -> void:
 			return
 		k += 1
 
-	print("OK: parite passe 1 + rendu GDScript vs C++ apres %d ticks (population=%d, capacite=%d, buffers=%d floats)" % [TICKS, pop_a, n, m])
+	# ETAPE 5 : PARITE RNG. Le C++ instancie un RandomNumberGenerator du
+	# moteur (meme classe que GDScript, meme PCG32). A seed egal, la suite
+	# des randf() doit etre bit-a-bit identique. On tire N=1000 des deux
+	# cotes et on compare.
+	var seed_test: int = 20260910
+	var rng_gd := RandomNumberGenerator.new()
+	rng_gd.seed = seed_test
+	var suite_gd: PackedFloat32Array = PackedFloat32Array()
+	suite_gd.resize(1000)
+	for k2 in range(1000):
+		suite_gd[k2] = rng_gd.randf()
+	simu_cpp_b.poser_seed_rng(seed_test)
+	var suite_cpp: PackedFloat32Array = simu_cpp_b.tirer_randf_lot(1000)
+	if suite_cpp.size() != 1000:
+		printerr("ECHEC: tirer_randf_lot(1000) rend %d valeurs" % suite_cpp.size())
+		quit(1)
+		return
+	for k3 in range(1000):
+		if suite_gd[k3] != suite_cpp[k3]:
+			printerr("ECHEC: randf[%d] divergent gd=%.9f cpp=%.9f" % [k3, suite_gd[k3], suite_cpp[k3]])
+			quit(1)
+			return
+	# Verifier reproductibilite : re-seed et re-tirer, meme suite.
+	simu_cpp_b.poser_seed_rng(seed_test)
+	var suite_cpp_bis: PackedFloat32Array = simu_cpp_b.tirer_randf_lot(1000)
+	for k4 in range(1000):
+		if suite_cpp[k4] != suite_cpp_bis[k4]:
+			printerr("ECHEC: re-seed non reproductible index=%d cpp=%.9f cpp_bis=%.9f" % [k4, suite_cpp[k4], suite_cpp_bis[k4]])
+			quit(1)
+			return
+
+	print("OK: parite passe 1 + rendu + rng (1000 randf) GDScript vs C++ apres %d ticks (population=%d, capacite=%d, buffers=%d floats)" % [TICKS, pop_a, n, m])
 	quit(0)
 
 

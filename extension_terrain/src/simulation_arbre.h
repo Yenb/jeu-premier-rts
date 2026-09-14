@@ -35,6 +35,8 @@
 // y_sol + ht*0.5, Y_feuillage = y_sol + ht + hf*0.5, cas feuillage nul
 // (scale zero, origin y_sol+ht) preserves.
 
+#include <godot_cpp/classes/random_number_generator.hpp>
+#include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
@@ -184,6 +186,24 @@ public:
 			const PackedByteArray &libres,
 			const PackedInt32Array &slot_stade,
 			const PackedFloat32Array &ages) const;
+
+	// ETAPE 5 : RNG DETERMINISTE. Instancie un RandomNumberGenerator du
+	// moteur (godot-cpp Ref<RandomNumberGenerator>) et l'expose. Aucun
+	// algorithme reimplemente a la main : c'est la MEME classe que
+	// GDScript utilise, meme PCG32 sous-jacent, meme suite a seed egal.
+	// La parite est par CONSTRUCTION, pas par reimplementation. Ne
+	// remplace pas encore le _rng GDScript des postes gameplay (etapes
+	// suivantes : reproduction, competition).
+	void poser_seed_rng(uint64_t seed);
+
+	// Tire N randf() du RNG C++ et rend PackedFloat32Array (N valeurs).
+	// Test de parite : appeler la meme fonction sur _rng GDScript apres
+	// re-seed, comparer bit-a-bit. Utile aussi pour bench et debug.
+	PackedFloat32Array tirer_randf_lot(int n);
+
+private:
+	// RNG godot-cpp -- meme classe que GDScript, meme PCG32.
+	Ref<RandomNumberGenerator> _rng;
 };
 
 } // namespace godot

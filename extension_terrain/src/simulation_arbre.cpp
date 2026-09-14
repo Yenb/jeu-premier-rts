@@ -64,10 +64,32 @@ void SimulationArbre::_bind_methods() {
 					"slot_stade",
 					"ages"),
 			&SimulationArbre::appliquer_reset_morts);
+	ClassDB::bind_method(D_METHOD("poser_seed_rng", "seed"), &SimulationArbre::poser_seed_rng);
+	ClassDB::bind_method(D_METHOD("tirer_randf_lot", "n"), &SimulationArbre::tirer_randf_lot);
 }
 
-SimulationArbre::SimulationArbre() {}
+SimulationArbre::SimulationArbre() {
+	_rng.instantiate();
+}
 SimulationArbre::~SimulationArbre() {}
+
+void SimulationArbre::poser_seed_rng(uint64_t seed) {
+	if (_rng.is_null()) {
+		_rng.instantiate();
+	}
+	_rng->set_seed(seed);
+}
+
+PackedFloat32Array SimulationArbre::tirer_randf_lot(int n) {
+	PackedFloat32Array out;
+	if (_rng.is_null() || n <= 0) return out;
+	out.resize(n);
+	float *w = out.ptrw();
+	for (int i = 0; i < n; ++i) {
+		w[i] = _rng->randf();
+	}
+	return out;
+}
 
 bool SimulationArbre::charge() const { return true; }
 int SimulationArbre::population() const { return _population; }
