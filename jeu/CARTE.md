@@ -4602,7 +4602,17 @@ en-tête).
   `charge()` (booléen de vérification de chargement) et
   `population()` rendant `_population` (0 tant que la logique du tick
   n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
-  logique à l'étape 1. ÉTAPE 3 (portée, RENDU MULTIMESH) :
+  logique à l'étape 1. ÉTAPE 4 (portée, RESET COLONNES DRAINAGE MORTS
+  VIEILLESSE) : `appliquer_reset_morts(morts, libres, slot_stade, ages)`
+  applique par indice mort `slot_stade[i]=-1`, `libres[i]=1`, `ages[i]=0`.
+  Signature typée ptrcall. Ne touche PAS aux structures non plates
+  (`_choses_arbre`, `_slots_libres`, `_slot_rendu_pour_data`,
+  `_dormantes_par_case`, `_reveils`, `_banque_graines`) qui restent
+  GDScript dans la même boucle. Décrément `_population -= 1` reste
+  GDScript. Sous bascule, les 3 mutations inline sont skippées,
+  remplacées par UN batch C++ après la boucle. Parité vérifiée sur 100
+  ticks avec longévité écrasée à 0.01 pour forcer des morts.
+  ÉTAPE 3 (portée, RENDU MULTIMESH) :
   `construire_buffers_rendu(cap, libres, ages, slot_stade, positions_x/y/z)`
   produit deux `PackedFloat32Array` de 16 floats/instance (12 transform
   TRANSFORM_3D + 4 color RGBA) prêts pour `_mm_tronc.buffer = ...` et

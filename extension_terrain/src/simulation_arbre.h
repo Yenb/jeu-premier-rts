@@ -168,6 +168,22 @@ public:
 			const PackedFloat32Array &positions_x,
 			const PackedFloat32Array &positions_y,
 			const PackedFloat32Array &positions_z) const;
+
+	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
+	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
+	// Signature typée (ptrcall). Ne touche PAS aux structures GDScript non
+	// plates (_choses_arbre, _slots_libres, _dormantes_par_case, _reveils,
+	// _slot_rendu_pour_data, _population) : elles restent gerees cote GD
+	// dans la meme boucle. Le C++ n'a de population interne qu'en scaffolding
+	// (jamais mutee par cette methode) -- decrement _population reste GD.
+	//
+	// Rend colonnes mutees dans un Dictionary (patron Copy-on-Write des
+	// autres methodes).
+	Dictionary appliquer_reset_morts(
+			const PackedInt32Array &morts,
+			const PackedByteArray &libres,
+			const PackedInt32Array &slot_stade,
+			const PackedFloat32Array &ages) const;
 };
 
 } // namespace godot

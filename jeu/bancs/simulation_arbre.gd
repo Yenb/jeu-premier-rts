@@ -943,9 +943,15 @@ func avancer(pas: float) -> void:
 						_dep_r_lsl.append(float(_conf_lsl.get("rayon_ombre_m", 0.0)))
 						_dep_m_lsl.append(_mag_lsl)
 						_dep_s_lsl.append(0)
-			_slot_stade[_i_lsl] = -1
-			_libres[_i_lsl] = 1
-			_ages[_i_lsl] = 0.0
+			# ETAPE 4 : reset colonnes plates (slot_stade/libres/ages) DEFERRE
+			# au batch C++ sous bascule. Le chemin oracle garde le reset
+			# inline. Le reste du drainage (_slots_libres, _slot_rendu_pour_data,
+			# _population, _dep_lsl, _rev_lsl, _choses_arbre, _derniere_params)
+			# n'est PAS porte a cette etape.
+			if not utiliser_cpp_ce_tick:
+				_slot_stade[_i_lsl] = -1
+				_libres[_i_lsl] = 1
+				_ages[_i_lsl] = 0.0
 			_slots_libres.append(_i_lsl)
 			var _slot_r_libere_lsl: int = _slot_rendu_pour_data[_i_lsl]
 			_slot_rendu_pour_data[_i_lsl] = -1
@@ -955,6 +961,15 @@ func avancer(pas: float) -> void:
 			_population -= 1
 			_rev_x_lsl.append(_pos_x_lsl)
 			_rev_z_lsl.append(_pos_z_lsl)
+		# ETAPE 4 : batch C++ du reset colonnes plates apres la boucle.
+		# Sous bascule utilise_cpp, remplace les 3 lignes inline
+		# (slot_stade[i]=-1, libres[i]=1, ages[i]=0) qui ont ete skippees
+		# dans la boucle. Le reste du drainage GDScript est intact.
+		if utiliser_cpp_ce_tick:
+			var res_reset: Dictionary = _simu_cpp.appliquer_reset_morts(_slots_lsl, _libres, _slot_stade, _ages)
+			_libres = res_reset.libres
+			_slot_stade = res_reset.slot_stade
+			_ages = res_reset.ages
 		# WRITES monde+couvert morts_v DEFERES a la fenetre W1 groupee
 		# apres les reveils (voir plus bas). Reveils inline n'accedent ni
 		# monde ni couvert, defere OK bit-a-bit.

@@ -44,11 +44,23 @@ func _init() -> void:
 		quit(1)
 		return
 
+	# ETAPE 4 : provoquer des morts de vieillesse dans la fenetre du test.
+	# Longevite ecrase a 0.01 -> seuil_mort divise par 100 -> les arbres
+	# meurent en quelques ticks. La parite sur _libres et le reset des
+	# colonnes plates est ainsi exercee. Meme facteur des deux cotes ->
+	# meme facteur individuel tire par le RNG (identique a seed egal).
+	var donnees_a: Dictionary = donnees.duplicate(true)
+	var donnees_b: Dictionary = donnees.duplicate(true)
+	donnees_a["longevite_min"] = 0.01
+	donnees_a["longevite_max"] = 0.01
+	donnees_b["longevite_min"] = 0.01
+	donnees_b["longevite_max"] = 0.01
+
 	var sim_a: RefCounted = SimulationArbreGd.new()
 	var sim_b: RefCounted = SimulationArbreGd.new()
 
-	_configurer_sim(sim_a, donnees.duplicate(true), types.dynamique)
-	_configurer_sim(sim_b, donnees.duplicate(true), types.dynamique)
+	_configurer_sim(sim_a, donnees_a, types.dynamique)
+	_configurer_sim(sim_b, donnees_b, types.dynamique)
 
 	sim_b.configurer_cpp(true)
 

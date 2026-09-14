@@ -57,6 +57,13 @@ void SimulationArbre::_bind_methods() {
 					"positions_y",
 					"positions_z"),
 			&SimulationArbre::construire_buffers_rendu);
+	ClassDB::bind_method(
+			D_METHOD("appliquer_reset_morts",
+					"morts",
+					"libres",
+					"slot_stade",
+					"ages"),
+			&SimulationArbre::appliquer_reset_morts);
 }
 
 SimulationArbre::SimulationArbre() {}
@@ -363,6 +370,35 @@ Dictionary SimulationArbre::construire_buffers_rendu(
 	Dictionary out;
 	out["buffer_tronc"] = buf_t;
 	out["buffer_feuillage"] = buf_f;
+	return out;
+}
+
+Dictionary SimulationArbre::appliquer_reset_morts(
+		const PackedInt32Array &morts,
+		const PackedByteArray &libres,
+		const PackedInt32Array &slot_stade,
+		const PackedFloat32Array &ages) const {
+	// Duplication Copy-on-Write des colonnes mutees.
+	PackedByteArray libres_out = libres;
+	PackedInt32Array slot_stade_out = slot_stade;
+	PackedFloat32Array ages_out = ages;
+	uint8_t *libres_w = libres_out.ptrw();
+	int32_t *slot_stade_w = slot_stade_out.ptrw();
+	float *ages_w = ages_out.ptrw();
+	const int32_t *morts_r = morts.ptr();
+	int n = morts.size();
+	int cap = libres.size();
+	for (int k = 0; k < n; ++k) {
+		int i = morts_r[k];
+		if (i < 0 || i >= cap) continue;
+		slot_stade_w[i] = -1;
+		libres_w[i] = 1;
+		ages_w[i] = 0.0f;
+	}
+	Dictionary out;
+	out["libres"] = libres_out;
+	out["slot_stade"] = slot_stade_out;
+	out["ages"] = ages_out;
 	return out;
 }
 
