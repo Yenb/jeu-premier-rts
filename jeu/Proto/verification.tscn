@@ -52,6 +52,17 @@ albedo_color = Color(1, 0.85, 0.2, 0.35)
 material = SubResource("Materiau_zone_spawn")
 size = Vector3(20, 0.4, 20)
 
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8p7a8"]
+transparency = 1
+shading_mode = 0
+albedo_color = Color(0.9, 0.2, 0.2, 0.35)
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_rnfjt"]
+material = SubResource("StandardMaterial3D_8p7a8")
+top_radius = 30.0
+bottom_radius = 30.0
+height = 0.4
+
 [node name="Proto" type="Node3D" unique_id=987324013]
 
 [node name="RepereVisuel" type="MeshInstance3D" parent="." unique_id=2028792952]
@@ -211,7 +222,9 @@ hote_actif = true
 carte_terrain_ref = ExtResource("3_g2etm")
 
 [node name="ZoneExclusionExemple" type="MeshInstance3D" parent="." unique_id=810000006]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.62544, 14.253365, 272.74768)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -363.26178, 14.253365, -316.1703)
+mesh = SubResource("CylinderMesh_rnfjt")
 script = ExtResource("27_zone")
-forme = 0
 rayon = 30.0
+demi_x = 50.0
+demi_z = 50.0
