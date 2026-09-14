@@ -4602,7 +4602,15 @@ en-tête).
   `charge()` (booléen de vérification de chargement) et
   `population()` rendant `_population` (0 tant que la logique du tick
   n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
-  logique à l'étape 1. ÉTAPE 4 (portée, RESET COLONNES DRAINAGE MORTS
+  logique à l'étape 1. ÉTAPE 5 (portée, RNG DÉTERMINISTE) : membre C++
+  `Ref<RandomNumberGenerator>` (godot-cpp, même classe que GDScript,
+  même PCG32 sous-jacent). Aucun algo réimplémenté — parité par
+  CONSTRUCTION. Méthodes typées ptrcall : `poser_seed_rng(seed)` et
+  `tirer_randf_lot(n) -> PackedFloat32Array`. Test verrouille 1000
+  randf() bit-à-bit à seed égal + reproductibilité re-seed. Ne
+  remplace pas encore le `_rng` GDScript des postes gameplay
+  (reproduction et compétition portées aux étapes suivantes).
+  ÉTAPE 4 (portée, RESET COLONNES DRAINAGE MORTS
   VIEILLESSE) : `appliquer_reset_morts(morts, libres, slot_stade, ages)`
   applique par indice mort `slot_stade[i]=-1`, `libres[i]=1`, `ages[i]=0`.
   Signature typée ptrcall. Ne touche PAS aux structures non plates
