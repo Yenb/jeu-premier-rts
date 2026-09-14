@@ -222,7 +222,6 @@ var _curseur_competition: int = 0
 # banque / cadence competition dependent de `pas`, donc leur cadence
 # moyenne reste identique quel que soit ce reglage.
 var _cadence_simulation_hz: float = 4.0
-var _temps_depuis_maj: float = 0.0
 
 # EPSILON pour skipper l'ecriture MultiMesh quand les 4 params
 # interpoles n'ont pas bouge (arbre au stade 8 fige, croissance lente
@@ -273,8 +272,6 @@ var _annees_par_seconde: float = 1.0
 
 var _mm_tronc: MultiMesh = null
 var _mm_feuillage: MultiMesh = null
-var _noeud_tronc: MultiMeshInstance3D = null
-var _noeud_feuillage: MultiMeshInstance3D = null
 
 var _capacite: int = 0
 var _ages: PackedFloat32Array = PackedFloat32Array()
@@ -352,6 +349,66 @@ var _intervalle_reprod: PackedFloat32Array = PackedFloat32Array()
 # _naitre_lot, decrementee dans _liberer_slots_lot. Aucun scan par frame.
 var _population: int = 0
 var _frames_depuis_releve: int = 0
+
+# CHRONO TEMPORAIRE du dernier tick en microsecondes. Rempli en fin de
+# `avancer(pas)` (Time.get_ticks_usec() aux bornes de la fonction, jamais
+# par arbre -- un now() par arbre fausserait la mesure), imprime sous le
+# meme gate que le releve population. Un seul poste « tick » a cette
+# etape ; le decoupage en sous-postes (senescence/stade/repro/banque/
+# couvert/competition/rendu) est une etape suivante. A RETIRER une fois
+# la mesure prise et le portage C++ verifie. Patron collision_lot.h
+# « CHRONOS TEMPORAIRES par appel ».
+var _chrono_dernier_tick_us: int = 0
+
+# SOUS-CHRONOS TEMPORAIRES par POSTE, cumules sur la fenetre de releve
+# (remis a 0 apres chaque print). Ecart : cumul plutot que « dernier tick »
+# pour lisser le bruit inter-tick et voir OU le tick passe son temps.
+# Postes disjoints qui couvrent tout le corps de avancer(pas) sans trou :
+#   us_boucle    : boucle unique (senescence + stade + detection + mort +
+#                  reproduction inline) OU passe_1_cpp + passe_reproduction
+#                  quand utilise_cpp = true.
+#   us_morts_v   : drainage `_liberer_morts_vieillesse_lot` inline.
+#   us_reveils   : reveil des dormantes en lot inline.
+#   us_transitions : redepot des transitions dans _couvert (deposer_lot elargi).
+#   us_semis     : `_semer_lot` inline.
+#   us_banque    : `_tick_banque` inline (drain expirations + reveils).
+#   us_naitre    : `_naitre_lot` inline.
+#   us_competition : `_avancer_competition` inline.
+#   us_rendu     : `_ecrire_slots_lot` inline.
+#   us_deverse   : monde.retirer_lot + couvert.deposer_lot finaux.
+# Total attendu : somme des 10 ~= _chrono_dernier_tick_us cumule sur la
+# fenetre (aux 10-20 us de now() eux-memes pres). Patron chronos
+# collision_lot.h -- TEMPORAIRE, a retirer une fois le poste dominant
+# identifie et porte C++.
+var _us_boucle: int = 0
+var _us_morts_v: int = 0
+var _us_reveils: int = 0
+var _us_semis: int = 0
+var _us_banque: int = 0
+var _us_naitre: int = 0
+var _us_competition: int = 0
+var _us_rendu: int = 0
+var _us_deverse: int = 0
+var _us_tick_cumul: int = 0
+# Poste `transitions` : le drainage W1 fusionne reveils + transitions
+# dans un unique bloc de code, sans separation nette. Comptabilise en
+# entier dans `_us_reveils` (voir bornage). Membre absent volontairement.
+
+# BASCULE C++ (etape 2 du portage). `utilise_cpp = true` remplace la boucle
+# unique (senescence + stade + detection + mort vieillesse) par un appel a
+# `extension_terrain::SimulationArbre::avancer_passe_1(...)`. La
+# reproduction stochastique (RNG) reste GDScript. Instancie a la demande
+# via `configurer_cpp()` : si l'extension n'est pas chargee, le drapeau
+# reste false et l'oracle GDScript est utilise sans interruption. Aucun
+# etat entre appels : la classe C++ ne stocke que les STABLES (poussees
+# une fois par `_pousser_stables_cpp`), les colonnes mutables voyagent
+# par frontiere a chaque tick.
+var utilise_cpp: bool = false
+var _simu_cpp: RefCounted = null
+# Drapeau : true = les colonnes stables (aps, durees, seuils, ombrage, bornes
+# adulte) ont deja ete poussees au C++ pour ce banc. Remis a false a chaque
+# `configurer_cpp(true)` (nouvelle instance).
+var _cpp_stable_pousse: bool = false
 
 # Champ scalaire d'ombrage par case, delegue au mecanisme framework
 # scripts/champ_saturation.gd (depot signe a decroissance Chebyshev
@@ -559,6 +616,35 @@ func mode_test_rapide() -> bool: return _mode_test_rapide
 func graine_rng() -> int: return _graine_rng
 func stades_ok() -> bool: return _stades.size() == 9 and _durees.size() == 8
 
+# Population vivante courante (nombre d'arbres non-libres). Sert au
+# releve imprime et aux instruments de mesure externes (banc de mesure,
+# test de parite futur C++).
+func population() -> int: return _population
+
+# CHRONO TEMPORAIRE : cout du dernier tick en microsecondes, expose au
+# meme titre que `collision_lot.h::derniers_chronos()`. Un seul poste
+# « tick » a cette etape. A RETIRER avec le reste de l'instrumentation.
+func derniers_chronos() -> Dictionary:
+	return {"tick": _chrono_dernier_tick_us}
+
+# BASCULE C++ (etape 2 du portage). Active/desactive la voie C++ pour la
+# passe 1 (senescence + stade + detection + mort vieillesse). `actif=true`
+# instancie SimulationArbre C++ via ClassDB si l'extension est chargee ;
+# sinon un push_warning est emis et le drapeau reste false (l'appelant
+# n'a pas a s'inquieter du chargement). `actif=false` remet le chemin
+# oracle sans liberer l'instance (le RefCounted C++ vit jusqu'a la
+# prochaine bascule ou la mort de la sim). Patron `deplacer_cpp` de
+# banc_peuplement.gd.
+func configurer_cpp(actif: bool) -> void:
+	if actif and _simu_cpp == null:
+		if not ClassDB.class_exists("SimulationArbre"):
+			push_warning("simulation_arbre : SimulationArbre C++ absente, bascule ignoree")
+			utilise_cpp = false
+			return
+		_simu_cpp = ClassDB.instantiate("SimulationArbre")
+		_cpp_stable_pousse = false
+	utilise_cpp = actif
+
 func _charger_reglages_locaux(donnees: Dictionary) -> void:
 	if donnees.has("durees_stades"):
 		var brut_durees: Array = donnees.durees_stades
@@ -751,6 +837,10 @@ func _monter_population_init() -> void:
 func avancer(pas: float) -> void:
 	if _stades.size() != 9 or _durees.size() != 8 or _stades_config_partagee.is_empty():
 		return
+	# CHRONO TEMPORAIRE du tick complet. Borne haute : dernier appel avant
+	# la sortie de la fonction. Voir `_chrono_dernier_tick_us`. A RETIRER
+	# avec le reste de l'instrumentation.
+	var _debut_tick_us: int = Time.get_ticks_usec()
 	# LOT DE GRAINES A SEMER : vide en debut de tick. resize(0) garde la
 	# capacite deja allouee (aucune allocation neuve tick apres tick une
 	# fois le regime atteint).
@@ -774,128 +864,25 @@ func avancer(pas: float) -> void:
 	# a `_liberer_morts_vieillesse_lot` apres la boucle, avant le reveil
 	# groupe (les morts appendent des positions de reveil a leur tour).
 	_morts_vieillesse_lot.resize(0)
-	# FUSION SENESCENCE + STADE + DETECTION dans la boucle unique par
-	# arbre : trois passes precedentes (Senescence.avancer_lot,
-	# Stade.avancer_lot, boucle detection) fusionnees en UN seul
-	# parcours memoire des colonnes. `_slot_stade_avant` supprime --
-	# l'index ancien vit en variable locale `ancien` par slot. Les
-	# fonctions coeur `Senescence.avancer_lot` et `Stade.avancer_lot`
-	# ne sont PAS modifiees (les tests hors domaine tiennent) : leur
-	# corps est inline mot pour mot ici. Ordre des multiplications
-	# senescence preserve strictement (`pas * (aps * facteur)`, meme
-	# sequence que `Senescence.avancer_lot`). Regle stade « jamais un
-	# recul » preservee (comparaison INDEX trouve vs INDEX courant).
-	# Capacite figee en debut de boucle.
-	var cap: int = _capacite
-	var n_stades_config: int = _stades_config_partagee.size()
-	var i: int = 0
-	while i < cap:
-		if _libres[i] == 1:
-			i += 1
-			continue
-		# SENESCENCE INLINE (equivalent Senescence.avancer_lot pour ce
-		# slot). Ordre `pas * (aps * facteur)` strictement identique.
-		_ages[i] = _ages[i] + pas * (_annees_par_seconde * _facteur_croissance[i])
-		var age_i: float = _ages[i]
-		# STADE INLINE (equivalent Stade.avancer_lot pour ce slot).
-		# `ancien` capture l'index AVANT mutation (remplace la lecture
-		# de `_slot_stade_avant[i]`). Jamais un recul : mutation SEULE
-		# si `index_trouve > ancien`.
-		var ancien: int = _slot_stade[i]
-		if n_stades_config > 0:
-			var index_trouve: int = -1
-			var k: int = 0
-			while k < n_stades_config:
-				var age_seuil: float = _stades_config_partagee[k].get("age_seuil", 0.0)
-				if age_i >= age_seuil:
-					index_trouve = k
-				k += 1
-			if index_trouve > ancien:
-				_slot_stade[i] = index_trouve
-		# Age reel compare au seuil de mort MODULE par la longevite individuelle.
-		var seuil_mort: float = (_duree_croissance_totale + _duree_mort) * _facteur_longevite[i]
-		if age_i >= seuil_mort:
-			# L'arbre meurt AVANT que sa transition de stade prenne effet
-			# (comportement de la version unitaire). On restaure l'index
-			# ancien pour que le drainage groupe depose bien -1 sur
-			# l'empreinte du stade ancien, jamais du stade nouvellement
-			# franchi. La liberation reelle (retrait monde, ombrage,
-			# reveil) est differee au drainage `_liberer_morts_vieillesse_lot`
-			# apres la boucle.
-			_slot_stade[i] = ancien
-			_morts_vieillesse_lot.append(i)
-			i += 1
-			continue
-		# Detection de changement de stade -> maj du champ de couvert.
-		var nouveau_index: int = _slot_stade[i]
-		if nouveau_index != ancien:
-			# TRANSITION EN UNE PASSE : empilement INLINE (aucun appel de
-			# fonction par arbre). Cas ancien >= 0 ET nouveau >= 0 : empile
-			# une transition qui sera fusionnee par `_couvert.redeposer_lot`.
-			# Cas naissance/mort (un seul stade existe) : `_deposer_ombrage`
-			# simple (rare, chemin degrade).
-			if ancien >= 0 and nouveau_index >= 0:
-				var stade_a: int = ancien + 1
-				var stade_n: int = nouveau_index + 1
-				var n_conf: int = _ombrage_par_stade.size()
-				if stade_a >= 1 and stade_a <= n_conf and stade_n >= 1 and stade_n <= n_conf:
-					var conf_a: Dictionary = _ombrage_par_stade[stade_a - 1]
-					var conf_n: Dictionary = _ombrage_par_stade[stade_n - 1]
-					_transitions_x.append(_positions_x[i])
-					_transitions_z.append(_positions_z[i])
-					_transitions_rayon_a.append(float(conf_a.get("rayon_ombre_m", 0.0)))
-					_transitions_rayon_n.append(float(conf_n.get("rayon_ombre_m", 0.0)))
-					_transitions_mag_a.append(float(conf_a.get("magnitude", 0.0)))
-					_transitions_mag_n.append(float(conf_n.get("magnitude", 0.0)))
-			elif ancien >= 0:
-				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien + 1, -1)
-			elif nouveau_index >= 0:
-				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
-			# `_slot_stade[i]` deja mute par `Stade.avancer_lot`.
-			# REVEIL SEULEMENT SI DEGAGEMENT (predicat INLINE) : perte du
-			# statut adulte OU baisse de magnitude OU baisse de rayon. Toute
-			# autre transition ne peut que fermer davantage un gate deja
-			# coince, jamais l'ouvrir. Position empilee dans le lot de
-			# reveils ; le traitement se fait en UNE passe apres la boucle
-			# dans `_reveiller_dormantes_autour_lot`.
-			var degageant: bool = false
-			if ancien >= 0 and nouveau_index >= 0:
-				var ancien_adulte: bool = (ancien + 1) >= _stade_gros_min and (ancien + 1) <= _stade_gros_max
-				var nouveau_adulte: bool = (nouveau_index + 1) >= _stade_gros_min and (nouveau_index + 1) <= _stade_gros_max
-				if ancien_adulte and not nouveau_adulte:
-					degageant = true
-				else:
-					var n_conf2: int = _ombrage_par_stade.size()
-					if n_conf2 > ancien and n_conf2 > nouveau_index:
-						var conf_a2: Dictionary = _ombrage_par_stade[ancien]
-						var conf_n2: Dictionary = _ombrage_par_stade[nouveau_index]
-						if float(conf_n2.get("magnitude", 0.0)) < float(conf_a2.get("magnitude", 0.0)):
-							degageant = true
-						elif float(conf_n2.get("rayon_ombre_m", 0.0)) < float(conf_a2.get("rayon_ombre_m", 0.0)):
-							degageant = true
-			if degageant:
-				_reveils_positions_x.append(_positions_x[i])
-				_reveils_positions_z.append(_positions_z[i])
-		# REPRODUCTION INLINE (phase 2 morceau 2 : fusion `_reproduire_lot`
-		# dans la boucle unique). Ordre RNG strictement identique a l'ex
-		# `_reproduire_lot` (iteration 0..cap-1, meme sequence de
-		# `_rng.randf()` sur les memes slots). Rien entre les deux passes
-		# supprimees ne modifie age/stade/fertilite d'un vivant : les
-		# transitions ombrage (`_couvert.redeposer_lot`) et les reveils
-		# n'affectent pas ces colonnes. Une mort de vieillesse a deja
-		# `continue` plus haut, donc le slot mort n'atteint pas la
-		# reproduction -- meme resultat qu'un skip `_libres[i]==1` post-
-		# `_liberer_morts_vieillesse_lot`. Tirage disque UNIFORME : angle
-		# uniforme + rayon = sqrt(u) * R.
-		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
-			var intervalle_i: float = _intervalle_reprod[i]
-			if intervalle_i > 0.0 and not is_inf(intervalle_i):
-				if _rng.randf() < pas / intervalle_i:
-					var angle_r: float = _rng.randf() * TAU
-					var rayon_r: float = sqrt(_rng.randf()) * _rayon_graine
-					_graines_lot_x.append(_positions_x[i] + cos(angle_r) * rayon_r)
-					_graines_lot_z.append(_positions_z[i] + sin(angle_r) * rayon_r)
-		i += 1
+	# BASCULE C++ (etape 2 du portage). `utilise_cpp = true` remplace la
+	# boucle unique GDScript (senescence + stade + detection + mort
+	# vieillesse + reproduction inline) par (a) un appel a
+	# `SimulationArbre.avancer_passe_1(...)` en C++ natif pour la partie
+	# non-RNG et (b) une boucle GDScript locale pour la reproduction seule
+	# (le RNG reste GDScript a cette etape pour que l'ordre des tirages
+	# reste evident et testable ; portage RNG a l'etape 3). Defaut false :
+	# chemin oracle inchange, boucle unique historique (extraction pure en
+	# `_boucle_unique_gd` -- aucun changement de logique dans le chemin
+	# oracle).
+	var utiliser_cpp_ce_tick: bool = utilise_cpp and _simu_cpp != null
+	var _us_bornage_debut: int = Time.get_ticks_usec()
+	if utiliser_cpp_ce_tick:
+		_passe_1_cpp(pas)
+		_passe_reproduction(pas)
+	else:
+		_boucle_unique_gd(pas)
+	_us_boucle += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _liberer_morts_vieillesse_lot -> _liberer_slots_lot(
 	# _morts_vieillesse_lot) -- morceau 2/N. Vars suffixees `_lsl`
 	# (liberer slots lot). Le reveil recursif utilise suffix `_lslrev`,
@@ -1016,6 +1003,8 @@ func avancer(pas: float) -> void:
 							var _dz_lslrev: float = _pos_lslrev.z - _pos_z_lslrev
 							if _dx_lslrev * _dx_lslrev + _dz_lslrev * _dz_lslrev <= _carre_lslrev:
 								_reveils[_id_lslrev] = true
+	_us_morts_v += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# REVEIL EN LOT INLINE (corps de `_reveiller_dormantes_autour_lot`
 	# recopie ici -- morceau 1/N de l'inlining des fonctions banc dans
 	# tick). Fonction originale conservee : appelee depuis
@@ -1108,6 +1097,8 @@ func avancer(pas: float) -> void:
 			_kt_w1 += 1
 		if _dep_x_w1.size() > 0:
 			_couvert.deposer_lot(_dep_x_w1, _dep_z_w1, _dep_r_w1, _taille_case, _dep_m_w1, _dep_s_w1)
+	_us_reveils += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _semer_lot -- morceau 3/N. Vars suffixees `_sml`. Inclut
 	# l'inline recursif de `_inscrire_dormante` (suffix `_smlind`).
 	var _n_sml: int = _graines_lot_x.size()
@@ -1217,6 +1208,8 @@ func avancer(pas: float) -> void:
 						(_arr_smlind as Array).append(_id_prospect_sml)
 						_case_de_dormante[_id_prospect_sml] = _cle_smlind
 					_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_sml])
+	_us_semis += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _tick_banque -- morceau 4/N. Vars suffixees `_tbq`.
 	# Helpers profonds inlines : _drainer_expirations (suffix _tbqde),
 	# _retirer_dormante (suffix _tbqrd).
@@ -1374,6 +1367,8 @@ func avancer(pas: float) -> void:
 	# interleaved, `monde.ajouter_lot`, `champ.deposer_lot`). Ordre
 	# RNG variance = ordre des naissances dans la queue = ordre naturel
 	# (semer d'abord, puis tick_banque). `stades_config` deja partage.
+	_us_banque += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _naitre_lot -- morceau 5/N. Vars suffixees `_ntl`. Helpers
 	# inlines : _index_pour_age (suffix _ntlia), _y_pour_naissance
 	# (suffix _ntlyn). `_agrandir_capacite` reste appel (chemin rare).
@@ -1476,6 +1471,8 @@ func avancer(pas: float) -> void:
 			_dep_s_finaux.append_array(_dep_s_ntl)
 		_naissances_lot_x.resize(0)
 		_naissances_lot_z.resize(0)
+	_us_naitre += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _avancer_competition -- morceau 6/N. Vars suffixees `_avc`.
 	# Inline recursif de _liberer_slots_lot (suffix _avclsl), avec ses
 	# propres inlines _ecrire_slots_vides_lot (_avcev) et
@@ -1633,8 +1630,12 @@ func avancer(pas: float) -> void:
 	# `_ecrire_slot` pour reposer le buffer GPU quand la capacite double
 	# (chemin rare). Corps de `_ecrire_slots_lot` inline ci-dessous
 	# (morceau 7, suffixe `_esl`).
+	_us_competition += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	var _cap_esl: int = _capacite
-	if _cap_esl > 0:
+	if utilise_cpp and _simu_cpp != null:
+		_ecrire_slots_lot_cpp(_cap_esl)
+	elif _cap_esl > 0:
 		var _n_stades_esl: int = _durees.size()
 		var _n_stades_full_esl: int = _stades.size()
 		var _i_esl: int = 0
@@ -1714,6 +1715,8 @@ func avancer(pas: float) -> void:
 					Vector3(_pos_x_esl, _y_sol_esl + _ht_esl + _hf_esl * 0.5, _pos_z_esl))
 			_mm_feuillage.set_instance_transform(_i_esl, _t_feuillage_esl)
 			_i_esl += 1
+	_us_rendu += Time.get_ticks_usec() - _us_bornage_debut
+	_us_bornage_debut = Time.get_ticks_usec()
 	# DEVERSEMENT DES BUFFERS FINAUX : UN appel monde (morts_c) et UN
 	# appel couvert (naissances +1 concatenees avec morts_c -1). Ordre des
 	# entrees couvert dans le deposer_lot final = ordre chronologique des
@@ -1726,11 +1729,407 @@ func avancer(pas: float) -> void:
 		_monde.retirer_lot(_ids_finaux_m)
 	if _dep_x_finaux.size() > 0:
 		_couvert.deposer_lot(_dep_x_finaux, _dep_z_finaux, _dep_r_finaux, _taille_case, _dep_m_finaux, _dep_s_finaux)
+	_us_deverse += Time.get_ticks_usec() - _us_bornage_debut
+	# CHRONO TEMPORAIRE : borne basse. La mesure couvre tout le corps de
+	# `avancer(pas)` hors la garde d'entree. A RETIRER avec le reste de
+	# l'instrumentation.
+	_chrono_dernier_tick_us = Time.get_ticks_usec() - _debut_tick_us
+	_us_tick_cumul += _chrono_dernier_tick_us
 	_frames_depuis_releve += 1
 	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
+		var n_frames: int = _frames_depuis_releve
 		_frames_depuis_releve = 0
 		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
-		print("[arbre] population = %d, dormantes = %d, cases_couvertes = %d" % [_population, dormantes, _couvert.nombre_cases()])
+		# Sous-chronos : MOYENNE par tick sur la fenetre du releve. Un poste
+		# a 0 us moyen = jamais actif sur la fenetre (ou ecrase sous 1 us).
+		@warning_ignore("integer_division")
+		print("[arbre] tick=%d us | boucle=%d morts_v=%d reveils=%d semis=%d banque=%d naitre=%d compet=%d rendu=%d deverse=%d | pop=%d dorm=%d cases=%d" % [
+			_us_tick_cumul / n_frames,
+			_us_boucle / n_frames,
+			_us_morts_v / n_frames,
+			_us_reveils / n_frames,
+			_us_semis / n_frames,
+			_us_banque / n_frames,
+			_us_naitre / n_frames,
+			_us_competition / n_frames,
+			_us_rendu / n_frames,
+			_us_deverse / n_frames,
+			_population, dormantes, _couvert.nombre_cases()
+		])
+		# Remise a zero de la fenetre.
+		_us_tick_cumul = 0
+		_us_boucle = 0
+		_us_morts_v = 0
+		_us_reveils = 0
+		_us_semis = 0
+		_us_banque = 0
+		_us_naitre = 0
+		_us_competition = 0
+		_us_rendu = 0
+		_us_deverse = 0
+
+# ============================================================================
+# BOUCLE UNIQUE (chemin oracle GDScript, utilise_cpp = false).
+# ============================================================================
+# EXTRAITE MOT POUR MOT du corps de `avancer(pas)` : senescence inline +
+# stade inline + detection de transition + mort vieillesse + reproduction
+# stochastique inline. Aucun changement de logique ni d'ordre par rapport a
+# la version pre-extraction -- juste un contenant. Le chemin oracle reste
+# la seule verite tant que la parite C++ n'est pas prouvee. Voir en-tete
+# du fichier « COUCHE LOGIQUE (coeur) » et « ECART FRAMEWORK ».
+func _boucle_unique_gd(pas: float) -> void:
+	var cap: int = _capacite
+	var n_stades_config: int = _stades_config_partagee.size()
+	var i: int = 0
+	while i < cap:
+		if _libres[i] == 1:
+			i += 1
+			continue
+		_ages[i] = _ages[i] + pas * (_annees_par_seconde * _facteur_croissance[i])
+		var age_i: float = _ages[i]
+		var ancien: int = _slot_stade[i]
+		if n_stades_config > 0:
+			var index_trouve: int = -1
+			var k: int = 0
+			while k < n_stades_config:
+				var age_seuil: float = _stades_config_partagee[k].get("age_seuil", 0.0)
+				if age_i >= age_seuil:
+					index_trouve = k
+				k += 1
+			if index_trouve > ancien:
+				_slot_stade[i] = index_trouve
+		var seuil_mort: float = (_duree_croissance_totale + _duree_mort) * _facteur_longevite[i]
+		if age_i >= seuil_mort:
+			_slot_stade[i] = ancien
+			_morts_vieillesse_lot.append(i)
+			i += 1
+			continue
+		var nouveau_index: int = _slot_stade[i]
+		if nouveau_index != ancien:
+			if ancien >= 0 and nouveau_index >= 0:
+				var stade_a: int = ancien + 1
+				var stade_n: int = nouveau_index + 1
+				var n_conf: int = _ombrage_par_stade.size()
+				if stade_a >= 1 and stade_a <= n_conf and stade_n >= 1 and stade_n <= n_conf:
+					var conf_a: Dictionary = _ombrage_par_stade[stade_a - 1]
+					var conf_n: Dictionary = _ombrage_par_stade[stade_n - 1]
+					_transitions_x.append(_positions_x[i])
+					_transitions_z.append(_positions_z[i])
+					_transitions_rayon_a.append(float(conf_a.get("rayon_ombre_m", 0.0)))
+					_transitions_rayon_n.append(float(conf_n.get("rayon_ombre_m", 0.0)))
+					_transitions_mag_a.append(float(conf_a.get("magnitude", 0.0)))
+					_transitions_mag_n.append(float(conf_n.get("magnitude", 0.0)))
+			elif ancien >= 0:
+				_deposer_ombrage(_positions_x[i], _positions_z[i], ancien + 1, -1)
+			elif nouveau_index >= 0:
+				_deposer_ombrage(_positions_x[i], _positions_z[i], nouveau_index + 1, 1)
+			var degageant: bool = false
+			if ancien >= 0 and nouveau_index >= 0:
+				var ancien_adulte: bool = (ancien + 1) >= _stade_gros_min and (ancien + 1) <= _stade_gros_max
+				var nouveau_adulte: bool = (nouveau_index + 1) >= _stade_gros_min and (nouveau_index + 1) <= _stade_gros_max
+				if ancien_adulte and not nouveau_adulte:
+					degageant = true
+				else:
+					var n_conf2: int = _ombrage_par_stade.size()
+					if n_conf2 > ancien and n_conf2 > nouveau_index:
+						var conf_a2: Dictionary = _ombrage_par_stade[ancien]
+						var conf_n2: Dictionary = _ombrage_par_stade[nouveau_index]
+						if float(conf_n2.get("magnitude", 0.0)) < float(conf_a2.get("magnitude", 0.0)):
+							degageant = true
+						elif float(conf_n2.get("rayon_ombre_m", 0.0)) < float(conf_a2.get("rayon_ombre_m", 0.0)):
+							degageant = true
+			if degageant:
+				_reveils_positions_x.append(_positions_x[i])
+				_reveils_positions_z.append(_positions_z[i])
+		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
+			var intervalle_i: float = _intervalle_reprod[i]
+			if intervalle_i > 0.0 and not is_inf(intervalle_i):
+				if _rng.randf() < pas / intervalle_i:
+					var angle_r: float = _rng.randf() * TAU
+					var rayon_r: float = sqrt(_rng.randf()) * _rayon_graine
+					_graines_lot_x.append(_positions_x[i] + cos(angle_r) * rayon_r)
+					_graines_lot_z.append(_positions_z[i] + sin(angle_r) * rayon_r)
+		i += 1
+
+# ============================================================================
+# PASSE 1 en C++ (chemin bascule, utilise_cpp = true).
+# ============================================================================
+# Appelle `SimulationArbre.avancer_passe_1(...)` (extension_terrain) et
+# INTEGRE ses sorties dans l'etat GDScript : reassigne _ages et _slot_stade
+# (patron Copy-on-Write), append aux lots (transitions, reveils, morts
+# vieillesse), depose les cas rares « simple » (naissance/mort dans boucle)
+# directement dans _couvert via _deposer_ombrage. La reproduction n'est PAS
+# faite ici -- elle est appelee separement (`_passe_reproduction`) pour
+# garder le RNG cote GDScript a cette etape.
+func _passe_1_cpp(pas: float) -> void:
+	if not _cpp_stable_pousse:
+		_pousser_stables_cpp()
+		_cpp_stable_pousse = true
+	# APPEL TYPE (ptrcall) : 9 arguments nommes, aucun Dictionary d'entree.
+	# Voir simulation_arbre.h -- signature alignee sur index_spatial.h::
+	# perception_lot. La sortie reste Dictionary (aligne sur les 4 soeurs).
+	var res: Dictionary = _simu_cpp.avancer_passe_1(
+		pas, _capacite, _libres, _ages, _slot_stade,
+		_facteur_croissance, _facteur_longevite, _positions_x, _positions_z
+	)
+	_ages = res.ages
+	_slot_stade = res.slot_stade
+	_morts_vieillesse_lot.append_array(res.morts_vieillesse)
+	_transitions_x.append_array(res.transitions_x)
+	_transitions_z.append_array(res.transitions_z)
+	_transitions_rayon_a.append_array(res.transitions_rayon_a)
+	_transitions_rayon_n.append_array(res.transitions_rayon_n)
+	_transitions_mag_a.append_array(res.transitions_mag_a)
+	_transitions_mag_n.append_array(res.transitions_mag_n)
+	_reveils_positions_x.append_array(res.reveils_x)
+	_reveils_positions_z.append_array(res.reveils_z)
+	var n_simple: int = res.simple_stade.size()
+	var k: int = 0
+	while k < n_simple:
+		_deposer_ombrage(res.simple_x[k], res.simple_z[k], res.simple_stade[k], res.simple_signe[k])
+		k += 1
+
+# Extrait les stables du banc et les pousse une seule fois au C++ via
+# `SimulationArbre.initialiser_stable(...)`. Le paquet couvre :
+# annees_par_seconde, duree_croissance_totale, duree_mort, stade_gros_min/max,
+# les age_seuil du catalogue de stades, les rayon_ombre_m et magnitude de
+# l'ombrage par stade. Idempotent : peut etre rappele sans effet observable.
+func _pousser_stables_cpp() -> void:
+	var seuils: PackedFloat32Array = PackedFloat32Array()
+	for entry in _stades_config_partagee:
+		seuils.append(float(entry.get("age_seuil", 0.0)))
+	var omb_r: PackedFloat32Array = PackedFloat32Array()
+	var omb_m: PackedFloat32Array = PackedFloat32Array()
+	for entry in _ombrage_par_stade:
+		omb_r.append(float(entry.get("rayon_ombre_m", 0.0)))
+		omb_m.append(float(entry.get("magnitude", 0.0)))
+	# APPEL TYPE (ptrcall) : 8 arguments nommes.
+	_simu_cpp.initialiser_stable(
+		_annees_par_seconde,
+		_duree_croissance_totale,
+		_duree_mort,
+		_stade_gros_min,
+		_stade_gros_max,
+		seuils,
+		omb_r,
+		omb_m
+	)
+	# Tables du RENDU (durees_stades, tronc/feuillage hauteur/largeur par
+	# stade, couleurs par stade, couleurs de repli, Y_SOL). Extraction des
+	# Dictionary imbriques _stades[k].tronc.hauteur etc. en PackedFloat32Array
+	# plates -- puis appel typé.
+	var n_stades_full: int = _stades.size()
+	var tr_h: PackedFloat32Array = PackedFloat32Array()
+	var tr_l: PackedFloat32Array = PackedFloat32Array()
+	var fe_h: PackedFloat32Array = PackedFloat32Array()
+	var fe_l: PackedFloat32Array = PackedFloat32Array()
+	tr_h.resize(n_stades_full)
+	tr_l.resize(n_stades_full)
+	fe_h.resize(n_stades_full)
+	fe_l.resize(n_stades_full)
+	for k in range(n_stades_full):
+		var e: Dictionary = _stades[k]
+		tr_h[k] = float(e.tronc.hauteur)
+		tr_l[k] = float(e.tronc.largeur)
+		fe_h[k] = float(e.feuillage.hauteur)
+		fe_l[k] = float(e.feuillage.largeur)
+	_simu_cpp.initialiser_stable_rendu(
+		_durees,
+		tr_h,
+		tr_l,
+		fe_h,
+		fe_l,
+		_couleur_tronc_par_stade,
+		_couleur_feuillage_par_stade,
+		COULEUR_REPLI_TRONC,
+		COULEUR_REPLI_FEUILLAGE,
+		Y_SOL
+	)
+
+# ============================================================================
+# RENDU par PUSH BUFFER (chemin bascule utilise_cpp = true).
+# ============================================================================
+# Remplace la boucle GDScript de rendu (2xN appels set_instance_transform)
+# par UN appel C++ qui construit deux PackedFloat32Array + DEUX push moteur
+# (`_mm_tronc.buffer = ...`, `_mm_feuillage.buffer = ...`). Voir
+# simulation_arbre.h::construire_buffers_rendu pour le layout (16 floats
+# par slot : 12 transform TRANSFORM_3D + 4 color RGBA).
+func _ecrire_slots_lot_cpp(cap: int) -> void:
+	if cap <= 0:
+		return
+	var res: Dictionary = _simu_cpp.construire_buffers_rendu(
+		cap,
+		_libres,
+		_ages,
+		_slot_stade,
+		_positions_x,
+		_positions_y,
+		_positions_z
+	)
+	# Synchro instance_count : le buffer C++ fait 16*cap floats, le
+	# MultiMesh doit avoir instance_count = cap avant `buffer = ...`.
+	if _mm_tronc.instance_count != cap:
+		_mm_tronc.instance_count = cap
+	if _mm_feuillage.instance_count != cap:
+		_mm_feuillage.instance_count = cap
+	_mm_tronc.buffer = res.buffer_tronc
+	_mm_feuillage.buffer = res.buffer_feuillage
+
+# ============================================================================
+# CONSTRUIRE BUFFERS RENDU en GDScript (helper de test parite).
+# ============================================================================
+# Miroir GDScript de construire_buffers_rendu C++. Reproduit la MEME logique
+# (lerp, cas feuillage nul, couleurs, formules Y), sans skip cache -- pour
+# comparer bit-a-bit contre le buffer C++. NE PAS l'utiliser au chemin
+# oracle (il ne cache pas) : c'est un helper de TEST uniquement.
+func _construire_buffers_rendu_gd(cap: int) -> Dictionary:
+	var buf_t: PackedFloat32Array = PackedFloat32Array()
+	var buf_f: PackedFloat32Array = PackedFloat32Array()
+	buf_t.resize(cap * 16)
+	buf_f.resize(cap * 16)
+	var n_durees: int = _durees.size()
+	var n_stades_full: int = _stades.size()
+	var n_col_t: int = _couleur_tronc_par_stade.size()
+	var n_col_f: int = _couleur_feuillage_par_stade.size()
+	# BUFFERIZE les tables de stade en PackedFloat32Array : le C++ lit
+	# depuis des std::vector<float> (float32), il faut que le helper GD
+	# fasse le meme calcul depuis les memes valeurs float32 (les doubles
+	# JSON ont ete casts en float32 lors du push aux stables C++). Sans
+	# ca, le helper GD lit les doubles JSON directement -> divergence 1 ULP.
+	var tr_h_f: PackedFloat32Array = PackedFloat32Array()
+	var tr_l_f: PackedFloat32Array = PackedFloat32Array()
+	var fe_h_f: PackedFloat32Array = PackedFloat32Array()
+	var fe_l_f: PackedFloat32Array = PackedFloat32Array()
+	tr_h_f.resize(n_stades_full)
+	tr_l_f.resize(n_stades_full)
+	fe_h_f.resize(n_stades_full)
+	fe_l_f.resize(n_stades_full)
+	for k in range(n_stades_full):
+		var e: Dictionary = _stades[k]
+		tr_h_f[k] = float(e.tronc.hauteur)
+		tr_l_f[k] = float(e.tronc.largeur)
+		fe_h_f[k] = float(e.feuillage.hauteur)
+		fe_l_f[k] = float(e.feuillage.largeur)
+	var i: int = 0
+	while i < cap:
+		var base: int = i * 16
+		if _libres[i] == 1:
+			buf_t[base + 7] = Y_SOL
+			buf_t[base + 15] = 1.0
+			buf_f[base + 7] = Y_SOL
+			buf_f[base + 15] = 1.0
+			i += 1
+			continue
+		var age: float = _ages[i]
+		var ht: float = 0.0
+		var lt: float = 0.0
+		var hf: float = 0.0
+		var lf: float = 0.0
+		var duree_cumulee: float = 0.0
+		var trouve: bool = false
+		var j: int = 0
+		while j < n_durees:
+			var duree_segment: float = _durees[j]
+			if age <= duree_cumulee + duree_segment:
+				var t: float = 0.0
+				if duree_segment > 0.0:
+					t = (age - duree_cumulee) / duree_segment
+				if t < 0.0:
+					t = 0.0
+				elif t > 1.0:
+					t = 1.0
+				# Lire depuis les PackedFloat32Array bufferizes (float32) --
+				# meme precision que le C++ (std::vector<float>).
+				ht = tr_h_f[j] + t * (tr_h_f[j + 1] - tr_h_f[j])
+				lt = tr_l_f[j] + t * (tr_l_f[j + 1] - tr_l_f[j])
+				hf = fe_h_f[j] + t * (fe_h_f[j + 1] - fe_h_f[j])
+				lf = fe_l_f[j] + t * (fe_l_f[j + 1] - fe_l_f[j])
+				trouve = true
+				break
+			duree_cumulee += duree_segment
+			j += 1
+		if not trouve:
+			var idx: int = n_stades_full - 1
+			ht = tr_h_f[idx]
+			lt = tr_l_f[idx]
+			hf = fe_h_f[idx]
+			lf = fe_l_f[idx]
+		var stade_actuel: int = _slot_stade[i]
+		var ct: Color = COULEUR_REPLI_TRONC
+		var cf: Color = COULEUR_REPLI_FEUILLAGE
+		if stade_actuel >= 0 and stade_actuel < n_col_t:
+			ct = _couleur_tronc_par_stade[stade_actuel]
+		if stade_actuel >= 0 and stade_actuel < n_col_f:
+			cf = _couleur_feuillage_par_stade[stade_actuel]
+		var pos_x: float = _positions_x[i]
+		var pos_y_sol: float = _positions_y[i]
+		var pos_z: float = _positions_z[i]
+		buf_t[base + 0] = lt
+		buf_t[base + 3] = pos_x
+		buf_t[base + 5] = ht
+		buf_t[base + 7] = pos_y_sol + ht * 0.5
+		buf_t[base + 10] = lt
+		buf_t[base + 11] = pos_z
+		buf_t[base + 12] = ct.r
+		buf_t[base + 13] = ct.g
+		buf_t[base + 14] = ct.b
+		buf_t[base + 15] = ct.a
+		if hf <= 0.0 or lf <= 0.0:
+			buf_f[base + 3] = pos_x
+			buf_f[base + 7] = pos_y_sol + ht
+			buf_f[base + 11] = pos_z
+		else:
+			buf_f[base + 0] = lf
+			buf_f[base + 3] = pos_x
+			buf_f[base + 5] = hf
+			buf_f[base + 7] = pos_y_sol + ht + hf * 0.5
+			buf_f[base + 10] = lf
+			buf_f[base + 11] = pos_z
+		buf_f[base + 12] = cf.r
+		buf_f[base + 13] = cf.g
+		buf_f[base + 14] = cf.b
+		buf_f[base + 15] = cf.a
+		i += 1
+	return {"buffer_tronc": buf_t, "buffer_feuillage": buf_f}
+
+# ============================================================================
+# REPRODUCTION SEULE (chemin bascule, apres `_passe_1_cpp`).
+# ============================================================================
+# Boucle par arbre, meme ordre 0..cap-1 que la boucle unique GDScript --
+# ordre des tirages `_rng.randf()` STRICTEMENT identique a l'oracle,
+# condition pour que le seed produise la meme foret sous les deux chemins
+# (parite prouvee a l'etape 3 quand le RNG sera lui aussi porte C++).
+# Skip _libres[i]==1 et skip les slots fraichement morts dans la passe 1
+# (via un PackedByteArray temporaire construit une fois par tick). Un
+# slot mort de vieillesse ne se reproduit pas -- meme resultat que le
+# `continue` sur mort de la boucle unique originale.
+func _passe_reproduction(pas: float) -> void:
+	var cap: int = _capacite
+	var morts_set: PackedByteArray = PackedByteArray()
+	morts_set.resize(cap)
+	var nm: int = _morts_vieillesse_lot.size()
+	var kk: int = 0
+	while kk < nm:
+		var mi: int = _morts_vieillesse_lot[kk]
+		if mi >= 0 and mi < cap:
+			morts_set[mi] = 1
+		kk += 1
+	var i: int = 0
+	while i < cap:
+		if _libres[i] == 1 or morts_set[i] == 1:
+			i += 1
+			continue
+		var age_i: float = _ages[i]
+		if age_i >= _debut_fertilite and age_i < _fin_fertilite:
+			var intervalle_i: float = _intervalle_reprod[i]
+			if intervalle_i > 0.0 and not is_inf(intervalle_i):
+				if _rng.randf() < pas / intervalle_i:
+					var angle_r: float = _rng.randf() * TAU
+					var rayon_r: float = sqrt(_rng.randf()) * _rayon_graine
+					_graines_lot_x.append(_positions_x[i] + cos(angle_r) * rayon_r)
+					_graines_lot_z.append(_positions_z[i] + sin(angle_r) * rayon_r)
+		i += 1
+
 
 # Hauteur Y du sol pour une naissance. Mode isole (`hote_actif = false`)
 # : Y_SOL constant, comportement bit-a-bit inchange du banc historique.

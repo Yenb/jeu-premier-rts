@@ -8,6 +8,7 @@
 #include "physique_simple_lot.h"
 #include "index_spatial.h"
 #include "collision_lot.h"
+#include "simulation_arbre.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/godot.hpp>
@@ -23,6 +24,7 @@ void initialize_terrain_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(PhysiqueSimpleLot);
 	GDREGISTER_CLASS(IndexSpatial);
 	GDREGISTER_CLASS(CollisionLot);
+	GDREGISTER_CLASS(SimulationArbre);
 }
 
 void uninitialize_terrain_module(ModuleInitializationLevel p_level) {

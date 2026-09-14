@@ -4581,15 +4581,83 @@ en-tête).
   standard (spatial hashing = requête locale et bornée, par entité).
   Les nouveau-nés de la même rafale sont déjà dans `_monde` (ajout
   live à chaque `_naitre`), la graine suivante les voit naturellement
-  — même effet que le dict `nouvelles` de `vegetation.gd`. CHRONOS
-  TEMPORAIRES dans `_tick_banque` (à retirer après diagnostic —
-  même discipline que les chronos de `collision_lot.h`) : quatre
-  postes disjoints (SETUP / QUERY / GATE / NAISSANCE) mesurés en
-  microsecondes + compte de passages, imprimés sous le même gate
-  que le relevé population. Logique du gate INLINE le temps du
-  diagnostic (duplique `_trouee_saturee`) pour isoler QUERY et
-  GATE. `avancer` du mécanisme framework n'est pas utilisé
-  (il compare à un seuil unique, sans notion d'événement).
+  — même effet que le dict `nouvelles` de `vegetation.gd`. CHRONO
+  TEMPORAIRE du tick complet dans `jeu/bancs/simulation_arbre.gd:
+  avancer(pas)` (à retirer une fois la mesure prise et le portage
+  C++ vérifié — même discipline que les chronos de `collision_lot.h`) :
+  UN poste « tick » mesuré aux bornes de la fonction par
+  `Time.get_ticks_usec()`, jamais par arbre. Exposé par
+  `derniers_chronos()` (`{"tick": µs}`), imprimé sous le MÊME gate
+  que le relevé population — la ligne devient `[arbre] tick = X us,
+  population = N, dormantes = ..., cases_couvertes = ...`. Yael relève
+  ce chiffre au profileur Godot sur la scène réelle. Sous-postes
+  (senescence/stade/repro/banque/couvert/competition/rendu) : étape
+  suivante, pas celle-ci. `population()` public rend `_population`
+  (population vivante O(1), aucun scan). PORTAGE C++ (étape 1,
+  scaffolding vide) : `extension_terrain/src/simulation_arbre.h/.cpp`
+  (**SimulationArbre**) — CINQUIÈME classe de la GDExtension existante
+  (à côté de CollisionLot / IndexSpatial / PhysiqueSimpleLot /
+  MesheurTuile), GDCLASS(RefCounted), enregistrée dans
+  `register_types.cpp`. Deux méthodes publiques à cette étape :
+  `charge()` (booléen de vérification de chargement) et
+  `population()` rendant `_population` (0 tant que la logique du tick
+  n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
+  logique à l'étape 1. ÉTAPE 3 (portée, RENDU MULTIMESH) :
+  `construire_buffers_rendu(cap, libres, ages, slot_stade, positions_x/y/z)`
+  produit deux `PackedFloat32Array` de 16 floats/instance (12 transform
+  TRANSFORM_3D + 4 color RGBA) prêts pour `_mm_tronc.buffer = ...` et
+  `_mm_feuillage.buffer = ...` — **2 push moteur par tick au lieu de 2×N
+  `set_instance_transform`**. Le patron est `mesheur_tuile.h` (l.18-24).
+  Tables statiques poussées UNE fois via `initialiser_stable_rendu`
+  (durées_stades, tronc/feuillage hauteur/largeur par stade, couleurs
+  tronc/feuillage par stade, couleurs de repli, Y_SOL). Miroir bit-à-bit
+  du lerp GDScript : calcul en DOUBLE puis cast float32 au write final
+  (sinon 1 ULP de divergence). Parité vérifiée : 128 floats de buffer
+  identiques après 100 ticks (helper GDScript `_construire_buffers_rendu_gd`
+  vs C++ `construire_buffers_rendu`). `_ecrire_slots_lot_cpp` synchronise
+  `instance_count` puis pousse les 2 buffers. Requiert `use_colors = true`
+  sur les deux MultiMesh (sinon le bloc couleur du buffer est ignoré).
+  ÉTAPE 2 (portée, FRONTIÈRE TYPÉE ptrcall) :
+  signatures alignées sur `index_spatial.h::perception_lot` — arguments
+  nommés + `Packed*Array const&` en entrée, aucun Dictionary d'entrée.
+  L'appel GDScript emprunte ptrcall (chemin natif, zéro marshalling
+  Variant sur les 9+ args). Sortie Dictionary conservée (aligne sur les 4
+  sœurs, qui rendent toutes Dictionary) — le gain ptrcall porte
+  **exclusivement sur l'entrée**. `initialiser_stable(...)`
+  pousse UNE fois les stables (annees_par_seconde, duree_croissance_totale,
+  duree_mort, seuils d'âge par stade, ombrage par stade, bornes du statut
+  adulte) en membres C++ ; `avancer_passe_1(...)` fait la boucle
+  senescence + stade + détection de transition + mort vieillesse, miroir
+  mot pour mot des lignes 793-903 de `simulation_arbre.gd::avancer`
+  (ordre `pas * (aps * facteur)` préservé, stade « jamais un recul » par
+  comparaison INDEX, mort vieillesse restaure `ancien` avant append).
+  Rend `_ages` et `_slot_stade` mutés + 11 arrays parallèles (morts
+  vieillesse, 6 transitions, 2 réveils, 4 dépôts simples naissance/mort).
+  Ne mute ni `_libres` ni `_population` : ces mutations restent GDScript
+  (drainage groupé après la passe). Reproduction stochastique (RNG) reste
+  GDScript à cette étape (portée à l'étape 3). Bascule côté GDScript :
+  `configurer_cpp(actif)` (patron `deplacer_cpp` de `banc_peuplement.gd`)
+  ; `utilise_cpp = true` remplace `_boucle_unique_gd(pas)` par
+  (`_passe_1_cpp` + `_passe_reproduction`) — la boucle unique historique
+  est extraite en `_boucle_unique_gd(pas)` sans changement de logique,
+  chemin oracle inchangé mot pour mot. Parité bit-à-bit vérifiée sur
+  100 ticks (SIM A oracle vs SIM B bascule, seed égal). La
+  const GDScript de la coquille, jadis nommée `SimulationArbre`, est
+  renommée `SimulationArbreGd` pour éviter le shadow ClassDB de
+  Godot 4.5+ (« The member "X" shadows a native class »). Verrou :
+  `scripts/test_simulation_arbre_cpp.gd` (patron
+  `test_collision_lot_cpp.gd` : gate `ClassDB.class_exists`,
+  instanciation, `population()==0`, quit(0/1)). Banc de mesure
+  headless : `jeu/bancs/banc_mesure_tick_arbre.gd` (SceneTree custom
+  qui monte la coquille, laisse la population monter à N arbres,
+  chronomètre TICKS_MESURE ticks GDScript, imprime µs/tick) — point
+  de référence à réutiliser tel quel aux étapes suivantes du portage
+  pour comparer le gain C++ / GDScript à seed égal, palier égal.
+  Piège documenté : `add_child(racine)` dans `extends SceneTree` +
+  `--headless --script` n'appelle pas `_ready()` synchro, un
+  `await process_frame` est requis avant de lire `_sim`. `avancer`
+  du mécanisme framework n'est pas utilisé (il compare à un seuil
+  unique, sans notion d'événement).
   Chaque graine échue passe par le MÊME gate de trouée que la
   germination directe
   (`_trouee_saturee`, patron `jeu/plantes/vegetation.gd:trouee_suffisante`).

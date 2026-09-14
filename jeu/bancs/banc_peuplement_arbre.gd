@@ -4,12 +4,12 @@
 # scene (sol, MultiMesh, lumiere, camera, joueur en mode isole), lire le
 # catalogue local JSON, instancier les instances coeur (`Monde`,
 # `ChampSaturationPlat`, `AttenteSeuil`) et le module de simulation
-# (`SimulationArbre`), puis a chaque frame gerer la cadence de simulation
+# (`SimulationArbreGd`), puis a chaque frame gerer la cadence de simulation
 # et deleguer le pas a `_sim.avancer(pas)`. Une porte, une commande.
 #
 # Aucune ligne de logique de simulation ne vit ici. Les colonnes de la
 # population, les structures de travail par-tick, la config figee, le
-# RNG et les refs coeur vivent tous dans `SimulationArbre`. `monde.gd`
+# RNG et les refs coeur vivent tous dans `SimulationArbreGd`. `monde.gd`
 # et `champ_saturation_plat.gd` sont appeles UNIQUEMENT depuis le
 # module (jamais depuis la coquille) : les instances sont construites
 # ici puis injectees a `_sim.attacher(...)`.
@@ -29,18 +29,18 @@ const Monde = preload("res://scripts/monde.gd")
 const ChampSaturationPlat = preload("res://scripts/champ_saturation_plat.gd")
 const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
-const SimulationArbre = preload("res://jeu/bancs/simulation_arbre.gd")
+const SimulationArbreGd = preload("res://jeu/bancs/simulation_arbre.gd")
 
 const CHEMIN_CATALOGUE_LOCAL := "res://data/banc_peuplement_arbre.json"
 const CHEMIN_TYPES := "res://data/types.json"
 
 # Hauteur du sol visuel monte par `_monter_scene`. Meme constante que
-# `SimulationArbre.Y_SOL` -- doublage assume (la coquille ne dependrait
+# `SimulationArbreGd.Y_SOL` -- doublage assume (la coquille ne dependrait
 # sinon de la sim que pour lire une constante scenographique).
 const Y_SOL := 12.0
 
 # Capacite initiale des deux MultiMesh, doit correspondre a
-# `SimulationArbre.CAPACITE_INITIALE` -- l'init des colonnes de la sim
+# `SimulationArbreGd.CAPACITE_INITIALE` -- l'init des colonnes de la sim
 # repose sur cette taille de buffer.
 const CAPACITE_INITIALE := 8
 
@@ -146,9 +146,13 @@ func _ready() -> void:
 			_monter_joueur()
 	_monter_population_nodes()
 	# Instancie la sim et lui injecte tout.
-	_sim = SimulationArbre.new()
+	_sim = SimulationArbreGd.new()
 	_sim.configurer(donnees)
 	_sim.attacher(_mm_tronc, _mm_feuillage, monde, couvert, banque, hote_actif, carte_terrain_ref, types_dynamique)
+	# BASCULE C++ activee par defaut (etape 2 : passe 1 senescence + stade
+	# + detection + mort vieillesse tourne cote C++). Silencieux si
+	# l'extension n'est pas chargee (push_warning + retombe sur l'oracle).
+	_sim.configurer_cpp(true)
 	# Position monde de l'arbre INITIAL : lit `global_position.xz` du
 	# noeud de la coquille pose dans la scene. Mode isole : le tscn du
 	# banc n'a pas de transform, `global_position = Vector3.ZERO`, donc
@@ -266,7 +270,7 @@ func _monter_joueur() -> void:
 # par la largeur dans `_ecrire_slot` donne le meme diametre). CylinderMesh
 # hauteur 1 rayon-bas 0.5 rayon-haut 0 (cone feuillage). L'init des
 # COLONNES de la sim (tailles, sentinelles, ordre des `_ecrire_slot_vide`)
-# se fait dans `SimulationArbre._monter_population_init`, appele par
+# se fait dans `SimulationArbreGd._monter_population_init`, appele par
 # `_sim.attacher(...)` immediatement apres l'attachement des MultiMesh.
 func _monter_population_nodes() -> void:
 	var tronc_mesh := CylinderMesh.new()
