@@ -2564,6 +2564,25 @@ func _naitre(pos_x: float, pos_z: float) -> void:
 	var chose := {"id": "arbre_%d" % i, "position": position_arbre, "slot": i}
 	_choses_arbre[i] = chose
 	_monde.ajouter(chose, "arbre", position_arbre)
+	# ETAPE 8+ : synchronise shadow arbre C++ (miroir de _monde). Sans ce
+	# miroir sur le chemin _naitre unitaire (arbre initial, agrandir
+	# capacite), le shadow sous-compte les voisins et divergeait de
+	# l'oracle -- corrige ici pour rester identique a _naitre_lot.
+	if utilise_cpp and _simu_cpp != null:
+		# _pousser_stables_cpp ouvre le niveau shadow (arbre_ouvrir_niveau).
+		# S'il n'est pas encore appele (naitre_initial est avant le premier
+		# tick), le shadow n'a aucun niveau ouvert -> arbre_ajouter_lot
+		# stocke la position mais rien dans les cases. Le pousser d'abord.
+		if not _cpp_stable_pousse:
+			_pousser_stables_cpp()
+			_cpp_stable_pousse = true
+		var _slots_cpp_naitre: PackedInt32Array = PackedInt32Array()
+		_slots_cpp_naitre.append(i)
+		var _px_cpp_naitre: PackedFloat32Array = PackedFloat32Array()
+		_px_cpp_naitre.append(pos_x)
+		var _pz_cpp_naitre: PackedFloat32Array = PackedFloat32Array()
+		_pz_cpp_naitre.append(pos_z)
+		_simu_cpp.arbre_ajouter_lot(_slots_cpp_naitre, _px_cpp_naitre, _pz_cpp_naitre, Y_SOL)
 	# INVALIDATION CACHE RENDU par coherence avec `_naitre_lot` : force
 	# `_ecrire_slot` a repousser transform+couleur sans risquer un skip
 	# EPS sur un cache herite d'un slot precedent.

@@ -75,6 +75,31 @@ func _init() -> void:
 	sim_a.naitre_initial(0.0, 0.0)
 	sim_b.naitre_initial(0.0, 0.0)
 
+	# ETAPE : verifie que le shadow C++ est synchro avec _monde APRES
+	# naitre_initial. Le bug corrige : _naitre unitaire n'appelait pas
+	# arbre_ajouter_lot, donc le shadow ratait l'arbre initial. Ce test
+	# doit ECHOUER sans le fix, PASSER avec.
+	var _rayon_comp_test: float = float(sim_b.get("_rayon_competition"))
+	var _monde_sim_b: RefCounted = sim_b.get("_monde")
+	var _voisins_monde_init: Array = _monde_sim_b.choses_dans_rayons_brut_xz(
+		[Vector3(0.0, 12.0, 0.0)], _rayon_comp_test
+	)
+	var _simu_cpp_b_early: RefCounted = sim_b.get("_simu_cpp")
+	var _px_probe: PackedFloat32Array = PackedFloat32Array()
+	_px_probe.append(0.0)
+	var _pz_probe: PackedFloat32Array = PackedFloat32Array()
+	_pz_probe.append(0.0)
+	var _voisins_shadow_init: Dictionary = _simu_cpp_b_early.arbre_choses_dans_rayons_brut_xz(
+		_px_probe, _pz_probe, 12.0, _rayon_comp_test
+	)
+	var _monde_count_init: int = _voisins_monde_init[0].size()
+	var _shadow_offsets_init: PackedInt32Array = _voisins_shadow_init.offsets
+	var _shadow_count_init: int = _shadow_offsets_init[1]
+	if _monde_count_init != _shadow_count_init:
+		printerr("ECHEC: shadow C++ desynchro de _monde apres naitre_initial -- monde=%d voisins, shadow=%d (rayon=%.1f)" % [_monde_count_init, _shadow_count_init, _rayon_comp_test])
+		quit(1)
+		return
+
 	var t: int = 0
 	while t < TICKS:
 		sim_a.avancer(PAS)
