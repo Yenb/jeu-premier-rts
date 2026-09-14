@@ -331,21 +331,137 @@ public:
 	void arbre_retirer_lot(const PackedInt32Array &slots);
 
 	// ETAPE 8 : requete spatiale, miroir bit-a-bit de monde.gd::
-	// choses_dans_rayons_brut_xz (l.664-714). Ecrasement Y : cy = floori(
-	// y_sol * inv_a), la tranche Y est constante. Ordre des voisins par
-	// case : cx croissant, cz croissant, puis ordre d'insertion dans le
-	// vector. STRICT.
-	//
-	// Sortie CSR :
-	//   "offsets" PackedInt32Array (n_positions + 1)
-	//   "slots"   PackedInt32Array (total voisins, slots data)
-	// GDScript reconstruit ensuite Array<Array<Dictionary>> depuis les
-	// slots via son propre `_choses_arbre[slot]`.
+	// choses_dans_rayons_brut_xz (l.664-714).
 	Dictionary arbre_choses_dans_rayons_brut_xz(
 			const PackedFloat32Array &positions_x,
 			const PackedFloat32Array &positions_z,
 			float y_sol,
 			float rayon) const;
+
+	// ETAPE 10 : SEMIS -- stables + zones + pre-filtre + gate + decision.
+	// Le semis ne tire PAS de RNG. Le drainage banque + dormantes reste
+	// GDScript, applique sur les listes rendues par semer_gate_decision.
+	void initialiser_stable_semis(
+			float rayon_trouee,
+			float facteur_trouee_gros,
+			float rayon_exclusion,
+			int trouee_max_voisins,
+			float demi_carte,
+			float seuil_couvert);
+
+	// Zones d'exclusion : cercle (forme=0, rayon utilise) ou rectangle
+	// (forme=1, demi_x/demi_z utilises). Poussees une fois a l'init du
+	// banc (constantes pour la vie de la sim, verifie sur disque).
+	void definir_zones_exclusion_cpp(
+			const PackedByteArray &formes,
+			const PackedFloat32Array &cx,
+			const PackedFloat32Array &cz,
+			const PackedFloat32Array &rayon,
+			const PackedFloat32Array &demi_x,
+			const PackedFloat32Array &demi_z);
+
+	// Pre-filtre : filtrage hors-carte + zones d'exclusion. Miroir
+	// l.1147-1176 du .gd. Rend :
+	//   "indices_valides" PackedInt32Array : k dans le lot qui passe
+	//   "positions_valides" PackedVector3Array : Vector3(x, y_sol, z)
+	// GDScript appelle ensuite monde.choses_dans_rayons_brut_xz sur
+	// positions_valides et couvert.lire_lot sur les graines completes.
+	Dictionary semer_pre_filtre(
+			const PackedFloat32Array &graines_x,
+			const PackedFloat32Array &graines_z,
+			float y_sol) const;
+
+	// Gate trouee + decision naissance vs banque. Miroir l.1185-1246 du .gd.
+	// Entrees :
+	//   graines_x/z : lot complet
+	//   naissances_deja_x/z : naissances DEJA dans le lot au moment de
+	//     l'appel (initialement vide). La sortie s'ajoute a ces listes en
+	//     interne pour que les graines suivantes voient les nouvelles
+	//     naissances comme voisins (l.1212-1223 du .gd).
+	//   indices_valides : PackedInt32Array (rendu par semer_pre_filtre)
+	//   voisins_offsets, voisins_slots : CSR des voisins pour les graines
+	//     valides (rendu par arbre_choses_dans_rayons_brut_xz)
+	//   couverts : couvert lu a chaque graine (via _couvert.lire_lot)
+	//   slot_stade : PackedInt32Array (pour lire stade des voisins)
+	//
+	// Sortie Dictionary :
+	//   "naissances_ajouts_x/z" PackedFloat32Array : nouvelles naissances
+	//     produites par ce semis (a append_array aux _naissances_lot_x/z)
+	//   "banque_x/z" PackedFloat32Array : graines qui vont en banque
+	//     (GDScript les inscrit via _banque_graines.ajouter + _inscrire_dormante)
+	Dictionary semer_gate_decision(
+			const PackedFloat32Array &graines_x,
+			const PackedFloat32Array &graines_z,
+			const PackedFloat32Array &naissances_deja_x,
+			const PackedFloat32Array &naissances_deja_z,
+			const PackedInt32Array &indices_valides,
+			const PackedInt32Array &voisins_offsets,
+			const PackedInt32Array &voisins_slots,
+			const PackedFloat32Array &couverts,
+			const PackedInt32Array &slot_stade) const;
+
+	// ETAPE 11 : GATE RE-TEST DES REVEILLES. Miroir l.1407-1489 du .gd
+	// (_tick_banque, boucle prospects reveilles). Meme math du gate que
+	// le semis (voisins arbres via CSR + naissances du lot en dynamique +
+	// trouee_max) MAIS :
+	//   - zones filtrees INLINE (pas de pre-filtre separe)
+	//   - pas de filtre hors-carte (prospects deja dans la carte par
+	//     construction)
+	//   - itere TOUS les prospects (pas d'indices_valides)
+	//   - decision : `passe && couvert < seuil` -> naissance ;
+	//     `couvert >= seuil` -> SKIP (le prospect reste en banque,
+	//     re-teste au prochain reveil), pas de re-inscription banque.
+	// Aucune modification du _banque_graines/_dormantes cote C++ :
+	// GDScript recoit les indices j des prospects qui produisent naissance,
+	// et applique _banque_graines.retirer + _retirer_dormante + append
+	// _naissances_lot_x/z, dans le meme ordre.
+	//
+	// Entrees :
+	//   pros_x/z : positions des prospects reveilles (dans l'ordre de
+	//     l'iteration GDScript, meme ordre que _pros_ids_tbq)
+	//   naissances_deja_x/z : naissances DEJA dans le lot au moment de
+	//     l'appel (le semis a deja tourne ce tick, donc contient les
+	//     naissances du semis). Les naissances reveilles s'ajoutent en
+	//     interne pour que les prospects suivants les voient (l.1459-1470
+	//     du .gd).
+	//   voisins_offsets, voisins_slots : CSR des voisins par prospect,
+	//     rendu par arbre_choses_dans_rayons_brut_xz sur pros_x/pros_z.
+	//   couverts : PackedFloat32Array (n_pros) -- lu par _couvert.lire_lot
+	//   slot_stade : lecture stade des voisins
+	//
+	// Sortie Dictionary :
+	//   "naissances_indices" PackedInt32Array : indices j des prospects
+	//     qui passent le gate ET dont couvert < seuil, dans l'ordre de
+	//     l'iteration (pour que GDScript retire prospects[j] et append
+	//     _naissances_lot_x/z dans le meme ordre).
+	Dictionary retester_reveilles_gate(
+			const PackedFloat32Array &pros_x,
+			const PackedFloat32Array &pros_z,
+			const PackedFloat32Array &naissances_deja_x,
+			const PackedFloat32Array &naissances_deja_z,
+			const PackedInt32Array &voisins_offsets,
+			const PackedInt32Array &voisins_slots,
+			const PackedFloat32Array &couverts,
+			const PackedInt32Array &slot_stade) const;
+
+private:
+	// Stables semis (etape 10).
+	float _rayon_trouee = 0.0f;
+	float _facteur_trouee_gros = 0.0f;
+	float _rayon_exclusion = 0.0f;
+	int _trouee_max_voisins = 0;
+	float _demi_carte = 0.0f;
+	float _seuil_couvert = 0.0f;
+
+	struct ZoneExclusionCpp {
+		int forme = 0; // 0 = cercle, 1 = rectangle
+		float cx = 0.0f;
+		float cz = 0.0f;
+		float rayon = 0.0f;
+		float demi_x = 0.0f;
+		float demi_z = 0.0f;
+	};
+	std::vector<ZoneExclusionCpp> _zones_exclusion_cpp;
 };
 
 } // namespace godot

@@ -125,6 +125,53 @@ void SimulationArbre::_bind_methods() {
 					"y_sol",
 					"rayon"),
 			&SimulationArbre::arbre_choses_dans_rayons_brut_xz);
+	ClassDB::bind_method(
+			D_METHOD("initialiser_stable_semis",
+					"rayon_trouee",
+					"facteur_trouee_gros",
+					"rayon_exclusion",
+					"trouee_max_voisins",
+					"demi_carte",
+					"seuil_couvert"),
+			&SimulationArbre::initialiser_stable_semis);
+	ClassDB::bind_method(
+			D_METHOD("definir_zones_exclusion_cpp",
+					"formes",
+					"cx",
+					"cz",
+					"rayon",
+					"demi_x",
+					"demi_z"),
+			&SimulationArbre::definir_zones_exclusion_cpp);
+	ClassDB::bind_method(
+			D_METHOD("semer_pre_filtre",
+					"graines_x",
+					"graines_z",
+					"y_sol"),
+			&SimulationArbre::semer_pre_filtre);
+	ClassDB::bind_method(
+			D_METHOD("semer_gate_decision",
+					"graines_x",
+					"graines_z",
+					"naissances_deja_x",
+					"naissances_deja_z",
+					"indices_valides",
+					"voisins_offsets",
+					"voisins_slots",
+					"couverts",
+					"slot_stade"),
+			&SimulationArbre::semer_gate_decision);
+	ClassDB::bind_method(
+			D_METHOD("retester_reveilles_gate",
+					"pros_x",
+					"pros_z",
+					"naissances_deja_x",
+					"naissances_deja_z",
+					"voisins_offsets",
+					"voisins_slots",
+					"couverts",
+					"slot_stade"),
+			&SimulationArbre::retester_reveilles_gate);
 }
 
 SimulationArbre::SimulationArbre() {
@@ -812,6 +859,351 @@ Dictionary SimulationArbre::arbre_choses_dans_rayons_brut_xz(
 	}
 	out["offsets"] = offsets;
 	out["slots"] = slots;
+	return out;
+}
+
+// ETAPE 10 : SEMIS -- init stables.
+void SimulationArbre::initialiser_stable_semis(
+		float rayon_trouee,
+		float facteur_trouee_gros,
+		float rayon_exclusion,
+		int trouee_max_voisins,
+		float demi_carte,
+		float seuil_couvert) {
+	_rayon_trouee = rayon_trouee;
+	_facteur_trouee_gros = facteur_trouee_gros;
+	_rayon_exclusion = rayon_exclusion;
+	_trouee_max_voisins = trouee_max_voisins;
+	_demi_carte = demi_carte;
+	_seuil_couvert = seuil_couvert;
+}
+
+// ETAPE 10 : zones d'exclusion, PUSH une seule fois.
+void SimulationArbre::definir_zones_exclusion_cpp(
+		const PackedByteArray &formes,
+		const PackedFloat32Array &cx,
+		const PackedFloat32Array &cz,
+		const PackedFloat32Array &rayon,
+		const PackedFloat32Array &demi_x,
+		const PackedFloat32Array &demi_z) {
+	int n = formes.size();
+	_zones_exclusion_cpp.clear();
+	_zones_exclusion_cpp.reserve(n);
+	const uint8_t *f = formes.ptr();
+	const float *pcx = cx.ptr();
+	const float *pcz = cz.ptr();
+	const float *pr = rayon.ptr();
+	const float *pdx = demi_x.ptr();
+	const float *pdz = demi_z.ptr();
+	for (int i = 0; i < n; ++i) {
+		ZoneExclusionCpp z;
+		z.forme = int(f[i]);
+		z.cx = pcx[i];
+		z.cz = pcz[i];
+		z.rayon = pr[i];
+		z.demi_x = pdx[i];
+		z.demi_z = pdz[i];
+		_zones_exclusion_cpp.push_back(z);
+	}
+}
+
+// ETAPE 10 : pre-filtre (miroir l.1147-1176 de _semer_lot).
+Dictionary SimulationArbre::semer_pre_filtre(
+		const PackedFloat32Array &graines_x,
+		const PackedFloat32Array &graines_z,
+		float y_sol) const {
+	Dictionary out;
+	PackedInt32Array indices_valides;
+	PackedVector3Array positions_valides;
+	int n = graines_x.size();
+	const float *gx = graines_x.ptr();
+	const float *gz = graines_z.ptr();
+	int n_zones = int(_zones_exclusion_cpp.size());
+	for (int k = 0; k < n; ++k) {
+		float px = gx[k];
+		float pz = gz[k];
+		if (std::fabs(px) > _demi_carte || std::fabs(pz) > _demi_carte) continue;
+		bool dans_zone = false;
+		for (int zi = 0; zi < n_zones; ++zi) {
+			const ZoneExclusionCpp &z = _zones_exclusion_cpp[zi];
+			if (z.forme == 0) {
+				float dx = px - z.cx;
+				float dz = pz - z.cz;
+				if (dx * dx + dz * dz <= z.rayon * z.rayon) {
+					dans_zone = true;
+					break;
+				}
+			} else {
+				if (std::fabs(px - z.cx) <= z.demi_x && std::fabs(pz - z.cz) <= z.demi_z) {
+					dans_zone = true;
+					break;
+				}
+			}
+		}
+		if (dans_zone) continue;
+		indices_valides.append(k);
+		positions_valides.append(Vector3(px, y_sol, pz));
+	}
+	out["indices_valides"] = indices_valides;
+	out["positions_valides"] = positions_valides;
+	return out;
+}
+
+// ETAPE 10 : gate trouee + decision (miroir l.1185-1231 de _semer_lot).
+// L'inscription banque + dormantes reste GDScript, appliquee sur banque_x/z.
+Dictionary SimulationArbre::semer_gate_decision(
+		const PackedFloat32Array &graines_x,
+		const PackedFloat32Array &graines_z,
+		const PackedFloat32Array &naissances_deja_x,
+		const PackedFloat32Array &naissances_deja_z,
+		const PackedInt32Array &indices_valides,
+		const PackedInt32Array &voisins_offsets,
+		const PackedInt32Array &voisins_slots,
+		const PackedFloat32Array &couverts,
+		const PackedInt32Array &slot_stade) const {
+	Dictionary out;
+	PackedFloat32Array naissances_ajouts_x;
+	PackedFloat32Array naissances_ajouts_z;
+	PackedFloat32Array banque_x;
+	PackedFloat32Array banque_z;
+
+	const float *gx = graines_x.ptr();
+	const float *gz = graines_z.ptr();
+	const int32_t *iv = indices_valides.ptr();
+	const int32_t *off = voisins_offsets.ptr();
+	const int32_t *vsl = voisins_slots.ptr();
+	const float *cov = couverts.ptr();
+	const int32_t *ss = slot_stade.ptr();
+	int taille_slot_stade = slot_stade.size();
+
+	// Naissances dynamiques : le lot initial (naissances_deja_*) plus les
+	// nouvelles produites par ce semis (l.1211-1223 du .gd). Buffer local
+	// pour eviter de reboucler sur PackedFloat32Array a chaque graine.
+	std::vector<float> nx;
+	std::vector<float> nz;
+	int n_deja = naissances_deja_x.size();
+	nx.reserve(n_deja + 32);
+	nz.reserve(n_deja + 32);
+	if (n_deja > 0) {
+		const float *ndx = naissances_deja_x.ptr();
+		const float *ndz = naissances_deja_z.ptr();
+		for (int i = 0; i < n_deja; ++i) {
+			nx.push_back(ndx[i]);
+			nz.push_back(ndz[i]);
+		}
+	}
+
+	float carre_normal = _rayon_trouee * _rayon_trouee;
+	float carre_min = _rayon_exclusion * _rayon_exclusion;
+	int nv = indices_valides.size();
+	for (int j = 0; j < nv; ++j) {
+		int kk = iv[j];
+		float pos_x = gx[kk];
+		float pos_z = gz[kk];
+		int compte_normal = 0;
+		bool passe = true;
+
+		// Voisins arbres (offsets CSR sur le j-ieme valide).
+		int off_beg = off[j];
+		int off_end = off[j + 1];
+		for (int oi = off_beg; oi < off_end; ++oi) {
+			int32_t slot_v = vsl[oi];
+			int stade_num = 0;
+			if (slot_v >= 0 && slot_v < taille_slot_stade) {
+				stade_num = ss[slot_v] + 1;
+			}
+			if (stade_num >= _stade_gros_min && stade_num <= _stade_gros_max) {
+				passe = false;
+				break;
+			}
+			// Distance^2 xz (y_sol egal des deux cotes, dy = 0).
+			auto it_pos = _positions_arbre.find(slot_v);
+			if (it_pos == _positions_arbre.end()) continue;
+			float vx = it_pos->second.first;
+			float vz = it_pos->second.second;
+			float dx = vx - pos_x;
+			float dz = vz - pos_z;
+			float d2 = dx * dx + dz * dz;
+			if (d2 < carre_min) {
+				passe = false;
+				break;
+			}
+			if (d2 <= carre_normal) {
+				++compte_normal;
+			}
+		}
+
+		if (passe) {
+			// Voisins naissances du meme lot (dynamique).
+			int m = int(nx.size());
+			for (int js = 0; js < m; ++js) {
+				float dx = nx[js] - pos_x;
+				float dz = nz[js] - pos_z;
+				float d2n = dx * dx + dz * dz;
+				if (d2n < carre_min) {
+					passe = false;
+					break;
+				}
+				if (d2n <= carre_normal) {
+					++compte_normal;
+				}
+			}
+		}
+
+		if (passe && compte_normal > _trouee_max_voisins) {
+			passe = false;
+		}
+		if (!passe) continue;
+
+		if (cov[kk] < _seuil_couvert) {
+			naissances_ajouts_x.append(pos_x);
+			naissances_ajouts_z.append(pos_z);
+			nx.push_back(pos_x);
+			nz.push_back(pos_z);
+			continue;
+		}
+		banque_x.append(pos_x);
+		banque_z.append(pos_z);
+	}
+
+	out["naissances_ajouts_x"] = naissances_ajouts_x;
+	out["naissances_ajouts_z"] = naissances_ajouts_z;
+	out["banque_x"] = banque_x;
+	out["banque_z"] = banque_z;
+	return out;
+}
+
+// ETAPE 11 : gate re-test des reveilles (miroir _tick_banque l.1407-1489).
+Dictionary SimulationArbre::retester_reveilles_gate(
+		const PackedFloat32Array &pros_x,
+		const PackedFloat32Array &pros_z,
+		const PackedFloat32Array &naissances_deja_x,
+		const PackedFloat32Array &naissances_deja_z,
+		const PackedInt32Array &voisins_offsets,
+		const PackedInt32Array &voisins_slots,
+		const PackedFloat32Array &couverts,
+		const PackedInt32Array &slot_stade) const {
+	Dictionary out;
+	PackedInt32Array naissances_indices;
+
+	int n = pros_x.size();
+	const float *px = pros_x.ptr();
+	const float *pz = pros_z.ptr();
+	const int32_t *off = voisins_offsets.ptr();
+	const int32_t *vsl = voisins_slots.ptr();
+	const float *cov = couverts.ptr();
+	const int32_t *ss = slot_stade.ptr();
+	int taille_slot_stade = slot_stade.size();
+	int n_zones = int(_zones_exclusion_cpp.size());
+
+	// Naissances dynamiques : le lot initial (naissances du semis) plus les
+	// nouvelles produites par les reveilles (l.1459-1470, l.1488-1489 du .gd).
+	std::vector<float> nx;
+	std::vector<float> nz;
+	int n_deja = naissances_deja_x.size();
+	nx.reserve(n_deja + 32);
+	nz.reserve(n_deja + 32);
+	if (n_deja > 0) {
+		const float *ndx = naissances_deja_x.ptr();
+		const float *ndz = naissances_deja_z.ptr();
+		for (int i = 0; i < n_deja; ++i) {
+			nx.push_back(ndx[i]);
+			nz.push_back(ndz[i]);
+		}
+	}
+
+	float carre_normal = _rayon_trouee * _rayon_trouee;
+	float carre_min = _rayon_exclusion * _rayon_exclusion;
+
+	for (int j = 0; j < n; ++j) {
+		float pos_x = px[j];
+		float pos_z = pz[j];
+
+		// Zones filtrees INLINE (miroir l.1416-1434 du .gd).
+		if (n_zones > 0) {
+			bool dans_zone = false;
+			for (int zi = 0; zi < n_zones; ++zi) {
+				const ZoneExclusionCpp &z = _zones_exclusion_cpp[zi];
+				if (z.forme == 0) {
+					float zdx = pos_x - z.cx;
+					float zdz = pos_z - z.cz;
+					if (zdx * zdx + zdz * zdz <= z.rayon * z.rayon) {
+						dans_zone = true;
+						break;
+					}
+				} else {
+					if (std::fabs(pos_x - z.cx) <= z.demi_x && std::fabs(pos_z - z.cz) <= z.demi_z) {
+						dans_zone = true;
+						break;
+					}
+				}
+			}
+			if (dans_zone) continue;
+		}
+
+		int compte_normal = 0;
+		bool passe = true;
+
+		// Voisins arbres via CSR sur j.
+		int off_beg = off[j];
+		int off_end = off[j + 1];
+		for (int oi = off_beg; oi < off_end; ++oi) {
+			int32_t slot_v = vsl[oi];
+			int stade_num = 0;
+			if (slot_v >= 0 && slot_v < taille_slot_stade) {
+				stade_num = ss[slot_v] + 1;
+			}
+			if (stade_num >= _stade_gros_min && stade_num <= _stade_gros_max) {
+				passe = false;
+				break;
+			}
+			auto it_pos = _positions_arbre.find(slot_v);
+			if (it_pos == _positions_arbre.end()) continue;
+			float vx = it_pos->second.first;
+			float vz = it_pos->second.second;
+			float dx = vx - pos_x;
+			float dz = vz - pos_z;
+			float d2 = dx * dx + dz * dz;
+			if (d2 < carre_min) {
+				passe = false;
+				break;
+			}
+			if (d2 <= carre_normal) {
+				++compte_normal;
+			}
+		}
+
+		if (passe) {
+			// Voisins naissances du meme lot (dynamique).
+			int m = int(nx.size());
+			for (int js = 0; js < m; ++js) {
+				float dx = nx[js] - pos_x;
+				float dz = nz[js] - pos_z;
+				float d2n = dx * dx + dz * dz;
+				if (d2n < carre_min) {
+					passe = false;
+					break;
+				}
+				if (d2n <= carre_normal) {
+					++compte_normal;
+				}
+			}
+		}
+
+		if (passe && compte_normal > _trouee_max_voisins) {
+			passe = false;
+		}
+		if (!passe) continue;
+
+		// Reveil : couvert >= seuil -> skip (le prospect reste en banque).
+		if (cov[j] >= _seuil_couvert) continue;
+
+		naissances_indices.append(j);
+		nx.push_back(pos_x);
+		nz.push_back(pos_z);
+	}
+
+	out["naissances_indices"] = naissances_indices;
 	return out;
 }
 

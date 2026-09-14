@@ -403,7 +403,7 @@ var _us_tick_cumul: int = 0
 # etat entre appels : la classe C++ ne stocke que les STABLES (poussees
 # une fois par `_pousser_stables_cpp`), les colonnes mutables voyagent
 # par frontiere a chaque tick.
-var utilise_cpp: bool = false
+var utilise_cpp: bool = true
 var _simu_cpp: RefCounted = null
 # ETAPE 8 : slots morts a retirer du shadow C++ a la fin du tick.
 # Accumule morts_vieillesse + morts_competition. Reset a chaque tick.
@@ -604,6 +604,35 @@ func attacher(mm_tronc: MultiMesh, mm_feuillage: MultiMesh, monde: RefCounted, c
 # noeuds retenue -- data legere.
 func definir_zones_exclusion(zones: Array) -> void:
 	_zones_exclusion = zones
+	# ETAPE 10 : miroir cpp si bascule active. Zones constantes pour la vie
+	# de la sim ; push unique. Si utilise_cpp est active plus tard, la push
+	# sera refaite par activer_cpp -> _pousser_stables_cpp.
+	if utilise_cpp and _simu_cpp != null:
+		_pousser_zones_exclusion_cpp()
+
+func _pousser_zones_exclusion_cpp() -> void:
+	var n: int = _zones_exclusion.size()
+	var formes: PackedByteArray = PackedByteArray()
+	var cx: PackedFloat32Array = PackedFloat32Array()
+	var cz: PackedFloat32Array = PackedFloat32Array()
+	var ry: PackedFloat32Array = PackedFloat32Array()
+	var dx: PackedFloat32Array = PackedFloat32Array()
+	var dz: PackedFloat32Array = PackedFloat32Array()
+	formes.resize(n)
+	cx.resize(n)
+	cz.resize(n)
+	ry.resize(n)
+	dx.resize(n)
+	dz.resize(n)
+	for i in range(n):
+		var z: Dictionary = _zones_exclusion[i]
+		formes[i] = int(z.get("forme", 0))
+		cx[i] = float(z.get("cx", 0.0))
+		cz[i] = float(z.get("cz", 0.0))
+		ry[i] = float(z.get("rayon", 0.0))
+		dx[i] = float(z.get("demi_x", 0.0))
+		dz[i] = float(z.get("demi_z", 0.0))
+	_simu_cpp.definir_zones_exclusion_cpp(formes, cx, cz, ry, dx, dz)
 
 # API PUBLIQUE. Plante l'arbre initial (equivalent de l'ancien
 # `_naitre(global_position.x, global_position.z)` au `_ready`).
@@ -1141,109 +1170,170 @@ func avancer(pas: float) -> void:
 	if _n_sml > 0:
 		var _rayon_gros_sml: float = _rayon_trouee * _facteur_trouee_gros
 		var _carre_normal_sml: float = _rayon_trouee * _rayon_trouee
-		var _indices_valides_sml: PackedInt32Array = PackedInt32Array()
-		var _positions_valides_sml: Array = []
-		var _n_zones_pre_sml: int = _zones_exclusion.size()
-		var _k_sml: int = 0
-		while _k_sml < _n_sml:
-			var _pxp_sml: float = _graines_lot_x[_k_sml]
-			var _pzp_sml: float = _graines_lot_z[_k_sml]
-			if absf(_pxp_sml) > _demi_carte or absf(_pzp_sml) > _demi_carte:
+		# ETAPE 10 : BASCULE C++ pour pre-filtre + gate + decision. L'inscription
+		# banque + dormantes + expirations reste GDScript, appliquee sur les
+		# listes rendues par semer_gate_decision.
+		if utiliser_cpp_ce_tick:
+			var _pref_cpp: Dictionary = _simu_cpp.semer_pre_filtre(_graines_lot_x, _graines_lot_z, Y_SOL)
+			var _iv_cpp: PackedInt32Array = _pref_cpp["indices_valides"]
+			var _pv_cpp: PackedVector3Array = _pref_cpp["positions_valides"]
+			if _iv_cpp.size() > 0:
+				# Positions valides en PackedFloat32Array pour l'API C++ shadow.
+				var _pvx_cpp: PackedFloat32Array = PackedFloat32Array()
+				var _pvz_cpp: PackedFloat32Array = PackedFloat32Array()
+				_pvx_cpp.resize(_pv_cpp.size())
+				_pvz_cpp.resize(_pv_cpp.size())
+				for _iiv in range(_pv_cpp.size()):
+					var _vv: Vector3 = _pv_cpp[_iiv]
+					_pvx_cpp[_iiv] = _vv.x
+					_pvz_cpp[_iiv] = _vv.z
+				var _csr_semis: Dictionary = _simu_cpp.arbre_choses_dans_rayons_brut_xz(_pvx_cpp, _pvz_cpp, Y_SOL, _rayon_gros_sml)
+				var _off_semis: PackedInt32Array = _csr_semis["offsets"]
+				var _slots_semis: PackedInt32Array = _csr_semis["slots"]
+				var _couverts_cpp: PackedFloat32Array = _couvert.lire_lot(_graines_lot_x, _graines_lot_z, _taille_case)
+				var _res_gate: Dictionary = _simu_cpp.semer_gate_decision(
+					_graines_lot_x,
+					_graines_lot_z,
+					_naissances_lot_x,
+					_naissances_lot_z,
+					_iv_cpp,
+					_off_semis,
+					_slots_semis,
+					_couverts_cpp,
+					_slot_stade
+				)
+				var _naiss_ax: PackedFloat32Array = _res_gate["naissances_ajouts_x"]
+				var _naiss_az: PackedFloat32Array = _res_gate["naissances_ajouts_z"]
+				var _banque_x_cpp: PackedFloat32Array = _res_gate["banque_x"]
+				var _banque_z_cpp: PackedFloat32Array = _res_gate["banque_z"]
+				_naissances_lot_x.append_array(_naiss_ax)
+				_naissances_lot_z.append_array(_naiss_az)
+				# Inscription banque + dormantes + expirations (GDScript, ordre
+				# preserve : miroir l.1232-1246 du chemin oracle).
+				var _nbq_cpp: int = _banque_x_cpp.size()
+				var _ibq_cpp: int = 0
+				while _ibq_cpp < _nbq_cpp:
+					var _bx_cpp: float = _banque_x_cpp[_ibq_cpp]
+					var _bz_cpp: float = _banque_z_cpp[_ibq_cpp]
+					_ibq_cpp += 1
+					var _id_prospect_cpp: int = _banque_graines.ajouter({
+						"position": Vector3(_bx_cpp, Y_SOL, _bz_cpp),
+					})
+					if _id_prospect_cpp >= 0:
+						if _taille_case_dormantes > 0.0:
+							var _inv_case_cpp: float = 1.0 / _taille_case_dormantes
+							var _cle_cpp: Vector2i = Vector2i(floori(_bx_cpp * _inv_case_cpp), floori(_bz_cpp * _inv_case_cpp))
+							var _arr_cpp = _dormantes_par_case.get(_cle_cpp, null)
+							if _arr_cpp == null:
+								_arr_cpp = []
+								_dormantes_par_case[_cle_cpp] = _arr_cpp
+							(_arr_cpp as Array).append(_id_prospect_cpp)
+							_case_de_dormante[_id_prospect_cpp] = _cle_cpp
+						_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_cpp])
+		else:
+			var _indices_valides_sml: PackedInt32Array = PackedInt32Array()
+			var _positions_valides_sml: Array = []
+			var _n_zones_pre_sml: int = _zones_exclusion.size()
+			var _k_sml: int = 0
+			while _k_sml < _n_sml:
+				var _pxp_sml: float = _graines_lot_x[_k_sml]
+				var _pzp_sml: float = _graines_lot_z[_k_sml]
+				if absf(_pxp_sml) > _demi_carte or absf(_pzp_sml) > _demi_carte:
+					_k_sml += 1
+					continue
+				var _dans_zone_pre_sml: bool = false
+				if _n_zones_pre_sml > 0:
+					var _zi_p_sml: int = 0
+					while _zi_p_sml < _n_zones_pre_sml:
+						var _zone_p_sml: Dictionary = _zones_exclusion[_zi_p_sml]
+						_zi_p_sml += 1
+						if int(_zone_p_sml.forme) == 0:
+							var _zdx_p_sml: float = _pxp_sml - float(_zone_p_sml.cx)
+							var _zdz_p_sml: float = _pzp_sml - float(_zone_p_sml.cz)
+							var _r_p_sml: float = float(_zone_p_sml.rayon)
+							if _zdx_p_sml * _zdx_p_sml + _zdz_p_sml * _zdz_p_sml <= _r_p_sml * _r_p_sml:
+								_dans_zone_pre_sml = true
+								break
+						else:
+							if absf(_pxp_sml - float(_zone_p_sml.cx)) <= float(_zone_p_sml.demi_x) and absf(_pzp_sml - float(_zone_p_sml.cz)) <= float(_zone_p_sml.demi_z):
+								_dans_zone_pre_sml = true
+								break
+				if _dans_zone_pre_sml:
+					_k_sml += 1
+					continue
+				_indices_valides_sml.append(_k_sml)
+				_positions_valides_sml.append(Vector3(_pxp_sml, Y_SOL, _pzp_sml))
 				_k_sml += 1
-				continue
-			var _dans_zone_pre_sml: bool = false
-			if _n_zones_pre_sml > 0:
-				var _zi_p_sml: int = 0
-				while _zi_p_sml < _n_zones_pre_sml:
-					var _zone_p_sml: Dictionary = _zones_exclusion[_zi_p_sml]
-					_zi_p_sml += 1
-					if int(_zone_p_sml.forme) == 0:
-						var _zdx_p_sml: float = _pxp_sml - float(_zone_p_sml.cx)
-						var _zdz_p_sml: float = _pzp_sml - float(_zone_p_sml.cz)
-						var _r_p_sml: float = float(_zone_p_sml.rayon)
-						if _zdx_p_sml * _zdx_p_sml + _zdz_p_sml * _zdz_p_sml <= _r_p_sml * _r_p_sml:
-							_dans_zone_pre_sml = true
-							break
-					else:
-						if absf(_pxp_sml - float(_zone_p_sml.cx)) <= float(_zone_p_sml.demi_x) and absf(_pzp_sml - float(_zone_p_sml.cz)) <= float(_zone_p_sml.demi_z):
-							_dans_zone_pre_sml = true
-							break
-			if _dans_zone_pre_sml:
-				_k_sml += 1
-				continue
-			_indices_valides_sml.append(_k_sml)
-			_positions_valides_sml.append(Vector3(_pxp_sml, Y_SOL, _pzp_sml))
-			_k_sml += 1
-		if not _positions_valides_sml.is_empty():
-			var _voisins_par_graine_sml: Array = _monde.choses_dans_rayons_brut_xz(_positions_valides_sml, _rayon_gros_sml)
-			var _couverts_sml: PackedFloat32Array = _couvert.lire_lot(_graines_lot_x, _graines_lot_z, _taille_case)
-			var _carre_min_sml: float = _rayon_exclusion * _rayon_exclusion
-			var _stade_gros_min_sml: int = _stade_gros_min
-			var _stade_gros_max_sml: int = _stade_gros_max
-			var _trouee_max_sml: int = _trouee_max_voisins
-			var _taille_slot_stade_sml: int = _slot_stade.size()
-			var _j_lot_sml: int = 0
-			var _nv_sml: int = _indices_valides_sml.size()
-			while _j_lot_sml < _nv_sml:
-				var _kk_sml: int = _indices_valides_sml[_j_lot_sml]
-				var _pos_x_sml: float = _graines_lot_x[_kk_sml]
-				var _pos_z_sml: float = _graines_lot_z[_kk_sml]
-				var _voisins_sml: Array = _voisins_par_graine_sml[_j_lot_sml]
-				_j_lot_sml += 1
-				var _arrivee_sml := Vector3(_pos_x_sml, Y_SOL, _pos_z_sml)
-				var _compte_normal_sml: int = 0
-				var _passe_sml: bool = true
-				for _voisin_sml in _voisins_sml:
-					var _slot_v_sml: int = int(_voisin_sml.get("slot", -1))
-					var _stade_num_sml: int = 0
-					if _slot_v_sml >= 0 and _slot_v_sml < _taille_slot_stade_sml:
-						_stade_num_sml = _slot_stade[_slot_v_sml] + 1
-					if _stade_num_sml >= _stade_gros_min_sml and _stade_num_sml <= _stade_gros_max_sml:
-						_passe_sml = false
-						break
-					var _pos_voisin_sml: Vector3 = _voisin_sml.position
-					var _d2_sml: float = _arrivee_sml.distance_squared_to(_pos_voisin_sml)
-					if _d2_sml < _carre_min_sml:
-						_passe_sml = false
-						break
-					if _d2_sml <= _carre_normal_sml:
-						_compte_normal_sml += 1
-				if _passe_sml:
-					var _m_sml: int = _naissances_lot_x.size()
-					var _j_s_sml: int = 0
-					while _j_s_sml < _m_sml:
-						var _dx_sml: float = _naissances_lot_x[_j_s_sml] - _pos_x_sml
-						var _dz_sml: float = _naissances_lot_z[_j_s_sml] - _pos_z_sml
-						var _d2n_sml: float = _dx_sml * _dx_sml + _dz_sml * _dz_sml
-						if _d2n_sml < _carre_min_sml:
+			if not _positions_valides_sml.is_empty():
+				var _voisins_par_graine_sml: Array = _monde.choses_dans_rayons_brut_xz(_positions_valides_sml, _rayon_gros_sml)
+				var _couverts_sml: PackedFloat32Array = _couvert.lire_lot(_graines_lot_x, _graines_lot_z, _taille_case)
+				var _carre_min_sml: float = _rayon_exclusion * _rayon_exclusion
+				var _stade_gros_min_sml: int = _stade_gros_min
+				var _stade_gros_max_sml: int = _stade_gros_max
+				var _trouee_max_sml: int = _trouee_max_voisins
+				var _taille_slot_stade_sml: int = _slot_stade.size()
+				var _j_lot_sml: int = 0
+				var _nv_sml: int = _indices_valides_sml.size()
+				while _j_lot_sml < _nv_sml:
+					var _kk_sml: int = _indices_valides_sml[_j_lot_sml]
+					var _pos_x_sml: float = _graines_lot_x[_kk_sml]
+					var _pos_z_sml: float = _graines_lot_z[_kk_sml]
+					var _voisins_sml: Array = _voisins_par_graine_sml[_j_lot_sml]
+					_j_lot_sml += 1
+					var _arrivee_sml := Vector3(_pos_x_sml, Y_SOL, _pos_z_sml)
+					var _compte_normal_sml: int = 0
+					var _passe_sml: bool = true
+					for _voisin_sml in _voisins_sml:
+						var _slot_v_sml: int = int(_voisin_sml.get("slot", -1))
+						var _stade_num_sml: int = 0
+						if _slot_v_sml >= 0 and _slot_v_sml < _taille_slot_stade_sml:
+							_stade_num_sml = _slot_stade[_slot_v_sml] + 1
+						if _stade_num_sml >= _stade_gros_min_sml and _stade_num_sml <= _stade_gros_max_sml:
 							_passe_sml = false
 							break
-						if _d2n_sml <= _carre_normal_sml:
+						var _pos_voisin_sml: Vector3 = _voisin_sml.position
+						var _d2_sml: float = _arrivee_sml.distance_squared_to(_pos_voisin_sml)
+						if _d2_sml < _carre_min_sml:
+							_passe_sml = false
+							break
+						if _d2_sml <= _carre_normal_sml:
 							_compte_normal_sml += 1
-						_j_s_sml += 1
-				if _passe_sml and _compte_normal_sml > _trouee_max_sml:
-					_passe_sml = false
-				if not _passe_sml:
-					continue
-				if _couverts_sml[_kk_sml] < _seuil_couvert:
-					_naissances_lot_x.append(_pos_x_sml)
-					_naissances_lot_z.append(_pos_z_sml)
-					continue
-				var _id_prospect_sml: int = _banque_graines.ajouter({
-					"position": Vector3(_pos_x_sml, Y_SOL, _pos_z_sml),
-				})
-				if _id_prospect_sml >= 0:
-					# INLINE _inscrire_dormante(id, pos_x, pos_z) -- suffix _smlind
-					if _taille_case_dormantes > 0.0:
-						var _inv_case_smlind: float = 1.0 / _taille_case_dormantes
-						var _cle_smlind: Vector2i = Vector2i(floori(_pos_x_sml * _inv_case_smlind), floori(_pos_z_sml * _inv_case_smlind))
-						var _arr_smlind = _dormantes_par_case.get(_cle_smlind, null)
-						if _arr_smlind == null:
-							_arr_smlind = []
-							_dormantes_par_case[_cle_smlind] = _arr_smlind
-						(_arr_smlind as Array).append(_id_prospect_sml)
-						_case_de_dormante[_id_prospect_sml] = _cle_smlind
-					_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_sml])
+					if _passe_sml:
+						var _m_sml: int = _naissances_lot_x.size()
+						var _j_s_sml: int = 0
+						while _j_s_sml < _m_sml:
+							var _dx_sml: float = _naissances_lot_x[_j_s_sml] - _pos_x_sml
+							var _dz_sml: float = _naissances_lot_z[_j_s_sml] - _pos_z_sml
+							var _d2n_sml: float = _dx_sml * _dx_sml + _dz_sml * _dz_sml
+							if _d2n_sml < _carre_min_sml:
+								_passe_sml = false
+								break
+							if _d2n_sml <= _carre_normal_sml:
+								_compte_normal_sml += 1
+							_j_s_sml += 1
+					if _passe_sml and _compte_normal_sml > _trouee_max_sml:
+						_passe_sml = false
+					if not _passe_sml:
+						continue
+					if _couverts_sml[_kk_sml] < _seuil_couvert:
+						_naissances_lot_x.append(_pos_x_sml)
+						_naissances_lot_z.append(_pos_z_sml)
+						continue
+					var _id_prospect_sml: int = _banque_graines.ajouter({
+						"position": Vector3(_pos_x_sml, Y_SOL, _pos_z_sml),
+					})
+					if _id_prospect_sml >= 0:
+						# INLINE _inscrire_dormante(id, pos_x, pos_z) -- suffix _smlind
+						if _taille_case_dormantes > 0.0:
+							var _inv_case_smlind: float = 1.0 / _taille_case_dormantes
+							var _cle_smlind: Vector2i = Vector2i(floori(_pos_x_sml * _inv_case_smlind), floori(_pos_z_sml * _inv_case_smlind))
+							var _arr_smlind = _dormantes_par_case.get(_cle_smlind, null)
+							if _arr_smlind == null:
+								_arr_smlind = []
+								_dormantes_par_case[_cle_smlind] = _arr_smlind
+							(_arr_smlind as Array).append(_id_prospect_sml)
+							_case_de_dormante[_id_prospect_sml] = _cle_smlind
+						_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_sml])
 	_us_semis += Time.get_ticks_usec() - _us_bornage_debut
 	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _tick_banque -- morceau 4/N. Vars suffixees `_tbq`.
@@ -1313,90 +1403,131 @@ func avancer(pas: float) -> void:
 		while _kk_pre_tbq < _nn_tbq:
 			_pros_positions_tbq[_kk_pre_tbq] = Vector3(_pros_x_tbq[_kk_pre_tbq], Y_SOL, _pros_z_tbq[_kk_pre_tbq])
 			_kk_pre_tbq += 1
-		var _voisins_par_prospect_tbq: Array = _monde.choses_dans_rayons_brut_xz(_pros_positions_tbq, _rayon_gros_tbq)
-		var _kk_tbq: int = 0
-		while _kk_tbq < _nn_tbq:
-			var _idx_tbq: int = _kk_tbq
-			var _id_tbq: int = int(_pros_ids_tbq[_kk_tbq])
-			var _pos_tbq: Vector3 = Vector3(_pros_x_tbq[_kk_tbq], Y_SOL, _pros_z_tbq[_kk_tbq])
-			var _couvert_b_tbq: float = _couverts_tbq[_kk_tbq]
-			_kk_tbq += 1
-			var _arrivee_tbq := _pos_tbq
-			var _n_zones_tbq: int = _zones_exclusion.size()
-			if _n_zones_tbq > 0:
-				var _dans_zone_tbq: bool = false
-				var _zi_tbq: int = 0
-				while _zi_tbq < _n_zones_tbq:
-					var _zone_tbq: Dictionary = _zones_exclusion[_zi_tbq]
-					_zi_tbq += 1
-					if int(_zone_tbq.forme) == 0:
-						var _zdx_tbq: float = _pos_tbq.x - float(_zone_tbq.cx)
-						var _zdz_tbq: float = _pos_tbq.z - float(_zone_tbq.cz)
-						var _r_tbq: float = float(_zone_tbq.rayon)
-						if _zdx_tbq * _zdx_tbq + _zdz_tbq * _zdz_tbq <= _r_tbq * _r_tbq:
-							_dans_zone_tbq = true
-							break
-					else:
-						if absf(_pos_tbq.x - float(_zone_tbq.cx)) <= float(_zone_tbq.demi_x) and absf(_pos_tbq.z - float(_zone_tbq.cz)) <= float(_zone_tbq.demi_z):
-							_dans_zone_tbq = true
-							break
-				if _dans_zone_tbq:
-					continue
-			# M3 GROUPE : lecture indexee du batch pre-calcule (meme patron
-			# que le semis `_voisins_par_graine_sml`). Format brut : chaque
-			# entree est la `chose` direct, pas un wrap `{chose,type,position}`.
-			# Meme reference dict cote monde : `wrap.chose == brut`, valeurs
-			# lues par le gate (`get("slot",-1)`, `.position`) identiques.
-			var _voisins_tbq: Array = _voisins_par_prospect_tbq[_idx_tbq]
-			var _compte_normal_tbq: int = 0
-			var _passe_tbq: bool = true
-			for _entree_b_tbq in _voisins_tbq:
-				var _slot_b_tbq: int = int(_entree_b_tbq.get("slot", -1))
-				var _stade_num_b_tbq: int = 0
-				if _slot_b_tbq >= 0 and _slot_b_tbq < _taille_slot_stade_tbq:
-					_stade_num_b_tbq = _slot_stade[_slot_b_tbq] + 1
-				if _stade_num_b_tbq >= _stade_gros_min_tbq and _stade_num_b_tbq <= _stade_gros_max_tbq:
-					_passe_tbq = false
-					break
-				var _pos_voisin_b_tbq: Vector3 = _entree_b_tbq.position
-				var _d2_b_tbq: float = _arrivee_tbq.distance_squared_to(_pos_voisin_b_tbq)
-				if _d2_b_tbq < _carre_min_tbq:
-					_passe_tbq = false
-					break
-				if _d2_b_tbq <= _carre_normal_tbq:
-					_compte_normal_tbq += 1
-			if _passe_tbq:
-				var _m_b_tbq: int = _naissances_lot_x.size()
-				var _j_b_tbq: int = 0
-				while _j_b_tbq < _m_b_tbq:
-					var _dx_b_tbq: float = _naissances_lot_x[_j_b_tbq] - _pos_tbq.x
-					var _dz_b_tbq: float = _naissances_lot_z[_j_b_tbq] - _pos_tbq.z
-					var _d2n_b_tbq: float = _dx_b_tbq * _dx_b_tbq + _dz_b_tbq * _dz_b_tbq
-					if _d2n_b_tbq < _carre_min_tbq:
+		# ETAPE 11 : BASCULE C++ pour le gate re-test des reveilles. Le C++
+		# reçoit pros_x/z + naissances_deja + CSR voisins + couverts + stades,
+		# rend `naissances_indices` (j des prospects qui passent + couvert
+		# bas). GDScript retire ensuite du banque/dormantes et append les
+		# naissances dans le meme ordre. Chemin oracle preserve sous else.
+		if utiliser_cpp_ce_tick:
+			var _csr_reveilles: Dictionary = _simu_cpp.arbre_choses_dans_rayons_brut_xz(_pros_x_tbq, _pros_z_tbq, Y_SOL, _rayon_gros_tbq)
+			var _off_reveilles: PackedInt32Array = _csr_reveilles["offsets"]
+			var _slots_reveilles: PackedInt32Array = _csr_reveilles["slots"]
+			var _res_reveilles: Dictionary = _simu_cpp.retester_reveilles_gate(
+				_pros_x_tbq,
+				_pros_z_tbq,
+				_naissances_lot_x,
+				_naissances_lot_z,
+				_off_reveilles,
+				_slots_reveilles,
+				_couverts_tbq,
+				_slot_stade
+			)
+			var _naiss_idx_cpp: PackedInt32Array = _res_reveilles["naissances_indices"]
+			var _n_naiss_cpp: int = _naiss_idx_cpp.size()
+			var _kk_ncpp: int = 0
+			while _kk_ncpp < _n_naiss_cpp:
+				var _j_cpp: int = _naiss_idx_cpp[_kk_ncpp]
+				_kk_ncpp += 1
+				var _id_cpp: int = int(_pros_ids_tbq[_j_cpp])
+				var _pos_x_cpp: float = _pros_x_tbq[_j_cpp]
+				var _pos_z_cpp: float = _pros_z_tbq[_j_cpp]
+				_banque_graines.retirer(_id_cpp)
+				var _cle_v_rdcpp = _case_de_dormante.get(_id_cpp, null)
+				if _cle_v_rdcpp != null:
+					var _cle_rdcpp: Vector2i = _cle_v_rdcpp
+					_case_de_dormante.erase(_id_cpp)
+					var _arr_rdcpp = _dormantes_par_case.get(_cle_rdcpp, null)
+					if _arr_rdcpp != null:
+						(_arr_rdcpp as Array).erase(_id_cpp)
+						if (_arr_rdcpp as Array).is_empty():
+							_dormantes_par_case.erase(_cle_rdcpp)
+				_naissances_lot_x.append(_pos_x_cpp)
+				_naissances_lot_z.append(_pos_z_cpp)
+		else:
+			var _voisins_par_prospect_tbq: Array = _monde.choses_dans_rayons_brut_xz(_pros_positions_tbq, _rayon_gros_tbq)
+			var _kk_tbq: int = 0
+			while _kk_tbq < _nn_tbq:
+				var _idx_tbq: int = _kk_tbq
+				var _id_tbq: int = int(_pros_ids_tbq[_kk_tbq])
+				var _pos_tbq: Vector3 = Vector3(_pros_x_tbq[_kk_tbq], Y_SOL, _pros_z_tbq[_kk_tbq])
+				var _couvert_b_tbq: float = _couverts_tbq[_kk_tbq]
+				_kk_tbq += 1
+				var _arrivee_tbq := _pos_tbq
+				var _n_zones_tbq: int = _zones_exclusion.size()
+				if _n_zones_tbq > 0:
+					var _dans_zone_tbq: bool = false
+					var _zi_tbq: int = 0
+					while _zi_tbq < _n_zones_tbq:
+						var _zone_tbq: Dictionary = _zones_exclusion[_zi_tbq]
+						_zi_tbq += 1
+						if int(_zone_tbq.forme) == 0:
+							var _zdx_tbq: float = _pos_tbq.x - float(_zone_tbq.cx)
+							var _zdz_tbq: float = _pos_tbq.z - float(_zone_tbq.cz)
+							var _r_tbq: float = float(_zone_tbq.rayon)
+							if _zdx_tbq * _zdx_tbq + _zdz_tbq * _zdz_tbq <= _r_tbq * _r_tbq:
+								_dans_zone_tbq = true
+								break
+						else:
+							if absf(_pos_tbq.x - float(_zone_tbq.cx)) <= float(_zone_tbq.demi_x) and absf(_pos_tbq.z - float(_zone_tbq.cz)) <= float(_zone_tbq.demi_z):
+								_dans_zone_tbq = true
+								break
+					if _dans_zone_tbq:
+						continue
+				# M3 GROUPE : lecture indexee du batch pre-calcule (meme patron
+				# que le semis `_voisins_par_graine_sml`). Format brut : chaque
+				# entree est la `chose` direct, pas un wrap `{chose,type,position}`.
+				# Meme reference dict cote monde : `wrap.chose == brut`, valeurs
+				# lues par le gate (`get("slot",-1)`, `.position`) identiques.
+				var _voisins_tbq: Array = _voisins_par_prospect_tbq[_idx_tbq]
+				var _compte_normal_tbq: int = 0
+				var _passe_tbq: bool = true
+				for _entree_b_tbq in _voisins_tbq:
+					var _slot_b_tbq: int = int(_entree_b_tbq.get("slot", -1))
+					var _stade_num_b_tbq: int = 0
+					if _slot_b_tbq >= 0 and _slot_b_tbq < _taille_slot_stade_tbq:
+						_stade_num_b_tbq = _slot_stade[_slot_b_tbq] + 1
+					if _stade_num_b_tbq >= _stade_gros_min_tbq and _stade_num_b_tbq <= _stade_gros_max_tbq:
 						_passe_tbq = false
 						break
-					if _d2n_b_tbq <= _carre_normal_tbq:
+					var _pos_voisin_b_tbq: Vector3 = _entree_b_tbq.position
+					var _d2_b_tbq: float = _arrivee_tbq.distance_squared_to(_pos_voisin_b_tbq)
+					if _d2_b_tbq < _carre_min_tbq:
+						_passe_tbq = false
+						break
+					if _d2_b_tbq <= _carre_normal_tbq:
 						_compte_normal_tbq += 1
-					_j_b_tbq += 1
-			if _passe_tbq and _compte_normal_tbq > _trouee_max_tbq:
-				_passe_tbq = false
-			if not _passe_tbq:
-				continue
-			if _couvert_b_tbq >= _seuil_couvert:
-				continue
-			_banque_graines.retirer(_id_tbq)
-			# INLINE _retirer_dormante(_id_tbq) -- suffix _tbqrd
-			var _cle_v_tbqrd = _case_de_dormante.get(_id_tbq, null)
-			if _cle_v_tbqrd != null:
-				var _cle_tbqrd: Vector2i = _cle_v_tbqrd
-				_case_de_dormante.erase(_id_tbq)
-				var _arr_tbqrd = _dormantes_par_case.get(_cle_tbqrd, null)
-				if _arr_tbqrd != null:
-					(_arr_tbqrd as Array).erase(_id_tbq)
-					if (_arr_tbqrd as Array).is_empty():
-						_dormantes_par_case.erase(_cle_tbqrd)
-			_naissances_lot_x.append(_pos_tbq.x)
-			_naissances_lot_z.append(_pos_tbq.z)
+				if _passe_tbq:
+					var _m_b_tbq: int = _naissances_lot_x.size()
+					var _j_b_tbq: int = 0
+					while _j_b_tbq < _m_b_tbq:
+						var _dx_b_tbq: float = _naissances_lot_x[_j_b_tbq] - _pos_tbq.x
+						var _dz_b_tbq: float = _naissances_lot_z[_j_b_tbq] - _pos_tbq.z
+						var _d2n_b_tbq: float = _dx_b_tbq * _dx_b_tbq + _dz_b_tbq * _dz_b_tbq
+						if _d2n_b_tbq < _carre_min_tbq:
+							_passe_tbq = false
+							break
+						if _d2n_b_tbq <= _carre_normal_tbq:
+							_compte_normal_tbq += 1
+						_j_b_tbq += 1
+				if _passe_tbq and _compte_normal_tbq > _trouee_max_tbq:
+					_passe_tbq = false
+				if not _passe_tbq:
+					continue
+				if _couvert_b_tbq >= _seuil_couvert:
+					continue
+				_banque_graines.retirer(_id_tbq)
+				# INLINE _retirer_dormante(_id_tbq) -- suffix _tbqrd
+				var _cle_v_tbqrd = _case_de_dormante.get(_id_tbq, null)
+				if _cle_v_tbqrd != null:
+					var _cle_tbqrd: Vector2i = _cle_v_tbqrd
+					_case_de_dormante.erase(_id_tbq)
+					var _arr_tbqrd = _dormantes_par_case.get(_cle_tbqrd, null)
+					if _arr_tbqrd != null:
+						(_arr_tbqrd as Array).erase(_id_tbq)
+						if (_arr_tbqrd as Array).is_empty():
+							_dormantes_par_case.erase(_cle_tbqrd)
+				_naissances_lot_x.append(_pos_tbq.x)
+				_naissances_lot_z.append(_pos_tbq.z)
 	# NAISSANCES EN LOT : draine `_naissances_lot_x/_z` empile par
 	# `_semer_lot` et `_tick_banque`. Un seul appel groupe pour toutes
 	# les naissances du tick (alloc slots, tirer variance en paires
@@ -2056,6 +2187,25 @@ func _pousser_stables_cpp() -> void:
 		_fin_fertilite,
 		_rayon_graine
 	)
+	# ETAPE 10 : pousser les stables du semis + ouvrir le niveau shadow
+	# du rayon semis (rayon_trouee * facteur_trouee_gros), miroir de la
+	# requete monde faite dans _semer_lot.
+	_simu_cpp.initialiser_stable_semis(
+		_rayon_trouee,
+		_facteur_trouee_gros,
+		_rayon_exclusion,
+		_trouee_max_voisins,
+		_demi_carte,
+		_seuil_couvert
+	)
+	var _rayon_semis_cpp: float = _rayon_trouee * _facteur_trouee_gros
+	if _rayon_semis_cpp > 0.0:
+		var _exp_semis_cpp: int = int(ceil(log(_rayon_semis_cpp) / log(2.0)))
+		_simu_cpp.arbre_ouvrir_niveau(_exp_semis_cpp)
+	# Zones d'exclusion (constantes ; deja poussees si definir_zones_exclusion
+	# a ete appelee avant activer_cpp -- ici on couvre le cas inverse).
+	if _zones_exclusion.size() > 0:
+		_pousser_zones_exclusion_cpp()
 
 # ============================================================================
 # RENDU par PUSH BUFFER (chemin bascule utilise_cpp = true).
