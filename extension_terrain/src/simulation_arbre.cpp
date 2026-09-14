@@ -1,6 +1,9 @@
 #include "simulation_arbre.h"
 
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/core/math.hpp>
+
+#include <cmath>
 
 // Voir simulation_arbre.h pour le contrat complet (etapes 1, 2, 2b, 3).
 // ROLLBACK si divergence : bascule utilise_cpp = false cote GDScript,
@@ -66,6 +69,24 @@ void SimulationArbre::_bind_methods() {
 			&SimulationArbre::appliquer_reset_morts);
 	ClassDB::bind_method(D_METHOD("poser_seed_rng", "seed"), &SimulationArbre::poser_seed_rng);
 	ClassDB::bind_method(D_METHOD("tirer_randf_lot", "n"), &SimulationArbre::tirer_randf_lot);
+	ClassDB::bind_method(
+			D_METHOD("initialiser_stable_reproduction",
+					"debut_fertilite",
+					"fin_fertilite",
+					"rayon_graine"),
+			&SimulationArbre::initialiser_stable_reproduction);
+	ClassDB::bind_method(
+			D_METHOD("passe_reproduction",
+					"pas",
+					"capacite",
+					"libres",
+					"ages",
+					"intervalle_reprod",
+					"positions_x",
+					"positions_z",
+					"morts_vieillesse"),
+			&SimulationArbre::passe_reproduction);
+	ClassDB::bind_method(D_METHOD("obtenir_rng"), &SimulationArbre::obtenir_rng);
 }
 
 SimulationArbre::SimulationArbre() {
@@ -422,6 +443,80 @@ Dictionary SimulationArbre::appliquer_reset_morts(
 	out["slot_stade"] = slot_stade_out;
 	out["ages"] = ages_out;
 	return out;
+}
+
+void SimulationArbre::initialiser_stable_reproduction(
+		float debut_fertilite,
+		float fin_fertilite,
+		float rayon_graine) {
+	_debut_fertilite = debut_fertilite;
+	_fin_fertilite = fin_fertilite;
+	_rayon_graine = rayon_graine;
+}
+
+Dictionary SimulationArbre::passe_reproduction(
+		float pas,
+		int capacite,
+		const PackedByteArray &libres,
+		const PackedFloat32Array &ages,
+		const PackedFloat32Array &intervalle_reprod,
+		const PackedFloat32Array &positions_x,
+		const PackedFloat32Array &positions_z,
+		const PackedInt32Array &morts_vieillesse) {
+	PackedFloat32Array gx, gz;
+	Dictionary out;
+	if (_rng.is_null()) {
+		out["graines_x"] = gx;
+		out["graines_z"] = gz;
+		return out;
+	}
+	int cap = capacite;
+
+	// morts_set : PackedByteArray temporaire, pareil que GDScript. Skip
+	// slots fraichement morts dans la passe 1 -- meme filtre.
+	std::vector<uint8_t> morts_set(cap, 0);
+	const int32_t *morts_r = morts_vieillesse.ptr();
+	int n_morts = morts_vieillesse.size();
+	for (int k = 0; k < n_morts; ++k) {
+		int mi = morts_r[k];
+		if (mi >= 0 && mi < cap) morts_set[mi] = 1;
+	}
+
+	const uint8_t *libres_r = libres.ptr();
+	const float *ages_r = ages.ptr();
+	const float *ir_r = intervalle_reprod.ptr();
+	const float *px_r = positions_x.ptr();
+	const float *pz_r = positions_z.ptr();
+	double d_pas = double(pas);
+	double d_debut = double(_debut_fertilite);
+	double d_fin = double(_fin_fertilite);
+	double d_rayon_graine = double(_rayon_graine);
+
+	// BOUCLE STRICTE 0..cap-1 -- ordre des tirages randf() preserve.
+	// Miroir de _passe_reproduction (simulation_arbre.gd l.2117-2130).
+	// Tous les calculs float en DOUBLE (GDScript float = double), cast
+	// float32 UNIQUEMENT au append PackedFloat32Array final.
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1 || morts_set[i] == 1) continue;
+		double age_i = double(ages_r[i]);
+		if (age_i < d_debut || age_i >= d_fin) continue;
+		double intervalle_i = double(ir_r[i]);
+		if (intervalle_i <= 0.0 || std::isinf(intervalle_i)) continue;
+		double randf1 = double(_rng->randf());
+		if (randf1 < d_pas / intervalle_i) {
+			double angle = double(_rng->randf()) * Math_TAU;
+			double rayon = std::sqrt(double(_rng->randf())) * d_rayon_graine;
+			gx.append(float(double(px_r[i]) + std::cos(angle) * rayon));
+			gz.append(float(double(pz_r[i]) + std::sin(angle) * rayon));
+		}
+	}
+	out["graines_x"] = gx;
+	out["graines_z"] = gz;
+	return out;
+}
+
+Ref<RandomNumberGenerator> SimulationArbre::obtenir_rng() const {
+	return _rng;
 }
 
 } // namespace godot

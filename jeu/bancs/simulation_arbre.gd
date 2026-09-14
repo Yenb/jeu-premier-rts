@@ -644,6 +644,14 @@ func configurer_cpp(actif: bool) -> void:
 		_simu_cpp = ClassDB.instantiate("SimulationArbre")
 		_cpp_stable_pousse = false
 	utilise_cpp = actif
+	# ETAPE 6 : partager le RNG. Sous bascule, `_rng` GDScript pointe le
+	# _simu_cpp._rng -- TOUS les tirages (repro C++ + variance naissance
+	# GDScript + competition GDScript) passent par LE MEME PCG32. Sans ce
+	# partage, la reproduction C++ desynchroniserait la suite de tirages
+	# GDScript restants et casserait la parite.
+	if actif and _simu_cpp != null:
+		_rng = _simu_cpp.obtenir_rng()
+		_rng.seed = _graine_rng
 
 func _charger_reglages_locaux(donnees: Dictionary) -> void:
 	if donnees.has("durees_stades"):
@@ -1960,6 +1968,12 @@ func _pousser_stables_cpp() -> void:
 		COULEUR_REPLI_FEUILLAGE,
 		Y_SOL
 	)
+	# ETAPE 6 : pousser les stables de reproduction.
+	_simu_cpp.initialiser_stable_reproduction(
+		_debut_fertilite,
+		_fin_fertilite,
+		_rayon_graine
+	)
 
 # ============================================================================
 # RENDU par PUSH BUFFER (chemin bascule utilise_cpp = true).
@@ -2120,6 +2134,22 @@ func _construire_buffers_rendu_gd(cap: int) -> Dictionary:
 # `continue` sur mort de la boucle unique originale.
 func _passe_reproduction(pas: float) -> void:
 	var cap: int = _capacite
+	# ETAPE 6 : sous bascule, appel batch C++ (meme ordre, meme RNG partage,
+	# parite bit-a-bit). Chemin oracle GDScript inchange sinon.
+	if utilise_cpp and _simu_cpp != null:
+		var res_repro: Dictionary = _simu_cpp.passe_reproduction(
+			pas,
+			cap,
+			_libres,
+			_ages,
+			_intervalle_reprod,
+			_positions_x,
+			_positions_z,
+			_morts_vieillesse_lot
+		)
+		_graines_lot_x.append_array(res_repro.graines_x)
+		_graines_lot_z.append_array(res_repro.graines_z)
+		return
 	var morts_set: PackedByteArray = PackedByteArray()
 	morts_set.resize(cap)
 	var nm: int = _morts_vieillesse_lot.size()

@@ -44,17 +44,25 @@ func _init() -> void:
 		quit(1)
 		return
 
-	# ETAPE 4 : provoquer des morts de vieillesse dans la fenetre du test.
-	# Longevite ecrase a 0.01 -> seuil_mort divise par 100 -> les arbres
-	# meurent en quelques ticks. La parite sur _libres et le reset des
-	# colonnes plates est ainsi exercee. Meme facteur des deux cotes ->
-	# meme facteur individuel tire par le RNG (identique a seed egal).
+	# ETAPE 6 : configurer pour exercer REPRODUCTION (parite RNG portee)
+	# + morts vieillesse (reset colonnes plates de l'etape 4). Fertile a
+	# tous les stades -> l'arbre initial pond des graines rapidement,
+	# les tirages randf() du C++ vs GDScript doivent matcher. Longevite
+	# a 0.3 -> les arbres meurent en quelques dizaines de secondes de sim
+	# (100 ticks a pas 0.25s = 25s), le drainage morts vieillesse est
+	# aussi exerce.
 	var donnees_a: Dictionary = donnees.duplicate(true)
 	var donnees_b: Dictionary = donnees.duplicate(true)
-	donnees_a["longevite_min"] = 0.01
-	donnees_a["longevite_max"] = 0.01
-	donnees_b["longevite_min"] = 0.01
-	donnees_b["longevite_max"] = 0.01
+	donnees_a["stade_fertile_debut"] = 1
+	donnees_a["stade_fertile_fin"] = 9
+	donnees_a["graines_par_vie"] = 100.0
+	donnees_a["longevite_min"] = 0.3
+	donnees_a["longevite_max"] = 0.3
+	donnees_b["stade_fertile_debut"] = 1
+	donnees_b["stade_fertile_fin"] = 9
+	donnees_b["graines_par_vie"] = 100.0
+	donnees_b["longevite_min"] = 0.3
+	donnees_b["longevite_max"] = 0.3
 
 	var sim_a: RefCounted = SimulationArbreGd.new()
 	var sim_b: RefCounted = SimulationArbreGd.new()

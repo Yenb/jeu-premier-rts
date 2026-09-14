@@ -204,6 +204,47 @@ public:
 private:
 	// RNG godot-cpp -- meme classe que GDScript, meme PCG32.
 	Ref<RandomNumberGenerator> _rng;
+
+	// STABLES REPRODUCTION posees une fois par initialiser_stable_reproduction.
+	float _debut_fertilite = 0.0f;
+	float _fin_fertilite = 0.0f;
+	float _rayon_graine = 6.0f;
+
+public:
+	// ETAPE 6 : INIT STABLE REPRODUCTION. Voir _passe_reproduction cote GDScript.
+	void initialiser_stable_reproduction(
+			float debut_fertilite,
+			float fin_fertilite,
+			float rayon_graine);
+
+	// ETAPE 6 : PASSE REPRODUCTION portee. Miroir de _passe_reproduction
+	// (simulation_arbre.gd l.2106-2131). Ordre 0..cap-1 preserve, skip
+	// libres et morts. Fertile => tirage randf() sur _rng C++ (parite
+	// prouvee etape 5 : meme suite que GDScript a seed egal), puis angle
+	// et rayon disque uniforme, append aux deux colonnes de graines.
+	// Aucune mutation d'etat GDScript autre que l'append -- graines
+	// rendues au GDScript qui append_array a _graines_lot_x/z.
+	//
+	// Cles retour Dictionary :
+	//   "graines_x" PackedFloat32Array (K)
+	//   "graines_z" PackedFloat32Array (K)
+	Dictionary passe_reproduction(
+			float pas,
+			int capacite,
+			const PackedByteArray &libres,
+			const PackedFloat32Array &ages,
+			const PackedFloat32Array &intervalle_reprod,
+			const PackedFloat32Array &positions_x,
+			const PackedFloat32Array &positions_z,
+			const PackedInt32Array &morts_vieillesse);
+
+	// ETAPE 6 : partager le RNG C++ avec GDScript. Rend la meme Ref
+	// que le membre interne, GDScript peut l'assigner a son `_rng` et
+	// TOUS les tirages (repro C++ + variance naissance GDScript +
+	// competition GDScript) passent alors par le MEME RandomNumberGenerator.
+	// Sans partage, la reproduction en C++ desynchroniserait les tirages
+	// GDScript restants (variance/competition) -> parite cassee.
+	Ref<RandomNumberGenerator> obtenir_rng() const;
 };
 
 } // namespace godot

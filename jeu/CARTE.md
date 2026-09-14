@@ -4602,7 +4602,23 @@ en-tête).
   `charge()` (booléen de vérification de chargement) et
   `population()` rendant `_population` (0 tant que la logique du tick
   n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
-  logique à l'étape 1. ÉTAPE 5 (portée, RNG DÉTERMINISTE) : membre C++
+  logique à l'étape 1. ÉTAPE 6 (portée, REPRODUCTION STOCHASTIQUE) :
+  `initialiser_stable_reproduction(debut_fertilite, fin_fertilite,
+  rayon_graine)` pose les stables, `passe_reproduction(pas, cap,
+  libres, ages, intervalle_reprod, positions_x, positions_z,
+  morts_vieillesse)` porte le corps de `_passe_reproduction` (miroir
+  l.2117-2130 du .gd) : boucle 0..cap-1, skip libres + morts, gate
+  fertilité + intervalle, tire `randf() < pas/intervalle`, angle et
+  rayon (disque uniforme), append graine `(pos + cos/sin*rayon)`.
+  Tous les calculs en DOUBLE (GDScript float=double), cast float32 au
+  append. RNG **partagé** avec GDScript via `obtenir_rng()` : sous
+  bascule, `_rng` GDScript pointe le RNG C++ → un seul PCG32 pour
+  reproduction (C++), variance naissance et compétition (GDScript). Sans
+  ce partage, les tirages C++ désynchroniseraient les tirages GDScript
+  restants et casseraient la parité. Parité vérifiée : forêt bit-à-bit
+  identique GDScript vs C++ après 100 ticks avec reproduction ET morts
+  vieillesse (pop=31).
+  ÉTAPE 5 (portée, RNG DÉTERMINISTE) : membre C++
   `Ref<RandomNumberGenerator>` (godot-cpp, même classe que GDScript,
   même PCG32 sous-jacent). Aucun algo réimplémenté — parité par
   CONSTRUCTION. Méthodes typées ptrcall : `poser_seed_rng(seed)` et
