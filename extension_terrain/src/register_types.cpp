@@ -9,6 +9,7 @@
 #include "index_spatial.h"
 #include "collision_lot.h"
 #include "simulation_arbre.h"
+#include "champ_saturation_plat.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/godot.hpp>
@@ -25,6 +26,7 @@ void initialize_terrain_module(ModuleInitializationLevel p_level) {
 	GDREGISTER_CLASS(IndexSpatial);
 	GDREGISTER_CLASS(CollisionLot);
 	GDREGISTER_CLASS(SimulationArbre);
+	GDREGISTER_CLASS(ChampSaturationPlat);
 }
 
 void uninitialize_terrain_module(ModuleInitializationLevel p_level) {

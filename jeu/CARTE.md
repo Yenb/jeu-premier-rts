@@ -4602,7 +4602,21 @@ en-tête).
   `charge()` (booléen de vérification de chargement) et
   `population()` rendant `_population` (0 tant que la logique du tick
   n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
-  logique à l'étape 1. ÉTAPE 8 (portée, SHADOW INDEX SPATIAL — requête
+  logique à l'étape 1. ÉTAPE 9 (portée, CHAMP DE SATURATION PLAT en C++) :
+  `ChampSaturationPlat` est la 6ème classe de `extension_terrain`, miroir
+  bit-à-bit de `scripts/champ_saturation_plat.gd`. Grille en
+  `std::vector<float>` indexée `z*largeur+x`, `_n_non_nulles` maintenu
+  par seuil `EPS_COUVERT=1e-6`, distance Tchebychev `d=max(|dcx|,|dcz|)`,
+  poids `1.0 - float(d)/float(rayon)` (division directe préservée),
+  `rayon=int(ceil(rayon_m/taille_case))`. 8 méthodes typées ptrcall :
+  `configurer`, `deposer`, `deposer_lot`, `redeposer`, `redeposer_lot`,
+  `lire`, `lire_lot`, `nombre_cases`. Le .gd garde son implémentation
+  (oracle) mais chaque méthode ouvre par `if _impl_cpp != null: return
+  _impl_cpp.methode(...)` : sous bascule (via `activer_cpp()`),
+  délégation transparente. Coquille `banc_peuplement_arbre.gd` appelle
+  `couvert.activer_cpp()` avant `configurer(...)`. Parité vérifiée sur
+  forêt complète (pop=31, cap=32).
+  ÉTAPE 8 (portée, SHADOW INDEX SPATIAL — requête
   compétition) : `SimulationArbre` C++ tient un miroir multi-niveaux du
   monde des arbres (mode structure_simple de `scripts/monde.gd`, aucun
   framework touché). Chaque niveau =

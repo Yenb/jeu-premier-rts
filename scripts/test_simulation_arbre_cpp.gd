@@ -18,7 +18,7 @@ extends SceneTree
 
 const SimulationArbreGd = preload("res://jeu/bancs/simulation_arbre.gd")
 const Monde = preload("res://scripts/monde.gd")
-const ChampSaturationPlat = preload("res://scripts/champ_saturation_plat.gd")
+const ChampSaturationPlatGd = preload("res://scripts/champ_saturation_plat.gd")
 const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 
 const CHEMIN_JSON := "res://data/banc_peuplement_arbre.json"
@@ -67,8 +67,8 @@ func _init() -> void:
 	var sim_a: RefCounted = SimulationArbreGd.new()
 	var sim_b: RefCounted = SimulationArbreGd.new()
 
-	_configurer_sim(sim_a, donnees_a, types.dynamique)
-	_configurer_sim(sim_b, donnees_b, types.dynamique)
+	_configurer_sim(sim_a, donnees_a, types.dynamique, false)
+	_configurer_sim(sim_b, donnees_b, types.dynamique, true)
 
 	sim_b.configurer_cpp(true)
 
@@ -199,7 +199,7 @@ func _lire_json(chemin: String) -> Variant:
 	return JSON.parse_string(texte)
 
 
-func _configurer_sim(sim: RefCounted, donnees: Dictionary, types_dyn: Variant) -> void:
+func _configurer_sim(sim: RefCounted, donnees: Dictionary, types_dyn: Variant, activer_couvert_cpp: bool) -> void:
 	sim.configurer(donnees)
 	var mm_t := MultiMesh.new()
 	mm_t.transform_format = MultiMesh.TRANSFORM_3D
@@ -211,7 +211,10 @@ func _configurer_sim(sim: RefCounted, donnees: Dictionary, types_dyn: Variant) -
 	mm_f.instance_count = 8
 	var monde = Monde.new()
 	monde.structure_simple = true
-	var couvert = ChampSaturationPlat.new()
+	var couvert = ChampSaturationPlatGd.new()
+	# ETAPE 9 : sim_b active la bascule couvert C++ ; sim_a garde oracle GDScript.
+	if activer_couvert_cpp:
+		couvert.activer_cpp()
 	couvert.configurer(-100, -100, 100, 100)
 	var banque = AttenteSeuil.new()
 	sim.attacher(mm_t, mm_f, monde, couvert, banque, false, null, types_dyn)

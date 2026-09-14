@@ -3,7 +3,7 @@
 # Node de la scene `.tscn` du banc. Rôle strictement limite : monter la
 # scene (sol, MultiMesh, lumiere, camera, joueur en mode isole), lire le
 # catalogue local JSON, instancier les instances coeur (`Monde`,
-# `ChampSaturationPlat`, `AttenteSeuil`) et le module de simulation
+# `ChampSaturationPlatGd`, `AttenteSeuil`) et le module de simulation
 # (`SimulationArbreGd`), puis a chaque frame gerer la cadence de simulation
 # et deleguer le pas a `_sim.avancer(pas)`. Une porte, une commande.
 #
@@ -26,7 +26,7 @@
 extends Node3D
 
 const Monde = preload("res://scripts/monde.gd")
-const ChampSaturationPlat = preload("res://scripts/champ_saturation_plat.gd")
+const ChampSaturationPlatGd = preload("res://scripts/champ_saturation_plat.gd")
 const AttenteSeuil = preload("res://scripts/attente_seuil.gd")
 const JoueurBanc = preload("res://jeu/bancs/joueur_banc.gd")
 const SimulationArbreGd = preload("res://jeu/bancs/simulation_arbre.gd")
@@ -96,7 +96,7 @@ func _ready() -> void:
 	# En mode hote, on SURCHARGE la cle `demi_carte` du JSON avant de la
 	# passer a la sim, pour que la garde de semis (`abs(x) > _demi_carte`)
 	# corresponde a l'emprise reelle du terrain fourni par la scene hote.
-	# Preservation bit-a-bit : les bornes de `ChampSaturationPlat` restent
+	# Preservation bit-a-bit : les bornes de `ChampSaturationPlatGd` restent
 	# calculees sur la valeur JSON (comme avant refonte) via
 	# `demi_carte_couvert` ci-dessous ; seul le champ `_demi_carte` de la
 	# sim recoit la valeur derivee du terrain.
@@ -107,7 +107,7 @@ func _ready() -> void:
 			return
 		var etendue_m: float = float(carte_terrain_ref.metres())
 		donnees["demi_carte"] = etendue_m * 0.5
-	# ChampSaturationPlat : bornes derivees de `demi_carte / taille_case` +
+	# ChampSaturationPlatGd : bornes derivees de `demi_carte / taille_case` +
 	# marge = ceil(max_rayon_ombre_m / taille_case), pour couvrir les
 	# depots pres du bord.
 	var taille_case: float = float(donnees.get("taille_case", 20.0))
@@ -119,7 +119,10 @@ func _ready() -> void:
 	var demi_cases: int = int(ceil(demi_carte_couvert / taille_case))
 	var marge_cases: int = int(ceil(max_rayon_ombre_m / taille_case))
 	var borne_cases: int = demi_cases + marge_cases
-	var couvert = ChampSaturationPlat.new()
+	var couvert = ChampSaturationPlatGd.new()
+	# ETAPE 9 : bascule couvert vers ChampSaturationPlatGd C++ (miroir
+	# bit-a-bit). L'oracle GDScript reste comme fallback pour tests.
+	couvert.activer_cpp()
 	couvert.configurer(-borne_cases, -borne_cases, borne_cases, borne_cases)
 	var monde = Monde.new()
 	monde.structure_simple = true

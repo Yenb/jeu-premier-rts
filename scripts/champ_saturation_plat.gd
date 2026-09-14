@@ -49,6 +49,22 @@ extends RefCounted
 
 const EPS_COUVERT: float = 1.0e-6
 
+# ETAPE 9 : BASCULE C++ vers ChampSaturationPlat (extension_terrain).
+# Sous bascule active, TOUTES les methodes publiques delegue a l'impl
+# C++ (miroir bit-a-bit). L'oracle GDScript reste sur disque comme
+# fallback pour le test de parite et rollback rapide.
+var _impl_cpp: RefCounted = null
+
+# Active la bascule C++. Si la DLL n'est pas chargee (ClassDB pas la
+# classe), assert HARD -- pas de fallback silencieux vers GDScript.
+# (Meme doctrine que simulation_arbre.gd:configurer_cpp.)
+func activer_cpp() -> void:
+	assert(ClassDB.class_exists("ChampSaturationPlat"), "champ_saturation_plat : ChampSaturationPlat C++ absente -- DLL extension_terrain non chargee")
+	if not ClassDB.class_exists("ChampSaturationPlat"):
+		push_error("champ_saturation_plat : ChampSaturationPlat C++ absente, bascule refusee")
+		return
+	_impl_cpp = ClassDB.instantiate("ChampSaturationPlat")
+
 var _valeurs: PackedFloat32Array = PackedFloat32Array()
 var _n_non_nulles: int = 0
 var _x_min: int = 0
@@ -60,6 +76,9 @@ var _hauteur: int = 0
 # traduit `demi_carte / taille_case` en indices avant d'appeler. Reset
 # le champ a zero. Bornes inclusives.
 func configurer(x_min: int, z_min: int, x_max: int, z_max: int) -> void:
+	if _impl_cpp != null:
+		_impl_cpp.configurer(x_min, z_min, x_max, z_max)
+		return
 	_x_min = x_min
 	_z_min = z_min
 	_largeur = maxi(0, x_max - x_min + 1)
@@ -69,6 +88,9 @@ func configurer(x_min: int, z_min: int, x_max: int, z_max: int) -> void:
 	_n_non_nulles = 0
 
 func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: float, magnitude: float, signe: int) -> void:
+	if _impl_cpp != null:
+		_impl_cpp.deposer(centre_x, centre_z, rayon_m, taille_case, magnitude, signe)
+		return
 	if taille_case <= 0.0 or _largeur == 0:
 		return
 	var mag: float = magnitude * float(signe)
@@ -116,6 +138,9 @@ func deposer(centre_x: float, centre_z: float, rayon_m: float, taille_case: floa
 		dcx += 1
 
 func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_rayon_m: float, taille_case: float, ancienne_magnitude: float, nouvelle_magnitude: float) -> void:
+	if _impl_cpp != null:
+		_impl_cpp.redeposer(centre_x, centre_z, ancien_rayon_m, nouveau_rayon_m, taille_case, ancienne_magnitude, nouvelle_magnitude)
+		return
 	if taille_case <= 0.0 or _largeur == 0:
 		return
 	var rayon_ancien: int = 0
@@ -174,6 +199,9 @@ func redeposer(centre_x: float, centre_z: float, ancien_rayon_m: float, nouveau_
 		dcx += 1
 
 func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, anciens_rayons_m: PackedFloat32Array, nouveaux_rayons_m: PackedFloat32Array, taille_case: float, anciennes_magnitudes: PackedFloat32Array, nouvelles_magnitudes: PackedFloat32Array) -> void:
+	if _impl_cpp != null:
+		_impl_cpp.redeposer_lot(centres_x, centres_z, anciens_rayons_m, nouveaux_rayons_m, taille_case, anciennes_magnitudes, nouvelles_magnitudes)
+		return
 	if taille_case <= 0.0 or _largeur == 0:
 		return
 	var n: int = centres_x.size()
@@ -244,6 +272,9 @@ func redeposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array,
 			dcx += 1
 
 func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, rayons_m: PackedFloat32Array, taille_case: float, magnitudes: PackedFloat32Array, signes: PackedByteArray) -> void:
+	if _impl_cpp != null:
+		_impl_cpp.deposer_lot(centres_x, centres_z, rayons_m, taille_case, magnitudes, signes)
+		return
 	if taille_case <= 0.0 or _largeur == 0:
 		return
 	var n: int = centres_x.size()
@@ -300,6 +331,8 @@ func deposer_lot(centres_x: PackedFloat32Array, centres_z: PackedFloat32Array, r
 			dcx += 1
 
 func lire(x: float, z: float, taille_case: float) -> float:
+	if _impl_cpp != null:
+		return _impl_cpp.lire(x, z, taille_case)
 	if taille_case <= 0.0 or _largeur == 0:
 		return 0.0
 	var cx: int = floori(x / taille_case) - _x_min
@@ -309,6 +342,8 @@ func lire(x: float, z: float, taille_case: float) -> float:
 	return float(_valeurs[cz * _largeur + cx])
 
 func lire_lot(positions_x: PackedFloat32Array, positions_z: PackedFloat32Array, taille_case: float) -> PackedFloat32Array:
+	if _impl_cpp != null:
+		return _impl_cpp.lire_lot(positions_x, positions_z, taille_case)
 	var n: int = positions_x.size()
 	var out := PackedFloat32Array()
 	out.resize(n)
@@ -324,4 +359,6 @@ func lire_lot(positions_x: PackedFloat32Array, positions_z: PackedFloat32Array, 
 	return out
 
 func nombre_cases() -> int:
+	if _impl_cpp != null:
+		return _impl_cpp.nombre_cases()
 	return _n_non_nulles
