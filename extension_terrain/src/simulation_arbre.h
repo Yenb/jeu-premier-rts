@@ -44,6 +44,7 @@
 #include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -245,6 +246,40 @@ public:
 	// Sans partage, la reproduction en C++ desynchroniserait les tirages
 	// GDScript restants (variance/competition) -> parite cassee.
 	Ref<RandomNumberGenerator> obtenir_rng() const;
+
+	// ETAPE 7 : COEUR DECISIONNEL COMPETITION. Deux appels typees
+	// encadrant la requete monde GDScript (option (a) : _monde n'est
+	// pas encore C++, on le laisse GDScript, la requete se fait entre
+	// deux appels C++). Le drainage des morts reste GDScript.
+	//
+	// selection_competition : boucle curseur tournant, meme arithmetique
+	// _n_slots_avc que le .gd (l.1505-1523). Skip libres et stade >
+	// stade_competition_max. Rend positions_batch (Y = y_sol constant),
+	// slots_batch, curseur_avance.
+	Dictionary selection_competition(
+			float pas,
+			int capacite,
+			float cadence_competition,
+			int stade_competition_max,
+			int curseur_competition,
+			const PackedByteArray &libres,
+			const PackedInt32Array &slot_stade,
+			const PackedFloat32Array &positions_x,
+			const PackedFloat32Array &positions_z,
+			float y_sol) const;
+
+	// decider_morts_competition : recoit slots_batch + CSR des voisins
+	// (offsets, slots) construit par GDScript apres appel monde. Compte
+	// voisins moins ceux deja morts ce tick (set interne au tour de
+	// boucle), tire _rng->randf() < proba (miroir l.1539-1547 du .gd).
+	// L'ordre du parcours et l'ordre des randf() sont STRICTEMENT
+	// identiques a l'oracle -- condition de parite seed-egal.
+	// Rend PackedInt32Array des slots morts.
+	PackedInt32Array decider_morts_competition(
+			const PackedInt32Array &slots_batch,
+			const PackedInt32Array &voisins_offsets,
+			const PackedInt32Array &voisins_slots,
+			int competition_max_voisins);
 };
 
 } // namespace godot

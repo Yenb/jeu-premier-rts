@@ -3,7 +3,9 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/math.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <unordered_set>
 
 // Voir simulation_arbre.h pour le contrat complet (etapes 1, 2, 2b, 3).
 // ROLLBACK si divergence : bascule utilise_cpp = false cote GDScript,
@@ -87,6 +89,26 @@ void SimulationArbre::_bind_methods() {
 					"morts_vieillesse"),
 			&SimulationArbre::passe_reproduction);
 	ClassDB::bind_method(D_METHOD("obtenir_rng"), &SimulationArbre::obtenir_rng);
+	ClassDB::bind_method(
+			D_METHOD("selection_competition",
+					"pas",
+					"capacite",
+					"cadence_competition",
+					"stade_competition_max",
+					"curseur_competition",
+					"libres",
+					"slot_stade",
+					"positions_x",
+					"positions_z",
+					"y_sol"),
+			&SimulationArbre::selection_competition);
+	ClassDB::bind_method(
+			D_METHOD("decider_morts_competition",
+					"slots_batch",
+					"voisins_offsets",
+					"voisins_slots",
+					"competition_max_voisins"),
+			&SimulationArbre::decider_morts_competition);
 }
 
 SimulationArbre::SimulationArbre() {
@@ -517,6 +539,99 @@ Dictionary SimulationArbre::passe_reproduction(
 
 Ref<RandomNumberGenerator> SimulationArbre::obtenir_rng() const {
 	return _rng;
+}
+
+Dictionary SimulationArbre::selection_competition(
+		float pas,
+		int capacite,
+		float cadence_competition,
+		int stade_competition_max,
+		int curseur_competition,
+		const PackedByteArray &libres,
+		const PackedInt32Array &slot_stade,
+		const PackedFloat32Array &positions_x,
+		const PackedFloat32Array &positions_z,
+		float y_sol) const {
+	PackedVector3Array positions_batch;
+	PackedInt32Array slots_batch;
+	Dictionary out;
+	int cap = capacite;
+	int curseur = curseur_competition;
+	if (cap <= 0 || cadence_competition <= 0.0f) {
+		out["positions_batch"] = positions_batch;
+		out["slots_batch"] = slots_batch;
+		out["curseur_avance"] = curseur;
+		return out;
+	}
+	// Miroir ligne 1505-1509 du .gd : ceil en DOUBLE (GDScript float=double).
+	int n_slots = int(std::ceil(double(cap) * double(pas) / double(cadence_competition)));
+	if (n_slots < 1) n_slots = 1;
+	if (n_slots > cap) n_slots = cap;
+	const uint8_t *libres_r = libres.ptr();
+	const int32_t *stade_r = slot_stade.ptr();
+	const float *px_r = positions_x.ptr();
+	const float *pz_r = positions_z.ptr();
+	int count = 0;
+	while (count < n_slots) {
+		int i = curseur;
+		curseur = (curseur + 1) % cap;
+		++count;
+		if (libres_r[i] == 1) continue;
+		int index_stade = stade_r[i];
+		if (index_stade < 0 || index_stade + 1 > stade_competition_max) continue;
+		positions_batch.append(Vector3(px_r[i], y_sol, pz_r[i]));
+		slots_batch.append(i);
+	}
+	out["positions_batch"] = positions_batch;
+	out["slots_batch"] = slots_batch;
+	out["curseur_avance"] = curseur;
+	return out;
+}
+
+PackedInt32Array SimulationArbre::decider_morts_competition(
+		const PackedInt32Array &slots_batch,
+		const PackedInt32Array &voisins_offsets,
+		const PackedInt32Array &voisins_slots,
+		int competition_max_voisins) {
+	PackedInt32Array morts_slots;
+	if (_rng.is_null()) return morts_slots;
+	int m = slots_batch.size();
+	if (m == 0) return morts_slots;
+	const int32_t *slots_r = slots_batch.ptr();
+	const int32_t *off_r = voisins_offsets.ptr();
+	const int32_t *vs_r = voisins_slots.ptr();
+	// morts_du_tick : set des slots deja decides morts dans ce lot,
+	// utilise pour decompter les voisins morts du tick (miroir du
+	// Dictionary GDScript, mais indexe par slot int32 au lieu d'id
+	// String -- correspondance directe car _voisin.slot == chose.slot).
+	std::unordered_set<int32_t> morts_du_tick;
+	int max_v = std::max(1, competition_max_voisins);
+	for (int k = 0; k < m; ++k) {
+		int slot = slots_r[k];
+		int deb = off_r[k];
+		int fin = off_r[k + 1];
+		int voisins_n = fin - deb;
+		if (!morts_du_tick.empty()) {
+			for (int j = deb; j < fin; ++j) {
+				if (morts_du_tick.find(vs_r[j]) != morts_du_tick.end()) {
+					--voisins_n;
+				}
+			}
+		}
+		if (voisins_n > competition_max_voisins) {
+			int exces = voisins_n - competition_max_voisins;
+			// Miroir clampf(exces/max, 0, 1) GDScript en DOUBLE.
+			double proba = double(exces) / double(max_v);
+			if (proba < 0.0) proba = 0.0;
+			else if (proba > 1.0) proba = 1.0;
+			double randf = double(_rng->randf());
+			if (randf < proba) {
+				morts_du_tick.insert(slot);
+				morts_slots.append(slot);
+			}
+		}
+	}
+	return morts_slots;
 }
 
 } // namespace godot

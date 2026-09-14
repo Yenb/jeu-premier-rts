@@ -1502,49 +1502,96 @@ func avancer(pas: float) -> void:
 	# _reveiller_dormantes_autour_lot (_avcrev). Duplication assumee.
 	var _cap_avc: int = _capacite
 	if _cap_avc > 0 and _cadence_competition > 0.0:
-		var _n_slots_avc: int = int(ceil(float(_cap_avc) * pas / _cadence_competition))
-		if _n_slots_avc < 1:
-			_n_slots_avc = 1
-		if _n_slots_avc > _cap_avc:
-			_n_slots_avc = _cap_avc
-		_competition_positions.clear()
-		_competition_slots.resize(0)
-		var _count_avc: int = 0
-		while _count_avc < _n_slots_avc:
-			var _i_avc: int = _curseur_competition
-			_curseur_competition = (_curseur_competition + 1) % _cap_avc
-			_count_avc += 1
-			if _libres[_i_avc] == 1:
-				continue
-			var _index_avc: int = _slot_stade[_i_avc]
-			if _index_avc < 0 or _index_avc + 1 > _stade_competition_max:
-				continue
-			_competition_positions.append(Vector3(_positions_x[_i_avc], Y_SOL, _positions_z[_i_avc]))
-			_competition_slots.append(_i_avc)
+		# ETAPE 7 : SELECTION -- gate bascule C++ / oracle GDScript.
+		if utilise_cpp and _simu_cpp != null:
+			var _res_sel_avc: Dictionary = _simu_cpp.selection_competition(
+				pas,
+				_cap_avc,
+				_cadence_competition,
+				_stade_competition_max,
+				_curseur_competition,
+				_libres,
+				_slot_stade,
+				_positions_x,
+				_positions_z,
+				Y_SOL
+			)
+			_curseur_competition = int(_res_sel_avc.curseur_avance)
+			_competition_positions.clear()
+			_competition_slots.resize(0)
+			var _pb_avc: PackedVector3Array = _res_sel_avc.positions_batch
+			var _sb_avc: PackedInt32Array = _res_sel_avc.slots_batch
+			var _sk_avc: int = 0
+			var _sn_avc: int = _sb_avc.size()
+			while _sk_avc < _sn_avc:
+				_competition_positions.append(_pb_avc[_sk_avc])
+				_competition_slots.append(_sb_avc[_sk_avc])
+				_sk_avc += 1
+		else:
+			var _n_slots_avc: int = int(ceil(float(_cap_avc) * pas / _cadence_competition))
+			if _n_slots_avc < 1:
+				_n_slots_avc = 1
+			if _n_slots_avc > _cap_avc:
+				_n_slots_avc = _cap_avc
+			_competition_positions.clear()
+			_competition_slots.resize(0)
+			var _count_avc: int = 0
+			while _count_avc < _n_slots_avc:
+				var _i_avc: int = _curseur_competition
+				_curseur_competition = (_curseur_competition + 1) % _cap_avc
+				_count_avc += 1
+				if _libres[_i_avc] == 1:
+					continue
+				var _index_avc: int = _slot_stade[_i_avc]
+				if _index_avc < 0 or _index_avc + 1 > _stade_competition_max:
+					continue
+				_competition_positions.append(Vector3(_positions_x[_i_avc], Y_SOL, _positions_z[_i_avc]))
+				_competition_slots.append(_i_avc)
 		if not _competition_positions.is_empty():
 			var _voisins_par_slot_avc: Array = _monde.choses_dans_rayons_brut_xz(_competition_positions, _rayon_competition)
-			var _morts_du_tick_avc: Dictionary = {}
 			var _morts_slots_avc: PackedInt32Array = PackedInt32Array()
-			var _k_avc: int = 0
-			var _m_avc: int = _competition_slots.size()
-			while _k_avc < _m_avc:
-				var _slot_avc: int = _competition_slots[_k_avc]
-				var _voisins_list_avc: Array = _voisins_par_slot_avc[_k_avc]
-				var _voisins_n_avc: int = _voisins_list_avc.size()
-				if not _morts_du_tick_avc.is_empty():
-					for _voisin_avc in _voisins_list_avc:
-						if _morts_du_tick_avc.has(_voisin_avc.id):
-							_voisins_n_avc -= 1
-				_k_avc += 1
-				if _voisins_n_avc > _competition_max_voisins:
-					var _exces_avc: int = _voisins_n_avc - _competition_max_voisins
-					var _proba_avc: float = clampf(
-						float(_exces_avc) / float(maxi(1, _competition_max_voisins)), 0.0, 1.0)
-					if _rng.randf() < _proba_avc:
-						var _chose_avc = _choses_arbre[_slot_avc]
-						if _chose_avc != null:
-							_morts_du_tick_avc[_chose_avc.id] = true
-						_morts_slots_avc.append(_slot_avc)
+			# ETAPE 7 : DECISION -- gate bascule C++ / oracle GDScript.
+			if utilise_cpp and _simu_cpp != null:
+				# CSR des voisins (offsets, slots) pour C++.
+				var _vo_avc: PackedInt32Array = PackedInt32Array()
+				_vo_avc.resize(_competition_slots.size() + 1)
+				_vo_avc[0] = 0
+				var _vs_avc: PackedInt32Array = PackedInt32Array()
+				var _off_avc: int = 0
+				var _kk_avc: int = 0
+				var _kn_avc: int = _competition_slots.size()
+				while _kk_avc < _kn_avc:
+					var _vk_avc: Array = _voisins_par_slot_avc[_kk_avc]
+					for _v_avc in _vk_avc:
+						_vs_avc.append(int(_v_avc.get("slot", -1)))
+					_off_avc += _vk_avc.size()
+					_vo_avc[_kk_avc + 1] = _off_avc
+					_kk_avc += 1
+				_morts_slots_avc = _simu_cpp.decider_morts_competition(
+					_competition_slots, _vo_avc, _vs_avc, _competition_max_voisins
+				)
+			else:
+				var _morts_du_tick_avc: Dictionary = {}
+				var _k_avc: int = 0
+				var _m_avc: int = _competition_slots.size()
+				while _k_avc < _m_avc:
+					var _slot_avc: int = _competition_slots[_k_avc]
+					var _voisins_list_avc: Array = _voisins_par_slot_avc[_k_avc]
+					var _voisins_n_avc: int = _voisins_list_avc.size()
+					if not _morts_du_tick_avc.is_empty():
+						for _voisin_avc in _voisins_list_avc:
+							if _morts_du_tick_avc.has(_voisin_avc.id):
+								_voisins_n_avc -= 1
+					_k_avc += 1
+					if _voisins_n_avc > _competition_max_voisins:
+						var _exces_avc: int = _voisins_n_avc - _competition_max_voisins
+						var _proba_avc: float = clampf(
+							float(_exces_avc) / float(maxi(1, _competition_max_voisins)), 0.0, 1.0)
+						if _rng.randf() < _proba_avc:
+							var _chose_avc = _choses_arbre[_slot_avc]
+							if _chose_avc != null:
+								_morts_du_tick_avc[_chose_avc.id] = true
+							_morts_slots_avc.append(_slot_avc)
 			# INLINE _liberer_slots_lot(_morts_slots_avc) -- suffix _avclsl
 			var _n_avclsl: int = _morts_slots_avc.size()
 			if _n_avclsl > 0:

@@ -4602,7 +4602,26 @@ en-tête).
   `charge()` (booléen de vérification de chargement) et
   `population()` rendant `_population` (0 tant que la logique du tick
   n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
-  logique à l'étape 1. ÉTAPE 6 (portée, REPRODUCTION STOCHASTIQUE) :
+  logique à l'étape 1. ÉTAPE 7 (portée, COEUR DÉCISIONNEL COMPÉTITION) :
+  deux méthodes typées encadrant la requête `_monde` (option (a) —
+  `_monde` reste GDScript, la requête `choses_dans_rayons_brut_xz` se
+  fait entre les deux appels C++). `selection_competition(pas, cap,
+  cadence, stade_max, curseur, libres, slot_stade, positions_x/z,
+  y_sol)` boucle curseur tournant (même arithmétique `n_slots =
+  ceil(cap*pas/cadence)`), skip libres et stade > max, rend
+  `positions_batch`+`slots_batch`+`curseur_avance`.
+  `decider_morts_competition(slots_batch, voisins_offsets, voisins_slots,
+  max_voisins)` reçoit CSR des voisins (aplati par GDScript après appel
+  monde) et pour chaque slot compte voisins moins morts du tick (set
+  `unordered_set<int32>` C++, indexé par `chose.slot`), tire
+  `_rng->randf() < clamp(excès/max_voisins, 0, 1)` — même ordre de
+  tirage que l'oracle, RNG partagé. Rend `morts_slots`
+  (`PackedInt32Array`). Le drainage GDScript inline (retrait monde,
+  ombrage inverse, réveil dormantes, reset colonnes, décrément
+  population) reste inchangé mot pour mot, opère sur `_morts_slots_avc`.
+  Parité vérifiée sur forêt complète (pop=31, cap=32) à 100 ticks avec
+  reproduction ET compétition actives.
+  ÉTAPE 6 (portée, REPRODUCTION STOCHASTIQUE) :
   `initialiser_stable_reproduction(debut_fertilite, fin_fertilite,
   rayon_graine)` pose les stables, `passe_reproduction(pas, cap,
   libres, ages, intervalle_reprod, positions_x, positions_z,
