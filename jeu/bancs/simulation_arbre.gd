@@ -640,9 +640,13 @@ func derniers_chronos() -> Dictionary:
 # banc_peuplement.gd.
 func configurer_cpp(actif: bool) -> void:
 	if actif and _simu_cpp == null:
+		# ETAPE FINALE : plus de fallback silencieux. Si la coquille demande
+		# le C++ et que la DLL n'est pas chargee, c'est un ECHEC HARD --
+		# sinon le banc tournerait sur l'oracle GDScript sans que personne
+		# ne s'en rende compte (chemin double dissimule).
+		assert(ClassDB.class_exists("SimulationArbre"), "simulation_arbre : SimulationArbre C++ absente -- DLL extension_terrain non chargee. Rebuild + Godot ferme + relance.")
 		if not ClassDB.class_exists("SimulationArbre"):
-			push_warning("simulation_arbre : SimulationArbre C++ absente, bascule ignoree")
-			utilise_cpp = false
+			push_error("simulation_arbre : SimulationArbre C++ absente -- DLL non chargee, aucun fallback GDScript, bascule refusee")
 			return
 		_simu_cpp = ClassDB.instantiate("SimulationArbre")
 		_cpp_stable_pousse = false
