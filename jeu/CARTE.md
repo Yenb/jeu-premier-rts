@@ -4602,7 +4602,24 @@ en-tête).
   `charge()` (booléen de vérification de chargement) et
   `population()` rendant `_population` (0 tant que la logique du tick
   n'est pas portée à l'étape 1). Aucune colonne, aucun RNG, aucune
-  logique à l'étape 1. ÉTAPE 7 (portée, COEUR DÉCISIONNEL COMPÉTITION) :
+  logique à l'étape 1. ÉTAPE 8 (portée, SHADOW INDEX SPATIAL — requête
+  compétition) : `SimulationArbre` C++ tient un miroir multi-niveaux du
+  monde des arbres (mode structure_simple de `scripts/monde.gd`, aucun
+  framework touché). Chaque niveau =
+  `unordered_map<Vector3i, vector<int32>> cases` + `case_de[slot] →
+  Vector3i` pour retrait swap-remove. Positions XZ par slot dans
+  `_positions_arbre`. Méthodes typées ptrcall : `arbre_ouvrir_niveau`,
+  `arbre_ajouter_lot`, `arbre_retirer_lot`,
+  `arbre_choses_dans_rayons_brut_xz` (rend CSR `{offsets, slots}`,
+  miroir bit-à-bit de `monde.gd::choses_dans_rayons_brut_xz` l.664-714,
+  écrasement Y, ordre cx croissant × cz croissant préservé). GDScript
+  synchronise le shadow à chaque `_monde.ajouter_lot` (naissances) et
+  `_monde.retirer_lot` (morts vieillesse immédiat, morts compétition au
+  déversement final). Sous bascule, la requête compétition passe par le
+  shadow C++ (CSR direct, plus de conversion Array<Dictionary>). Semis
+  et banque restent GDScript (étape 9 à venir). Parité vérifiée sur
+  forêt complète (pop=31, cap=32).
+  ÉTAPE 7 (portée, COEUR DÉCISIONNEL COMPÉTITION) :
   deux méthodes typées encadrant la requête `_monde` (option (a) —
   `_monde` reste GDScript, la requête `choses_dans_rayons_brut_xz` se
   fait entre les deux appels C++). `selection_competition(pas, cap,

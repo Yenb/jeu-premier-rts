@@ -405,6 +405,9 @@ var _us_tick_cumul: int = 0
 # par frontiere a chaque tick.
 var utilise_cpp: bool = false
 var _simu_cpp: RefCounted = null
+# ETAPE 8 : slots morts a retirer du shadow C++ a la fin du tick.
+# Accumule morts_vieillesse + morts_competition. Reset a chaque tick.
+var _slots_finaux_m_cpp: PackedInt32Array = PackedInt32Array()
 # Drapeau : true = les colonnes stables (aps, durees, seuils, ombrage, bornes
 # adulte) ont deja ete poussees au C++ pour ce banc. Remis a false a chaque
 # `configurer_cpp(true)` (nouvelle instance).
@@ -872,6 +875,8 @@ func avancer(pas: float) -> void:
 	# a `_liberer_morts_vieillesse_lot` apres la boucle, avant le reveil
 	# groupe (les morts appendent des positions de reveil a leur tour).
 	_morts_vieillesse_lot.resize(0)
+	# ETAPE 8 : reset accumulator morts pour shadow C++.
+	_slots_finaux_m_cpp.resize(0)
 	# BASCULE C++ (etape 2 du portage). `utilise_cpp = true` remplace la
 	# boucle unique GDScript (senescence + stade + detection + mort
 	# vieillesse + reproduction inline) par (a) un appel a
@@ -1077,6 +1082,10 @@ func avancer(pas: float) -> void:
 	# l'etat post-W1.
 	if _ids_a_retirer_lsl.size() > 0:
 		_monde.retirer_lot(_ids_a_retirer_lsl)
+		# ETAPE 8 : shadow C++ retire immediatement pour que semis/banque/
+		# competition qui suivent ne voient plus ces slots. Aligne sur monde.
+		if utilise_cpp and _simu_cpp != null:
+			_simu_cpp.arbre_retirer_lot(_morts_vieillesse_lot)
 	var _n_trans_w1: int = _transitions_x.size()
 	var _n_morts_w1: int = _dep_x_lsl.size()
 	if _n_morts_w1 > 0 or _n_trans_w1 > 0:
@@ -1484,6 +1493,16 @@ func avancer(pas: float) -> void:
 			_k_ntl += 1
 		# W2 monde SYNCHRONE (competition lit monde et compte naissances).
 		_monde.ajouter_lot(_entries_monde_ntl)
+		# ETAPE 8 : synchronise shadow arbre C++ en parallele.
+		if utilise_cpp and _simu_cpp != null:
+			var _slots_naitre_cpp: PackedInt32Array = PackedInt32Array()
+			var _px_naitre_cpp: PackedFloat32Array = PackedFloat32Array()
+			var _pz_naitre_cpp: PackedFloat32Array = PackedFloat32Array()
+			for _entree_naitre_cpp in _entries_monde_ntl:
+				_slots_naitre_cpp.append(int(_entree_naitre_cpp.chose.slot))
+				_px_naitre_cpp.append(float(_entree_naitre_cpp.chose.position.x))
+				_pz_naitre_cpp.append(float(_entree_naitre_cpp.chose.position.z))
+			_simu_cpp.arbre_ajouter_lot(_slots_naitre_cpp, _px_naitre_cpp, _pz_naitre_cpp, Y_SOL)
 		# W2 couvert BUFFERISE (aucune lecture couvert apres W2 dans ce
 		# tick -- competition ne lit que monde).
 		if _dep_x_ntl.size() > 0:
@@ -1548,29 +1567,27 @@ func avancer(pas: float) -> void:
 				_competition_positions.append(Vector3(_positions_x[_i_avc], Y_SOL, _positions_z[_i_avc]))
 				_competition_slots.append(_i_avc)
 		if not _competition_positions.is_empty():
-			var _voisins_par_slot_avc: Array = _monde.choses_dans_rayons_brut_xz(_competition_positions, _rayon_competition)
 			var _morts_slots_avc: PackedInt32Array = PackedInt32Array()
 			# ETAPE 7 : DECISION -- gate bascule C++ / oracle GDScript.
+			# ETAPE 8 : sous bascule, la REQUETE passe aussi cote C++ (shadow
+			# arbre) qui rend directement le CSR -- plus de conversion
+			# Array<Dictionary> intermediaire.
 			if utilise_cpp and _simu_cpp != null:
-				# CSR des voisins (offsets, slots) pour C++.
-				var _vo_avc: PackedInt32Array = PackedInt32Array()
-				_vo_avc.resize(_competition_slots.size() + 1)
-				_vo_avc[0] = 0
-				var _vs_avc: PackedInt32Array = PackedInt32Array()
-				var _off_avc: int = 0
-				var _kk_avc: int = 0
-				var _kn_avc: int = _competition_slots.size()
-				while _kk_avc < _kn_avc:
-					var _vk_avc: Array = _voisins_par_slot_avc[_kk_avc]
-					for _v_avc in _vk_avc:
-						_vs_avc.append(int(_v_avc.get("slot", -1)))
-					_off_avc += _vk_avc.size()
-					_vo_avc[_kk_avc + 1] = _off_avc
-					_kk_avc += 1
+				var _pos_x_avc_cpp: PackedFloat32Array = PackedFloat32Array()
+				var _pos_z_avc_cpp: PackedFloat32Array = PackedFloat32Array()
+				for _p_avc_cpp in _competition_positions:
+					_pos_x_avc_cpp.append(_p_avc_cpp.x)
+					_pos_z_avc_cpp.append(_p_avc_cpp.z)
+				var _csr_avc_cpp: Dictionary = _simu_cpp.arbre_choses_dans_rayons_brut_xz(
+					_pos_x_avc_cpp, _pos_z_avc_cpp, Y_SOL, _rayon_competition
+				)
+				var _vo_avc: PackedInt32Array = _csr_avc_cpp.offsets
+				var _vs_avc: PackedInt32Array = _csr_avc_cpp.slots
 				_morts_slots_avc = _simu_cpp.decider_morts_competition(
 					_competition_slots, _vo_avc, _vs_avc, _competition_max_voisins
 				)
 			else:
+				var _voisins_par_slot_avc: Array = _monde.choses_dans_rayons_brut_xz(_competition_positions, _rayon_competition)
 				var _morts_du_tick_avc: Dictionary = {}
 				var _k_avc: int = 0
 				var _m_avc: int = _competition_slots.size()
@@ -1643,6 +1660,10 @@ func avancer(pas: float) -> void:
 				# ce tick -- morts_c ne sont plus jamais interrogees).
 				if _ids_a_retirer_avclsl.size() > 0:
 					_ids_finaux_m.append_array(_ids_a_retirer_avclsl)
+					# ETAPE 8 : shadow C++ -- accumule les morts competition,
+					# retirees au deversement final (comme _monde).
+					if utilise_cpp and _simu_cpp != null:
+						_slots_finaux_m_cpp.append_array(_morts_slots_avc)
 				if _dep_x_avclsl.size() > 0:
 					_dep_x_finaux.append_array(_dep_x_avclsl)
 					_dep_z_finaux.append_array(_dep_z_avclsl)
@@ -1797,6 +1818,11 @@ func avancer(pas: float) -> void:
 	# strict.
 	if _ids_finaux_m.size() > 0:
 		_monde.retirer_lot(_ids_finaux_m)
+		# ETAPE 8 : shadow arbre C++ retire les mêmes slots. Aucune
+		# validation d'existence côté C++ (retirer un slot non inscrit
+		# est un no-op).
+		if utilise_cpp and _simu_cpp != null and _slots_finaux_m_cpp.size() > 0:
+			_simu_cpp.arbre_retirer_lot(_slots_finaux_m_cpp)
 	if _dep_x_finaux.size() > 0:
 		_couvert.deposer_lot(_dep_x_finaux, _dep_z_finaux, _dep_r_finaux, _taille_case, _dep_m_finaux, _dep_s_finaux)
 	_us_deverse += Time.get_ticks_usec() - _us_bornage_debut
@@ -1984,6 +2010,11 @@ func _pousser_stables_cpp() -> void:
 		omb_r,
 		omb_m
 	)
+	# ETAPE 8 : ouvrir le niveau shadow du rayon competition (les rayons
+	# semis/banque restent en GDScript pour l'instant).
+	if _rayon_competition > 0.0:
+		var _exp_avc_cpp: int = int(ceil(log(_rayon_competition) / log(2.0)))
+		_simu_cpp.arbre_ouvrir_niveau(_exp_avc_cpp)
 	# Tables du RENDU (durees_stades, tronc/feuillage hauteur/largeur par
 	# stade, couleurs par stade, couleurs de repli, Y_SOL). Extraction des
 	# Dictionary imbriques _stades[k].tronc.hauteur etc. en PackedFloat32Array

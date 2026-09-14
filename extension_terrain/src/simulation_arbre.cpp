@@ -109,6 +109,22 @@ void SimulationArbre::_bind_methods() {
 					"voisins_slots",
 					"competition_max_voisins"),
 			&SimulationArbre::decider_morts_competition);
+	ClassDB::bind_method(D_METHOD("arbre_ouvrir_niveau", "exposant"), &SimulationArbre::arbre_ouvrir_niveau);
+	ClassDB::bind_method(
+			D_METHOD("arbre_ajouter_lot",
+					"slots",
+					"positions_x",
+					"positions_z",
+					"y_sol"),
+			&SimulationArbre::arbre_ajouter_lot);
+	ClassDB::bind_method(D_METHOD("arbre_retirer_lot", "slots"), &SimulationArbre::arbre_retirer_lot);
+	ClassDB::bind_method(
+			D_METHOD("arbre_choses_dans_rayons_brut_xz",
+					"positions_x",
+					"positions_z",
+					"y_sol",
+					"rayon"),
+			&SimulationArbre::arbre_choses_dans_rayons_brut_xz);
 }
 
 SimulationArbre::SimulationArbre() {
@@ -632,6 +648,171 @@ PackedInt32Array SimulationArbre::decider_morts_competition(
 		}
 	}
 	return morts_slots;
+}
+
+void SimulationArbre::arbre_ouvrir_niveau(int exposant) {
+	if (_niveaux_arbre.find(exposant) != _niveaux_arbre.end()) return;
+	NiveauArbre n;
+	n.exposant = exposant;
+	n.inv_arete = 1.0 / std::pow(2.0, double(exposant));
+	// Repopule depuis _positions_arbre (miroir _batir monde.gd).
+	// Ordre : parcours des slots dans l'ordre d'insertion de la map.
+	// Note : unordered_map ne garantit pas un ordre stable ; ce niveau
+	// s'ouvre AVANT tout ajout d'arbre pour eviter la dependance a l'ordre.
+	for (auto &p : _positions_arbre) {
+		int32_t slot = p.first;
+		double x = double(p.second.first);
+		double z = double(p.second.second);
+		// cy calcule sur position.y = y_sol supposee constante. On ne
+		// stocke pas y : ici on met cy = 0 par convention et on reconstruit
+		// cy a la requete via floori(y_sol * inv_a). Ecart avec le GDScript
+		// qui stocke cy dans la clef -- corrige : je reinsere lors du
+		// premier arbre_ajouter_lot avec le vrai y_sol. Ce chemin n'est
+		// pas exercice tant qu'on ouvre les niveaux avant ajout.
+		Vector3i cle(int(std::floor(x * n.inv_arete)), 0, int(std::floor(z * n.inv_arete)));
+		n.cases[cle].push_back(slot);
+		n.case_de[slot] = cle;
+	}
+	_niveaux_arbre[exposant] = std::move(n);
+}
+
+void SimulationArbre::arbre_ajouter_lot(
+		const PackedInt32Array &slots,
+		const PackedFloat32Array &positions_x,
+		const PackedFloat32Array &positions_z,
+		float y_sol) {
+	int n = slots.size();
+	const int32_t *sr = slots.ptr();
+	const float *px = positions_x.ptr();
+	const float *pz = positions_z.ptr();
+	for (int k = 0; k < n; ++k) {
+		int32_t slot = sr[k];
+		float x = px[k];
+		float z = pz[k];
+		_positions_arbre[slot] = std::make_pair(x, z);
+		// Inscrit dans TOUS les niveaux ouverts.
+		for (auto &kv : _niveaux_arbre) {
+			NiveauArbre &niveau = kv.second;
+			int cy = int(std::floor(double(y_sol) * niveau.inv_arete));
+			Vector3i cle(int(std::floor(double(x) * niveau.inv_arete)),
+					cy,
+					int(std::floor(double(z) * niveau.inv_arete)));
+			niveau.cases[cle].push_back(slot);
+			niveau.case_de[slot] = cle;
+		}
+	}
+}
+
+void SimulationArbre::arbre_retirer_lot(const PackedInt32Array &slots) {
+	int n = slots.size();
+	const int32_t *sr = slots.ptr();
+	for (int k = 0; k < n; ++k) {
+		int32_t slot = sr[k];
+		_positions_arbre.erase(slot);
+		for (auto &kv : _niveaux_arbre) {
+			NiveauArbre &niveau = kv.second;
+			auto it_case = niveau.case_de.find(slot);
+			if (it_case == niveau.case_de.end()) continue;
+			Vector3i cle = it_case->second;
+			auto it_v = niveau.cases.find(cle);
+			if (it_v != niveau.cases.end()) {
+				auto &vec = it_v->second;
+				// swap-remove : miroir monde.gd _deranger mode simple.
+				for (size_t i = 0; i < vec.size(); ++i) {
+					if (vec[i] == slot) {
+						int32_t last = vec.back();
+						vec[i] = last;
+						vec.pop_back();
+						if (last != slot) {
+							niveau.case_de[last] = cle;
+						}
+						break;
+					}
+				}
+				if (vec.empty()) niveau.cases.erase(cle);
+			}
+			niveau.case_de.erase(slot);
+		}
+	}
+}
+
+Dictionary SimulationArbre::arbre_choses_dans_rayons_brut_xz(
+		const PackedFloat32Array &positions_x,
+		const PackedFloat32Array &positions_z,
+		float y_sol,
+		float rayon) const {
+	Dictionary out;
+	PackedInt32Array offsets;
+	PackedInt32Array slots;
+	int n_pos = positions_x.size();
+	offsets.resize(n_pos + 1);
+	int32_t *off_w = offsets.ptrw();
+	off_w[0] = 0;
+	if (n_pos == 0 || rayon <= 0.0f) {
+		out["offsets"] = offsets;
+		out["slots"] = slots;
+		return out;
+	}
+	// Miroir _exposant_pour l.860-863 : ceil(log2(rayon)), clampe.
+	// Bornes EXPOSANT_MIN/MAX de monde.gd : je ne connais pas les
+	// constantes, je clamp large [-16, 16]. En pratique tous les rayons
+	// du banc arbre tombent dans [1, 20].
+	int exposant = int(std::ceil(std::log(double(rayon)) / std::log(2.0)));
+	if (exposant < -16) exposant = -16;
+	if (exposant > 16) exposant = 16;
+	auto it_niv = _niveaux_arbre.find(exposant);
+	if (it_niv == _niveaux_arbre.end()) {
+		// Niveau non ouvert : rendre resultat vide (offsets tous a 0).
+		for (int k = 1; k <= n_pos; ++k) off_w[k] = 0;
+		out["offsets"] = offsets;
+		out["slots"] = slots;
+		return out;
+	}
+	const NiveauArbre &niveau = it_niv->second;
+	double inv_a = niveau.inv_arete;
+	const float *px = positions_x.ptr();
+	const float *pz = positions_z.ptr();
+	double d_rayon = double(rayon);
+	double carre = d_rayon * d_rayon;
+	int cy = int(std::floor(double(y_sol) * inv_a));
+	int total = 0;
+	for (int k = 0; k < n_pos; ++k) {
+		double px_r = double(px[k]);
+		double pz_r = double(pz[k]);
+		double pos_bas_x = px_r - d_rayon;
+		double pos_bas_z = pz_r - d_rayon;
+		double pos_haut_x = px_r + d_rayon;
+		double pos_haut_z = pz_r + d_rayon;
+		int cx_min = int(std::floor(pos_bas_x * inv_a));
+		int cx_max = int(std::floor(pos_haut_x * inv_a));
+		int cz_min = int(std::floor(pos_bas_z * inv_a));
+		int cz_max = int(std::floor(pos_haut_z * inv_a));
+		for (int cx = cx_min; cx <= cx_max; ++cx) {
+			for (int cz = cz_min; cz <= cz_max; ++cz) {
+				Vector3i cle(cx, cy, cz);
+				auto it_case = niveau.cases.find(cle);
+				if (it_case == niveau.cases.end()) continue;
+				const auto &vec = it_case->second;
+				for (int32_t s : vec) {
+					auto it_pos = _positions_arbre.find(s);
+					if (it_pos == _positions_arbre.end()) continue;
+					double vx = double(it_pos->second.first);
+					double vz = double(it_pos->second.second);
+					// Distance^2 3D avec dy = 0 (tous a Y_SOL) = distance^2 xz.
+					double dx = vx - px_r;
+					double dz = vz - pz_r;
+					if (dx * dx + dz * dz <= carre) {
+						slots.append(s);
+						++total;
+					}
+				}
+			}
+		}
+		off_w[k + 1] = total;
+	}
+	out["offsets"] = offsets;
+	out["slots"] = slots;
+	return out;
 }
 
 } // namespace godot

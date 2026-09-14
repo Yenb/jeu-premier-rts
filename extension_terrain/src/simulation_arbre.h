@@ -46,7 +46,11 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
+#include <godot_cpp/variant/vector3i.hpp>
+
 #include <cstdint>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace godot {
@@ -206,6 +210,32 @@ private:
 	// RNG godot-cpp -- meme classe que GDScript, meme PCG32.
 	Ref<RandomNumberGenerator> _rng;
 
+	// ETAPE 8 : SHADOW INDEX SPATIAL du monde des arbres. Miroir minimal
+	// de scripts/monde.gd (mode structure_simple). Multi-niveaux par
+	// exposant : chaque niveau tient un unordered_map case (Vector3i) ->
+	// vector<slot int32>, plus case_de[slot] pour retrait swap-remove.
+	// Positions par slot stockees a part (test distance^2 xz). N'expose
+	// PAS l'API monde complete -- seulement ce qu'il faut pour porter
+	// choses_dans_rayons_brut_xz. Aucun framework touche.
+	struct Vec3iHashArbre {
+		size_t operator()(const Vector3i &v) const noexcept {
+			size_t h = std::hash<int32_t>()(v.x);
+			h ^= std::hash<int32_t>()(v.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+			h ^= std::hash<int32_t>()(v.z) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+			return h;
+		}
+	};
+	struct NiveauArbre {
+		double inv_arete = 1.0;
+		int exposant = 0;
+		std::unordered_map<Vector3i, std::vector<int32_t>, Vec3iHashArbre> cases;
+		std::unordered_map<int32_t, Vector3i> case_de;
+	};
+	std::unordered_map<int, NiveauArbre> _niveaux_arbre;
+	// slot -> (x, z) -- positions arbres pour le test distance^2 en xz.
+	// Un arbre non present dans cette map = non inscrit.
+	std::unordered_map<int32_t, std::pair<float, float>> _positions_arbre;
+
 	// STABLES REPRODUCTION posees une fois par initialiser_stable_reproduction.
 	float _debut_fertilite = 0.0f;
 	float _fin_fertilite = 0.0f;
@@ -280,6 +310,42 @@ public:
 			const PackedInt32Array &voisins_offsets,
 			const PackedInt32Array &voisins_slots,
 			int competition_max_voisins);
+
+	// ETAPE 8 : shadow monde -- ouvrir un niveau pour un exposant. Batit
+	// depuis les positions deja enregistrees (miroir _batir de monde.gd).
+	// Miroir de _exposant_pour (l.860-863) : ceil(log2(rayon)), clampe.
+	void arbre_ouvrir_niveau(int exposant);
+
+	// ETAPE 8 : inscrit les arbres du lot dans TOUS les niveaux ouverts,
+	// et enregistre leurs positions. Ordre d'insertion des slots dans
+	// case[cle] preserve (append) -- condition de parite.
+	void arbre_ajouter_lot(
+			const PackedInt32Array &slots,
+			const PackedFloat32Array &positions_x,
+			const PackedFloat32Array &positions_z,
+			float y_sol);
+
+	// ETAPE 8 : retire les arbres du lot de TOUS les niveaux ouverts.
+	// swap-remove dans le vector case (miroir _deranger de monde.gd
+	// mode structure_simple) -- O(1) par slot.
+	void arbre_retirer_lot(const PackedInt32Array &slots);
+
+	// ETAPE 8 : requete spatiale, miroir bit-a-bit de monde.gd::
+	// choses_dans_rayons_brut_xz (l.664-714). Ecrasement Y : cy = floori(
+	// y_sol * inv_a), la tranche Y est constante. Ordre des voisins par
+	// case : cx croissant, cz croissant, puis ordre d'insertion dans le
+	// vector. STRICT.
+	//
+	// Sortie CSR :
+	//   "offsets" PackedInt32Array (n_positions + 1)
+	//   "slots"   PackedInt32Array (total voisins, slots data)
+	// GDScript reconstruit ensuite Array<Array<Dictionary>> depuis les
+	// slots via son propre `_choses_arbre[slot]`.
+	Dictionary arbre_choses_dans_rayons_brut_xz(
+			const PackedFloat32Array &positions_x,
+			const PackedFloat32Array &positions_z,
+			float y_sol,
+			float rayon) const;
 };
 
 } // namespace godot
