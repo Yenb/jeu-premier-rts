@@ -77,6 +77,50 @@ var _mm_feuillage: MultiMesh = null
 var _noeud_tronc: MultiMeshInstance3D = null
 var _noeud_feuillage: MultiMeshInstance3D = null
 
+# OCCLUSION ARBRE (2026-09-15). Un OccluderInstance3D dedie au peuplement,
+# alimente par les troncs deja dans le cercle de rendu (les MEMES arbres
+# que ceux poses dans _mm_tronc.buffer -- le C++ compact les a filtres
+# par distance). Un tronc = deux quads verticaux en croix (XY et ZY),
+# fusionnes en UN seul ArrayOccluder3D. Patron : `rendu_terrain_multimesh.gd`
+# _occludeur_de_cubes / _phase_baker_occluder l.838-873 (ArrayOccluder3D
+# double-face, set_arrays(sommets, indices), OccluderInstance3D.occluder = occ).
+# NE TOUCHE AUCUNE colonne de sim, aucun RNG, aucune cadence. Aucun cout
+# ajoute au tick sim ; seule la coquille rebake.
+var _noeud_occludeur: OccluderInstance3D = null
+# Rebake AMORTI a intervalle fixe. Sans amortissement, le cout CPU de
+# construction du ArrayOccluder3D (N=8000 troncs -> 64k sommets + 96k
+# indices + set_arrays) tomberait dans chaque frame et mangerait le gain
+# d'occlusion. 0.5 s = 2 rebake/s : la composition du cercle change lente
+# ment (l'observateur bouge de quelques m par seconde), la latence
+# visuelle est negligeable.
+const INTERVALLE_BAKE_OCCL_S := 0.5
+# Un tronc plus petit que ce seuil ne participe pas au maillage occludeur :
+# la geometrie ajoutee ne bloquerait presque rien (jeune arbre) et
+# gaspillerait le budget CPU rasterizer.
+const HAUTEUR_MIN_TRONC_OCCL := 1.0
+var _temps_depuis_bake_occl: float = 0.0
+
+# CONE DE VISION (streaming, 2026-09-15). Demi-angle du cone de filtrage
+# rendu, EN DEGRES. Volontairement plus large que le demi-FOV horizontal
+# reel (~45-50 degres a FOV 75 vertical + aspect 16:9) pour offrir une
+# marge : un arbre au bord de l'ecran ne clignote pas quand le joueur
+# pivote entre deux ticks. Cos precompute a `_ready`.
+const CONE_DEMI_ANGLE_DEG := 75.0
+var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
+
+# STREAMING RENDU 60 Hz (2026-09-15). Le rebuild du buffer compact suit
+# la CAMERA (position + orientation XZ), pas la cadence sim. Sans ce
+# rebuild par frame, quand la camera pivote entre deux ticks sim (250 ms
+# a 4 Hz), les arbres qui entrent dans le champ n'apparaissent qu'au
+# prochain tick -> pop visible. La sim ne re-tourne PAS : seul le filtre
+# cercle+cone se recalcule. Gate par SEUIL_* pour ne pas rebuilder quand
+# la camera est immobile (economie a N=100000).
+const REBUILD_SEUIL_POS_M := 0.25   # 25 cm de deplacement
+const REBUILD_SEUIL_COS := 0.9998   # ~1.1 degre d'ecart d'orientation XZ
+var _pos_bake_prec: Vector2 = Vector2.INF * Vector2.ONE
+var _dir_bake_prec: Vector2 = Vector2.ZERO
+var _bake_prec_valide: bool = false
+
 # Module de simulation. Instancie au `_ready`, appele par `_process`.
 # `null` avant init : `_process` gate en tete pour ne pas appeler avancer
 # sur rien -- au moindre echec de config, la sim reste null et le banc
@@ -168,6 +212,42 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if _sim == null:
 		return
+	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
+	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
+	# cadence -- que la sim ait tourne ce tick ou non, la position reste
+	# fraiche. Patron identique a terrain_visible.gd (l.245-250) :
+	# `get_first_node_in_group(&"observateur")`. Mode isole (pas de joueur
+	# dans la scene) : aucun push, le drapeau `_observateur_actif` cote sim
+	# reste false (cas neutre, pas une panne).
+	# CAMERA suivie a 60 Hz : position XZ + direction XZ. Pousse a la sim
+	# CHAQUE FRAME (cout : 3 float stores + bool), utile a la fois pour
+	# avancer(pas) au prochain tick sim et pour rafraichir_buffer_rendu()
+	# entre deux ticks quand la camera bouge.
+	var pos_obs_xz := Vector2.ZERO
+	var dir_obs_xz := Vector2.ZERO
+	var obs_present: bool = false
+	var obs_cone_present: bool = false
+	var obs := get_tree().get_first_node_in_group(&"observateur")
+	if obs != null and obs is Node3D:
+		var noeud_obs: Node3D = obs as Node3D
+		var pos_obs: Vector3 = noeud_obs.global_position
+		pos_obs_xz = Vector2(pos_obs.x, pos_obs.z)
+		obs_present = true
+		_sim.definir_observateur(pos_obs.x, pos_obs.z)
+		# CONE VISION (2026-09-15) : direction XZ du regard = -basis.z du
+		# noeud observateur, projetee sur XZ puis normalisee. Le joueur
+		# (JoueurBanc CharacterBody3D) porte son lacet sur son propre basis
+		# (le tangage vit dans _yeux, indifferent pour un cone XZ). Camera
+		# fixe (banc mode isole, joueur inactif) : -basis.z pointe vers
+		# l'origine, meme convention. Direction quasi-verticale (regard au
+		# sol ou au ciel) -> pas de cone (dir_xz trop courte a normaliser).
+		var fwd: Vector3 = -noeud_obs.global_transform.basis.z
+		var dir_xz := Vector2(fwd.x, fwd.z)
+		if dir_xz.length_squared() > 0.0001:
+			dir_xz = dir_xz.normalized()
+			dir_obs_xz = dir_xz
+			obs_cone_present = true
+			_sim.definir_observateur_cone(dir_xz.x, dir_xz.y, _cone_cos_demi_angle)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
 	# `_sim.avancer(pas)` -- proba stochastique / cadence banque /
@@ -175,13 +255,47 @@ func _process(delta: float) -> void:
 	# identique.
 	_temps_depuis_maj += delta
 	var intervalle_maj: float = 1.0 / _cadence_simulation_hz if _cadence_simulation_hz > 0.0 else 0.0
-	if _temps_depuis_maj < intervalle_maj:
-		return
-	var pas: float = _temps_depuis_maj
-	_temps_depuis_maj = 0.0
-	if _mode_test_rapide:
-		pas *= 4.0
-	_sim.avancer(pas)
+	var sim_a_tourne: bool = false
+	if _temps_depuis_maj >= intervalle_maj:
+		var pas: float = _temps_depuis_maj
+		_temps_depuis_maj = 0.0
+		if _mode_test_rapide:
+			pas *= 4.0
+		_sim.avancer(pas)
+		sim_a_tourne = true
+	# STREAMING RENDU 60 Hz (2026-09-15). Si la sim n'a pas tourne ce frame
+	# ET que la camera a bouge/tourne au-dela des seuils, rafraichir le
+	# buffer compact SANS avancer la sim. Cout : un rebuild O(cap) borne
+	# cercle+cone, aucune mutation de colonne sim. Camera immobile : rien.
+	if obs_present and not sim_a_tourne:
+		var doit_rebuild: bool = not _bake_prec_valide
+		if not doit_rebuild:
+			var d_pos: float = (pos_obs_xz - _pos_bake_prec).length()
+			if d_pos >= REBUILD_SEUIL_POS_M:
+				doit_rebuild = true
+		if not doit_rebuild and obs_cone_present:
+			var d_cos: float = dir_obs_xz.dot(_dir_bake_prec)
+			if d_cos < REBUILD_SEUIL_COS:
+				doit_rebuild = true
+		if doit_rebuild:
+			_sim.rafraichir_buffer_rendu()
+			_pos_bake_prec = pos_obs_xz
+			_dir_bake_prec = dir_obs_xz
+			_bake_prec_valide = true
+	elif sim_a_tourne and obs_present:
+		# Le tick sim a deja rebuild le buffer avec la camera courante.
+		# Synchro les references pour eviter un double rebuild imediat.
+		_pos_bake_prec = pos_obs_xz
+		_dir_bake_prec = dir_obs_xz
+		_bake_prec_valide = true
+	# OCCLUSION ARBRE : rebake amorti a INTERVALLE_BAKE_OCCL_S. Independant
+	# de la cadence sim -- le buffer de rendu est toujours a jour du dernier
+	# tick, on rebake sur son etat actuel. Le noeud occludeur ne change rien
+	# a la sim ; l'occlusion est un ajout de rendu pur.
+	_temps_depuis_bake_occl += delta
+	if _temps_depuis_bake_occl >= INTERVALLE_BAKE_OCCL_S:
+		_temps_depuis_bake_occl = 0.0
+		_rebake_occludeur_arbre()
 
 
 # Charge le JSON du banc (donnees + config). Rend un Dictionary vide en
@@ -245,14 +359,18 @@ func _monter_scene(demi_carte: float, joueur_actif: bool) -> void:
 	lumiere.shadow_enabled = false
 	add_child(lumiere)
 	# Camera plongeante conservee mais NON-current : le joueur reprend le
-	# point de vue avec sa propre camera. Le groupe "observateur" reste sur
-	# elle -- aucun consommateur du groupe dans ce banc, verifie au grep.
+	# point de vue avec sa propre camera. Le groupe "observateur" est pose
+	# sur la camera SEULEMENT quand le joueur est desactive -- sinon c'est
+	# le JoueurBanc (CharacterBody3D mobile) qui porte le groupe (voir
+	# `_monter_joueur`), pour que le streaming rendu suive la vraie
+	# position du point de vue.
 	var camera := Camera3D.new()
 	camera.position = Vector3(0.0, 55.0, 55.0)
 	# current = true si le joueur est desactive (JSON `joueur_actif`=false),
 	# sinon false : le joueur mettra sa propre camera current au _ready.
 	camera.current = not joueur_actif
-	camera.add_to_group(&"observateur")
+	if not joueur_actif:
+		camera.add_to_group(&"observateur")
 	add_child(camera)
 	camera.look_at(Vector3(0.0, Y_SOL, 0.0), Vector3.UP)
 
@@ -265,6 +383,11 @@ func _monter_scene(demi_carte: float, joueur_actif: bool) -> void:
 func _monter_joueur() -> void:
 	var joueur := JoueurBanc.new()
 	joueur.position = Vector3(8.0, Y_SOL + 1.0, 8.0)
+	# STREAMING RENDU ARBRE, ETAPE 1/4 (2026-09-15) : le joueur est le
+	# point de vue mobile -- c'est lui qui porte le groupe "observateur",
+	# pas la camera plongeante fixe. Convention du framework
+	# (terrain_visible.gd:245-250, banc_peuplement.gd:294).
+	joueur.add_to_group(&"observateur")
 	add_child(joueur)
 
 
@@ -280,6 +403,14 @@ func _monter_population_nodes() -> void:
 	tronc_mesh.top_radius = 0.5
 	tronc_mesh.bottom_radius = 0.5
 	tronc_mesh.height = 1.0
+	# Densite mesh volontairement basse pour la simulation de masse (defaut
+	# Godot : radial_segments=64, rings=4 -> ~256 triangles par tronc x N,
+	# 24M primitives a N=8500). 8 segments = compromis rondeur/cout pour
+	# simulation de masse, ajustable. cap_top desactive car cache par feuillage.
+	tronc_mesh.radial_segments = 8
+	tronc_mesh.rings = 1
+	tronc_mesh.cap_top = false
+	tronc_mesh.cap_bottom = true
 	var mat_tronc := StandardMaterial3D.new()
 	mat_tronc.albedo_color = Color(0.35, 0.22, 0.12)
 	# Couleur d'instance -> albedo (paire OBLIGATOIRE avec
@@ -311,6 +442,12 @@ func _monter_population_nodes() -> void:
 	cone.top_radius = 0.0
 	cone.bottom_radius = 0.5
 	cone.height = 1.0
+	# Densite mesh volontairement basse (meme raison que tronc). 8 segments =
+	# compromis rondeur/cout, ajustable. cap_bottom actif (base visible par
+	# en dessous a distance) ; top_radius=0 -> pas de cap_top possible.
+	cone.radial_segments = 8
+	cone.rings = 1
+	cone.cap_bottom = true
 	var mat_feuillage := StandardMaterial3D.new()
 	mat_feuillage.albedo_color = Color(0.15, 0.45, 0.2)
 	# Couleur d'instance -> albedo (paire OBLIGATOIRE avec use_colors,
@@ -327,6 +464,14 @@ func _monter_population_nodes() -> void:
 	_noeud_feuillage.top_level = true
 	_noeud_feuillage.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_noeud_feuillage)
+	# OCCLUSION ARBRE : noeud OccluderInstance3D dedie au peuplement.
+	# top_level = true : les sommets du ArrayOccluder3D sont ecrits en
+	# COORDONNEES MONDE (memes que _mm_tronc.buffer), le noeud reste a
+	# l'origine, meme convention que _noeud_tronc/_noeud_feuillage.
+	_noeud_occludeur = OccluderInstance3D.new()
+	_noeud_occludeur.top_level = true
+	_noeud_occludeur.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
+	add_child(_noeud_occludeur)
 
 
 # Lit une fois le groupe `&"exclusion_arbre"` et copie chaque zone en
@@ -335,6 +480,74 @@ func _monter_population_nodes() -> void:
 # `call_deferred` -- garantit que TOUS les noeuds d'exclusion freres ont
 # deja execute leur propre `_ready` (donc `add_to_group`) au moment ou
 # on lit le groupe.
+func _rebake_occludeur_arbre() -> void:
+	# OCCLUSION ARBRE (2026-09-15). Reconstruit un ArrayOccluder3D neuf a
+	# partir du BUFFER COMPACT du tronc (_mm_tronc.buffer) : le C++ a deja
+	# fait le filtre cercle -- on n'occulte donc QUE les arbres du cercle
+	# de rendu, coherent avec le streaming. Pour chaque tronc, deux quads
+	# verticaux en croix (perpendiculaires a X et a Z) : occulte dans
+	# toutes les directions horizontales sans depender de l'orientation
+	# de l'observateur (pas de billboard, pas de rebake sur rotation).
+	# ArrayOccluder3D est DOUBLE-FACE (voir rendu_terrain_multimesh.gd:838),
+	# winding order libre.
+	if _mm_tronc == null or _noeud_occludeur == null:
+		return
+	var pop: int = _mm_tronc.instance_count
+	if pop <= 0:
+		_noeud_occludeur.occluder = null
+		return
+	var buf: PackedFloat32Array = _mm_tronc.buffer
+	if buf.size() < pop * 16:
+		return
+	var sommets := PackedVector3Array()
+	var indices := PackedInt32Array()
+	# Reserve approximative : 8 sommets et 12 indices par tronc valide.
+	# Sur-allocation gerable, evite les realloc successives.
+	sommets.resize(0)
+	indices.resize(0)
+	var k: int = 0
+	while k < pop:
+		var base: int = k * 16
+		# Layout TRANSFORM_3D + color, 16 floats/instance. Buffer ecrit par
+		# le C++ (simulation_arbre.cpp:mettre_a_jour_buffers_rendu). Basis
+		# diagonale : rows[0].x = lt (largeur), rows[1].y = ht (hauteur),
+		# origin = (buf[3], buf[7], buf[11]) avec y = y_sol + ht*0.5.
+		var lt: float = buf[base + 0]
+		var ht: float = buf[base + 5]
+		if ht < HAUTEUR_MIN_TRONC_OCCL:
+			k += 1
+			continue
+		var ox: float = buf[base + 3]
+		var oy: float = buf[base + 7]
+		var oz: float = buf[base + 11]
+		var y_bas: float = oy - ht * 0.5
+		var y_haut: float = oy + ht * 0.5
+		var demi_l: float = lt * 0.5
+		# Quad 1 : plan XY (perpendiculaire a Z).
+		var s0: int = sommets.size()
+		sommets.append(Vector3(ox - demi_l, y_bas, oz))
+		sommets.append(Vector3(ox + demi_l, y_bas, oz))
+		sommets.append(Vector3(ox + demi_l, y_haut, oz))
+		sommets.append(Vector3(ox - demi_l, y_haut, oz))
+		indices.append(s0 + 0); indices.append(s0 + 1); indices.append(s0 + 2)
+		indices.append(s0 + 0); indices.append(s0 + 2); indices.append(s0 + 3)
+		# Quad 2 : plan ZY (perpendiculaire a X).
+		var s1: int = sommets.size()
+		sommets.append(Vector3(ox, y_bas, oz - demi_l))
+		sommets.append(Vector3(ox, y_bas, oz + demi_l))
+		sommets.append(Vector3(ox, y_haut, oz + demi_l))
+		sommets.append(Vector3(ox, y_haut, oz - demi_l))
+		indices.append(s1 + 0); indices.append(s1 + 1); indices.append(s1 + 2)
+		indices.append(s1 + 0); indices.append(s1 + 2); indices.append(s1 + 3)
+		k += 1
+	if indices.is_empty():
+		_noeud_occludeur.occluder = null
+		return
+	var occ := ArrayOccluder3D.new()
+	occ.set_arrays(sommets, indices)
+	_noeud_occludeur.occluder = occ
+
+
 func _charger_zones_exclusion() -> void:
 	var zones: Array = []
 	for zone_node in get_tree().get_nodes_in_group(&"exclusion_arbre"):

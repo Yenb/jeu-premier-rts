@@ -126,9 +126,6 @@ const CAPACITE_INITIALE := 8
 # Position horizontale du premier arbre (l'arbre initial).
 const POS_INITIALE := Vector2(0.0, 0.0)
 
-# Cadence du releve population imprime dans la console (~1/s a 60 fps).
-const CADENCE_RELEVE_POPULATION_FRAMES := 60
-
 # Nom du type local declare dans le catalogue combine et resolu par
 # `Objet.fabriquer`.
 const TYPE_ARBRE := "arbre_pousse"
@@ -348,51 +345,33 @@ var _intervalle_reprod: PackedFloat32Array = PackedFloat32Array()
 # Population vivante courante, tenue en O(1) : incrementee dans
 # _naitre_lot, decrementee dans _liberer_slots_lot. Aucun scan par frame.
 var _population: int = 0
-var _frames_depuis_releve: int = 0
 
-# CHRONO TEMPORAIRE du dernier tick en microsecondes. Rempli en fin de
-# `avancer(pas)` (Time.get_ticks_usec() aux bornes de la fonction, jamais
-# par arbre -- un now() par arbre fausserait la mesure), imprime sous le
-# meme gate que le releve population. Un seul poste « tick » a cette
-# etape ; le decoupage en sous-postes (senescence/stade/repro/banque/
-# couvert/competition/rendu) est une etape suivante. A RETIRER une fois
-# la mesure prise et le portage C++ verifie. Patron collision_lot.h
-# « CHRONOS TEMPORAIRES par appel ».
-var _chrono_dernier_tick_us: int = 0
+# STREAMING RENDU ARBRE, ETAPE 1/4 (2026-09-15) : position de l'observateur
+# (joueur) poussee par la coquille (banc_peuplement_arbre.gd:_process) via
+# `definir_observateur(x, z)`. Cette etape ne fait QUE stocker -- aucun
+# filtrage rendu ne s'appuie encore sur ces valeurs. Mode isole (pas de
+# joueur) : `_observateur_actif` reste false, cas neutre.
+var _observateur_x: float = 0.0
+var _observateur_z: float = 0.0
+var _observateur_actif: bool = false
 
-# SOUS-CHRONOS TEMPORAIRES par POSTE, cumules sur la fenetre de releve
-# (remis a 0 apres chaque print). Ecart : cumul plutot que « dernier tick »
-# pour lisser le bruit inter-tick et voir OU le tick passe son temps.
-# Postes disjoints qui couvrent tout le corps de avancer(pas) sans trou :
-#   us_boucle    : boucle unique (senescence + stade + detection + mort +
-#                  reproduction inline) OU passe_1_cpp + passe_reproduction
-#                  quand utilise_cpp = true.
-#   us_morts_v   : drainage `_liberer_morts_vieillesse_lot` inline.
-#   us_reveils   : reveil des dormantes en lot inline.
-#   us_transitions : redepot des transitions dans _couvert (deposer_lot elargi).
-#   us_semis     : `_semer_lot` inline.
-#   us_banque    : `_tick_banque` inline (drain expirations + reveils).
-#   us_naitre    : `_naitre_lot` inline.
-#   us_competition : `_avancer_competition` inline.
-#   us_rendu     : `_ecrire_slots_lot` inline.
-#   us_deverse   : monde.retirer_lot + couvert.deposer_lot finaux.
-# Total attendu : somme des 10 ~= _chrono_dernier_tick_us cumule sur la
-# fenetre (aux 10-20 us de now() eux-memes pres). Patron chronos
-# collision_lot.h -- TEMPORAIRE, a retirer une fois le poste dominant
-# identifie et porte C++.
-var _us_boucle: int = 0
-var _us_morts_v: int = 0
-var _us_reveils: int = 0
-var _us_semis: int = 0
-var _us_banque: int = 0
-var _us_naitre: int = 0
-var _us_competition: int = 0
-var _us_rendu: int = 0
-var _us_deverse: int = 0
-var _us_tick_cumul: int = 0
-# Poste `transitions` : le drainage W1 fusionne reveils + transitions
-# dans un unique bloc de code, sans separation nette. Comptabilise en
-# entier dans `_us_reveils` (voir bornage). Membre absent volontairement.
+# STREAMING RENDU ARBRE, FILTRE CONE (2026-09-15). Direction XZ NORMALISEE
+# du regard camera observateur + cosinus du demi-angle du champ (avec
+# marge). Pousses par la coquille via `definir_observateur_cone`. Si le
+# cone est inactif (aucune camera orientee poussee), le C++ n'applique
+# que le cercle -- comportement identique a l'etape precedente.
+var _observateur_dir_x: float = 0.0
+var _observateur_dir_z: float = 0.0
+var _observateur_cos_demi_angle: float = -1.0
+var _observateur_cone_actif: bool = false
+
+# STREAMING RENDU ARBRE, ETAPE 2/4 (2026-09-15). Rayon du cercle rendu
+# autour de l'observateur (metres). Un arbre data i est INCLUS dans le
+# buffer compact rendu par C++ SEULEMENT si (px-ox)^2 + (pz-oz)^2 <=
+# rayon^2. La SIMULATION ne lit JAMAIS ce rayon : la boucle 0..cap
+# continue sur tous les arbres. Defaut 80 m, reglable via JSON `rayon_rendu_m`.
+# En mode isole (_observateur_actif=false) : filtre inactif, buffer inchange.
+var _rayon_rendu_m: float = 80.0
 
 # BASCULE C++ (etape 2 du portage). `utilise_cpp = true` remplace la boucle
 # unique (senescence + stade + detection + mort vieillesse) par un appel a
@@ -640,6 +619,18 @@ func naitre_initial(pos_x: float, pos_z: float) -> void:
 	if _stades.size() == 9:
 		_naitre(pos_x, pos_z)
 
+# STREAMING RENDU ARBRE (2026-09-15). API PUBLIQUE : rafraichit le buffer
+# compact rendu (cercle + cone) SANS faire tourner la sim. La coquille
+# appelle ceci chaque frame quand la camera a bouge/tourne, pour que le
+# filtre suive a 60 Hz alors que la sim tourne a 4 Hz. Ne mute AUCUNE
+# colonne de sim -- lit uniquement _libres/_ages/_slot_stade/_positions_*
+# et l'observateur courant, memes lectures que le chemin tick. Coeur
+# reutilise : _ecrire_slots_lot_cpp fait deja exactement ce travail.
+func rafraichir_buffer_rendu() -> void:
+	if not (utilise_cpp and _simu_cpp != null):
+		return
+	_ecrire_slots_lot_cpp(_capacite)
+
 # Getters exposes a la coquille (cadence, scene, decision de montage).
 func demi_carte() -> float: return _demi_carte
 func joueur_actif() -> bool: return _joueur_actif
@@ -653,11 +644,38 @@ func stades_ok() -> bool: return _stades.size() == 9 and _durees.size() == 8
 # test de parite futur C++).
 func population() -> int: return _population
 
-# CHRONO TEMPORAIRE : cout du dernier tick en microsecondes, expose au
-# meme titre que `collision_lot.h::derniers_chronos()`. Un seul poste
-# « tick » a cette etape. A RETIRER avec le reste de l'instrumentation.
-func derniers_chronos() -> Dictionary:
-	return {"tick": _chrono_dernier_tick_us}
+# STREAMING RENDU ARBRE, ETAPE 1/4 (2026-09-15). API poussee par la coquille
+# (banc_peuplement_arbre.gd:_process) chaque frame. La sim est un RefCounted
+# hors scene (SIM:16-17, aucun get_node) : elle ne peut pas lire l'arbre de
+# noeuds. La coquille lit l'observateur via
+# `get_first_node_in_group(&"observateur")` -- patron terrain_visible.gd
+# (l.245-250) -- et pousse la position ici. Mode isole (aucun observateur) :
+# jamais appelee, `_observateur_actif` reste false. A CETTE ETAPE, rien
+# n'est encore filtre par ces valeurs -- on ne fait que stocker.
+func definir_observateur(x: float, z: float) -> void:
+	_observateur_x = x
+	_observateur_z = z
+	_observateur_actif = true
+
+# STREAMING RENDU ARBRE, FILTRE CONE (2026-09-15). API poussee par la
+# coquille pour informer la sim de la direction de regard XZ de la camera
+# observateur et du cosinus du demi-angle du champ (avec marge par rapport
+# au FOV reel). Ne touche RIEN de la sim -- consomme uniquement dans
+# `_ecrire_slots_lot_cpp` pour transmettre au C++. Une seule fois par
+# frame suffit (la coquille rappelle chaque frame). Cas coquille sans
+# camera orientee : ne pas appeler -> `_observateur_cone_actif` reste false,
+# le filtre cone reste inactif cote C++.
+func definir_observateur_cone(dir_x: float, dir_z: float, cos_demi_angle: float) -> void:
+	_observateur_dir_x = dir_x
+	_observateur_dir_z = dir_z
+	_observateur_cos_demi_angle = cos_demi_angle
+	_observateur_cone_actif = true
+
+# Accesseurs de verification (Yael bouge le joueur, lit ces valeurs pour
+# constater que la position suit). ETAPE 1/4 -- ils disparaitront avec le
+# reste de l'ossature de verification une fois le streaming en place.
+func observateur_actif() -> bool: return _observateur_actif
+func observateur_position_xz() -> Vector2: return Vector2(_observateur_x, _observateur_z)
 
 # BASCULE C++ (etape 2 du portage). Active/desactive la voie C++ pour la
 # passe 1 (senescence + stade + detection + mort vieillesse). `actif=true`
@@ -747,6 +765,8 @@ func _charger_reglages_locaux(donnees: Dictionary) -> void:
 		_facteur_trouee_gros = float(donnees.facteur_trouee_gros)
 	if donnees.has("cadence_simulation_hz"):
 		_cadence_simulation_hz = float(donnees.cadence_simulation_hz)
+	if donnees.has("rayon_rendu_m"):
+		_rayon_rendu_m = float(donnees.rayon_rendu_m)
 	if donnees.has("ombrage_par_stade"):
 		_ombrage_par_stade = donnees.ombrage_par_stade
 	# COULEURS PAR STADE : chaque entree JSON est [r, g, b] (floats 0-1),
@@ -881,10 +901,6 @@ func _monter_population_init() -> void:
 func avancer(pas: float) -> void:
 	if _stades.size() != 9 or _durees.size() != 8 or _stades_config_partagee.is_empty():
 		return
-	# CHRONO TEMPORAIRE du tick complet. Borne haute : dernier appel avant
-	# la sortie de la fonction. Voir `_chrono_dernier_tick_us`. A RETIRER
-	# avec le reste de l'instrumentation.
-	var _debut_tick_us: int = Time.get_ticks_usec()
 	# LOT DE GRAINES A SEMER : vide en debut de tick. resize(0) garde la
 	# capacite deja allouee (aucune allocation neuve tick apres tick une
 	# fois le regime atteint).
@@ -921,14 +937,11 @@ func avancer(pas: float) -> void:
 	# `_boucle_unique_gd` -- aucun changement de logique dans le chemin
 	# oracle).
 	var utiliser_cpp_ce_tick: bool = utilise_cpp and _simu_cpp != null
-	var _us_bornage_debut: int = Time.get_ticks_usec()
 	if utiliser_cpp_ce_tick:
 		_passe_1_cpp(pas)
 		_passe_reproduction(pas)
 	else:
 		_boucle_unique_gd(pas)
-	_us_boucle += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _liberer_morts_vieillesse_lot -> _liberer_slots_lot(
 	# _morts_vieillesse_lot) -- morceau 2/N. Vars suffixees `_lsl`
 	# (liberer slots lot). Le reveil recursif utilise suffix `_lslrev`,
@@ -1020,90 +1033,106 @@ func avancer(pas: float) -> void:
 		# apres les reveils (voir plus bas). Reveils inline n'accedent ni
 		# monde ni couvert, defere OK bit-a-bit.
 		# INLINE _ecrire_slots_vides_lot(_slots_lsl) -- suffix _lslev.
+		# RENDU COMPACT (prompt 2026-09-14) : sous bascule cpp, le MultiMesh
+		# a instance_count = pop et son buffer compact est reconstruit chaque
+		# tick -- les slots morts n'y apparaissent pas. Les set_instance_*
+		# indexes en slot data seraient hors bornes. Skip les ecritures visuelles
+		# sous cpp ; oracle GDScript inchange.
 		var _t_lslev := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
 		var _taille_couleur_lslev: int = _derniere_couleur_stade.size()
 		var _k_lslev: int = 0
 		while _k_lslev < _n_lsl:
 			var _i_lslev: int = _slots_lsl[_k_lslev]
 			_k_lslev += 1
-			_mm_tronc.set_instance_transform(_i_lslev, _t_lslev)
-			_mm_feuillage.set_instance_transform(_i_lslev, _t_lslev)
+			if not utiliser_cpp_ce_tick:
+				_mm_tronc.set_instance_transform(_i_lslev, _t_lslev)
+				_mm_feuillage.set_instance_transform(_i_lslev, _t_lslev)
 			if _i_lslev < _taille_couleur_lslev:
 				_derniere_couleur_stade[_i_lslev] = -1
 		# INLINE _reveiller_dormantes_autour_lot(_rev_x_lsl, _rev_z_lsl)
 		# -- suffix _lslrev. Reveils locaux au lot des morts.
-		var _n_lslrev: int = _rev_x_lsl.size()
-		if _n_lslrev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
-			var _inv_case_lslrev: float = 1.0 / _taille_case_dormantes
-			var _carre_lslrev: float = _rayon_reveil * _rayon_reveil
-			var _prospects_lslrev: Dictionary = _banque_graines.prospects()
-			var _kk_lslrev: int = 0
-			while _kk_lslrev < _n_lslrev:
-				var _pos_x_lslrev: float = _rev_x_lsl[_kk_lslrev]
-				var _pos_z_lslrev: float = _rev_z_lsl[_kk_lslrev]
-				_kk_lslrev += 1
-				var _cx_min_lslrev: int = floori((_pos_x_lslrev - _rayon_reveil) * _inv_case_lslrev)
-				var _cx_max_lslrev: int = floori((_pos_x_lslrev + _rayon_reveil) * _inv_case_lslrev)
-				var _cz_min_lslrev: int = floori((_pos_z_lslrev - _rayon_reveil) * _inv_case_lslrev)
-				var _cz_max_lslrev: int = floori((_pos_z_lslrev + _rayon_reveil) * _inv_case_lslrev)
-				for _cx_lslrev in range(_cx_min_lslrev, _cx_max_lslrev + 1):
-					for _cz_lslrev in range(_cz_min_lslrev, _cz_max_lslrev + 1):
-						var _cle_lslrev: Vector2i = Vector2i(_cx_lslrev, _cz_lslrev)
-						var _ids_lslrev = _dormantes_par_case.get(_cle_lslrev, null)
-						if _ids_lslrev == null:
-							continue
-						for _id_variant_lslrev in _ids_lslrev:
-							var _id_lslrev: int = int(_id_variant_lslrev)
-							if _reveils.has(_id_lslrev):
+		# ETAPE 14 : sous cpp, banque_reveiller_autour_lot fait ce parcours
+		# depuis l'etat C++ ; oracle GDScript inchange.
+		if utiliser_cpp_ce_tick:
+			if _rev_x_lsl.size() > 0:
+				_simu_cpp.banque_reveiller_autour_lot(_rev_x_lsl, _rev_z_lsl)
+		else:
+			var _n_lslrev: int = _rev_x_lsl.size()
+			if _n_lslrev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
+				var _inv_case_lslrev: float = 1.0 / _taille_case_dormantes
+				var _carre_lslrev: float = _rayon_reveil * _rayon_reveil
+				var _prospects_lslrev: Dictionary = _banque_graines.prospects()
+				var _kk_lslrev: int = 0
+				while _kk_lslrev < _n_lslrev:
+					var _pos_x_lslrev: float = _rev_x_lsl[_kk_lslrev]
+					var _pos_z_lslrev: float = _rev_z_lsl[_kk_lslrev]
+					_kk_lslrev += 1
+					var _cx_min_lslrev: int = floori((_pos_x_lslrev - _rayon_reveil) * _inv_case_lslrev)
+					var _cx_max_lslrev: int = floori((_pos_x_lslrev + _rayon_reveil) * _inv_case_lslrev)
+					var _cz_min_lslrev: int = floori((_pos_z_lslrev - _rayon_reveil) * _inv_case_lslrev)
+					var _cz_max_lslrev: int = floori((_pos_z_lslrev + _rayon_reveil) * _inv_case_lslrev)
+					for _cx_lslrev in range(_cx_min_lslrev, _cx_max_lslrev + 1):
+						for _cz_lslrev in range(_cz_min_lslrev, _cz_max_lslrev + 1):
+							var _cle_lslrev: Vector2i = Vector2i(_cx_lslrev, _cz_lslrev)
+							var _ids_lslrev = _dormantes_par_case.get(_cle_lslrev, null)
+							if _ids_lslrev == null:
 								continue
-							if not _prospects_lslrev.has(_id_lslrev):
-								continue
-							var _entree_lslrev: Dictionary = _prospects_lslrev[_id_lslrev]
-							var _pos_lslrev: Vector3 = _entree_lslrev.position
-							var _dx_lslrev: float = _pos_lslrev.x - _pos_x_lslrev
-							var _dz_lslrev: float = _pos_lslrev.z - _pos_z_lslrev
-							if _dx_lslrev * _dx_lslrev + _dz_lslrev * _dz_lslrev <= _carre_lslrev:
-								_reveils[_id_lslrev] = true
-	_us_morts_v += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
+							for _id_variant_lslrev in _ids_lslrev:
+								var _id_lslrev: int = int(_id_variant_lslrev)
+								if _reveils.has(_id_lslrev):
+									continue
+								if not _prospects_lslrev.has(_id_lslrev):
+									continue
+								var _entree_lslrev: Dictionary = _prospects_lslrev[_id_lslrev]
+								var _pos_lslrev: Vector3 = _entree_lslrev.position
+								var _dx_lslrev: float = _pos_lslrev.x - _pos_x_lslrev
+								var _dz_lslrev: float = _pos_lslrev.z - _pos_z_lslrev
+								if _dx_lslrev * _dx_lslrev + _dz_lslrev * _dz_lslrev <= _carre_lslrev:
+									_reveils[_id_lslrev] = true
 	# REVEIL EN LOT INLINE (corps de `_reveiller_dormantes_autour_lot`
 	# recopie ici -- morceau 1/N de l'inlining des fonctions banc dans
 	# tick). Fonction originale conservee : appelee depuis
 	# `_liberer_slots_lot` (mort vieillesse + competition), sera inlinee
 	# aux morceaux suivants. Vars suffixees `_rev` pour eviter collisions
 	# GDScript function-scope avec les autres inlines du tick.
-	var _n_rev: int = _reveils_positions_x.size()
-	if _n_rev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
-		var _inv_case_rev: float = 1.0 / _taille_case_dormantes
-		var _carre_rev: float = _rayon_reveil * _rayon_reveil
-		var _prospects_rev: Dictionary = _banque_graines.prospects()
-		var _k_rev: int = 0
-		while _k_rev < _n_rev:
-			var _pos_x_rev: float = _reveils_positions_x[_k_rev]
-			var _pos_z_rev: float = _reveils_positions_z[_k_rev]
-			_k_rev += 1
-			var _cx_min_rev: int = floori((_pos_x_rev - _rayon_reveil) * _inv_case_rev)
-			var _cx_max_rev: int = floori((_pos_x_rev + _rayon_reveil) * _inv_case_rev)
-			var _cz_min_rev: int = floori((_pos_z_rev - _rayon_reveil) * _inv_case_rev)
-			var _cz_max_rev: int = floori((_pos_z_rev + _rayon_reveil) * _inv_case_rev)
-			for _cx_rev in range(_cx_min_rev, _cx_max_rev + 1):
-				for _cz_rev in range(_cz_min_rev, _cz_max_rev + 1):
-					var _cle_rev: Vector2i = Vector2i(_cx_rev, _cz_rev)
-					var _ids_rev = _dormantes_par_case.get(_cle_rev, null)
-					if _ids_rev == null:
-						continue
-					for _id_variant_rev in _ids_rev:
-						var _id_rev: int = int(_id_variant_rev)
-						if _reveils.has(_id_rev):
+	# ETAPE 14 : sous cpp, banque_reveiller_autour_lot fait ce parcours
+	# depuis l'etat C++ ; oracle GDScript inchange.
+	if utiliser_cpp_ce_tick:
+		if _reveils_positions_x.size() > 0:
+			_simu_cpp.banque_reveiller_autour_lot(_reveils_positions_x, _reveils_positions_z)
+	else:
+		var _n_rev: int = _reveils_positions_x.size()
+		if _n_rev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
+			var _inv_case_rev: float = 1.0 / _taille_case_dormantes
+			var _carre_rev: float = _rayon_reveil * _rayon_reveil
+			var _prospects_rev: Dictionary = _banque_graines.prospects()
+			var _k_rev: int = 0
+			while _k_rev < _n_rev:
+				var _pos_x_rev: float = _reveils_positions_x[_k_rev]
+				var _pos_z_rev: float = _reveils_positions_z[_k_rev]
+				_k_rev += 1
+				var _cx_min_rev: int = floori((_pos_x_rev - _rayon_reveil) * _inv_case_rev)
+				var _cx_max_rev: int = floori((_pos_x_rev + _rayon_reveil) * _inv_case_rev)
+				var _cz_min_rev: int = floori((_pos_z_rev - _rayon_reveil) * _inv_case_rev)
+				var _cz_max_rev: int = floori((_pos_z_rev + _rayon_reveil) * _inv_case_rev)
+				for _cx_rev in range(_cx_min_rev, _cx_max_rev + 1):
+					for _cz_rev in range(_cz_min_rev, _cz_max_rev + 1):
+						var _cle_rev: Vector2i = Vector2i(_cx_rev, _cz_rev)
+						var _ids_rev = _dormantes_par_case.get(_cle_rev, null)
+						if _ids_rev == null:
 							continue
-						if not _prospects_rev.has(_id_rev):
-							continue
-						var _entree_rev: Dictionary = _prospects_rev[_id_rev]
-						var _pos_rev: Vector3 = _entree_rev.position
-						var _dx_rev: float = _pos_rev.x - _pos_x_rev
-						var _dz_rev: float = _pos_rev.z - _pos_z_rev
-						if _dx_rev * _dx_rev + _dz_rev * _dz_rev <= _carre_rev:
-							_reveils[_id_rev] = true
+						for _id_variant_rev in _ids_rev:
+							var _id_rev: int = int(_id_variant_rev)
+							if _reveils.has(_id_rev):
+								continue
+							if not _prospects_rev.has(_id_rev):
+								continue
+							var _entree_rev: Dictionary = _prospects_rev[_id_rev]
+							var _pos_rev: Vector3 = _entree_rev.position
+							var _dx_rev: float = _pos_rev.x - _pos_x_rev
+							var _dz_rev: float = _pos_rev.z - _pos_z_rev
+							if _dx_rev * _dx_rev + _dz_rev * _dz_rev <= _carre_rev:
+								_reveils[_id_rev] = true
 	# FENETRE W1 : ecritures monde + couvert groupees. Cote monde : UN
 	# `_monde.retirer_lot` (morts_v). Cote couvert : UN `_couvert.deposer_lot`
 	# ELARGI qui contient morts_v (signe -1) PLUS chaque transition
@@ -1162,8 +1191,6 @@ func avancer(pas: float) -> void:
 			_kt_w1 += 1
 		if _dep_x_w1.size() > 0:
 			_couvert.deposer_lot(_dep_x_w1, _dep_z_w1, _dep_r_w1, _taille_case, _dep_m_w1, _dep_s_w1)
-	_us_reveils += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _semer_lot -- morceau 3/N. Vars suffixees `_sml`. Inclut
 	# l'inline recursif de `_inscrire_dormante` (suffix `_smlind`).
 	var _n_sml: int = _graines_lot_x.size()
@@ -1210,26 +1237,15 @@ func avancer(pas: float) -> void:
 				_naissances_lot_z.append_array(_naiss_az)
 				# Inscription banque + dormantes + expirations (GDScript, ordre
 				# preserve : miroir l.1232-1246 du chemin oracle).
+				# ETAPE 14 : inscription banque + dormante + expirations en
+				# etat C++. Miroir de ajouter + _inscrire_dormante + _expirations.append.
 				var _nbq_cpp: int = _banque_x_cpp.size()
 				var _ibq_cpp: int = 0
 				while _ibq_cpp < _nbq_cpp:
 					var _bx_cpp: float = _banque_x_cpp[_ibq_cpp]
 					var _bz_cpp: float = _banque_z_cpp[_ibq_cpp]
 					_ibq_cpp += 1
-					var _id_prospect_cpp: int = _banque_graines.ajouter({
-						"position": Vector3(_bx_cpp, Y_SOL, _bz_cpp),
-					})
-					if _id_prospect_cpp >= 0:
-						if _taille_case_dormantes > 0.0:
-							var _inv_case_cpp: float = 1.0 / _taille_case_dormantes
-							var _cle_cpp: Vector2i = Vector2i(floori(_bx_cpp * _inv_case_cpp), floori(_bz_cpp * _inv_case_cpp))
-							var _arr_cpp = _dormantes_par_case.get(_cle_cpp, null)
-							if _arr_cpp == null:
-								_arr_cpp = []
-								_dormantes_par_case[_cle_cpp] = _arr_cpp
-							(_arr_cpp as Array).append(_id_prospect_cpp)
-							_case_de_dormante[_id_prospect_cpp] = _cle_cpp
-						_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_cpp])
+					_simu_cpp.banque_ajouter_dormante(_bx_cpp, _bz_cpp)
 		else:
 			var _indices_valides_sml: PackedInt32Array = PackedInt32Array()
 			var _positions_valides_sml: Array = []
@@ -1334,40 +1350,77 @@ func avancer(pas: float) -> void:
 							(_arr_smlind as Array).append(_id_prospect_sml)
 							_case_de_dormante[_id_prospect_sml] = _cle_smlind
 						_expirations.append([_temps_banque + _duree_vie_graine, _id_prospect_sml])
-	_us_semis += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _tick_banque -- morceau 4/N. Vars suffixees `_tbq`.
 	# Helpers profonds inlines : _drainer_expirations (suffix _tbqde),
 	# _retirer_dormante (suffix _tbqrd).
 	_temps_banque += pas
-	# INLINE _drainer_expirations() -- suffix _tbqde
-	if _banque_graines != null:
-		var _prospects_tbqde: Dictionary = _banque_graines.prospects()
-		while _expirations_head < _expirations.size():
-			var _entry_tbqde: Array = _expirations[_expirations_head]
-			if float(_entry_tbqde[0]) > _temps_banque:
-				break
-			_expirations_head += 1
-			var _id_tbqde: int = int(_entry_tbqde[1])
-			if _prospects_tbqde.has(_id_tbqde):
-				_banque_graines.retirer(_id_tbqde)
-				# INLINE _retirer_dormante(_id_tbqde) -- suffix _tbqdrd
-				var _cle_v_tbqdrd = _case_de_dormante.get(_id_tbqde, null)
-				if _cle_v_tbqdrd != null:
-					var _cle_tbqdrd: Vector2i = _cle_v_tbqdrd
-					_case_de_dormante.erase(_id_tbqde)
-					var _arr_tbqdrd = _dormantes_par_case.get(_cle_tbqdrd, null)
-					if _arr_tbqdrd != null:
-						(_arr_tbqdrd as Array).erase(_id_tbqde)
-						if (_arr_tbqdrd as Array).is_empty():
-							_dormantes_par_case.erase(_cle_tbqdrd)
-		if _expirations_head > 1024 and _expirations_head > (_expirations.size() >> 1):
-			_expirations = _expirations.slice(_expirations_head)
-			_expirations_head = 0
-	if not _reveils.is_empty():
-		var _prospects_tbq: Dictionary = _banque_graines.prospects()
-		var _ids_tbq: Array = _reveils.keys()
-		_reveils.clear()
+	# ETAPE 14 : sous cpp, drain expirations + reveils vivent en C++.
+	if utiliser_cpp_ce_tick:
+		_simu_cpp.banque_avancer_temps(pas)
+		_simu_cpp.banque_drainer_expirations()
+	else:
+		# INLINE _drainer_expirations() -- suffix _tbqde (oracle GDScript)
+		if _banque_graines != null:
+			var _prospects_tbqde: Dictionary = _banque_graines.prospects()
+			while _expirations_head < _expirations.size():
+				var _entry_tbqde: Array = _expirations[_expirations_head]
+				if float(_entry_tbqde[0]) > _temps_banque:
+					break
+				_expirations_head += 1
+				var _id_tbqde: int = int(_entry_tbqde[1])
+				if _prospects_tbqde.has(_id_tbqde):
+					_banque_graines.retirer(_id_tbqde)
+					# INLINE _retirer_dormante(_id_tbqde) -- suffix _tbqdrd
+					var _cle_v_tbqdrd = _case_de_dormante.get(_id_tbqde, null)
+					if _cle_v_tbqdrd != null:
+						var _cle_tbqdrd: Vector2i = _cle_v_tbqdrd
+						_case_de_dormante.erase(_id_tbqde)
+						var _arr_tbqdrd = _dormantes_par_case.get(_cle_tbqdrd, null)
+						if _arr_tbqdrd != null:
+							(_arr_tbqdrd as Array).erase(_id_tbqde)
+							if (_arr_tbqdrd as Array).is_empty():
+								_dormantes_par_case.erase(_cle_tbqdrd)
+			if _expirations_head > 1024 and _expirations_head > (_expirations.size() >> 1):
+				_expirations = _expirations.slice(_expirations_head)
+				_expirations_head = 0
+	# ETAPE 14 : test reveils non vides -- via etat C++ ou GDScript.
+	var _reveils_pending: bool
+	if utiliser_cpp_ce_tick:
+		_reveils_pending = not _simu_cpp.banque_reveils_est_vide()
+	else:
+		_reveils_pending = not _reveils.is_empty()
+	if _reveils_pending:
+		# ETAPE 14 : recuperer les ids reveilles + positions depuis l'etat cpp
+		# ou l'etat GDScript, dans l'ORDRE d'insertion (miroir _reveils.keys()).
+		var _pros_ids_tbq: Array = []
+		var _pros_x_tbq: PackedFloat32Array = PackedFloat32Array()
+		var _pros_z_tbq: PackedFloat32Array = PackedFloat32Array()
+		if utiliser_cpp_ce_tick:
+			var _ids_reveilles_cpp: PackedInt32Array = _simu_cpp.banque_recuperer_reveils_ids_ordre()
+			var _res_pros: Dictionary = _simu_cpp.banque_prospects_pour_ids(_ids_reveilles_cpp)
+			var _presents_cpp: PackedByteArray = _res_pros["presents"]
+			var _x_pros_cpp: PackedFloat32Array = _res_pros["x"]
+			var _z_pros_cpp: PackedFloat32Array = _res_pros["z"]
+			var _nn_cpp: int = _ids_reveilles_cpp.size()
+			for _i_pros_cpp in range(_nn_cpp):
+				if _presents_cpp[_i_pros_cpp] == 0:
+					continue
+				_pros_ids_tbq.append(int(_ids_reveilles_cpp[_i_pros_cpp]))
+				_pros_x_tbq.append(_x_pros_cpp[_i_pros_cpp])
+				_pros_z_tbq.append(_z_pros_cpp[_i_pros_cpp])
+		else:
+			var _prospects_tbq: Dictionary = _banque_graines.prospects()
+			var _ids_tbq: Array = _reveils.keys()
+			_reveils.clear()
+			for _id_variant_tbq in _ids_tbq:
+				var _id_pre_tbq: int = int(_id_variant_tbq)
+				if not _prospects_tbq.has(_id_pre_tbq):
+					continue
+				var _entree_pre_tbq: Dictionary = _prospects_tbq[_id_pre_tbq]
+				var _pos_pre_tbq: Vector3 = _entree_pre_tbq.position
+				_pros_x_tbq.append(_pos_pre_tbq.x)
+				_pros_z_tbq.append(_pos_pre_tbq.z)
+				_pros_ids_tbq.append(_id_pre_tbq)
 		var _rayon_gros_tbq: float = _rayon_trouee * _facteur_trouee_gros
 		var _carre_normal_tbq: float = _rayon_trouee * _rayon_trouee
 		var _carre_min_tbq: float = _rayon_exclusion * _rayon_exclusion
@@ -1375,18 +1428,6 @@ func avancer(pas: float) -> void:
 		var _stade_gros_max_tbq: int = _stade_gros_max
 		var _trouee_max_tbq: int = _trouee_max_voisins
 		var _taille_slot_stade_tbq: int = _slot_stade.size()
-		var _pros_x_tbq: PackedFloat32Array = PackedFloat32Array()
-		var _pros_z_tbq: PackedFloat32Array = PackedFloat32Array()
-		var _pros_ids_tbq: Array = []
-		for _id_variant_tbq in _ids_tbq:
-			var _id_pre_tbq: int = int(_id_variant_tbq)
-			if not _prospects_tbq.has(_id_pre_tbq):
-				continue
-			var _entree_pre_tbq: Dictionary = _prospects_tbq[_id_pre_tbq]
-			var _pos_pre_tbq: Vector3 = _entree_pre_tbq.position
-			_pros_x_tbq.append(_pos_pre_tbq.x)
-			_pros_z_tbq.append(_pos_pre_tbq.z)
-			_pros_ids_tbq.append(_id_pre_tbq)
 		var _couverts_tbq: PackedFloat32Array = _couvert.lire_lot(_pros_x_tbq, _pros_z_tbq, _taille_case)
 		# M3 GROUPE : UNE requete groupee `choses_dans_rayons_brut_xz` sur
 		# TOUTES les positions de prospects reveilles, memes patron que le
@@ -1431,16 +1472,8 @@ func avancer(pas: float) -> void:
 				var _id_cpp: int = int(_pros_ids_tbq[_j_cpp])
 				var _pos_x_cpp: float = _pros_x_tbq[_j_cpp]
 				var _pos_z_cpp: float = _pros_z_tbq[_j_cpp]
-				_banque_graines.retirer(_id_cpp)
-				var _cle_v_rdcpp = _case_de_dormante.get(_id_cpp, null)
-				if _cle_v_rdcpp != null:
-					var _cle_rdcpp: Vector2i = _cle_v_rdcpp
-					_case_de_dormante.erase(_id_cpp)
-					var _arr_rdcpp = _dormantes_par_case.get(_cle_rdcpp, null)
-					if _arr_rdcpp != null:
-						(_arr_rdcpp as Array).erase(_id_cpp)
-						if (_arr_rdcpp as Array).is_empty():
-							_dormantes_par_case.erase(_cle_rdcpp)
+				# ETAPE 14 : retrait banque + dormantes en etat C++.
+				_simu_cpp.banque_retirer_dormante(_id_cpp)
 				_naissances_lot_x.append(_pos_x_cpp)
 				_naissances_lot_z.append(_pos_z_cpp)
 		else:
@@ -1534,8 +1567,6 @@ func avancer(pas: float) -> void:
 	# interleaved, `monde.ajouter_lot`, `champ.deposer_lot`). Ordre
 	# RNG variance = ordre des naissances dans la queue = ordre naturel
 	# (semer d'abord, puis tick_banque). `stades_config` deja partage.
-	_us_banque += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _naitre_lot -- morceau 5/N. Vars suffixees `_ntl`. Helpers
 	# inlines : _index_pour_age (suffix _ntlia), _y_pour_naissance
 	# (suffix _ntlyn). `_agrandir_capacite` reste appel (chemin rare).
@@ -1584,48 +1615,118 @@ func avancer(pas: float) -> void:
 			_rayon_naissance_ntl = float(_conf_ntl.get("rayon_ombre_m", 0.0))
 			_mag_naissance_ntl = float(_conf_ntl.get("magnitude", 0.0))
 		var _denom_prefixe_ntl: float = _annees_par_seconde * _graines_par_vie
-		_k_ntl = 0
-		while _k_ntl < _n_ntl:
-			var _slot_ntl: int = _slots_ntl[_k_ntl]
-			var _pos_x_ntl: float = _naissances_lot_x[_k_ntl]
-			var _pos_z_ntl: float = _naissances_lot_z[_k_ntl]
-			_libres[_slot_ntl] = 0
-			_ages[_slot_ntl] = 0.0
-			_positions_x[_slot_ntl] = _pos_x_ntl
-			_positions_z[_slot_ntl] = _pos_z_ntl
-			# INLINE _y_pour_naissance(_pos_x_ntl, _pos_z_ntl) -- suffix _ntlyn
-			var _y_ntlyn: float = Y_SOL
+		# ETAPE 12 : precalcule naissances_y (Y_SOL ou carte_terrain.sommet).
+		# Necessaire pour la bascule C++ ET reutilise dans le chemin oracle
+		# pour eviter le double appel.
+		var _naissances_y_ntl: PackedFloat32Array = PackedFloat32Array()
+		_naissances_y_ntl.resize(_n_ntl)
+		var _ky_ntl: int = 0
+		while _ky_ntl < _n_ntl:
+			var _yv_ntl: float = Y_SOL
 			if hote_actif and carte_terrain_ref != null:
-				var _y_variant_ntlyn = carte_terrain_ref.sommet(_pos_x_ntl, _pos_z_ntl)
+				var _y_variant_ntlyn = carte_terrain_ref.sommet(_naissances_lot_x[_ky_ntl], _naissances_lot_z[_ky_ntl])
 				if _y_variant_ntlyn != null:
-					_y_ntlyn = float(_y_variant_ntlyn)
-			_positions_y[_slot_ntl] = _y_ntlyn
-			var _slot_r_naissance_ntl: int = _slots_r_ntl[_k_ntl]
-			_slot_rendu_pour_data[_slot_ntl] = _slot_r_naissance_ntl
-			if _slot_r_naissance_ntl >= 0:
-				_data_pour_slot_rendu[_slot_r_naissance_ntl] = _slot_ntl
-			_slot_stade[_slot_ntl] = _stade_initial_ntl
-			_facteur_croissance[_slot_ntl] = _croissance_col_ntl[_k_ntl]
-			_facteur_longevite[_slot_ntl] = _longevite_col_ntl[_k_ntl]
-			_derniere_params[_slot_ntl] = Vector4(INF, INF, INF, INF)
-			_derniere_couleur_stade[_slot_ntl] = -1
-			var _denom_ntl: float = _denom_prefixe_ntl * _croissance_col_ntl[_k_ntl]
-			if _fenetre_fertile_age > 0.0 and _denom_ntl > 0.0:
-				_intervalle_reprod[_slot_ntl] = _fenetre_fertile_age / _denom_ntl
-			else:
-				_intervalle_reprod[_slot_ntl] = INF
-			var _position_arbre_ntl := Vector3(_pos_x_ntl, Y_SOL, _pos_z_ntl)
-			var _chose_ntl := {"id": "arbre_%d" % _slot_ntl, "position": _position_arbre_ntl, "slot": _slot_ntl}
-			_choses_arbre[_slot_ntl] = _chose_ntl
-			_entries_monde_ntl[_k_ntl] = {"chose": _chose_ntl, "type": "arbre"}
-			if _conf_ombrage_ok_ntl and _mag_naissance_ntl != 0.0:
-				_dep_x_ntl.append(_pos_x_ntl)
-				_dep_z_ntl.append(_pos_z_ntl)
-				_dep_r_ntl.append(_rayon_naissance_ntl)
-				_dep_m_ntl.append(_mag_naissance_ntl)
-				_dep_s_ntl.append(1)
-			_population += 1
-			_k_ntl += 1
+					_yv_ntl = float(_y_variant_ntlyn)
+			_naissances_y_ntl[_ky_ntl] = _yv_ntl
+			_ky_ntl += 1
+		if utiliser_cpp_ce_tick:
+			# BASCULE C++ : colonnes plates + INF ordre float miroir. Le
+			# reste (Array Vector4, _choses_arbre, _entries_monde_ntl,
+			# _dep_ombrage, _population) reste GDScript.
+			var _res_rem: Dictionary = _simu_cpp.remplir_colonnes_naissance(
+				_slots_ntl,
+				_slots_r_ntl,
+				_naissances_lot_x,
+				_naissances_y_ntl,
+				_naissances_lot_z,
+				_croissance_col_ntl,
+				_longevite_col_ntl,
+				_stade_initial_ntl,
+				_annees_par_seconde,
+				_graines_par_vie,
+				_fenetre_fertile_age,
+				_libres,
+				_ages,
+				_positions_x,
+				_positions_y,
+				_positions_z,
+				_slot_stade,
+				_facteur_croissance,
+				_facteur_longevite,
+				_intervalle_reprod,
+				_derniere_couleur_stade,
+				_slot_rendu_pour_data,
+				_data_pour_slot_rendu
+			)
+			_libres = _res_rem["libres"]
+			_ages = _res_rem["ages"]
+			_positions_x = _res_rem["positions_x"]
+			_positions_y = _res_rem["positions_y"]
+			_positions_z = _res_rem["positions_z"]
+			_slot_stade = _res_rem["slot_stade"]
+			_facteur_croissance = _res_rem["facteur_croissance"]
+			_facteur_longevite = _res_rem["facteur_longevite"]
+			_intervalle_reprod = _res_rem["intervalle_reprod"]
+			_derniere_couleur_stade = _res_rem["derniere_couleur_stade"]
+			_slot_rendu_pour_data = _res_rem["slot_rendu_pour_data"]
+			_data_pour_slot_rendu = _res_rem["data_pour_slot_rendu"]
+			# Colonnes non plates + population + monde/ombrage : boucle
+			# GDScript qui NE touche PAS les colonnes deja ecrites C++.
+			_k_ntl = 0
+			while _k_ntl < _n_ntl:
+				var _slot_cpp_ntl: int = _slots_ntl[_k_ntl]
+				var _pos_x_cpp_ntl: float = _naissances_lot_x[_k_ntl]
+				var _pos_z_cpp_ntl: float = _naissances_lot_z[_k_ntl]
+				_derniere_params[_slot_cpp_ntl] = Vector4(INF, INF, INF, INF)
+				var _position_arbre_cpp_ntl := Vector3(_pos_x_cpp_ntl, Y_SOL, _pos_z_cpp_ntl)
+				var _chose_cpp_ntl := {"id": "arbre_%d" % _slot_cpp_ntl, "position": _position_arbre_cpp_ntl, "slot": _slot_cpp_ntl}
+				_choses_arbre[_slot_cpp_ntl] = _chose_cpp_ntl
+				_entries_monde_ntl[_k_ntl] = {"chose": _chose_cpp_ntl, "type": "arbre"}
+				if _conf_ombrage_ok_ntl and _mag_naissance_ntl != 0.0:
+					_dep_x_ntl.append(_pos_x_cpp_ntl)
+					_dep_z_ntl.append(_pos_z_cpp_ntl)
+					_dep_r_ntl.append(_rayon_naissance_ntl)
+					_dep_m_ntl.append(_mag_naissance_ntl)
+					_dep_s_ntl.append(1)
+				_population += 1
+				_k_ntl += 1
+		else:
+			_k_ntl = 0
+			while _k_ntl < _n_ntl:
+				var _slot_ntl: int = _slots_ntl[_k_ntl]
+				var _pos_x_ntl: float = _naissances_lot_x[_k_ntl]
+				var _pos_z_ntl: float = _naissances_lot_z[_k_ntl]
+				_libres[_slot_ntl] = 0
+				_ages[_slot_ntl] = 0.0
+				_positions_x[_slot_ntl] = _pos_x_ntl
+				_positions_z[_slot_ntl] = _pos_z_ntl
+				_positions_y[_slot_ntl] = _naissances_y_ntl[_k_ntl]
+				var _slot_r_naissance_ntl: int = _slots_r_ntl[_k_ntl]
+				_slot_rendu_pour_data[_slot_ntl] = _slot_r_naissance_ntl
+				if _slot_r_naissance_ntl >= 0:
+					_data_pour_slot_rendu[_slot_r_naissance_ntl] = _slot_ntl
+				_slot_stade[_slot_ntl] = _stade_initial_ntl
+				_facteur_croissance[_slot_ntl] = _croissance_col_ntl[_k_ntl]
+				_facteur_longevite[_slot_ntl] = _longevite_col_ntl[_k_ntl]
+				_derniere_params[_slot_ntl] = Vector4(INF, INF, INF, INF)
+				_derniere_couleur_stade[_slot_ntl] = -1
+				var _denom_ntl: float = _denom_prefixe_ntl * _croissance_col_ntl[_k_ntl]
+				if _fenetre_fertile_age > 0.0 and _denom_ntl > 0.0:
+					_intervalle_reprod[_slot_ntl] = _fenetre_fertile_age / _denom_ntl
+				else:
+					_intervalle_reprod[_slot_ntl] = INF
+				var _position_arbre_ntl := Vector3(_pos_x_ntl, Y_SOL, _pos_z_ntl)
+				var _chose_ntl := {"id": "arbre_%d" % _slot_ntl, "position": _position_arbre_ntl, "slot": _slot_ntl}
+				_choses_arbre[_slot_ntl] = _chose_ntl
+				_entries_monde_ntl[_k_ntl] = {"chose": _chose_ntl, "type": "arbre"}
+				if _conf_ombrage_ok_ntl and _mag_naissance_ntl != 0.0:
+					_dep_x_ntl.append(_pos_x_ntl)
+					_dep_z_ntl.append(_pos_z_ntl)
+					_dep_r_ntl.append(_rayon_naissance_ntl)
+					_dep_m_ntl.append(_mag_naissance_ntl)
+					_dep_s_ntl.append(1)
+				_population += 1
+				_k_ntl += 1
 		# W2 monde SYNCHRONE (competition lit monde et compte naissances).
 		_monde.ajouter_lot(_entries_monde_ntl)
 		# ETAPE 8 : synchronise shadow arbre C++ en parallele.
@@ -1648,8 +1749,6 @@ func avancer(pas: float) -> void:
 			_dep_s_finaux.append_array(_dep_s_ntl)
 		_naissances_lot_x.resize(0)
 		_naissances_lot_z.resize(0)
-	_us_naitre += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	# INLINE _avancer_competition -- morceau 6/N. Vars suffixees `_avc`.
 	# Inline recursif de _liberer_slots_lot (suffix _avclsl), avec ses
 	# propres inlines _ecrire_slots_vides_lot (_avcev) et
@@ -1805,50 +1904,59 @@ func avancer(pas: float) -> void:
 					_dep_r_finaux.append_array(_dep_r_avclsl)
 					_dep_m_finaux.append_array(_dep_m_avclsl)
 					_dep_s_finaux.append_array(_dep_s_avclsl)
-				# INLINE _ecrire_slots_vides_lot(_morts_slots_avc) -- suffix _avcev
+				# INLINE _ecrire_slots_vides_lot(_morts_slots_avc) -- suffix _avcev.
+				# RENDU COMPACT (prompt 2026-09-14) : sous bascule cpp, buffer
+				# reconstruit par _ecrire_slots_lot_cpp ; skip les set_instance_*
+				# indexes en slot data (hors bornes du MultiMesh compact).
 				var _t_avcev := Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3(0.0, Y_SOL, 0.0))
 				var _taille_couleur_avcev: int = _derniere_couleur_stade.size()
 				var _k_avcev: int = 0
 				while _k_avcev < _n_avclsl:
 					var _i_avcev: int = _morts_slots_avc[_k_avcev]
 					_k_avcev += 1
-					_mm_tronc.set_instance_transform(_i_avcev, _t_avcev)
-					_mm_feuillage.set_instance_transform(_i_avcev, _t_avcev)
+					if not utiliser_cpp_ce_tick:
+						_mm_tronc.set_instance_transform(_i_avcev, _t_avcev)
+						_mm_feuillage.set_instance_transform(_i_avcev, _t_avcev)
 					if _i_avcev < _taille_couleur_avcev:
 						_derniere_couleur_stade[_i_avcev] = -1
 				# INLINE _reveiller_dormantes_autour_lot(_rev_x_avclsl, _rev_z_avclsl) -- suffix _avcrev
-				var _n_avcrev: int = _rev_x_avclsl.size()
-				if _n_avcrev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
-					var _inv_case_avcrev: float = 1.0 / _taille_case_dormantes
-					var _carre_avcrev: float = _rayon_reveil * _rayon_reveil
-					var _prospects_avcrev: Dictionary = _banque_graines.prospects()
-					var _kk_avcrev: int = 0
-					while _kk_avcrev < _n_avcrev:
-						var _pos_x_avcrev: float = _rev_x_avclsl[_kk_avcrev]
-						var _pos_z_avcrev: float = _rev_z_avclsl[_kk_avcrev]
-						_kk_avcrev += 1
-						var _cx_min_avcrev: int = floori((_pos_x_avcrev - _rayon_reveil) * _inv_case_avcrev)
-						var _cx_max_avcrev: int = floori((_pos_x_avcrev + _rayon_reveil) * _inv_case_avcrev)
-						var _cz_min_avcrev: int = floori((_pos_z_avcrev - _rayon_reveil) * _inv_case_avcrev)
-						var _cz_max_avcrev: int = floori((_pos_z_avcrev + _rayon_reveil) * _inv_case_avcrev)
-						for _cx_avcrev in range(_cx_min_avcrev, _cx_max_avcrev + 1):
-							for _cz_avcrev in range(_cz_min_avcrev, _cz_max_avcrev + 1):
-								var _cle_avcrev: Vector2i = Vector2i(_cx_avcrev, _cz_avcrev)
-								var _ids_avcrev = _dormantes_par_case.get(_cle_avcrev, null)
-								if _ids_avcrev == null:
-									continue
-								for _id_variant_avcrev in _ids_avcrev:
-									var _id_avcrev: int = int(_id_variant_avcrev)
-									if _reveils.has(_id_avcrev):
+				# ETAPE 14 : sous cpp, banque_reveiller_autour_lot depuis etat C++.
+				if utiliser_cpp_ce_tick:
+					if _rev_x_avclsl.size() > 0:
+						_simu_cpp.banque_reveiller_autour_lot(_rev_x_avclsl, _rev_z_avclsl)
+				else:
+					var _n_avcrev: int = _rev_x_avclsl.size()
+					if _n_avcrev > 0 and _banque_graines != null and _rayon_reveil > 0.0 and _taille_case_dormantes > 0.0 and not _dormantes_par_case.is_empty():
+						var _inv_case_avcrev: float = 1.0 / _taille_case_dormantes
+						var _carre_avcrev: float = _rayon_reveil * _rayon_reveil
+						var _prospects_avcrev: Dictionary = _banque_graines.prospects()
+						var _kk_avcrev: int = 0
+						while _kk_avcrev < _n_avcrev:
+							var _pos_x_avcrev: float = _rev_x_avclsl[_kk_avcrev]
+							var _pos_z_avcrev: float = _rev_z_avclsl[_kk_avcrev]
+							_kk_avcrev += 1
+							var _cx_min_avcrev: int = floori((_pos_x_avcrev - _rayon_reveil) * _inv_case_avcrev)
+							var _cx_max_avcrev: int = floori((_pos_x_avcrev + _rayon_reveil) * _inv_case_avcrev)
+							var _cz_min_avcrev: int = floori((_pos_z_avcrev - _rayon_reveil) * _inv_case_avcrev)
+							var _cz_max_avcrev: int = floori((_pos_z_avcrev + _rayon_reveil) * _inv_case_avcrev)
+							for _cx_avcrev in range(_cx_min_avcrev, _cx_max_avcrev + 1):
+								for _cz_avcrev in range(_cz_min_avcrev, _cz_max_avcrev + 1):
+									var _cle_avcrev: Vector2i = Vector2i(_cx_avcrev, _cz_avcrev)
+									var _ids_avcrev = _dormantes_par_case.get(_cle_avcrev, null)
+									if _ids_avcrev == null:
 										continue
-									if not _prospects_avcrev.has(_id_avcrev):
-										continue
-									var _entree_avcrev: Dictionary = _prospects_avcrev[_id_avcrev]
-									var _pos_avcrev: Vector3 = _entree_avcrev.position
-									var _dx_avcrev: float = _pos_avcrev.x - _pos_x_avcrev
-									var _dz_avcrev: float = _pos_avcrev.z - _pos_z_avcrev
-									if _dx_avcrev * _dx_avcrev + _dz_avcrev * _dz_avcrev <= _carre_avcrev:
-										_reveils[_id_avcrev] = true
+									for _id_variant_avcrev in _ids_avcrev:
+										var _id_avcrev: int = int(_id_variant_avcrev)
+										if _reveils.has(_id_avcrev):
+											continue
+										if not _prospects_avcrev.has(_id_avcrev):
+											continue
+										var _entree_avcrev: Dictionary = _prospects_avcrev[_id_avcrev]
+										var _pos_avcrev: Vector3 = _entree_avcrev.position
+										var _dx_avcrev: float = _pos_avcrev.x - _pos_x_avcrev
+										var _dz_avcrev: float = _pos_avcrev.z - _pos_z_avcrev
+										if _dx_avcrev * _dx_avcrev + _dz_avcrev * _dz_avcrev <= _carre_avcrev:
+											_reveils[_id_avcrev] = true
 	# RENDU EN LOT : un seul appel groupe pour tous les slots vivants. Le
 	# corps de `_ecrire_slot` + `_calc_params` + `_appliquer_couleur_slot`
 	# est reproduit inline dans la boucle interne unique -- zero appel
@@ -1856,8 +1964,6 @@ func avancer(pas: float) -> void:
 	# `_ecrire_slot` pour reposer le buffer GPU quand la capacite double
 	# (chemin rare). Corps de `_ecrire_slots_lot` inline ci-dessous
 	# (morceau 7, suffixe `_esl`).
-	_us_competition += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	var _cap_esl: int = _capacite
 	if utilise_cpp and _simu_cpp != null:
 		_ecrire_slots_lot_cpp(_cap_esl)
@@ -1941,8 +2047,6 @@ func avancer(pas: float) -> void:
 					Vector3(_pos_x_esl, _y_sol_esl + _ht_esl + _hf_esl * 0.5, _pos_z_esl))
 			_mm_feuillage.set_instance_transform(_i_esl, _t_feuillage_esl)
 			_i_esl += 1
-	_us_rendu += Time.get_ticks_usec() - _us_bornage_debut
-	_us_bornage_debut = Time.get_ticks_usec()
 	# DEVERSEMENT DES BUFFERS FINAUX : UN appel monde (morts_c) et UN
 	# appel couvert (naissances +1 concatenees avec morts_c -1). Ordre des
 	# entrees couvert dans le deposer_lot final = ordre chronologique des
@@ -1960,44 +2064,6 @@ func avancer(pas: float) -> void:
 			_simu_cpp.arbre_retirer_lot(_slots_finaux_m_cpp)
 	if _dep_x_finaux.size() > 0:
 		_couvert.deposer_lot(_dep_x_finaux, _dep_z_finaux, _dep_r_finaux, _taille_case, _dep_m_finaux, _dep_s_finaux)
-	_us_deverse += Time.get_ticks_usec() - _us_bornage_debut
-	# CHRONO TEMPORAIRE : borne basse. La mesure couvre tout le corps de
-	# `avancer(pas)` hors la garde d'entree. A RETIRER avec le reste de
-	# l'instrumentation.
-	_chrono_dernier_tick_us = Time.get_ticks_usec() - _debut_tick_us
-	_us_tick_cumul += _chrono_dernier_tick_us
-	_frames_depuis_releve += 1
-	if _frames_depuis_releve >= CADENCE_RELEVE_POPULATION_FRAMES:
-		var n_frames: int = _frames_depuis_releve
-		_frames_depuis_releve = 0
-		var dormantes: int = 0 if _banque_graines == null else _banque_graines.nombre()
-		# Sous-chronos : MOYENNE par tick sur la fenetre du releve. Un poste
-		# a 0 us moyen = jamais actif sur la fenetre (ou ecrase sous 1 us).
-		@warning_ignore("integer_division")
-		print("[arbre] tick=%d us | boucle=%d morts_v=%d reveils=%d semis=%d banque=%d naitre=%d compet=%d rendu=%d deverse=%d | pop=%d dorm=%d cases=%d" % [
-			_us_tick_cumul / n_frames,
-			_us_boucle / n_frames,
-			_us_morts_v / n_frames,
-			_us_reveils / n_frames,
-			_us_semis / n_frames,
-			_us_banque / n_frames,
-			_us_naitre / n_frames,
-			_us_competition / n_frames,
-			_us_rendu / n_frames,
-			_us_deverse / n_frames,
-			_population, dormantes, _couvert.nombre_cases()
-		])
-		# Remise a zero de la fenetre.
-		_us_tick_cumul = 0
-		_us_boucle = 0
-		_us_morts_v = 0
-		_us_reveils = 0
-		_us_semis = 0
-		_us_banque = 0
-		_us_naitre = 0
-		_us_competition = 0
-		_us_rendu = 0
-		_us_deverse = 0
 
 # ============================================================================
 # BOUCLE UNIQUE (chemin oracle GDScript, utilise_cpp = false).
@@ -2206,6 +2272,14 @@ func _pousser_stables_cpp() -> void:
 	# a ete appelee avant activer_cpp -- ici on couvre le cas inverse).
 	if _zones_exclusion.size() > 0:
 		_pousser_zones_exclusion_cpp()
+	# ETAPE 14 : banque + dormantes + expirations + reveils vivent maintenant
+	# cote C++ sous utilise_cpp. Init stables + reset etat vierge.
+	_simu_cpp.initialiser_stable_banque(
+		_taille_case_dormantes,
+		_rayon_reveil,
+		_duree_vie_graine
+	)
+	_simu_cpp.banque_reset()
 
 # ============================================================================
 # RENDU par PUSH BUFFER (chemin bascule utilise_cpp = true).
@@ -2218,23 +2292,58 @@ func _pousser_stables_cpp() -> void:
 func _ecrire_slots_lot_cpp(cap: int) -> void:
 	if cap <= 0:
 		return
-	var res: Dictionary = _simu_cpp.construire_buffers_rendu(
+	# RENDU COMPACT (prompt 2026-09-14). Le C++ construit un buffer compact
+	# (pop*16 floats, uniquement les slots vivants) et rend la table
+	# slot_data -> index_rendu. GDScript pose _mm.instance_count = pop et
+	# pousse pop*16 floats -- le cout suit la population, pas la capacite.
+	# Ce buffer est reconstruit chaque tick : les naissances/morts decalent
+	# les index_rendu des autres vivants, donc pas de chemin incremental.
+	# Le cache C++ EPS/dirty reste sur les slots data (invariant a la
+	# compaction) : il ne skippe que le RECOMPUTE, pas la reecriture compacte.
+	# FILTRE CERCLE (streaming, prompt 2026-09-15). Actif SEULEMENT si un
+	# observateur a ete pousse depuis la coquille. rayon_carre passe une fois
+	# ; le C++ fait la distance^2 par slot vivant, exclut hors cercle du
+	# buffer compact.
+	# FILTRE CONE (2026-09-15) : cumule avec le cercle. Actif SEULEMENT si la
+	# coquille a pousse une direction de regard (definir_observateur_cone).
+	# La sim GDScript ne touche RIEN ici.
+	var _rayon_carre_cpp: float = _rayon_rendu_m * _rayon_rendu_m
+	var res: Dictionary = _simu_cpp.mettre_a_jour_buffers_rendu(
 		cap,
 		_libres,
 		_ages,
 		_slot_stade,
 		_positions_x,
 		_positions_y,
-		_positions_z
+		_positions_z,
+		_observateur_actif,
+		_observateur_x,
+		_observateur_z,
+		_rayon_carre_cpp,
+		_observateur_cone_actif,
+		_observateur_dir_x,
+		_observateur_dir_z,
+		_observateur_cos_demi_angle
 	)
-	# Synchro instance_count : le buffer C++ fait 16*cap floats, le
-	# MultiMesh doit avoir instance_count = cap avant `buffer = ...`.
-	if _mm_tronc.instance_count != cap:
-		_mm_tronc.instance_count = cap
-	if _mm_feuillage.instance_count != cap:
-		_mm_feuillage.instance_count = cap
-	_mm_tronc.buffer = res.buffer_tronc
-	_mm_feuillage.buffer = res.buffer_feuillage
+	var _pop_i: int = int(res.get("pop", 0))
+	# MAJ mapping slot_data -> index_rendu (le C++ le calcule chaque tick,
+	# GDScript le stocke pour rester coherent avec le reste du fichier qui
+	# lit encore ce champ -- naissances / drainage morts).
+	var _srpd_res: PackedInt32Array = res.get("slot_rendu_pour_data", PackedInt32Array())
+	if _srpd_res.size() == _slot_rendu_pour_data.size():
+		_slot_rendu_pour_data = _srpd_res
+	# Push COMPACT : instance_count = pop, buffer = pop*16 floats. Godot
+	# n'accepte buffer que si buffer.size() == instance_count * 16 (stride
+	# TRANSFORM_3D + color) -- d'ou l'ajustement de instance_count a pop.
+	if _mm_tronc.instance_count != _pop_i:
+		_mm_tronc.instance_count = _pop_i
+	if _mm_feuillage.instance_count != _pop_i:
+		_mm_feuillage.instance_count = _pop_i
+	if _pop_i > 0:
+		_mm_tronc.buffer = res.buffer_tronc
+		_mm_feuillage.buffer = res.buffer_feuillage
+	_mm_tronc.visible_instance_count = _pop_i
+	_mm_feuillage.visible_instance_count = _pop_i
 
 # ============================================================================
 # CONSTRUIRE BUFFERS RENDU en GDScript (helper de test parite).
@@ -2866,6 +2975,9 @@ func _agrandir_capacite() -> void:
 	_mm_tronc.instance_count = nouvelle
 	_mm_feuillage.instance_count = nouvelle
 	_capacite = nouvelle
+	# ETAPE B2 : cache rendu C++ invalide -- capacite changee, buffer GPU reset.
+	if utilise_cpp and _simu_cpp != null:
+		_simu_cpp.invalider_cache_rendu()
 	# En morceau 1 (identity), capacite rendu suit capacite data.
 	_capacite_rendu = nouvelle
 	# INIT NEW SLOTS : par defaut libres, sentinelle INF pour cache
@@ -2909,4 +3021,3 @@ func _agrandir_capacite() -> void:
 		else:
 			_ecrire_slot(j, _ages[j])
 		j += 1
-

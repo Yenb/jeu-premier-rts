@@ -180,6 +180,65 @@ func _init() -> void:
 			return
 		k += 1
 
+	# PARITE RENDU COMPACT (prompt 2026-09-14). mettre_a_jour_buffers_rendu
+	# doit produire un buffer compact (pop*16) contenant les slots vivants
+	# ranges 0..pop-1 dans l'ordre croissant des slots data, plus la table
+	# slot_data -> index_rendu (-1 si libre). Pour chaque slot vivant, la
+	# tranche de 16 floats dans le buffer compact doit egaler la tranche du
+	# meme slot dans le buffer de reference (construit sans cache). On
+	# invalide le cache C++ pour forcer un recompute complet -> parite
+	# bit-a-bit identique a construire_buffers_rendu.
+	simu_cpp_b.invalider_cache_rendu()
+	var res_maj: Dictionary = simu_cpp_b.mettre_a_jour_buffers_rendu(
+		n, libres_a, ages_a, stade_a, pos_x_a, pos_y_a, pos_z_a,
+		false, 0.0, 0.0, 0.0,
+		false, 0.0, 0.0, -1.0
+	)
+	var pop_compact: int = int(res_maj.get("pop", -1))
+	var bt_compact: PackedFloat32Array = res_maj.buffer_tronc
+	var bf_compact: PackedFloat32Array = res_maj.buffer_feuillage
+	var srpd: PackedInt32Array = res_maj.slot_rendu_pour_data
+	if pop_compact != pop_a:
+		printerr("ECHEC: pop compact divergent -- attendu=%d, obtenu=%d" % [pop_a, pop_compact])
+		quit(1)
+		return
+	if bt_compact.size() != pop_compact * 16 or bf_compact.size() != pop_compact * 16:
+		printerr("ECHEC: taille buffer compact -- attendu=%d, tronc=%d, feuillage=%d" % [pop_compact * 16, bt_compact.size(), bf_compact.size()])
+		quit(1)
+		return
+	if srpd.size() != n:
+		printerr("ECHEC: slot_rendu_pour_data taille -- attendu=%d, obtenu=%d" % [n, srpd.size()])
+		quit(1)
+		return
+	var rank_attendu: int = 0
+	var ii: int = 0
+	while ii < n:
+		if libres_a[ii] == 1:
+			if srpd[ii] != -1:
+				printerr("ECHEC: srpd[%d] libre devrait etre -1, obtenu=%d" % [ii, srpd[ii]])
+				quit(1)
+				return
+		else:
+			if srpd[ii] != rank_attendu:
+				printerr("ECHEC: srpd[%d] rank attendu=%d, obtenu=%d" % [ii, rank_attendu, srpd[ii]])
+				quit(1)
+				return
+			var src_slot: int = ii * 16
+			var dst_rank: int = rank_attendu * 16
+			var kk: int = 0
+			while kk < 16:
+				if bt_compact[dst_rank + kk] != bt_gd[src_slot + kk]:
+					printerr("ECHEC: buffer_tronc compact[slot=%d, rank=%d, k=%d] compact=%.9f ref=%.9f" % [ii, rank_attendu, kk, bt_compact[dst_rank + kk], bt_gd[src_slot + kk]])
+					quit(1)
+					return
+				if bf_compact[dst_rank + kk] != bf_gd[src_slot + kk]:
+					printerr("ECHEC: buffer_feuillage compact[slot=%d, rank=%d, k=%d] compact=%.9f ref=%.9f" % [ii, rank_attendu, kk, bf_compact[dst_rank + kk], bf_gd[src_slot + kk]])
+					quit(1)
+					return
+				kk += 1
+			rank_attendu += 1
+		ii += 1
+
 	# ETAPE 5 : PARITE RNG. Le C++ instancie un RandomNumberGenerator du
 	# moteur (meme classe que GDScript, meme PCG32). A seed egal, la suite
 	# des randf() doit etre bit-a-bit identique. On tire N=1000 des deux

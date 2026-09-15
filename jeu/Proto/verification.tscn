@@ -22,7 +22,6 @@
 [ext_resource type="Resource" uid="uid://lh5rq8g6qnm8" path="res://jeu/Outil de jeu/profils_blocs/bloc_terre.tres" id="22_pterr"]
 [ext_resource type="Resource" uid="uid://gf82gs84nva3" path="res://jeu/Outil de jeu/profils_blocs/bloc_beche.tres" id="23_pbeche"]
 [ext_resource type="Script" uid="uid://cvwwgdhfl31br" path="res://jeu/Proto/manager_proto_2.gd" id="24_mgr2"]
-[ext_resource type="PackedScene" uid="uid://bodhl7e84ikma" path="res://jeu/Proto/producteur.tscn" id="25_prodtest"]
 [ext_resource type="Script" uid="uid://knh5newlawfl" path="res://jeu/bancs/banc_peuplement_arbre.gd" id="26_foret"]
 [ext_resource type="Script" uid="uid://b0cll7l4dilpj" path="res://jeu/plantes/zone_exclusion_arbre.gd" id="27_zone"]
 
@@ -52,13 +51,13 @@ albedo_color = Color(1, 0.85, 0.2, 0.35)
 material = SubResource("Materiau_zone_spawn")
 size = Vector3(20, 0.4, 20)
 
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8p7a8"]
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_dlwel"]
 transparency = 1
 shading_mode = 0
 albedo_color = Color(0.9, 0.2, 0.2, 0.35)
 
-[sub_resource type="CylinderMesh" id="CylinderMesh_rnfjt"]
-material = SubResource("StandardMaterial3D_8p7a8")
+[sub_resource type="CylinderMesh" id="CylinderMesh_8p7a8"]
+material = SubResource("StandardMaterial3D_dlwel")
 top_radius = 30.0
 bottom_radius = 30.0
 height = 0.4
@@ -134,7 +133,7 @@ utilise_rs_direct = true
 utilise_pipeline_intra_tuile = true
 
 [node name="Personnage" parent="." unique_id=1872488247 groups=["observateur"] instance=ExtResource("5_eu0d1")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -375.97253, 14.253365, -311.75073)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 171.05212, 14.253365, 232.77234)
 
 [node name="Arme" parent="Personnage" unique_id=1625706290 instance=ExtResource("6_nkfda")]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.009276211, 0.546542, -0.55944645)
@@ -175,9 +174,6 @@ max_ennemis = 50
 ennemis_par_cycle = 10
 vitesse_ennemi = 5.0
 
-[node name="ProducteurTest" parent="ManagerProto" unique_id=810000010 groups=["producteur"] instance=ExtResource("25_prodtest")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 231.43956, 18.101206, 254.94211)
-
 [node name="EnnemiTestStatique" type="Node3D" parent="ManagerProto" unique_id=810000011 groups=["ennemi_test_statique"]]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 215.50258, 13.84004, 248.05368)
 
@@ -191,13 +187,6 @@ mesh = SubResource("BoxMesh_zone_spawn")
 [node name="ManagerProto2" type="Node3D" parent="." unique_id=1201141474]
 transform = Transform3D(0.99988616, 0, -0.015088755, 0, 1, 0, 0.015088755, 0, 0.99988616, 111.17137, 0, 267.79074)
 script = ExtResource("24_mgr2")
-
-[node name="ZoneSpawnIAPrototype2" type="MeshInstance3D" parent="ManagerProto2" unique_id=1201141475]
-physics_interpolation_mode = 1
-auto_translate_mode = 2
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 155.42133, 15, -2.345398)
-sorting_use_aabb_center = false
-mesh = SubResource("BoxMesh_zone_spawn")
 
 [node name="StockJoueur" type="Node" parent="." unique_id=810000002]
 script = ExtResource("17_stock")
@@ -223,7 +212,7 @@ carte_terrain_ref = ExtResource("3_g2etm")
 
 [node name="ZoneExclusionExemple" type="MeshInstance3D" parent="." unique_id=810000006]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -363.26178, 14.253365, -316.1703)
-mesh = SubResource("CylinderMesh_rnfjt")
+mesh = SubResource("CylinderMesh_8p7a8")
 script = ExtResource("27_zone")
 rayon = 30.0
 demi_x = 50.0

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <unordered_set>
 
 // Voir simulation_arbre.h pour le contrat complet (etapes 1, 2, 2b, 3).
@@ -62,6 +64,25 @@ void SimulationArbre::_bind_methods() {
 					"positions_y",
 					"positions_z"),
 			&SimulationArbre::construire_buffers_rendu);
+	ClassDB::bind_method(
+			D_METHOD("mettre_a_jour_buffers_rendu",
+					"capacite",
+					"libres",
+					"ages",
+					"slot_stade",
+					"positions_x",
+					"positions_y",
+					"positions_z",
+					"filtre_actif",
+					"ox",
+					"oz",
+					"rayon_carre",
+					"cone_actif",
+					"dir_x",
+					"dir_z",
+					"cos_demi_angle"),
+			&SimulationArbre::mettre_a_jour_buffers_rendu);
+	ClassDB::bind_method(D_METHOD("invalider_cache_rendu"), &SimulationArbre::invalider_cache_rendu);
 	ClassDB::bind_method(
 			D_METHOD("appliquer_reset_morts",
 					"morts",
@@ -172,6 +193,48 @@ void SimulationArbre::_bind_methods() {
 					"couverts",
 					"slot_stade"),
 			&SimulationArbre::retester_reveilles_gate);
+	ClassDB::bind_method(
+			D_METHOD("initialiser_stable_banque",
+					"taille_case_dormantes",
+					"rayon_reveil",
+					"duree_vie_graine"),
+			&SimulationArbre::initialiser_stable_banque);
+	ClassDB::bind_method(D_METHOD("banque_reset"), &SimulationArbre::banque_reset);
+	ClassDB::bind_method(D_METHOD("banque_ajouter_dormante", "x", "z"), &SimulationArbre::banque_ajouter_dormante);
+	ClassDB::bind_method(D_METHOD("banque_retirer_dormante", "id"), &SimulationArbre::banque_retirer_dormante);
+	ClassDB::bind_method(D_METHOD("banque_nombre"), &SimulationArbre::banque_nombre);
+	ClassDB::bind_method(D_METHOD("banque_avancer_temps", "pas"), &SimulationArbre::banque_avancer_temps);
+	ClassDB::bind_method(D_METHOD("banque_drainer_expirations"), &SimulationArbre::banque_drainer_expirations);
+	ClassDB::bind_method(D_METHOD("banque_recuperer_reveils_ids_ordre"), &SimulationArbre::banque_recuperer_reveils_ids_ordre);
+	ClassDB::bind_method(D_METHOD("banque_prospects_pour_ids", "ids"), &SimulationArbre::banque_prospects_pour_ids);
+	ClassDB::bind_method(D_METHOD("banque_reveiller_autour_lot", "rev_x", "rev_z"), &SimulationArbre::banque_reveiller_autour_lot);
+	ClassDB::bind_method(D_METHOD("banque_reveils_est_vide"), &SimulationArbre::banque_reveils_est_vide);
+	ClassDB::bind_method(
+			D_METHOD("remplir_colonnes_naissance",
+					"slots",
+					"slots_r",
+					"naissances_x",
+					"naissances_y",
+					"naissances_z",
+					"croissance_col",
+					"longevite_col",
+					"stade_initial",
+					"annees_par_seconde",
+					"graines_par_vie",
+					"fenetre_fertile_age",
+					"libres",
+					"ages",
+					"positions_x",
+					"positions_y",
+					"positions_z",
+					"slot_stade",
+					"facteur_croissance",
+					"facteur_longevite",
+					"intervalle_reprod",
+					"derniere_couleur_stade",
+					"slot_rendu_pour_data",
+					"data_pour_slot_rendu"),
+			&SimulationArbre::remplir_colonnes_naissance);
 }
 
 SimulationArbre::SimulationArbre() {
@@ -1204,6 +1267,602 @@ Dictionary SimulationArbre::retester_reveilles_gate(
 	}
 
 	out["naissances_indices"] = naissances_indices;
+	return out;
+}
+
+// ETAPE 12 : remplissage colonnes plates naissance (miroir _naitre_lot
+// l.1587-1628, colonnes plates + INF ordre float preserve). Aucune touche
+// aux structures non-plates (_derniere_params Array, _choses_arbre,
+// _entries_monde_ntl, monde, shadow, ombrage) : elles restent GDScript.
+Dictionary SimulationArbre::remplir_colonnes_naissance(
+		const PackedInt32Array &slots,
+		const PackedInt32Array &slots_r,
+		const PackedFloat32Array &naissances_x,
+		const PackedFloat32Array &naissances_y,
+		const PackedFloat32Array &naissances_z,
+		const PackedFloat32Array &croissance_col,
+		const PackedFloat32Array &longevite_col,
+		int stade_initial,
+		float annees_par_seconde,
+		float graines_par_vie,
+		float fenetre_fertile_age,
+		const PackedByteArray &libres,
+		const PackedFloat32Array &ages,
+		const PackedFloat32Array &positions_x,
+		const PackedFloat32Array &positions_y,
+		const PackedFloat32Array &positions_z,
+		const PackedInt32Array &slot_stade,
+		const PackedFloat32Array &facteur_croissance,
+		const PackedFloat32Array &facteur_longevite,
+		const PackedFloat32Array &intervalle_reprod,
+		const PackedInt32Array &derniere_couleur_stade,
+		const PackedInt32Array &slot_rendu_pour_data,
+		const PackedInt32Array &data_pour_slot_rendu) const {
+	Dictionary out;
+	// COW-copy chaque colonne, ptrw() la met en propriete privee.
+	PackedByteArray out_libres = libres;
+	PackedFloat32Array out_ages = ages;
+	PackedFloat32Array out_px = positions_x;
+	PackedFloat32Array out_py = positions_y;
+	PackedFloat32Array out_pz = positions_z;
+	PackedInt32Array out_stade = slot_stade;
+	PackedFloat32Array out_fc = facteur_croissance;
+	PackedFloat32Array out_fl = facteur_longevite;
+	PackedFloat32Array out_ir = intervalle_reprod;
+	PackedInt32Array out_dcs = derniere_couleur_stade;
+	PackedInt32Array out_srpd = slot_rendu_pour_data;
+	PackedInt32Array out_dpsr = data_pour_slot_rendu;
+
+	uint8_t *w_libres = out_libres.ptrw();
+	float *w_ages = out_ages.ptrw();
+	float *w_px = out_px.ptrw();
+	float *w_py = out_py.ptrw();
+	float *w_pz = out_pz.ptrw();
+	int32_t *w_stade = out_stade.ptrw();
+	float *w_fc = out_fc.ptrw();
+	float *w_fl = out_fl.ptrw();
+	float *w_ir = out_ir.ptrw();
+	int32_t *w_dcs = out_dcs.ptrw();
+	int32_t *w_srpd = out_srpd.ptrw();
+	int32_t *w_dpsr = out_dpsr.ptrw();
+
+	int n = slots.size();
+	const int32_t *r_slots = slots.ptr();
+	const int32_t *r_slots_r = slots_r.ptr();
+	const float *r_nx = naissances_x.ptr();
+	const float *r_ny = naissances_y.ptr();
+	const float *r_nz = naissances_z.ptr();
+	const float *r_cc = croissance_col.ptr();
+	const float *r_lc = longevite_col.ptr();
+
+	float denom_prefixe = annees_par_seconde * graines_par_vie;
+	const float INF32 = std::numeric_limits<float>::infinity();
+
+	for (int k = 0; k < n; ++k) {
+		int32_t slot = r_slots[k];
+		float pos_x = r_nx[k];
+		float pos_y = r_ny[k];
+		float pos_z = r_nz[k];
+		w_libres[slot] = 0;
+		w_ages[slot] = 0.0f;
+		w_px[slot] = pos_x;
+		w_pz[slot] = pos_z;
+		w_py[slot] = pos_y;
+		int32_t slot_r = r_slots_r[k];
+		w_srpd[slot] = slot_r;
+		if (slot_r >= 0) {
+			w_dpsr[slot_r] = slot;
+		}
+		w_stade[slot] = stade_initial;
+		float cc = r_cc[k];
+		float lc = r_lc[k];
+		w_fc[slot] = cc;
+		w_fl[slot] = lc;
+		w_dcs[slot] = -1;
+		// MEME formule + ordre float : denom = denom_prefixe * cc.
+		float denom = denom_prefixe * cc;
+		if (fenetre_fertile_age > 0.0f && denom > 0.0f) {
+			w_ir[slot] = fenetre_fertile_age / denom;
+		} else {
+			w_ir[slot] = INF32;
+		}
+	}
+
+	out["libres"] = out_libres;
+	out["ages"] = out_ages;
+	out["positions_x"] = out_px;
+	out["positions_y"] = out_py;
+	out["positions_z"] = out_pz;
+	out["slot_stade"] = out_stade;
+	out["facteur_croissance"] = out_fc;
+	out["facteur_longevite"] = out_fl;
+	out["intervalle_reprod"] = out_ir;
+	out["derniere_couleur_stade"] = out_dcs;
+	out["slot_rendu_pour_data"] = out_srpd;
+	out["data_pour_slot_rendu"] = out_dpsr;
+	return out;
+}
+
+// ============================================================================
+// ETAPE 14 : banque + dormantes + expirations + reveils (etat interne).
+// ============================================================================
+void SimulationArbre::initialiser_stable_banque(
+		float taille_case_dormantes,
+		float rayon_reveil,
+		float duree_vie_graine) {
+	_taille_case_dormantes = taille_case_dormantes;
+	_rayon_reveil = rayon_reveil;
+	_duree_vie_graine = duree_vie_graine;
+}
+
+void SimulationArbre::banque_reset() {
+	_prospects_ordre.clear();
+	_prospects_idx.clear();
+	_prochain_id_banque = 0;
+	_dormantes_par_case_cpp.clear();
+	_case_de_dormante_cpp.clear();
+	_expirations_cpp.clear();
+	_expirations_head_cpp = 0;
+	_reveils_ordre.clear();
+	_reveils_idx.clear();
+	_temps_banque = 0.0f;
+}
+
+int SimulationArbre::banque_ajouter_dormante(float x, float z) {
+	int32_t id = _prochain_id_banque;
+	_prochain_id_banque += 1;
+	BanqueProspect p;
+	p.x = x;
+	p.z = z;
+	auto it = _prospects_ordre.insert(_prospects_ordre.end(), std::make_pair(id, p));
+	_prospects_idx[id] = it;
+	_inscrire_dormante_cpp(id, x, z);
+	_expirations_cpp.push_back(std::make_pair(_temps_banque + _duree_vie_graine, id));
+	return int(id);
+}
+
+void SimulationArbre::banque_retirer_dormante(int id) {
+	auto it_idx = _prospects_idx.find(int32_t(id));
+	if (it_idx == _prospects_idx.end()) return;
+	_prospects_ordre.erase(it_idx->second);
+	_prospects_idx.erase(it_idx);
+	_retirer_dormante_cpp(int32_t(id));
+}
+
+int SimulationArbre::banque_nombre() const {
+	return int(_prospects_ordre.size());
+}
+
+void SimulationArbre::banque_avancer_temps(float pas) {
+	_temps_banque += pas;
+}
+
+void SimulationArbre::banque_drainer_expirations() {
+	// Miroir l.1354-1377 du .gd : avance _head tant que temps <= _temps_banque,
+	// retire chaque id encore present dans _prospects (retirer_dormante inclus).
+	int n = int(_expirations_cpp.size());
+	while (_expirations_head_cpp < n) {
+		auto &entry = _expirations_cpp[_expirations_head_cpp];
+		if (entry.first > _temps_banque) break;
+		_expirations_head_cpp += 1;
+		int32_t id = entry.second;
+		auto it_idx = _prospects_idx.find(id);
+		if (it_idx != _prospects_idx.end()) {
+			_prospects_ordre.erase(it_idx->second);
+			_prospects_idx.erase(it_idx);
+			_retirer_dormante_cpp(id);
+		}
+	}
+	// Compaction (miroir l.1375-1377) : _head > 1024 et _head > size/2.
+	if (_expirations_head_cpp > 1024 && _expirations_head_cpp > int(_expirations_cpp.size() >> 1)) {
+		_expirations_cpp.erase(_expirations_cpp.begin(), _expirations_cpp.begin() + _expirations_head_cpp);
+		_expirations_head_cpp = 0;
+	}
+}
+
+PackedInt32Array SimulationArbre::banque_recuperer_reveils_ids_ordre() {
+	PackedInt32Array out;
+	out.resize(int(_reveils_ordre.size()));
+	int32_t *w = out.ptrw();
+	int k = 0;
+	for (int32_t id : _reveils_ordre) {
+		w[k] = id;
+		++k;
+	}
+	_reveils_ordre.clear();
+	_reveils_idx.clear();
+	return out;
+}
+
+Dictionary SimulationArbre::banque_prospects_pour_ids(const PackedInt32Array &ids) const {
+	Dictionary out;
+	int n = ids.size();
+	PackedByteArray presents;
+	PackedFloat32Array x;
+	PackedFloat32Array z;
+	presents.resize(n);
+	x.resize(n);
+	z.resize(n);
+	uint8_t *pw = presents.ptrw();
+	float *xw = x.ptrw();
+	float *zw = z.ptrw();
+	const int32_t *r = ids.ptr();
+	for (int k = 0; k < n; ++k) {
+		int32_t id = r[k];
+		auto it = _prospects_idx.find(id);
+		if (it == _prospects_idx.end()) {
+			pw[k] = 0;
+			xw[k] = 0.0f;
+			zw[k] = 0.0f;
+		} else {
+			pw[k] = 1;
+			xw[k] = it->second->second.x;
+			zw[k] = it->second->second.z;
+		}
+	}
+	out["presents"] = presents;
+	out["x"] = x;
+	out["z"] = z;
+	return out;
+}
+
+void SimulationArbre::banque_reveiller_autour_lot(
+		const PackedFloat32Array &rev_x,
+		const PackedFloat32Array &rev_z) {
+	// Miroir _reveiller_dormantes_autour_lot (l.1042-1072 morts_v du .gd).
+	int n = rev_x.size();
+	if (n == 0) return;
+	if (_rayon_reveil <= 0.0f) return;
+	if (_taille_case_dormantes <= 0.0f) return;
+	if (_dormantes_par_case_cpp.empty()) return;
+	float inv_case = 1.0f / _taille_case_dormantes;
+	float carre = _rayon_reveil * _rayon_reveil;
+	const float *px = rev_x.ptr();
+	const float *pz = rev_z.ptr();
+	for (int k = 0; k < n; ++k) {
+		float pos_x = px[k];
+		float pos_z = pz[k];
+		int cx_min = int(std::floor((pos_x - _rayon_reveil) * inv_case));
+		int cx_max = int(std::floor((pos_x + _rayon_reveil) * inv_case));
+		int cz_min = int(std::floor((pos_z - _rayon_reveil) * inv_case));
+		int cz_max = int(std::floor((pos_z + _rayon_reveil) * inv_case));
+		for (int cx = cx_min; cx <= cx_max; ++cx) {
+			for (int cz = cz_min; cz <= cz_max; ++cz) {
+				Vector2i cle(cx, cz);
+				auto it_case = _dormantes_par_case_cpp.find(cle);
+				if (it_case == _dormantes_par_case_cpp.end()) continue;
+				const std::vector<int32_t> &ids = it_case->second;
+				for (int32_t id : ids) {
+					if (_reveils_idx.find(id) != _reveils_idx.end()) continue;
+					auto it_pros = _prospects_idx.find(id);
+					if (it_pros == _prospects_idx.end()) continue;
+					float vx = it_pros->second->second.x;
+					float vz = it_pros->second->second.z;
+					float dx = vx - pos_x;
+					float dz = vz - pos_z;
+					if (dx * dx + dz * dz <= carre) {
+						auto it_r = _reveils_ordre.insert(_reveils_ordre.end(), id);
+						_reveils_idx[id] = it_r;
+					}
+				}
+			}
+		}
+	}
+}
+
+bool SimulationArbre::banque_reveils_est_vide() const {
+	return _reveils_ordre.empty();
+}
+
+// Helper prive : miroir _inscrire_dormante(id, pos_x, pos_z) l.1237-1246 du .gd.
+void SimulationArbre::_inscrire_dormante_cpp(int32_t id, float x, float z) {
+	if (_taille_case_dormantes <= 0.0f) return;
+	float inv_case = 1.0f / _taille_case_dormantes;
+	Vector2i cle(int(std::floor(x * inv_case)), int(std::floor(z * inv_case)));
+	_dormantes_par_case_cpp[cle].push_back(id);
+	_case_de_dormante_cpp[id] = cle;
+}
+
+// Helper prive : miroir _retirer_dormante(id).
+// Preserve l'ordre des ids restants dans la case (erase par valeur, pas swap).
+void SimulationArbre::_retirer_dormante_cpp(int32_t id) {
+	auto it_cle = _case_de_dormante_cpp.find(id);
+	if (it_cle == _case_de_dormante_cpp.end()) return;
+	Vector2i cle = it_cle->second;
+	_case_de_dormante_cpp.erase(it_cle);
+	auto it_case = _dormantes_par_case_cpp.find(cle);
+	if (it_case == _dormantes_par_case_cpp.end()) return;
+	std::vector<int32_t> &vec = it_case->second;
+	// Erase par valeur (preserve ordre restant, miroir Array.erase() GDScript).
+	for (size_t i = 0; i < vec.size(); ++i) {
+		if (vec[i] == id) {
+			vec.erase(vec.begin() + i);
+			break;
+		}
+	}
+	if (vec.empty()) _dormantes_par_case_cpp.erase(it_case);
+}
+
+// ============================================================================
+// ETAPE B2 : mise a jour incrementale des buffers rendu (cache EPS_TAILLE).
+// ============================================================================
+static constexpr float EPS_TAILLE_RENDU = 0.001f;
+
+void SimulationArbre::invalider_cache_rendu() {
+	_cache_rendu_force_reset = true;
+}
+
+Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
+		int capacite,
+		const PackedByteArray &libres,
+		const PackedFloat32Array &ages,
+		const PackedInt32Array &slot_stade,
+		const PackedFloat32Array &positions_x,
+		const PackedFloat32Array &positions_y,
+		const PackedFloat32Array &positions_z,
+		bool filtre_actif,
+		float ox,
+		float oz,
+		float rayon_carre,
+		bool cone_actif,
+		float dir_x,
+		float dir_z,
+		float cos_demi_angle) {
+	Dictionary out;
+	int cap = capacite;
+
+	// Detection changement de capacite / cache reset -> tout_dirty.
+	bool tout_dirty = false;
+	if (cap != _rendu_cap_actuelle || _cache_rendu_force_reset) {
+		tout_dirty = true;
+		_rendu_cap_actuelle = cap;
+		_cache_rendu_force_reset = false;
+		_buf_tronc_p.assign(size_t(cap) * 16, 0.0f);
+		_buf_feuillage_p.assign(size_t(cap) * 16, 0.0f);
+		_cache_valide.assign(size_t(cap), 0);
+		_cache_libres_ecrit.assign(size_t(cap), 0);
+		_cache_stade_ecrit.assign(size_t(cap), -1);
+		_cache_p_ht.assign(size_t(cap), 0.0f);
+		_cache_p_lt.assign(size_t(cap), 0.0f);
+		_cache_p_hf.assign(size_t(cap), 0.0f);
+		_cache_p_lf.assign(size_t(cap), 0.0f);
+		_cache_terminal.assign(size_t(cap), 0);
+	}
+
+	const uint8_t *libres_r = libres.ptr();
+	const float *ages_r = ages.ptr();
+	const int32_t *stade_r = slot_stade.ptr();
+	const float *px_r = positions_x.ptr();
+	const float *py_r = positions_y.ptr();
+	const float *pz_r = positions_z.ptr();
+
+	int n_durees = int(_durees_stades.size());
+	int n_stades_full = int(_tronc_hauteur.size());
+	int n_col_t = int(_couleur_tronc.size());
+	int n_col_f = int(_couleur_feuillage.size());
+	const float *tr_h = _tronc_hauteur.data();
+	const float *tr_l = _tronc_largeur.data();
+	const float *fe_h = _feuillage_hauteur.data();
+	const float *fe_l = _feuillage_largeur.data();
+	const float *dur = _durees_stades.data();
+	float y_sol_def = _y_sol_defaut;
+
+	float *bt = _buf_tronc_p.data();
+	float *bf = _buf_feuillage_p.data();
+
+	// Liste des dirty slots ce tick.
+	std::vector<int32_t> dirty;
+	dirty.reserve(size_t(cap));
+
+	for (int i = 0; i < cap; ++i) {
+		int base = i * 16;
+		uint8_t libres_i = libres_r[i];
+
+		// Slot LIBRE (mort ou vide) : cache_libres==1 et pas invalide -> skip.
+		if (libres_i == 1) {
+			if (_cache_valide[i] == 1 && _cache_libres_ecrit[i] == 1) {
+				continue;
+			}
+			// Ecrit slot vide (miroir _ecrire_slot_vide oracle).
+			bt[base + 0] = 0.0f; bt[base + 1] = 0.0f; bt[base + 2] = 0.0f; bt[base + 3] = 0.0f;
+			bt[base + 4] = 0.0f; bt[base + 5] = 0.0f; bt[base + 6] = 0.0f; bt[base + 7] = y_sol_def;
+			bt[base + 8] = 0.0f; bt[base + 9] = 0.0f; bt[base + 10] = 0.0f; bt[base + 11] = 0.0f;
+			bt[base + 12] = 0.0f; bt[base + 13] = 0.0f; bt[base + 14] = 0.0f; bt[base + 15] = 1.0f;
+			bf[base + 0] = 0.0f; bf[base + 1] = 0.0f; bf[base + 2] = 0.0f; bf[base + 3] = 0.0f;
+			bf[base + 4] = 0.0f; bf[base + 5] = 0.0f; bf[base + 6] = 0.0f; bf[base + 7] = y_sol_def;
+			bf[base + 8] = 0.0f; bf[base + 9] = 0.0f; bf[base + 10] = 0.0f; bf[base + 11] = 0.0f;
+			bf[base + 12] = 0.0f; bf[base + 13] = 0.0f; bf[base + 14] = 0.0f; bf[base + 15] = 1.0f;
+			_cache_valide[i] = 1;
+			_cache_libres_ecrit[i] = 1;
+			_cache_stade_ecrit[i] = -1;
+			_cache_p_ht[i] = 0.0f;
+			_cache_p_lt[i] = 0.0f;
+			_cache_p_hf[i] = 0.0f;
+			_cache_p_lf[i] = 0.0f;
+			_cache_terminal[i] = 0;
+			dirty.push_back(int32_t(i));
+			continue;
+		}
+
+		// Slot VIVANT.
+		// FIX B2 : EARLY-EXIT avant compute lerp. En regime stable, la
+		// grande majorite des slots sont "terminaux" (age > sum(durees) ->
+		// trouve==false, ht/lt/hf/lf figes aux valeurs du dernier stade).
+		// Si le cache l'atteste et que stade/libres n'ont pas change, le
+		// buffer est deja bon -> skip SANS calculer lerp. Sans ce test,
+		// le lerp est calcule pour tous les slots vivants chaque tick
+		// (cause des ~10ms en regime stable a N=8400).
+		int stade_actuel_early = stade_r[i];
+		if (_cache_valide[i] == 1
+				&& _cache_libres_ecrit[i] == 0
+				&& _cache_stade_ecrit[i] == stade_actuel_early
+				&& _cache_terminal[i] == 1) {
+			continue;
+		}
+		float age = ages_r[i];
+		double ht = 0.0, lt = 0.0, hf = 0.0, lf = 0.0;
+		double duree_cumulee = 0.0;
+		bool trouve = false;
+		for (int j = 0; j < n_durees; ++j) {
+			double duree_segment = double(dur[j]);
+			if (double(age) <= duree_cumulee + duree_segment) {
+				double d_t = 0.0;
+				if (duree_segment > 0.0) d_t = (double(age) - duree_cumulee) / duree_segment;
+				if (d_t < 0.0) d_t = 0.0;
+				else if (d_t > 1.0) d_t = 1.0;
+				double d_ath = double(tr_h[j]);
+				double d_bth = double(tr_h[j + 1]);
+				double d_atl = double(tr_l[j]);
+				double d_btl = double(tr_l[j + 1]);
+				double d_afh = double(fe_h[j]);
+				double d_bfh = double(fe_h[j + 1]);
+				double d_afl = double(fe_l[j]);
+				double d_bfl = double(fe_l[j + 1]);
+				ht = d_ath + d_t * (d_bth - d_ath);
+				lt = d_atl + d_t * (d_btl - d_atl);
+				hf = d_afh + d_t * (d_bfh - d_afh);
+				lf = d_afl + d_t * (d_bfl - d_afl);
+				trouve = true;
+				break;
+			}
+			duree_cumulee = duree_cumulee + duree_segment;
+		}
+		if (!trouve) {
+			int idx = n_stades_full - 1;
+			ht = double(tr_h[idx]);
+			lt = double(tr_l[idx]);
+			hf = double(fe_h[idx]);
+			lf = double(fe_l[idx]);
+		}
+
+		int stade_actuel = stade_r[i];
+		float ht_f = float(ht);
+		float lt_f = float(lt);
+		float hf_f = float(hf);
+		float lf_f = float(lf);
+
+		// SKIP EPS_TAILLE : slot vivant deja ecrit, meme stade, |delta| < EPS
+		// sur les 4 params (ht/lt/hf/lf). Miroir _derniere_params oracle.
+		bool slot_meme_stade_cache = (_cache_valide[i] == 1 && _cache_libres_ecrit[i] == 0 && _cache_stade_ecrit[i] == stade_actuel);
+		if (slot_meme_stade_cache) {
+			float d_ht = std::fabs(ht_f - _cache_p_ht[i]);
+			float d_lt = std::fabs(lt_f - _cache_p_lt[i]);
+			float d_hf = std::fabs(hf_f - _cache_p_hf[i]);
+			float d_lf = std::fabs(lf_f - _cache_p_lf[i]);
+			if (d_ht < EPS_TAILLE_RENDU && d_lt < EPS_TAILLE_RENDU
+					&& d_hf < EPS_TAILLE_RENDU && d_lf < EPS_TAILLE_RENDU) {
+				continue;
+			}
+		}
+
+		// Recalcul complet du slot.
+		Color ct = _couleur_repli_tronc;
+		Color cf = _couleur_repli_feuillage;
+		if (stade_actuel >= 0 && stade_actuel < n_col_t) ct = _couleur_tronc[stade_actuel];
+		if (stade_actuel >= 0 && stade_actuel < n_col_f) cf = _couleur_feuillage[stade_actuel];
+
+		float pos_x = px_r[i];
+		double pos_y_sol = double(py_r[i]);
+		float pos_z = pz_r[i];
+
+		bt[base + 0] = lt_f; bt[base + 1] = 0.0f;  bt[base + 2] = 0.0f;  bt[base + 3] = pos_x;
+		bt[base + 4] = 0.0f; bt[base + 5] = ht_f;  bt[base + 6] = 0.0f;  bt[base + 7] = float(pos_y_sol + ht * 0.5);
+		bt[base + 8] = 0.0f; bt[base + 9] = 0.0f;  bt[base + 10] = lt_f; bt[base + 11] = pos_z;
+		bt[base + 12] = ct.r; bt[base + 13] = ct.g; bt[base + 14] = ct.b; bt[base + 15] = ct.a;
+
+		if (hf <= 0.0 || lf <= 0.0) {
+			bf[base + 0] = 0.0f; bf[base + 1] = 0.0f; bf[base + 2] = 0.0f; bf[base + 3] = pos_x;
+			bf[base + 4] = 0.0f; bf[base + 5] = 0.0f; bf[base + 6] = 0.0f; bf[base + 7] = float(pos_y_sol + ht);
+			bf[base + 8] = 0.0f; bf[base + 9] = 0.0f; bf[base + 10] = 0.0f; bf[base + 11] = pos_z;
+		} else {
+			bf[base + 0] = lf_f; bf[base + 1] = 0.0f; bf[base + 2] = 0.0f; bf[base + 3] = pos_x;
+			bf[base + 4] = 0.0f; bf[base + 5] = hf_f; bf[base + 6] = 0.0f; bf[base + 7] = float(pos_y_sol + ht + hf * 0.5);
+			bf[base + 8] = 0.0f; bf[base + 9] = 0.0f; bf[base + 10] = lf_f; bf[base + 11] = pos_z;
+		}
+		bf[base + 12] = cf.r; bf[base + 13] = cf.g; bf[base + 14] = cf.b; bf[base + 15] = cf.a;
+
+		_cache_valide[i] = 1;
+		_cache_libres_ecrit[i] = 0;
+		_cache_stade_ecrit[i] = stade_actuel;
+		_cache_p_ht[i] = ht_f;
+		_cache_p_lt[i] = lt_f;
+		_cache_p_hf[i] = hf_f;
+		_cache_p_lf[i] = lf_f;
+		// FIX B2 : marquer terminal si trouve==false (age depasse sum(durees) ->
+		// valeurs figees au dernier stade). Le prochain tick, le early-exit
+		// skippera SANS relancer le lerp.
+		_cache_terminal[i] = trouve ? 0 : 1;
+		dirty.push_back(int32_t(i));
+	}
+
+	int dirty_count = int(dirty.size());
+	out["tout_dirty"] = tout_dirty;
+	out["dirty_count"] = dirty_count;
+
+	// RENDU COMPACT (prompt 2026-09-14 + filtre cercle 2026-09-15). Le
+	// buffer emis contient UNIQUEMENT les slots vivants ET dans le cercle
+	// autour de l'observateur si filtre_actif=true (sinon TOUS les vivants).
+	// Ranges 0..pop-1 dans l'ordre croissant des slots data. Le cache/lerp
+	// /EPS restent indexes par slot data ; seule l'ECRITURE finale est
+	// compacte. La sim GDScript ne depend PAS de ce filtre : la boucle 0..cap
+	// continue sur TOUS les arbres, ceux hors cercle grandissent normalement.
+	//
+	// Table slot_data -> index_rendu (cap ints, -1 si libre OU hors cercle
+	// OU hors cone).
+	// EPS_CONE_XZ_CARRE : sous ce seuil de distance^2 (~0.01 m^2), l'arbre est
+	// considere "sur" l'observateur et TOUJOURS inclus, cone bypasse. Evite la
+	// division par ~0 dans la normalisation et le pop visuel d'un arbre qui
+	// passerait entre les jambes du joueur.
+	constexpr float EPS_CONE_XZ_CARRE = 0.01f;
+	auto dans_cercle = [&](int i) -> bool {
+		if (!filtre_actif) return true;
+		float dx = px_r[i] - ox;
+		float dz = pz_r[i] - oz;
+		float d2 = dx * dx + dz * dz;
+		if (d2 > rayon_carre) return false;
+		if (!cone_actif) return true;
+		if (d2 <= EPS_CONE_XZ_CARRE) return true;
+		// dot((dir_x, dir_z), normalize(dx, dz)) >= cos_demi_angle
+		// <=> (dir_x * dx + dir_z * dz) >= cos_demi_angle * sqrt(d2)
+		// Comparer AVANT la sqrt pour epargner l'operation quand possible.
+		float num = dir_x * dx + dir_z * dz;
+		// Cos_demi_angle attendu dans [-1, 1]. Marge d'angle poussee par la
+		// coquille (demi-angle > demi-FOV) pour eviter le clignotement au
+		// bord de l'ecran quand l'observateur pivote entre deux ticks.
+		if (num < 0.0f && cos_demi_angle >= 0.0f) return false;
+		float rhs = cos_demi_angle * std::sqrt(d2);
+		return num >= rhs;
+	};
+	int pop = 0;
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 0 && dans_cercle(i)) ++pop;
+	}
+	PackedFloat32Array pb_t;
+	PackedFloat32Array pb_f;
+	PackedInt32Array srpd;
+	pb_t.resize(pop * 16);
+	pb_f.resize(pop * 16);
+	srpd.resize(cap);
+	int32_t *srpd_w = srpd.ptrw();
+	float *pb_t_w = pb_t.ptrw();
+	float *pb_f_w = pb_f.ptrw();
+	int rank = 0;
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1 || !dans_cercle(i)) {
+			srpd_w[i] = -1;
+			continue;
+		}
+		srpd_w[i] = int32_t(rank);
+		int src = i * 16;
+		int dst = rank * 16;
+		std::memcpy(pb_t_w + dst, bt + src, 16 * sizeof(float));
+		std::memcpy(pb_f_w + dst, bf + src, 16 * sizeof(float));
+		++rank;
+	}
+	out["pop"] = pop;
+	out["buffer_tronc"] = pb_t;
+	out["buffer_feuillage"] = pb_f;
+	out["slot_rendu_pour_data"] = srpd;
 	return out;
 }
 

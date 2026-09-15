@@ -46,9 +46,11 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
+#include <godot_cpp/variant/vector2i.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
 
 #include <cstdint>
+#include <list>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -175,6 +177,64 @@ public:
 			const PackedFloat32Array &positions_x,
 			const PackedFloat32Array &positions_y,
 			const PackedFloat32Array &positions_z) const;
+
+	// ETAPE B2 : mise a jour INCREMENTALE des buffers rendu, avec cache par
+	// slot (miroir du skip EPS_TAILLE oracle). Buffers persistants en membres
+	// C++ : jamais realloues sauf changement de capacite. Un slot n'est
+	// recalcule QUE si son age/stade/libres a franchi le seuil EPS_TAILLE
+	// depuis le dernier tick.
+	//
+	// Retour Dictionary (RENDU COMPACT, prompt 2026-09-14) :
+	//   "tout_dirty" (bool) : true si capacite changee ou cache reset.
+	//   "dirty_count" (int) : nombre de slots data reellement modifies ce tick
+	//     (informatif -- ne conditionne plus le chemin push).
+	//   "pop" (int) : nombre de slots vivants (libres==0) dans la capacite.
+	//   "buffer_tronc"/"buffer_feuillage" (PackedFloat32Array, 16*pop) : buffer
+	//     COMPACT dans l'ordre croissant des slots data vivants. GDScript pose
+	//     _mm.instance_count = pop et pousse pop*16 floats -- independant de cap.
+	//   "slot_rendu_pour_data" (PackedInt32Array, taille cap) : -1 si libre,
+	//     sinon le rang du slot data dans le buffer compact (0..pop-1).
+	//
+	// Seuil EPS_TAILLE = 0.001f (identique constante EPS_TAILLE GDScript).
+	// Cache invalide via invalider_cache_rendu() -- a appeler au
+	// _agrandir_capacite ou tout reset structurel du buffer GPU.
+	// FILTRE CERCLE RENDU (streaming, prompt 2026-09-15) :
+	//   filtre_actif=false : buffer compact sur TOUS les vivants (comportement
+	//     historique) ; ox/oz/rayon_carre ignores.
+	//   filtre_actif=true  : un slot vivant est INCLUS dans le buffer compact
+	//     UNIQUEMENT si (px-ox)^2 + (pz-oz)^2 <= rayon_carre. La sim GDScript
+	//     ne depend PAS de ce filtre (aucune colonne mutee ici).
+	//
+	// FILTRE CONE VISION (2026-09-15) : en plus du cercle. cone_actif=false ->
+	// pas de test cone (comportement identique au filtre distance seul).
+	// cone_actif=true -> un arbre dans le cercle passe SI le produit scalaire
+	// entre (dir_x, dir_z) et le vecteur arbre-observateur (normalise en xz)
+	// est >= cos_demi_angle. dir_x/dir_z est la direction de regard XZ NORMALISEE
+	// de la camera observateur (poussee par la coquille). cos_demi_angle porte
+	// une marge (demi-angle plus large que le demi-FOV reel) : evite le
+	// clignotement au bord de l'ecran quand l'observateur pivote entre deux
+	// ticks. Arbre a distance ~0 (sur le joueur) : test cone bypasse -> toujours
+	// inclus (evite division par ~0 et pop visible du joueur en marchant).
+	Dictionary mettre_a_jour_buffers_rendu(
+			int capacite,
+			const PackedByteArray &libres,
+			const PackedFloat32Array &ages,
+			const PackedInt32Array &slot_stade,
+			const PackedFloat32Array &positions_x,
+			const PackedFloat32Array &positions_y,
+			const PackedFloat32Array &positions_z,
+			bool filtre_actif,
+			float ox,
+			float oz,
+			float rayon_carre,
+			bool cone_actif,
+			float dir_x,
+			float dir_z,
+			float cos_demi_angle);
+
+	// Invalide le cache : force tout_dirty=true au prochain appel.
+	// Miroir : agrandissement de capacite qui reset le buffer GPU.
+	void invalider_cache_rendu();
 
 	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
 	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
@@ -444,6 +504,128 @@ public:
 			const PackedFloat32Array &couverts,
 			const PackedInt32Array &slot_stade) const;
 
+	// ETAPE 12 : REMPLISSAGE COLONNES PLATES NAISSANCE. Miroir de la boucle
+	// _naitre_lot (l.1587-1628 du .gd), COLONNES PLATES + population
+	// UNIQUEMENT. Reste GDScript : allocation slots, tirage RNG
+	// FacteurVariance (ordre RNG intact), _derniere_params (Array Vector4),
+	// _choses_arbre, _monde.ajouter_lot, arbre_ajouter_lot, depot ombrage.
+	//
+	// Entrees :
+	//   slots            : slots alloues (n)
+	//   slots_r          : slots rendu correspondants (n), -1 si aucun
+	//   naissances_x/y/z : positions (n) -- y deja calcule GDScript
+	//                      (Y_SOL ou carte_terrain.sommet)
+	//   croissance_col   : deja tires (n) via FacteurVariance
+	//   longevite_col    : deja tires (n) via FacteurVariance
+	//   stade_initial    : index stade a la naissance (typiquement -1 avant
+	//                      passage +1, comme _index_pour_age(0.0) du .gd)
+	//   annees_par_seconde, graines_par_vie, fenetre_fertile_age : stables
+	//   colonnes actuelles (COW) : libres, ages, positions_x/y/z, slot_stade,
+	//     facteur_croissance, facteur_longevite, intervalle_reprod,
+	//     derniere_couleur_stade, slot_rendu_pour_data, data_pour_slot_rendu
+	//
+	// Sortie Dictionary : chaque colonne mutee, meme nom que la cle GDScript.
+	Dictionary remplir_colonnes_naissance(
+			const PackedInt32Array &slots,
+			const PackedInt32Array &slots_r,
+			const PackedFloat32Array &naissances_x,
+			const PackedFloat32Array &naissances_y,
+			const PackedFloat32Array &naissances_z,
+			const PackedFloat32Array &croissance_col,
+			const PackedFloat32Array &longevite_col,
+			int stade_initial,
+			float annees_par_seconde,
+			float graines_par_vie,
+			float fenetre_fertile_age,
+			const PackedByteArray &libres,
+			const PackedFloat32Array &ages,
+			const PackedFloat32Array &positions_x,
+			const PackedFloat32Array &positions_y,
+			const PackedFloat32Array &positions_z,
+			const PackedInt32Array &slot_stade,
+			const PackedFloat32Array &facteur_croissance,
+			const PackedFloat32Array &facteur_longevite,
+			const PackedFloat32Array &intervalle_reprod,
+			const PackedInt32Array &derniere_couleur_stade,
+			const PackedInt32Array &slot_rendu_pour_data,
+			const PackedInt32Array &data_pour_slot_rendu) const;
+
+	// ETAPE 14 : BANQUE + DORMANTES + EXPIRATIONS + REVEILS.
+	// Miroir de attente_seuil.gd + _dormantes_par_case + _case_de_dormante +
+	// _expirations + _reveils cote GDScript. Ordre d'insertion PRESERVE
+	// bit-a-bit : les ids attribues (_prochain_id monotone jamais reutilise)
+	// et l'ordre de parcours de _prospects / _reveils / _dormantes_par_case[cle]
+	// determinent quelles graines deviennent des naissances -> foret entiere.
+	//
+	// initialiser_stable_banque : pose stables (taille_case_dormantes,
+	// rayon_reveil, duree_vie_graine). Idempotent.
+	void initialiser_stable_banque(
+			float taille_case_dormantes,
+			float rayon_reveil,
+			float duree_vie_graine);
+
+	// banque_reset : vide tout etat banque (prospects, dormantes, expirations,
+	// reveils, temps_banque=0, _prochain_id_banque=0). Appele au setup du banc.
+	void banque_reset();
+
+	// banque_ajouter_dormante : miroir des 3 gestes GDScript qui suivent
+	// _banque_graines.ajouter (l.1229-1243 du .gd) :
+	//   1. ajouter au registre _prospects (attribue id monotone)
+	//   2. _inscrire_dormante(id, x, z) : ajout a la grille _dormantes_par_case
+	//   3. _expirations.append([_temps_banque + _duree_vie_graine, id])
+	// Rend l'id attribue. Miroir ORDRE d'insertion exact.
+	int banque_ajouter_dormante(float x, float z);
+
+	// banque_retirer_dormante : miroir des 3 gestes GDScript qui suivent
+	// _banque_graines.retirer (drainer_expirations + _tick_banque naissance) :
+	//   1. retirer du registre _prospects
+	//   2. _retirer_dormante(id) : retire de la grille _dormantes_par_case
+	//      (preserve l'ordre des ids restants dans la case)
+	// L'entree correspondante dans _expirations n'est PAS retiree (miroir GD :
+	// la file n'est purgee que par la tete lors du drain ; les ids absents de
+	// _prospects sont ignores l.1360-1362).
+	void banque_retirer_dormante(int id);
+
+	// banque_nombre : miroir _banque_graines.nombre().
+	int banque_nombre() const;
+
+	// banque_avancer_temps : _temps_banque += pas (avant drainer_expirations).
+	void banque_avancer_temps(float pas);
+
+	// banque_drainer_expirations : miroir l.1354-1377 du .gd.
+	// Avance _expirations_head tant que temps <= _temps_banque, retire chaque
+	// id encore present dans _prospects (retirer_dormante inclus). Compaction
+	// _expirations quand _head > 1024 et _head > size/2.
+	void banque_drainer_expirations();
+
+	// banque_recuperer_reveils_ids_ordre : rend les ids de _reveils dans
+	// leur ordre d'insertion (Dictionary GDScript = insertion-ordered) puis
+	// CLEAR _reveils. Miroir de `_ids_tbq = _reveils.keys() ; _reveils.clear()`
+	// (l.1379-1381). GDScript appelle ensuite banque_prospects_pour_ids pour
+	// obtenir les positions.
+	PackedInt32Array banque_recuperer_reveils_ids_ordre();
+
+	// banque_prospects_pour_ids : pour chaque id demande, rend (present, x, z)
+	// dans l'ordre d'entree. Sortie :
+	//   "presents" PackedByteArray (n) : 1 si _prospects.has(id), 0 sinon
+	//   "x" PackedFloat32Array (n) : position x (0 si absent)
+	//   "z" PackedFloat32Array (n) : position z (0 si absent)
+	// GDScript filtre alors les absents pour construire pros_ids_tbq / pros_x_tbq /
+	// pros_z_tbq dans le meme ordre que l'oracle (miroir l.1382-1389).
+	Dictionary banque_prospects_pour_ids(const PackedInt32Array &ids) const;
+
+	// banque_reveiller_autour_lot : miroir _reveiller_dormantes_autour_lot
+	// (l.1042-1072 morts_v, l.1081-1112 reveil-en-lot, l.1902-1932 morts_c).
+	// Meme parcours cx/cz avec floori, meme test distance^2 <= _rayon_reveil^2,
+	// skip si deja reveille ou absent des _prospects. Preserve l'ordre
+	// d'insertion dans _reveils (insertion-ordered map).
+	void banque_reveiller_autour_lot(
+			const PackedFloat32Array &rev_x,
+			const PackedFloat32Array &rev_z);
+
+	// banque_reveils_est_vide : test rapide (miroir _reveils.is_empty()).
+	bool banque_reveils_est_vide() const;
+
 private:
 	// Stables semis (etape 10).
 	float _rayon_trouee = 0.0f;
@@ -462,6 +644,72 @@ private:
 		float demi_z = 0.0f;
 	};
 	std::vector<ZoneExclusionCpp> _zones_exclusion_cpp;
+
+	// Etat buffers rendu persistants (etape B2). Non realloues sauf
+	// changement de capacite. Cache par slot : dernieres valeurs ecrites
+	// pour le comparer via EPS_TAILLE (miroir _derniere_params GDScript).
+	std::vector<float> _buf_tronc_p;
+	std::vector<float> _buf_feuillage_p;
+	int _rendu_cap_actuelle = 0;
+	std::vector<uint8_t> _cache_valide;   // 0 = jamais ecrit, 1 = ecrit
+	std::vector<uint8_t> _cache_libres_ecrit;
+	std::vector<int32_t> _cache_stade_ecrit;
+	std::vector<float> _cache_p_ht;
+	std::vector<float> _cache_p_lt;
+	std::vector<float> _cache_p_hf;
+	std::vector<float> _cache_p_lf;
+	// FIX B2 : flag "au terminal" par slot -- 1 quand le dernier recalcul
+	// a trouve==false (age > sum(durees), valeurs figees au dernier stade).
+	// Permet un SKIP EARLY avant la boucle lerp l.1673 : en regime stable,
+	// evite le compute pour ~90% de la population. Sinon le lerp est calcule
+	// pour tous les slots vivants meme quand ils vont etre skippes.
+	std::vector<uint8_t> _cache_terminal;
+	bool _cache_rendu_force_reset = true; // premier appel = tout_dirty
+
+	// Stables banque (etape 14).
+	float _taille_case_dormantes = 0.0f;
+	float _rayon_reveil = 0.0f;
+	float _duree_vie_graine = 0.0f;
+	float _temps_banque = 0.0f;
+
+	// Etat banque : registre _prospects INSERTION-ORDERED (list + hash).
+	struct BanqueProspect {
+		float x = 0.0f;
+		float z = 0.0f;
+	};
+	std::list<std::pair<int32_t, BanqueProspect>> _prospects_ordre;
+	std::unordered_map<int32_t, std::list<std::pair<int32_t, BanqueProspect>>::iterator> _prospects_idx;
+	int32_t _prochain_id_banque = 0;
+
+	// Grille dormantes : case -> vector<id> (ordre d'insertion), + inverse.
+	struct Vec2iHashBanque {
+		size_t operator()(const Vector2i &v) const noexcept {
+			size_t h = std::hash<int32_t>()(v.x);
+			h ^= std::hash<int32_t>()(v.y) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+			return h;
+		}
+	};
+	struct Vec2iEqBanque {
+		bool operator()(const Vector2i &a, const Vector2i &b) const noexcept {
+			return a.x == b.x && a.y == b.y;
+		}
+	};
+	std::unordered_map<Vector2i, std::vector<int32_t>, Vec2iHashBanque, Vec2iEqBanque> _dormantes_par_case_cpp;
+	std::unordered_map<int32_t, Vector2i> _case_de_dormante_cpp;
+
+	// File des expirations : vector + curseur tete. Compaction quand
+	// _head > 1024 et > size/2 (miroir GDScript l.1375-1377).
+	std::vector<std::pair<float, int32_t>> _expirations_cpp;
+	int32_t _expirations_head_cpp = 0;
+
+	// Set _reveils INSERTION-ORDERED (list + hash).
+	std::list<int32_t> _reveils_ordre;
+	std::unordered_map<int32_t, std::list<int32_t>::iterator> _reveils_idx;
+
+	// Helper prive : inscription grille dormantes (miroir _inscrire_dormante).
+	void _inscrire_dormante_cpp(int32_t id, float x, float z);
+	// Helper prive : retrait grille dormantes (miroir _retirer_dormante).
+	void _retirer_dormante_cpp(int32_t id);
 };
 
 } // namespace godot
