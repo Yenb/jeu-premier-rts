@@ -664,6 +664,12 @@ private:
 	// evite le compute pour ~90% de la population. Sinon le lerp est calcule
 	// pour tous les slots vivants meme quand ils vont etre skippes.
 	std::vector<uint8_t> _cache_terminal;
+	// Hysterese temporelle sur l'occlusion (prompt 2026-09-15). Compteur
+	// signe par slot : +1 quand le test dit "cache", -1 quand "visible",
+	// borne dans [0, SEUIL]. L'arbre n'est REELLEMENT occulte que quand
+	// le compteur atteint SEUIL -> les vacillements courts (1-2 ticks)
+	// n'atteignent jamais le seuil, aucun changement visible.
+	std::vector<int32_t> _occlusion_ticks;
 	bool _cache_rendu_force_reset = true; // premier appel = tout_dirty
 
 	// Stables banque (etape 14).

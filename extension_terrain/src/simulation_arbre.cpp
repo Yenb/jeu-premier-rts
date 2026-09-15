@@ -1627,6 +1627,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		_cache_p_hf.assign(size_t(cap), 0.0f);
 		_cache_p_lf.assign(size_t(cap), 0.0f);
 		_cache_terminal.assign(size_t(cap), 0);
+		_occlusion_ticks.assign(size_t(cap), 0);
 	}
 
 	const uint8_t *libres_r = libres.ptr();
@@ -1842,7 +1843,13 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// Compteurs d'instrumentation (lecture seule).
 	int n_bloqueurs = 0;
 	int n_occultes = 0;
-	if (filtre_actif && cone_actif && cap > 0) {
+	// Occlusion decouplee du cone (prompt 2026-09-15) : la passe tourne
+	// des que le cercle est actif. Si couplee a cone_actif, quand le
+	// tangage bascule le cone off, occulte[] repart a 0, _occlusion_ticks
+	// reste a SEUIL -> au retour du cone les arbres se re-cachent en 1 tick
+	// (l'hysterese ne freine que l'entree). Le cone reste utilise seulement
+	// dans dans_cercle plus bas pour filtrer le champ de vision.
+	if (filtre_actif && cap > 0) {
 		constexpr float PI_F = 3.14159265358979323846f;
 		const float TAU = 2.0f * PI_F;
 		const float inv_tau_s = float(SECTEURS_OCCLUSION) / TAU;
@@ -1900,8 +1907,14 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		// PASSE 2 : pour chaque arbre, test segment-vs-cercle sur les
 		// bloqueurs du secteur de l'arbre + voisins immediats.
 		constexpr float MARGE_AUTO_M = 0.5f;
+		// Hysterese temporelle : SEUIL_OCCL_TICKS ticks constants necessaires
+		// pour faire basculer un arbre (disparition ou reapparition).
+		constexpr int32_t SEUIL_OCCL_TICKS = 20;
 		for (int i = 0; i < cap; ++i) {
-			if (libres_r[i] == 1) continue;
+			if (libres_r[i] == 1) {
+				_occlusion_ticks[i] = 0;
+				continue;
+			}
 			float dx = px_r[i] - ox;
 			float dz = pz_r[i] - oz;
 			float d2 = dx * dx + dz * dz;
@@ -1945,7 +1958,16 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 					}
 				}
 			}
+			// Hysterese temporelle : mise a jour du compteur, puis seuil.
+			// occulte_i = resultat BRUT du test geometrique ce tick.
 			if (occulte_i) {
+				int32_t v = _occlusion_ticks[i] + 1;
+				_occlusion_ticks[i] = v > SEUIL_OCCL_TICKS ? SEUIL_OCCL_TICKS : v;
+			} else {
+				int32_t v = _occlusion_ticks[i] - 1;
+				_occlusion_ticks[i] = v < 0 ? 0 : v;
+			}
+			if (_occlusion_ticks[i] >= SEUIL_OCCL_TICKS) {
 				occulte[i] = 1;
 				++n_occultes;
 			}
