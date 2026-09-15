@@ -313,7 +313,13 @@ var _slot_rendu_pour_data: PackedInt32Array = PackedInt32Array()
 # Rebati a chaque tick par mettre_a_jour_buffers_rendu (cle C++
 # "buffer_tronc_cercle"). Lit par la coquille via buffer_tronc_occludeur().
 var _buffer_tronc_occludeur: PackedFloat32Array = PackedFloat32Array()
+var _buffer_feuillage_occludeur: PackedFloat32Array = PackedFloat32Array()
 var _pop_occludeur: int = 0
+# Instrumentation occlusion (prompt 2026-09-15). Lecture seule, publiee par
+# le C++ dans le Dictionary de sortie. Lu par la coquille pour affichage.
+var _instr_cone_actif: bool = false
+var _instr_n_bloqueurs: int = 0
+var _instr_n_occultes: int = 0
 # Inverse : slot rendu j -> slot data, -1 si le slot rendu est libre.
 # Sert au morceau 2 pour effacer visuellement un arbre sorti du cercle.
 var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
@@ -377,7 +383,7 @@ var _observateur_cone_actif: bool = false
 # rayon^2. La SIMULATION ne lit JAMAIS ce rayon : la boucle 0..cap
 # continue sur tous les arbres. Defaut 80 m, reglable via JSON `rayon_rendu_m`.
 # En mode isole (_observateur_actif=false) : filtre inactif, buffer inchange.
-var _rayon_rendu_m: float = 80.0
+var _rayon_rendu_m: float = 200.0
 
 # BASCULE C++ (etape 2 du portage). `utilise_cpp = true` remplace la boucle
 # unique (senescence + stade + detection + mort vieillesse) par un appel a
@@ -2340,7 +2346,12 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 		_slot_rendu_pour_data = _srpd_res
 	# Buffer tronc CERCLE SEUL pour l'occludeur (indep. cone/occlusion CPU).
 	_buffer_tronc_occludeur = res.get("buffer_tronc_cercle", PackedFloat32Array())
+	_buffer_feuillage_occludeur = res.get("buffer_feuillage_cercle", PackedFloat32Array())
 	_pop_occludeur = int(res.get("pop_cercle", 0))
+	# Instrumentation occlusion (lecture seule).
+	_instr_cone_actif = bool(res.get("cone_actif", false))
+	_instr_n_bloqueurs = int(res.get("n_bloqueurs", 0))
+	_instr_n_occultes = int(res.get("n_occultes", 0))
 	# Push COMPACT : instance_count = pop, buffer = pop*16 floats. Godot
 	# n'accepte buffer que si buffer.size() == instance_count * 16 (stride
 	# TRANSFORM_3D + color) -- d'ou l'ajustement de instance_count a pop.
@@ -2362,8 +2373,25 @@ func buffer_tronc_occludeur() -> PackedFloat32Array:
 	return _buffer_tronc_occludeur
 
 
+func buffer_feuillage_occludeur() -> PackedFloat32Array:
+	return _buffer_feuillage_occludeur
+
+
 func pop_occludeur() -> int:
 	return _pop_occludeur
+
+
+# Accesseurs instrumentation occlusion (lecture seule).
+func instr_cone_actif() -> bool:
+	return _instr_cone_actif
+
+
+func instr_n_bloqueurs() -> int:
+	return _instr_n_bloqueurs
+
+
+func instr_n_occultes() -> int:
+	return _instr_n_occultes
 
 
 # ============================================================================

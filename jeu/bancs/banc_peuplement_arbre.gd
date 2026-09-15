@@ -98,6 +98,7 @@ const INTERVALLE_BAKE_OCCL_S := 0.5
 # la geometrie ajoutee ne bloquerait presque rien (jeune arbre) et
 # gaspillerait le budget CPU rasterizer.
 const HAUTEUR_MIN_TRONC_OCCL := 1.0
+const HAUTEUR_MIN_FEUILLAGE_OCCL := 1.0
 var _temps_depuis_bake_occl: float = 0.0
 
 # CONE DE VISION (streaming, 2026-09-15). Demi-angle du cone de filtrage
@@ -105,7 +106,7 @@ var _temps_depuis_bake_occl: float = 0.0
 # reel (~45-50 degres a FOV 75 vertical + aspect 16:9) pour offrir une
 # marge : un arbre au bord de l'ecran ne clignote pas quand le joueur
 # pivote entre deux ticks. Cos precompute a `_ready`.
-const CONE_DEMI_ANGLE_DEG := 75.0
+const CONE_DEMI_ANGLE_DEG := 70.0
 var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
 
 # CONE PROGRESSIF -> COUPURE FRANCHE (2026-09-15). |fwd.y| = sin(tangage).
@@ -116,8 +117,8 @@ var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
 # vecteur). Entre les deux : bande de transition etroite (smoothstep)
 # pour eviter un saut visible. Bande 0.60..0.75 = tangage 37°..49° :
 # le cone se ferme bien avant que la direction XZ devienne bruitee.
-const CONE_TANGAGE_SEUIL_BAS := 0.60
-const CONE_TANGAGE_SEUIL_HAUT := 0.75
+const CONE_TANGAGE_SEUIL_BAS := 0.85
+const CONE_TANGAGE_SEUIL_HAUT := 0.95
 
 # STREAMING RENDU 60 Hz (2026-09-15). Le rebuild du buffer compact suit
 # la CAMERA (position + orientation XZ), pas la cadence sim. Sans ce
@@ -220,9 +221,21 @@ func _ready() -> void:
 	_sim.naitre_initial(global_position.x, global_position.z)
 
 
+var _instr_temps_depuis_affichage: float = 0.0
+const INSTR_INTERVALLE_S: float = 1.0
+
+
 func _process(delta: float) -> void:
 	if _sim == null:
 		return
+	# Instrumentation occlusion (prompt 2026-09-15). Print rare (1 s) pour
+	# ne pas noyer la console. Lit trois getters exposes par la sim.
+	_instr_temps_depuis_affichage += delta
+	if _instr_temps_depuis_affichage >= INSTR_INTERVALLE_S:
+		_instr_temps_depuis_affichage = 0.0
+		print("cone_actif=", _sim.instr_cone_actif(),
+			" bloqueurs=", _sim.instr_n_bloqueurs(),
+			" occultes=", _sim.instr_n_occultes())
 	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
 	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
 	# cadence -- que la sim ait tourne ce tick ou non, la position reste
@@ -582,6 +595,45 @@ func _rebake_occludeur_arbre() -> void:
 		indices.append(s1 + 0); indices.append(s1 + 1); indices.append(s1 + 2)
 		indices.append(s1 + 0); indices.append(s1 + 2); indices.append(s1 + 3)
 		k += 1
+	# Meme logique pour le FEUILLAGE : mêmes deux quads en croix, lus depuis
+	# buffer_feuillage_occludeur(). Layout identique (TRANSFORM_3D + color,
+	# 16 floats/instance) : rows[0].x = lf, rows[1].y = hf, origin.y =
+	# y_sol + ht + hf/2 (le feuillage est pose sur le tronc, pas centre au
+	# milieu de sa hauteur). Le feuillage devient bloqueur au meme titre
+	# que le tronc.
+	var buf_f: PackedFloat32Array = _sim.buffer_feuillage_occludeur()
+	if buf_f.size() >= pop * 16:
+		var kf: int = 0
+		while kf < pop:
+			var basef: int = kf * 16
+			var lf: float = buf_f[basef + 0]
+			var hf: float = buf_f[basef + 5]
+			if hf < HAUTEUR_MIN_FEUILLAGE_OCCL:
+				kf += 1
+				continue
+			var oxf: float = buf_f[basef + 3]
+			var oyf: float = buf_f[basef + 7]
+			var ozf: float = buf_f[basef + 11]
+			var yf_bas: float = oyf - hf * 0.5
+			var yf_haut: float = oyf + hf * 0.5
+			var demi_lf: float = lf * 0.5
+			# Quad 1 : plan XY (perpendiculaire a Z).
+			var sf0: int = sommets.size()
+			sommets.append(Vector3(oxf - demi_lf, yf_bas, ozf))
+			sommets.append(Vector3(oxf + demi_lf, yf_bas, ozf))
+			sommets.append(Vector3(oxf + demi_lf, yf_haut, ozf))
+			sommets.append(Vector3(oxf - demi_lf, yf_haut, ozf))
+			indices.append(sf0 + 0); indices.append(sf0 + 1); indices.append(sf0 + 2)
+			indices.append(sf0 + 0); indices.append(sf0 + 2); indices.append(sf0 + 3)
+			# Quad 2 : plan ZY (perpendiculaire a X).
+			var sf1: int = sommets.size()
+			sommets.append(Vector3(oxf, yf_bas, ozf - demi_lf))
+			sommets.append(Vector3(oxf, yf_bas, ozf + demi_lf))
+			sommets.append(Vector3(oxf, yf_haut, ozf + demi_lf))
+			sommets.append(Vector3(oxf, yf_haut, ozf - demi_lf))
+			indices.append(sf1 + 0); indices.append(sf1 + 1); indices.append(sf1 + 2)
+			indices.append(sf1 + 0); indices.append(sf1 + 2); indices.append(sf1 + 3)
+			kf += 1
 	if indices.is_empty():
 		_noeud_occludeur.occluder = null
 		return

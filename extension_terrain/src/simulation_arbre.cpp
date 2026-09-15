@@ -1627,7 +1627,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		_cache_p_hf.assign(size_t(cap), 0.0f);
 		_cache_p_lf.assign(size_t(cap), 0.0f);
 		_cache_terminal.assign(size_t(cap), 0);
-		_occlusion_precedente.assign(size_t(cap), 0);
 	}
 
 	const uint8_t *libres_r = libres.ptr();
@@ -1827,125 +1826,130 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// secteur + marge. La lambda dans_cercle ci-dessous ajoute occulte[i]
 	// APRES les tests cercle+cone (ne les remplace pas). Aucun atan2 ni sqrt
 	// dans la lambda -- tout est pre-calcule ici en O(cap).
-	// Tableaux alloues UNE fois par appel via assign (pas d'alloc par slot).
+	// OCCLUSION GEOMETRIQUE segment-vs-cercle (prompt 2026-09-15). Remplace
+	// l'occlusion par secteurs (hysterese, marges profondeur/angle). Pour
+	// chaque arbre, on trace le segment 2D observateur->arbre ; l'arbre est
+	// occulte si un tronc bloqueur, plus proche que lui, a son centre a
+	// une distance perpendiculaire inferieure a son rayon (demi-largeur *
+	// FACTEUR) du segment. Test deterministe -> pas de clignotement, pas
+	// d'hysterese. Support O(N) : les bloqueurs sont indexes par SECTEUR
+	// angulaire (comme un partitionnement spatial), chaque arbre ne
+	// consulte que sa case + les voisines. Aucune comparaison N^2.
 	constexpr int SECTEURS_OCCLUSION = 512;
-	// HYSTERESE double seuil (prompt 2026-09-15 suite occlusion). Un arbre
-	// non occulte au tick precedent doit franchir MARGE_ENTREE_M pour devenir
-	// occulte ; un arbre deja occulte doit revenir dans MARGE_SORTIE_M pour
-	// redevenir visible. La zone morte entre les deux (entree franche,
-	// sortie franche) empeche le va-et-vient tick a tick au bord.
-	// Points de reglage occlusion (prompt 2026-09-15). Yael affine a l'ecran.
-	// MARGE_ENTREE_M large : un arbre doit etre franchement enfonce derriere
-	// le tronc pour etre coupe. MARGE_SORTIE_M court : une fois occulte, il
-	// suffit d'un pas pour redevenir visible (l'hysterese tue le clignotement).
-	// FACTEUR_LARGEUR_OCCL petit : le tronc n'occulte que ce qui est pile
-	// derriere son fut, pas les bords.
-	// TEST SENSIBILITE MINIMALE (prompt 2026-09-15) : valeurs volontairement
-	// extremes pour verifier si le probleme observe vient de la sensibilite
-	// de l'occlusion. Occlusion quasi inactive avec ces valeurs, Yael remonte
-	// ensuite progressivement.
-	constexpr float MARGE_ENTREE_M = 30.0f;
-	constexpr float MARGE_SORTIE_M = 0.2f;
-	constexpr float FACTEUR_LARGEUR_OCCL = 0.05f;
-	// Angle de securite pour l'occlusion par angle (prompt 2026-09-15).
-	// A ~80 m un secteur ~0.7 deg couvre ~1 m -- un arbre lointain saute de
-	// secteur au moindre pas et clignote. On compare l'angle REEL de l'arbre
-	// a l'angle du bloqueur du secteur ; si l'ecart depasse cette marge,
-	// l'arbre n'est plus considere cache (plus de bascule au pas).
-	constexpr float MARGE_ANGLE_OCCL_RAD = 0.01f;
+	constexpr float FACTEUR_LARGEUR_OCCL = 0.22f;
 	std::vector<uint8_t> occulte;
 	occulte.assign(size_t(cap), 0);
+	// Compteurs d'instrumentation (lecture seule).
+	int n_bloqueurs = 0;
+	int n_occultes = 0;
 	if (filtre_actif && cone_actif && cap > 0) {
-		std::vector<float> bloqueur_d;
-		bloqueur_d.assign(size_t(SECTEURS_OCCLUSION), std::numeric_limits<float>::infinity());
-		// Angle REEL du bloqueur retenu par secteur : ecrit quand ce tronc
-		// devient le plus proche de son secteur. Permet a la passe 2 de
-		// comparer par angle, pas seulement par index de secteur -- un arbre
-		// lointain qui saute d'un secteur au pas ne bascule plus si l'angle
-		// du bloqueur derive de plus de MARGE_ANGLE_OCCL_RAD.
-		std::vector<float> bloqueur_angle;
-		bloqueur_angle.assign(size_t(SECTEURS_OCCLUSION), 0.0f);
 		constexpr float PI_F = 3.14159265358979323846f;
 		const float TAU = 2.0f * PI_F;
 		const float inv_tau_s = float(SECTEURS_OCCLUSION) / TAU;
-		// Seuil hauteur bloqueur : un jeune arbre (petit stade) ne bloque pas.
-		// tr_h est trie croissant par stade -> dernier stade = arbre adulte ;
-		// on prend la moitie -> les arbres mi-adultes et au-dela bloquent.
 		float hauteur_min = 3.0f;
 		if (n_stades_full > 0) hauteur_min = tr_h[n_stades_full - 1] * 0.5f;
-		// PASSE 1 : inscription.
+		// Tableaux parallels des bloqueurs (positions et rayons).
+		std::vector<float> bloq_bx;
+		std::vector<float> bloq_bz;
+		std::vector<float> bloq_r;
+		bloq_bx.reserve(size_t(cap));
+		bloq_bz.reserve(size_t(cap));
+		bloq_r.reserve(size_t(cap));
+		// Support spatial : listes de bloqueurs par secteur angulaire.
+		std::vector<std::vector<int>> bloq_par_secteur;
+		bloq_par_secteur.assign(size_t(SECTEURS_OCCLUSION), std::vector<int>());
+		// PASSE 1 : recenser les bloqueurs et les indexer par secteur.
+		// EPS retire ici : un tronc colle au joueur reste bloqueur.
 		for (int i = 0; i < cap; ++i) {
 			if (libres_r[i] == 1) continue;
 			float dx = px_r[i] - ox;
 			float dz = pz_r[i] - oz;
 			float d2 = dx * dx + dz * dz;
 			if (d2 > rayon_carre) continue;
-			if (d2 <= EPS_CONE_XZ_CARRE) continue;
 			if (_cache_p_ht[i] < hauteur_min) continue;
+			// Rayon bloqueur = max(rayon tronc, rayon feuillage), tout PAR SLOT.
+			// _cache_p_lt[i] et _cache_p_lf[i] sont indexes par slot (comme
+			// les autres caches). NE PAS utiliser fe_l qui est indexe par stade.
+			float rayon_tronc = _cache_p_lt[i] * 0.5f * FACTEUR_LARGEUR_OCCL;
+			float rayon_feuillage = _cache_p_lf[i] * 0.5f * FACTEUR_LARGEUR_OCCL;
+			float rayon_bloqueur = (rayon_feuillage > rayon_tronc) ? rayon_feuillage : rayon_tronc;
+			if (rayon_bloqueur <= 0.0f) continue;
+			int idx_bloq = int(bloq_bx.size());
+			bloq_bx.push_back(px_r[i]);
+			bloq_bz.push_back(pz_r[i]);
+			bloq_r.push_back(rayon_bloqueur);
+			++n_bloqueurs;
+			// Indexation par secteur : etaler sur les secteurs couverts par
+			// la demi-largeur angulaire (rayon / distance).
 			float d = std::sqrt(d2);
 			float angle = std::atan2(dz, dx);
 			if (angle < 0.0f) angle += TAU;
 			int s_centre = int(angle * inv_tau_s);
 			if (s_centre < 0) s_centre = 0;
 			if (s_centre >= SECTEURS_OCCLUSION) s_centre = SECTEURS_OCCLUSION - 1;
-			float demi_larg = _cache_p_lt[i] * FACTEUR_LARGEUR_OCCL;
-			float demi_ang = (d > 0.001f) ? (demi_larg / d) : 0.0f;
+			float demi_ang = (d > 0.001f) ? (rayon_bloqueur / d) : PI_F;
 			int etale = int(std::ceil(demi_ang * inv_tau_s));
 			if (etale < 0) etale = 0;
 			if (etale > SECTEURS_OCCLUSION / 2) etale = SECTEURS_OCCLUSION / 2;
 			for (int k = -etale; k <= etale; ++k) {
 				int s = (s_centre + k) % SECTEURS_OCCLUSION;
 				if (s < 0) s += SECTEURS_OCCLUSION;
-				if (d < bloqueur_d[s]) {
-					bloqueur_d[s] = d;
-					bloqueur_angle[s] = angle;
-				}
+				bloq_par_secteur[s].push_back(idx_bloq);
 			}
 		}
-		// PASSE 2 : marquage occulte[i] par OCCLUSION INDEXEE PAR ANGLE.
-		// Le secteur donne le CANDIDAT bloqueur, mais la decision se prend
-		// sur l'ECART ANGULAIRE reel entre l'arbre et le bloqueur retenu.
-		// Un arbre lointain qui saute d'un secteur au pas ne bascule plus
-		// tant que l'ecart angulaire depasse MARGE_ANGLE_OCCL_RAD.
-		// Deux conditions cumulatives pour occulter :
-		//   (a) bloqueur nettement plus proche : d > bloqueur_d[s] + seuil
-		//       (seuil ENTREE si non occulte au tick precedent, SORTIE sinon)
-		//   (b) ecart angulaire circulaire |a_arbre - a_bloqueur| < MARGE
+		// PASSE 2 : pour chaque arbre, test segment-vs-cercle sur les
+		// bloqueurs du secteur de l'arbre + voisins immediats.
+		constexpr float MARGE_AUTO_M = 0.5f;
 		for (int i = 0; i < cap; ++i) {
-			if (libres_r[i] == 1) {
-				_occlusion_precedente[i] = 0;
-				continue;
-			}
+			if (libres_r[i] == 1) continue;
 			float dx = px_r[i] - ox;
 			float dz = pz_r[i] - oz;
 			float d2 = dx * dx + dz * dz;
-			if (d2 > rayon_carre) { _occlusion_precedente[i] = 0; continue; }
-			if (d2 <= EPS_CONE_XZ_CARRE) { _occlusion_precedente[i] = 0; continue; }
+			if (d2 > rayon_carre) continue;
+			// EPS : un tronc sur le joueur ne s'auto-occulte pas.
+			if (d2 <= EPS_CONE_XZ_CARRE) continue;
 			float d = std::sqrt(d2);
+			float ux = dx / d;
+			float uz = dz / d;
 			float angle = std::atan2(dz, dx);
 			if (angle < 0.0f) angle += TAU;
 			int s = int(angle * inv_tau_s);
 			if (s < 0) s = 0;
 			if (s >= SECTEURS_OCCLUSION) s = SECTEURS_OCCLUSION - 1;
-			float b = bloqueur_d[s];
-			bool etait_occulte = (_occlusion_precedente[i] != 0);
-			float seuil = etait_occulte ? MARGE_SORTIE_M : MARGE_ENTREE_M;
-			bool devient_occulte = false;
-			if (d > b + seuil) {
-				// Test angulaire : ecart circulaire sur [0, TAU).
-				float a_b = bloqueur_angle[s];
-				float ecart = std::fabs(angle - a_b);
-				if (ecart > TAU * 0.5f) ecart = TAU - ecart;
-				if (ecart < MARGE_ANGLE_OCCL_RAD) devient_occulte = true;
+			int voisins[3] = {
+				s,
+				(s - 1 + SECTEURS_OCCLUSION) % SECTEURS_OCCLUSION,
+				(s + 1) % SECTEURS_OCCLUSION
+			};
+			bool occulte_i = false;
+			for (int v = 0; v < 3 && !occulte_i; ++v) {
+				const std::vector<int> &liste = bloq_par_secteur[voisins[v]];
+				for (int idx : liste) {
+					float bdx = bloq_bx[idx] - ox;
+					float bdz = bloq_bz[idx] - oz;
+					// Projection de (bdx, bdz) sur le segment observateur->arbre.
+					float t = bdx * ux + bdz * uz;
+					// Bloqueur doit etre STRICTEMENT entre observateur et arbre,
+					// avec marge MARGE_AUTO_M aux deux bouts pour eviter qu'un
+					// tronc s'auto-occulte lui-meme.
+					if (t <= MARGE_AUTO_M) continue;
+					if (t >= d - MARGE_AUTO_M) continue;
+					// Distance perpendiculaire du centre du tronc au segment.
+					float perp_x = bdx - t * ux;
+					float perp_z = bdz - t * uz;
+					float perp2 = perp_x * perp_x + perp_z * perp_z;
+					float r = bloq_r[idx];
+					if (perp2 <= r * r) {
+						occulte_i = true;
+						break;
+					}
+				}
 			}
-			if (devient_occulte) occulte[i] = 1;
-			_occlusion_precedente[i] = devient_occulte ? 1 : 0;
+			if (occulte_i) {
+				occulte[i] = 1;
+				++n_occultes;
+			}
 		}
-	} else {
-		// Occlusion inactive ce tick : reset l'etat precedent pour eviter
-		// qu'un ancien flag persiste et fasse rentrer un slot en occlusion
-		// des la prochaine activation avec un seuil de sortie court.
-		for (int i = 0; i < cap; ++i) _occlusion_precedente[i] = 0;
 	}
 	auto dans_cercle = [&](int i) -> bool {
 		if (!filtre_actif) return true;
@@ -2022,8 +2026,11 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		}
 	}
 	PackedFloat32Array pb_t_cercle;
+	PackedFloat32Array pb_f_cercle;
 	pb_t_cercle.resize(pop_cercle * 16);
+	pb_f_cercle.resize(pop_cercle * 16);
 	float *pb_t_cercle_w = pb_t_cercle.ptrw();
+	float *pb_f_cercle_w = pb_f_cercle.ptrw();
 	int rank_cercle = 0;
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
@@ -2036,10 +2043,18 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		int src = i * 16;
 		int dst = rank_cercle * 16;
 		std::memcpy(pb_t_cercle_w + dst, bt + src, 16 * sizeof(float));
+		std::memcpy(pb_f_cercle_w + dst, bf + src, 16 * sizeof(float));
 		++rank_cercle;
 	}
 	out["pop_cercle"] = pop_cercle;
 	out["buffer_tronc_cercle"] = pb_t_cercle;
+	// Meme filtrage cercle, meme layout, mais depuis le buffer feuillage :
+	// l'occludeur cote coquille bati des quads en croix avec ces donnees,
+	// comme pour le tronc. Le feuillage devient bloqueur au meme titre.
+	out["buffer_feuillage_cercle"] = pb_f_cercle;
+	out["cone_actif"] = cone_actif;
+	out["n_bloqueurs"] = n_bloqueurs;
+	out["n_occultes"] = n_occultes;
 	return out;
 }
 

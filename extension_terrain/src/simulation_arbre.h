@@ -664,10 +664,6 @@ private:
 	// evite le compute pour ~90% de la population. Sinon le lerp est calcule
 	// pour tous les slots vivants meme quand ils vont etre skippes.
 	std::vector<uint8_t> _cache_terminal;
-	// Occlusion tick precedent : hysterese double seuil pour tuer le
-	// clignotement quand l'observateur bouge. Indexe par slot data comme
-	// les autres caches (invariant a la compaction).
-	std::vector<uint8_t> _occlusion_precedente;
 	bool _cache_rendu_force_reset = true; // premier appel = tout_dirty
 
 	// Stables banque (etape 14).
