@@ -239,6 +239,80 @@ func _init() -> void:
 			rank_attendu += 1
 		ii += 1
 
+	# PARITE RENDU COMPACT AVEC CONE ACTIF (prompt 2026-09-15). Ferme le trou
+	# ou une regression sur le chemin cone_actif=true resterait VERTE. On
+	# invalide le cache C++, on appelle mettre_a_jour_buffers_rendu avec un
+	# observateur en (0,0) et un cone regardant +X, demi-angle 90° (cos=0.0).
+	# Rayon carre TRES GRAND -> le cercle n'exclut rien, seul le cone filtre.
+	# On verifie : (a) au moins un slot vivant est exclu (filtre reellement
+	# exerce, sinon equivalent a cone eteint), (b) au moins un slot vivant
+	# est inclus, (c) srpd est -1 pour libres ET pour exclus, ranks croissants
+	# pour inclus, (d) tranche 16 floats du buffer compact au rank egale
+	# tranche 16 floats du buffer de reference (buf_gd) au slot data. Meme
+	# patron d'assertion bit-a-bit que le cas cone_actif=false ci-dessus.
+	simu_cpp_b.invalider_cache_rendu()
+	var res_cone: Dictionary = simu_cpp_b.mettre_a_jour_buffers_rendu(
+		n, libres_a, ages_a, stade_a, pos_x_a, pos_y_a, pos_z_a,
+		true, 0.0, 0.0, 1.0e12,
+		true, 1.0, 0.0, 0.0
+	)
+	var pop_cone: int = int(res_cone.get("pop", -1))
+	var bt_cone: PackedFloat32Array = res_cone.buffer_tronc
+	var bf_cone: PackedFloat32Array = res_cone.buffer_feuillage
+	var srpd_cone: PackedInt32Array = res_cone.slot_rendu_pour_data
+	if srpd_cone.size() != n:
+		printerr("ECHEC cone: srpd taille attendu=%d obtenu=%d" % [n, srpd_cone.size()])
+		quit(1)
+		return
+	if bt_cone.size() != pop_cone * 16 or bf_cone.size() != pop_cone * 16:
+		printerr("ECHEC cone: taille buffer compact -- attendu=%d, tronc=%d, feuillage=%d" % [pop_cone * 16, bt_cone.size(), bf_cone.size()])
+		quit(1)
+		return
+	if pop_cone <= 0:
+		printerr("ECHEC cone: aucun slot inclus (pop_cone=%d) -- cone trop restrictif pour cette pop" % pop_cone)
+		quit(1)
+		return
+	if pop_cone >= pop_a:
+		printerr("ECHEC cone: aucun slot exclu (pop_cone=%d, pop_a=%d) -- filtre non exerce, cas equivalent a cone eteint" % [pop_cone, pop_a])
+		quit(1)
+		return
+	var rank_cone: int = 0
+	var iic: int = 0
+	while iic < n:
+		if libres_a[iic] == 1:
+			if srpd_cone[iic] != -1:
+				printerr("ECHEC cone: srpd[%d] libre devrait etre -1, obtenu=%d" % [iic, srpd_cone[iic]])
+				quit(1)
+				return
+		else:
+			var rid: int = srpd_cone[iic]
+			if rid == -1:
+				iic += 1
+				continue
+			if rid != rank_cone:
+				printerr("ECHEC cone: srpd[%d] rank attendu=%d, obtenu=%d" % [iic, rank_cone, rid])
+				quit(1)
+				return
+			var src_slot_c: int = iic * 16
+			var dst_rank_c: int = rank_cone * 16
+			var kkc: int = 0
+			while kkc < 16:
+				if bt_cone[dst_rank_c + kkc] != bt_gd[src_slot_c + kkc]:
+					printerr("ECHEC cone: buffer_tronc compact[slot=%d, rank=%d, k=%d] compact=%.9f ref=%.9f" % [iic, rank_cone, kkc, bt_cone[dst_rank_c + kkc], bt_gd[src_slot_c + kkc]])
+					quit(1)
+					return
+				if bf_cone[dst_rank_c + kkc] != bf_gd[src_slot_c + kkc]:
+					printerr("ECHEC cone: buffer_feuillage compact[slot=%d, rank=%d, k=%d] compact=%.9f ref=%.9f" % [iic, rank_cone, kkc, bf_cone[dst_rank_c + kkc], bf_gd[src_slot_c + kkc]])
+					quit(1)
+					return
+				kkc += 1
+			rank_cone += 1
+		iic += 1
+	if rank_cone != pop_cone:
+		printerr("ECHEC cone: rank final=%d != pop_cone=%d" % [rank_cone, pop_cone])
+		quit(1)
+		return
+
 	# ETAPE 5 : PARITE RNG. Le C++ instancie un RandomNumberGenerator du
 	# moteur (meme classe que GDScript, meme PCG32). A seed egal, la suite
 	# des randf() doit etre bit-a-bit identique. On tire N=1000 des deux

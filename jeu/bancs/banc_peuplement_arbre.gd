@@ -108,6 +108,17 @@ var _temps_depuis_bake_occl: float = 0.0
 const CONE_DEMI_ANGLE_DEG := 75.0
 var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
 
+# CONE PROGRESSIF -> COUPURE FRANCHE (2026-09-15). |fwd.y| = sin(tangage).
+# Sous SEUIL_BAS : cone actif normal (rendu econome, vue horizontale).
+# Au-dessus de SEUIL_HAUT : cone desactive, tout le cercle rendu -- on
+# coupe AVANT la zone d'instabilite de dir_xz (quand length² <= 0.0001,
+# vers tangage ~89.4°, la garde declenche un basculement brutal du
+# vecteur). Entre les deux : bande de transition etroite (smoothstep)
+# pour eviter un saut visible. Bande 0.60..0.75 = tangage 37°..49° :
+# le cone se ferme bien avant que la direction XZ devienne bruitee.
+const CONE_TANGAGE_SEUIL_BAS := 0.60
+const CONE_TANGAGE_SEUIL_HAUT := 0.75
+
 # STREAMING RENDU 60 Hz (2026-09-15). Le rebuild du buffer compact suit
 # la CAMERA (position + orientation XZ), pas la cadence sim. Sans ce
 # rebuild par frame, quand la camera pivote entre deux ticks sim (250 ms
@@ -234,6 +245,17 @@ func _process(delta: float) -> void:
 		pos_obs_xz = Vector2(pos_obs.x, pos_obs.z)
 		obs_present = true
 		_sim.definir_observateur(pos_obs.x, pos_obs.z)
+		# CUSTOM_AABB RECENTREE SUR LE JOUEUR (2026-09-15). Godot culle un
+		# MultiMesh comme UN objet via son AABB globale ; l'AABB auto n'est
+		# pas rafraichie de maniere fiable apres reecriture des transforms
+		# du buffer, donc les arbres en bord d'ecran disparaissent quand la
+		# camera tourne. `top_level = true` -> transform du noeud = identite
+		# -> l'AABB locale posee ici est deja en coordonnees monde. Rayon
+		# rendu 80 m + marge 10 m ; Y garde -5 a +60 (origine -5, taille 65).
+		var demi := 90.0
+		var aabb_arbres := AABB(Vector3(pos_obs.x - demi, -5.0, pos_obs.z - demi), Vector3(demi * 2.0, 65.0, demi * 2.0))
+		_noeud_tronc.custom_aabb = aabb_arbres
+		_noeud_feuillage.custom_aabb = aabb_arbres
 		# CONE VISION (2026-09-15) : direction XZ du regard = -basis.z du
 		# noeud observateur, projetee sur XZ puis normalisee. Le joueur
 		# (JoueurBanc CharacterBody3D) porte son lacet sur son propre basis
@@ -241,13 +263,31 @@ func _process(delta: float) -> void:
 		# fixe (banc mode isole, joueur inactif) : -basis.z pointe vers
 		# l'origine, meme convention. Direction quasi-verticale (regard au
 		# sol ou au ciel) -> pas de cone (dir_xz trop courte a normaliser).
-		var fwd: Vector3 = -noeud_obs.global_transform.basis.z
+		# Lire fwd sur la CAMERA ACTIVE, pas sur le body : le body ne porte
+		# que le lacet (joueur_banc.gd:81), le tangage vit sur la camera
+		# enfant (_yeux.rotation.x). Lire basis.z du body -> fwd.y ~= 0 quel
+		# que soit le regard vertical, le lerp cos_eff plus bas ne s'active
+		# jamais. get_viewport().get_camera_3d() rend la camera courante
+		# quelle que soit la scene ; fallback body si aucune camera active.
+		var cam := get_viewport().get_camera_3d()
+		var fwd: Vector3 = -cam.global_transform.basis.z if cam != null else -noeud_obs.global_transform.basis.z
+		# COUPURE FRANCHE SELON TANGAGE (2026-09-15). Le lerp lineaire
+		# precedent ouvrait le cone TROP TARD : la transition finissait
+		# vers tangage 90° alors que dir_xz devient bruite bien avant.
+		# Nouvelle logique : sous SEUIL_BAS le cone est normal, au-dessus
+		# de SEUIL_HAUT il est desactive (cos_eff=-1 = tout le cercle),
+		# bande smoothstep etroite au milieu. La coupure arrive AVANT que
+		# dir_xz devienne instable -> aucun saut au moment ou la garde
+		# length² > 0.0001 finit par se declencher (le cone est deja off).
+		var abs_fy: float = absf(fwd.y)
+		var t_coupure: float = smoothstep(CONE_TANGAGE_SEUIL_BAS, CONE_TANGAGE_SEUIL_HAUT, abs_fy)
+		var cos_eff: float = lerpf(_cone_cos_demi_angle, -1.0, t_coupure)
 		var dir_xz := Vector2(fwd.x, fwd.z)
 		if dir_xz.length_squared() > 0.0001:
 			dir_xz = dir_xz.normalized()
 			dir_obs_xz = dir_xz
 			obs_cone_present = true
-			_sim.definir_observateur_cone(dir_xz.x, dir_xz.y, _cone_cos_demi_angle)
+			_sim.definir_observateur_cone(dir_xz.x, dir_xz.y, cos_eff)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
 	# `_sim.avancer(pas)` -- proba stochastique / cadence banque /
@@ -482,21 +522,23 @@ func _monter_population_nodes() -> void:
 # on lit le groupe.
 func _rebake_occludeur_arbre() -> void:
 	# OCCLUSION ARBRE (2026-09-15). Reconstruit un ArrayOccluder3D neuf a
-	# partir du BUFFER COMPACT du tronc (_mm_tronc.buffer) : le C++ a deja
-	# fait le filtre cercle -- on n'occulte donc QUE les arbres du cercle
-	# de rendu, coherent avec le streaming. Pour chaque tronc, deux quads
-	# verticaux en croix (perpendiculaires a X et a Z) : occulte dans
-	# toutes les directions horizontales sans depender de l'orientation
-	# de l'observateur (pas de billboard, pas de rebake sur rotation).
+	# partir du BUFFER TRONC CERCLE SEUL (sim.buffer_tronc_occludeur()),
+	# batie cote C++ avec le filtre cercle uniquement -- sans cone, sans
+	# occlusion CPU. L'occludeur couvre donc tous les troncs du cercle de
+	# rendu et NE CHANGE PAS quand la camera tourne : il ne varie qu'au
+	# deplacement de l'observateur. Pour chaque tronc, deux quads verticaux
+	# en croix (perpendiculaires a X et a Z) : occulte dans toutes les
+	# directions horizontales sans depender de l'orientation (pas de
+	# billboard, pas de rebake sur rotation).
 	# ArrayOccluder3D est DOUBLE-FACE (voir rendu_terrain_multimesh.gd:838),
 	# winding order libre.
-	if _mm_tronc == null or _noeud_occludeur == null:
+	if _sim == null or _noeud_occludeur == null:
 		return
-	var pop: int = _mm_tronc.instance_count
+	var pop: int = _sim.pop_occludeur()
 	if pop <= 0:
 		_noeud_occludeur.occluder = null
 		return
-	var buf: PackedFloat32Array = _mm_tronc.buffer
+	var buf: PackedFloat32Array = _sim.buffer_tronc_occludeur()
 	if buf.size() < pop * 16:
 		return
 	var sommets := PackedVector3Array()

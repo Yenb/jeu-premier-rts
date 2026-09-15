@@ -308,6 +308,12 @@ var _capacite_rendu: int = 0
 # pas rendu (sortie du cercle en mode hote streame). En morceau 1,
 # identity : posee a `i` a la naissance, -1 a la mort.
 var _slot_rendu_pour_data: PackedInt32Array = PackedInt32Array()
+# BUFFER TRONC CERCLE SEUL (prompt 2026-09-15). Cache pour l'occludeur :
+# tous les troncs du cercle de rendu, sans filtre cone ni occlusion CPU.
+# Rebati a chaque tick par mettre_a_jour_buffers_rendu (cle C++
+# "buffer_tronc_cercle"). Lit par la coquille via buffer_tronc_occludeur().
+var _buffer_tronc_occludeur: PackedFloat32Array = PackedFloat32Array()
+var _pop_occludeur: int = 0
 # Inverse : slot rendu j -> slot data, -1 si le slot rendu est libre.
 # Sert au morceau 2 pour effacer visuellement un arbre sorti du cercle.
 var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
@@ -2332,6 +2338,9 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	var _srpd_res: PackedInt32Array = res.get("slot_rendu_pour_data", PackedInt32Array())
 	if _srpd_res.size() == _slot_rendu_pour_data.size():
 		_slot_rendu_pour_data = _srpd_res
+	# Buffer tronc CERCLE SEUL pour l'occludeur (indep. cone/occlusion CPU).
+	_buffer_tronc_occludeur = res.get("buffer_tronc_cercle", PackedFloat32Array())
+	_pop_occludeur = int(res.get("pop_cercle", 0))
 	# Push COMPACT : instance_count = pop, buffer = pop*16 floats. Godot
 	# n'accepte buffer que si buffer.size() == instance_count * 16 (stride
 	# TRANSFORM_3D + color) -- d'ou l'ajustement de instance_count a pop.
@@ -2344,6 +2353,18 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 		_mm_feuillage.buffer = res.buffer_feuillage
 	_mm_tronc.visible_instance_count = _pop_i
 	_mm_feuillage.visible_instance_count = _pop_i
+
+
+# Accesseurs occludeur : la coquille (banc_peuplement_arbre.gd) bat
+# l'ArrayOccluder3D depuis ces donnees, PAS depuis _mm_tronc.buffer
+# (qui est filtre cone+occlusion et saute quand la camera tourne).
+func buffer_tronc_occludeur() -> PackedFloat32Array:
+	return _buffer_tronc_occludeur
+
+
+func pop_occludeur() -> int:
+	return _pop_occludeur
+
 
 # ============================================================================
 # CONSTRUIRE BUFFERS RENDU en GDScript (helper de test parite).

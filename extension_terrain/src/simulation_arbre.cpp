@@ -1627,6 +1627,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		_cache_p_hf.assign(size_t(cap), 0.0f);
 		_cache_p_lf.assign(size_t(cap), 0.0f);
 		_cache_terminal.assign(size_t(cap), 0);
+		_occlusion_precedente.assign(size_t(cap), 0);
 	}
 
 	const uint8_t *libres_r = libres.ptr();
@@ -1814,6 +1815,138 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// division par ~0 dans la normalisation et le pop visuel d'un arbre qui
 	// passerait entre les jambes du joueur.
 	constexpr float EPS_CONE_XZ_CARRE = 0.01f;
+	// OCCLUSION CPU PAR SECTEURS ANGULAIRES (prompt 2026-09-15). Ferme le trou
+	// ou un arbre derriere un tronc plus proche restait dans le buffer -- le
+	// compteur de primitives ne baissait pas quand l'observateur se collait
+	// a un tronc. L'occludeur Godot coupe le DESSIN, pas le buffer : seul
+	// levier sur pop = rejeter au CPU avant l'ecriture.
+	// Deux passes en O(N), pas de N^2 : (1) inscription des bloqueurs (arbres
+	// dont _cache_p_ht >= hauteur_min) dans bloqueur_d[secteur], etale sur
+	// les secteurs couverts par la demi-largeur angulaire (lt/2)/d. (2)
+	// marquage occulte[i] pour un arbre plus loin que le bloqueur de son
+	// secteur + marge. La lambda dans_cercle ci-dessous ajoute occulte[i]
+	// APRES les tests cercle+cone (ne les remplace pas). Aucun atan2 ni sqrt
+	// dans la lambda -- tout est pre-calcule ici en O(cap).
+	// Tableaux alloues UNE fois par appel via assign (pas d'alloc par slot).
+	constexpr int SECTEURS_OCCLUSION = 512;
+	// HYSTERESE double seuil (prompt 2026-09-15 suite occlusion). Un arbre
+	// non occulte au tick precedent doit franchir MARGE_ENTREE_M pour devenir
+	// occulte ; un arbre deja occulte doit revenir dans MARGE_SORTIE_M pour
+	// redevenir visible. La zone morte entre les deux (entree franche,
+	// sortie franche) empeche le va-et-vient tick a tick au bord.
+	// Points de reglage occlusion (prompt 2026-09-15). Yael affine a l'ecran.
+	// MARGE_ENTREE_M large : un arbre doit etre franchement enfonce derriere
+	// le tronc pour etre coupe. MARGE_SORTIE_M court : une fois occulte, il
+	// suffit d'un pas pour redevenir visible (l'hysterese tue le clignotement).
+	// FACTEUR_LARGEUR_OCCL petit : le tronc n'occulte que ce qui est pile
+	// derriere son fut, pas les bords.
+	// TEST SENSIBILITE MINIMALE (prompt 2026-09-15) : valeurs volontairement
+	// extremes pour verifier si le probleme observe vient de la sensibilite
+	// de l'occlusion. Occlusion quasi inactive avec ces valeurs, Yael remonte
+	// ensuite progressivement.
+	constexpr float MARGE_ENTREE_M = 30.0f;
+	constexpr float MARGE_SORTIE_M = 0.2f;
+	constexpr float FACTEUR_LARGEUR_OCCL = 0.05f;
+	// Angle de securite pour l'occlusion par angle (prompt 2026-09-15).
+	// A ~80 m un secteur ~0.7 deg couvre ~1 m -- un arbre lointain saute de
+	// secteur au moindre pas et clignote. On compare l'angle REEL de l'arbre
+	// a l'angle du bloqueur du secteur ; si l'ecart depasse cette marge,
+	// l'arbre n'est plus considere cache (plus de bascule au pas).
+	constexpr float MARGE_ANGLE_OCCL_RAD = 0.01f;
+	std::vector<uint8_t> occulte;
+	occulte.assign(size_t(cap), 0);
+	if (filtre_actif && cone_actif && cap > 0) {
+		std::vector<float> bloqueur_d;
+		bloqueur_d.assign(size_t(SECTEURS_OCCLUSION), std::numeric_limits<float>::infinity());
+		// Angle REEL du bloqueur retenu par secteur : ecrit quand ce tronc
+		// devient le plus proche de son secteur. Permet a la passe 2 de
+		// comparer par angle, pas seulement par index de secteur -- un arbre
+		// lointain qui saute d'un secteur au pas ne bascule plus si l'angle
+		// du bloqueur derive de plus de MARGE_ANGLE_OCCL_RAD.
+		std::vector<float> bloqueur_angle;
+		bloqueur_angle.assign(size_t(SECTEURS_OCCLUSION), 0.0f);
+		constexpr float PI_F = 3.14159265358979323846f;
+		const float TAU = 2.0f * PI_F;
+		const float inv_tau_s = float(SECTEURS_OCCLUSION) / TAU;
+		// Seuil hauteur bloqueur : un jeune arbre (petit stade) ne bloque pas.
+		// tr_h est trie croissant par stade -> dernier stade = arbre adulte ;
+		// on prend la moitie -> les arbres mi-adultes et au-dela bloquent.
+		float hauteur_min = 3.0f;
+		if (n_stades_full > 0) hauteur_min = tr_h[n_stades_full - 1] * 0.5f;
+		// PASSE 1 : inscription.
+		for (int i = 0; i < cap; ++i) {
+			if (libres_r[i] == 1) continue;
+			float dx = px_r[i] - ox;
+			float dz = pz_r[i] - oz;
+			float d2 = dx * dx + dz * dz;
+			if (d2 > rayon_carre) continue;
+			if (d2 <= EPS_CONE_XZ_CARRE) continue;
+			if (_cache_p_ht[i] < hauteur_min) continue;
+			float d = std::sqrt(d2);
+			float angle = std::atan2(dz, dx);
+			if (angle < 0.0f) angle += TAU;
+			int s_centre = int(angle * inv_tau_s);
+			if (s_centre < 0) s_centre = 0;
+			if (s_centre >= SECTEURS_OCCLUSION) s_centre = SECTEURS_OCCLUSION - 1;
+			float demi_larg = _cache_p_lt[i] * FACTEUR_LARGEUR_OCCL;
+			float demi_ang = (d > 0.001f) ? (demi_larg / d) : 0.0f;
+			int etale = int(std::ceil(demi_ang * inv_tau_s));
+			if (etale < 0) etale = 0;
+			if (etale > SECTEURS_OCCLUSION / 2) etale = SECTEURS_OCCLUSION / 2;
+			for (int k = -etale; k <= etale; ++k) {
+				int s = (s_centre + k) % SECTEURS_OCCLUSION;
+				if (s < 0) s += SECTEURS_OCCLUSION;
+				if (d < bloqueur_d[s]) {
+					bloqueur_d[s] = d;
+					bloqueur_angle[s] = angle;
+				}
+			}
+		}
+		// PASSE 2 : marquage occulte[i] par OCCLUSION INDEXEE PAR ANGLE.
+		// Le secteur donne le CANDIDAT bloqueur, mais la decision se prend
+		// sur l'ECART ANGULAIRE reel entre l'arbre et le bloqueur retenu.
+		// Un arbre lointain qui saute d'un secteur au pas ne bascule plus
+		// tant que l'ecart angulaire depasse MARGE_ANGLE_OCCL_RAD.
+		// Deux conditions cumulatives pour occulter :
+		//   (a) bloqueur nettement plus proche : d > bloqueur_d[s] + seuil
+		//       (seuil ENTREE si non occulte au tick precedent, SORTIE sinon)
+		//   (b) ecart angulaire circulaire |a_arbre - a_bloqueur| < MARGE
+		for (int i = 0; i < cap; ++i) {
+			if (libres_r[i] == 1) {
+				_occlusion_precedente[i] = 0;
+				continue;
+			}
+			float dx = px_r[i] - ox;
+			float dz = pz_r[i] - oz;
+			float d2 = dx * dx + dz * dz;
+			if (d2 > rayon_carre) { _occlusion_precedente[i] = 0; continue; }
+			if (d2 <= EPS_CONE_XZ_CARRE) { _occlusion_precedente[i] = 0; continue; }
+			float d = std::sqrt(d2);
+			float angle = std::atan2(dz, dx);
+			if (angle < 0.0f) angle += TAU;
+			int s = int(angle * inv_tau_s);
+			if (s < 0) s = 0;
+			if (s >= SECTEURS_OCCLUSION) s = SECTEURS_OCCLUSION - 1;
+			float b = bloqueur_d[s];
+			bool etait_occulte = (_occlusion_precedente[i] != 0);
+			float seuil = etait_occulte ? MARGE_SORTIE_M : MARGE_ENTREE_M;
+			bool devient_occulte = false;
+			if (d > b + seuil) {
+				// Test angulaire : ecart circulaire sur [0, TAU).
+				float a_b = bloqueur_angle[s];
+				float ecart = std::fabs(angle - a_b);
+				if (ecart > TAU * 0.5f) ecart = TAU - ecart;
+				if (ecart < MARGE_ANGLE_OCCL_RAD) devient_occulte = true;
+			}
+			if (devient_occulte) occulte[i] = 1;
+			_occlusion_precedente[i] = devient_occulte ? 1 : 0;
+		}
+	} else {
+		// Occlusion inactive ce tick : reset l'etat precedent pour eviter
+		// qu'un ancien flag persiste et fasse rentrer un slot en occlusion
+		// des la prochaine activation avec un seuil de sortie court.
+		for (int i = 0; i < cap; ++i) _occlusion_precedente[i] = 0;
+	}
 	auto dans_cercle = [&](int i) -> bool {
 		if (!filtre_actif) return true;
 		float dx = px_r[i] - ox;
@@ -1831,7 +1964,11 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		// bord de l'ecran quand l'observateur pivote entre deux ticks.
 		if (num < 0.0f && cos_demi_angle >= 0.0f) return false;
 		float rhs = cos_demi_angle * std::sqrt(d2);
-		return num >= rhs;
+		if (num < rhs) return false;
+		// OCCLUSION : ajoute apres cercle+cone, ne les remplace pas. occulte
+		// reste tout 0 quand cone_actif=false (pas de passe d'inscription).
+		if (occulte[i]) return false;
+		return true;
 	};
 	int pop = 0;
 	for (int i = 0; i < cap; ++i) {
@@ -1863,6 +2000,46 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["buffer_tronc"] = pb_t;
 	out["buffer_feuillage"] = pb_f;
 	out["slot_rendu_pour_data"] = srpd;
+
+	// BUFFER TRONC CERCLE SEUL (prompt 2026-09-15) pour l'occludeur.
+	// L'occludeur doit couvrir tous les troncs du cercle de rendu, pas
+	// seulement ceux dans le cone : sans ca, tourner la camera rebati
+	// l'occludeur sur un autre sous-ensemble et l'occlusion saute. Filtre
+	// ici : d² <= rayon_carre uniquement (ni cone, ni occlusion CPU).
+	// Layout identique a pb_t (16 floats/instance, TRANSFORM_3D + color).
+	int pop_cercle = 0;
+	if (filtre_actif) {
+		for (int i = 0; i < cap; ++i) {
+			if (libres_r[i] == 1) continue;
+			float dx = px_r[i] - ox;
+			float dz = pz_r[i] - oz;
+			float d2 = dx * dx + dz * dz;
+			if (d2 <= rayon_carre) ++pop_cercle;
+		}
+	} else {
+		for (int i = 0; i < cap; ++i) {
+			if (libres_r[i] == 0) ++pop_cercle;
+		}
+	}
+	PackedFloat32Array pb_t_cercle;
+	pb_t_cercle.resize(pop_cercle * 16);
+	float *pb_t_cercle_w = pb_t_cercle.ptrw();
+	int rank_cercle = 0;
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1) continue;
+		if (filtre_actif) {
+			float dx = px_r[i] - ox;
+			float dz = pz_r[i] - oz;
+			float d2 = dx * dx + dz * dz;
+			if (d2 > rayon_carre) continue;
+		}
+		int src = i * 16;
+		int dst = rank_cercle * 16;
+		std::memcpy(pb_t_cercle_w + dst, bt + src, 16 * sizeof(float));
+		++rank_cercle;
+	}
+	out["pop_cercle"] = pop_cercle;
+	out["buffer_tronc_cercle"] = pb_t_cercle;
 	return out;
 }
 
