@@ -192,7 +192,8 @@ func _init() -> void:
 	var res_maj: Dictionary = simu_cpp_b.mettre_a_jour_buffers_rendu(
 		n, libres_a, ages_a, stade_a, pos_x_a, pos_y_a, pos_z_a,
 		false, 0.0, 0.0, 0.0,
-		false, 0.0, 0.0, -1.0
+		false, 0.0, 0.0, -1.0,
+		0.0, 0.0
 	)
 	var pop_compact: int = int(res_maj.get("pop", -1))
 	var bt_compact: PackedFloat32Array = res_maj.buffer_tronc
@@ -254,7 +255,8 @@ func _init() -> void:
 	var res_cone: Dictionary = simu_cpp_b.mettre_a_jour_buffers_rendu(
 		n, libres_a, ages_a, stade_a, pos_x_a, pos_y_a, pos_z_a,
 		true, 0.0, 0.0, 1.0e12,
-		true, 1.0, 0.0, 0.0
+		true, 1.0, 0.0, 0.0,
+		0.0, 0.0
 	)
 	var pop_cone: int = int(res_cone.get("pop", -1))
 	var bt_cone: PackedFloat32Array = res_cone.buffer_tronc

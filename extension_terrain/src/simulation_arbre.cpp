@@ -80,7 +80,9 @@ void SimulationArbre::_bind_methods() {
 					"cone_actif",
 					"dir_x",
 					"dir_z",
-					"cos_demi_angle"),
+					"cos_demi_angle",
+					"obs_y",
+					"pitch_y"),
 			&SimulationArbre::mettre_a_jour_buffers_rendu);
 	ClassDB::bind_method(D_METHOD("invalider_cache_rendu"), &SimulationArbre::invalider_cache_rendu);
 	ClassDB::bind_method(
@@ -239,6 +241,7 @@ void SimulationArbre::_bind_methods() {
 
 SimulationArbre::SimulationArbre() {
 	_rng.instantiate();
+	_buffer_2d.assign(size_t(BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR), std::numeric_limits<float>::infinity());
 }
 SimulationArbre::~SimulationArbre() {}
 
@@ -1607,7 +1610,9 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		bool cone_actif,
 		float dir_x,
 		float dir_z,
-		float cos_demi_angle) {
+		float cos_demi_angle,
+		float obs_y,
+		float pitch_y) {
 	Dictionary out;
 	int cap = capacite;
 
@@ -1627,7 +1632,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		_cache_p_hf.assign(size_t(cap), 0.0f);
 		_cache_p_lf.assign(size_t(cap), 0.0f);
 		_cache_terminal.assign(size_t(cap), 0);
-		_occlusion_ticks.assign(size_t(cap), 0);
 	}
 
 	const uint8_t *libres_r = libres.ptr();
@@ -1815,163 +1819,127 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// division par ~0 dans la normalisation et le pop visuel d'un arbre qui
 	// passerait entre les jambes du joueur.
 	constexpr float EPS_CONE_XZ_CARRE = 0.01f;
-	// OCCLUSION CPU PAR SECTEURS ANGULAIRES (prompt 2026-09-15). Ferme le trou
-	// ou un arbre derriere un tronc plus proche restait dans le buffer -- le
-	// compteur de primitives ne baissait pas quand l'observateur se collait
-	// a un tronc. L'occludeur Godot coupe le DESSIN, pas le buffer : seul
-	// levier sur pop = rejeter au CPU avant l'ecriture.
-	// Deux passes en O(N), pas de N^2 : (1) inscription des bloqueurs (arbres
-	// dont _cache_p_ht >= hauteur_min) dans bloqueur_d[secteur], etale sur
-	// les secteurs couverts par la demi-largeur angulaire (lt/2)/d. (2)
-	// marquage occulte[i] pour un arbre plus loin que le bloqueur de son
-	// secteur + marge. La lambda dans_cercle ci-dessous ajoute occulte[i]
-	// APRES les tests cercle+cone (ne les remplace pas). Aucun atan2 ni sqrt
-	// dans la lambda -- tout est pre-calcule ici en O(cap).
-	// OCCLUSION GEOMETRIQUE segment-vs-cercle (prompt 2026-09-15). Remplace
-	// l'occlusion par secteurs (hysterese, marges profondeur/angle). Pour
-	// chaque arbre, on trace le segment 2D observateur->arbre ; l'arbre est
-	// occulte si un tronc bloqueur, plus proche que lui, a son centre a
-	// une distance perpendiculaire inferieure a son rayon (demi-largeur *
-	// FACTEUR) du segment. Test deterministe -> pas de clignotement, pas
-	// d'hysterese. Support O(N) : les bloqueurs sont indexes par SECTEUR
-	// angulaire (comme un partitionnement spatial), chaque arbre ne
-	// consulte que sa case + les voisines. Aucune comparaison N^2.
-	constexpr int SECTEURS_OCCLUSION = 512;
-	constexpr float FACTEUR_LARGEUR_OCCL = 0.22f;
-	std::vector<uint8_t> occulte;
-	occulte.assign(size_t(cap), 0);
-	// Compteurs d'instrumentation (lecture seule).
-	int n_bloqueurs = 0;
-	int n_occultes = 0;
-	// Occlusion decouplee du cone (prompt 2026-09-15) : la passe tourne
-	// des que le cercle est actif. Si couplee a cone_actif, quand le
-	// tangage bascule le cone off, occulte[] repart a 0, _occlusion_ticks
-	// reste a SEUIL -> au retour du cone les arbres se re-cachent en 1 tick
-	// (l'hysterese ne freine que l'entree). Le cone reste utilise seulement
-	// dans dans_cercle plus bas pour filtrer le champ de vision.
-	if (filtre_actif && cap > 0) {
-		constexpr float PI_F = 3.14159265358979323846f;
-		const float TAU = 2.0f * PI_F;
-		const float inv_tau_s = float(SECTEURS_OCCLUSION) / TAU;
-		float hauteur_min = 3.0f;
-		if (n_stades_full > 0) hauteur_min = tr_h[n_stades_full - 1] * 0.5f;
-		// Tableaux parallels des bloqueurs (positions et rayons).
-		std::vector<float> bloq_bx;
-		std::vector<float> bloq_bz;
-		std::vector<float> bloq_r;
-		bloq_bx.reserve(size_t(cap));
-		bloq_bz.reserve(size_t(cap));
-		bloq_r.reserve(size_t(cap));
-		// Support spatial : listes de bloqueurs par secteur angulaire.
-		std::vector<std::vector<int>> bloq_par_secteur;
-		bloq_par_secteur.assign(size_t(SECTEURS_OCCLUSION), std::vector<int>());
-		// PASSE 1 : recenser les bloqueurs et les indexer par secteur.
-		// EPS retire ici : un tronc colle au joueur reste bloqueur.
-		for (int i = 0; i < cap; ++i) {
-			if (libres_r[i] == 1) continue;
-			float dx = px_r[i] - ox;
-			float dz = pz_r[i] - oz;
-			float d2 = dx * dx + dz * dz;
-			if (d2 > rayon_carre) continue;
-			if (_cache_p_ht[i] < hauteur_min) continue;
-			// Rayon bloqueur = max(rayon tronc, rayon feuillage), tout PAR SLOT.
-			// _cache_p_lt[i] et _cache_p_lf[i] sont indexes par slot (comme
-			// les autres caches). NE PAS utiliser fe_l qui est indexe par stade.
-			float rayon_tronc = _cache_p_lt[i] * 0.5f * FACTEUR_LARGEUR_OCCL;
-			float rayon_feuillage = _cache_p_lf[i] * 0.5f * FACTEUR_LARGEUR_OCCL;
-			float rayon_bloqueur = (rayon_feuillage > rayon_tronc) ? rayon_feuillage : rayon_tronc;
-			if (rayon_bloqueur <= 0.0f) continue;
-			int idx_bloq = int(bloq_bx.size());
-			bloq_bx.push_back(px_r[i]);
-			bloq_bz.push_back(pz_r[i]);
-			bloq_r.push_back(rayon_bloqueur);
-			++n_bloqueurs;
-			// Indexation par secteur : etaler sur les secteurs couverts par
-			// la demi-largeur angulaire (rayon / distance).
-			float d = std::sqrt(d2);
-			float angle = std::atan2(dz, dx);
-			if (angle < 0.0f) angle += TAU;
-			int s_centre = int(angle * inv_tau_s);
-			if (s_centre < 0) s_centre = 0;
-			if (s_centre >= SECTEURS_OCCLUSION) s_centre = SECTEURS_OCCLUSION - 1;
-			float demi_ang = (d > 0.001f) ? (rayon_bloqueur / d) : PI_F;
-			int etale = int(std::ceil(demi_ang * inv_tau_s));
-			if (etale < 0) etale = 0;
-			if (etale > SECTEURS_OCCLUSION / 2) etale = SECTEURS_OCCLUSION / 2;
-			for (int k = -etale; k <= etale; ++k) {
-				int s = (s_centre + k) % SECTEURS_OCCLUSION;
-				if (s < 0) s += SECTEURS_OCCLUSION;
-				bloq_par_secteur[s].push_back(idx_bloq);
-			}
+	// Occlusion Intel MOC : refill inconditionnel des bloqueurs depuis la
+	// CAMERA a chaque tick. Coherence de reference frame -- meme observateur
+	// pour le filtrage, le remplissage buffer 2D et la lecture.
+	_bloqueurs_camera.clear();
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1) continue;
+		if (_cache_p_ht[i] < HAUTEUR_MIN_BLOQUEUR_M) continue;
+		float dx = px_r[i] - ox;
+		float dz = pz_r[i] - oz;
+		float d2 = dx * dx + dz * dz;
+		if (d2 > rayon_carre) continue;
+		_bloqueurs_camera.push_back(int32_t(i));
+	}
+	// Etape 4/8 occlusion 2D projete camera : fonction de projection monde
+	// -> pixel du buffer 2D. Rend visible=false si point derriere camera ou
+	// hors du FOV.
+	constexpr float FOV_H_DEG_4 = 90.0f;
+	constexpr float FOV_V_DEG_4 = 45.0f;
+	constexpr float PI_F_4 = 3.14159265358979323846f;
+	constexpr float FOV_H_RAD_4 = FOV_H_DEG_4 * PI_F_4 / 180.0f;
+	constexpr float FOV_V_RAD_4 = FOV_V_DEG_4 * PI_F_4 / 180.0f;
+	// Reconstruire le vecteur regard 3D depuis dir_x/dir_z (XZ normalise)
+	// et pitch_y (sin(tangage)).
+	float pitch_clamped = pitch_y;
+	if (pitch_clamped > 1.0f) pitch_clamped = 1.0f;
+	if (pitch_clamped < -1.0f) pitch_clamped = -1.0f;
+	float fwd_h = std::sqrt(1.0f - pitch_clamped * pitch_clamped);
+	float fwd_x = dir_x * fwd_h;
+	float fwd_y = pitch_clamped;
+	float fwd_z = dir_z * fwd_h;
+	// Base camera : right = fwd x (0,1,0), up = right x fwd.
+	float right_x = fwd_z;
+	float right_y = 0.0f;
+	float right_z = -fwd_x;
+	float right_len = std::sqrt(right_x * right_x + right_z * right_z);
+	if (right_len > 0.0001f) {
+		right_x /= right_len;
+		right_z /= right_len;
+	}
+	float up_x = right_y * fwd_z - right_z * fwd_y;
+	float up_y = right_z * fwd_x - right_x * fwd_z;
+	float up_z = right_x * fwd_y - right_y * fwd_x;
+	auto world_to_pixel = [&](float wx, float wy, float wz,
+							  int &out_px, int &out_py, float &out_depth) -> bool {
+		float vx = wx - ox;
+		float vy = wy - obs_y;
+		float vz = wz - oz;
+		float fwd_v = vx * fwd_x + vy * fwd_y + vz * fwd_z;
+		constexpr float NEAR_PLANE_M = 1.0f;
+		if (fwd_v <= NEAR_PLANE_M) return false;
+		float right_v = vx * right_x + vy * right_y + vz * right_z;
+		float up_v = vx * up_x + vy * up_y + vz * up_z;
+		float alpha = std::atan2(right_v, fwd_v);
+		float beta = std::atan2(up_v, fwd_v);
+		int px = int((alpha + FOV_H_RAD_4 * 0.5f) / FOV_H_RAD_4 * float(BUFFER_2D_LARGEUR));
+		int py = int((FOV_V_RAD_4 * 0.5f - beta) / FOV_V_RAD_4 * float(BUFFER_2D_HAUTEUR));
+		out_px = px;
+		out_py = py;
+		out_depth = fwd_v;
+		return (px >= 0 && px < BUFFER_2D_LARGEUR && py >= 0 && py < BUFFER_2D_HAUTEUR);
+	};
+	// Etape 5/8 : reset buffer 2D + projection des bloqueurs.
+	// Reset chaque tick : le buffer depend position ET orientation camera.
+	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
+		_buffer_2d[p] = std::numeric_limits<float>::infinity();
+	}
+	int pixels_couverts_buffer = 0;
+	for (int32_t idx : _bloqueurs_camera) {
+		float bx = px_r[idx];
+		float bz = pz_r[idx];
+		float by_bas = py_r[idx];
+		float ht = _cache_p_ht[idx];
+		float hf = _cache_p_hf[idx];
+		float lt = _cache_p_lt[idx];
+		float lf = _cache_p_lf[idx];
+		float by_haut = by_bas + ht + hf;
+		constexpr float INV_SQRT2 = 0.70710678f;
+		float rayon_reel = (lt > lf ? lt : lf) * 0.5f;
+		float demi_l = rayon_reel * INV_SQRT2;
+		int px_min = BUFFER_2D_LARGEUR;
+		int px_max = -1;
+		int py_min = BUFFER_2D_HAUTEUR;
+		int py_max = -1;
+		float depth_max_bloq = 0.0f;
+		float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
+							bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
+		float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
+							by_bas, by_bas, by_haut, by_haut};
+		float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
+							bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
+		bool au_moins_un_visible = false;
+		for (int k = 0; k < 8; ++k) {
+			int cpx = -1, cpy = -1;
+			float cdepth = 0.0f;
+			bool cvis = world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth);
+			if (!cvis) continue;
+			au_moins_un_visible = true;
+			if (cpx < px_min) px_min = cpx;
+			if (cpx > px_max) px_max = cpx;
+			if (cpy < py_min) py_min = cpy;
+			if (cpy > py_max) py_max = cpy;
+			if (cdepth > depth_max_bloq) depth_max_bloq = cdepth;
 		}
-		// PASSE 2 : pour chaque arbre, test segment-vs-cercle sur les
-		// bloqueurs du secteur de l'arbre + voisins immediats.
-		constexpr float MARGE_AUTO_M = 0.5f;
-		// Hysterese temporelle : SEUIL_OCCL_TICKS ticks constants necessaires
-		// pour faire basculer un arbre (disparition ou reapparition).
-		constexpr int32_t SEUIL_OCCL_TICKS = 20;
-		for (int i = 0; i < cap; ++i) {
-			if (libres_r[i] == 1) {
-				_occlusion_ticks[i] = 0;
-				continue;
-			}
-			float dx = px_r[i] - ox;
-			float dz = pz_r[i] - oz;
-			float d2 = dx * dx + dz * dz;
-			if (d2 > rayon_carre) continue;
-			// EPS : un tronc sur le joueur ne s'auto-occulte pas.
-			if (d2 <= EPS_CONE_XZ_CARRE) continue;
-			float d = std::sqrt(d2);
-			float ux = dx / d;
-			float uz = dz / d;
-			float angle = std::atan2(dz, dx);
-			if (angle < 0.0f) angle += TAU;
-			int s = int(angle * inv_tau_s);
-			if (s < 0) s = 0;
-			if (s >= SECTEURS_OCCLUSION) s = SECTEURS_OCCLUSION - 1;
-			int voisins[3] = {
-				s,
-				(s - 1 + SECTEURS_OCCLUSION) % SECTEURS_OCCLUSION,
-				(s + 1) % SECTEURS_OCCLUSION
-			};
-			bool occulte_i = false;
-			for (int v = 0; v < 3 && !occulte_i; ++v) {
-				const std::vector<int> &liste = bloq_par_secteur[voisins[v]];
-				for (int idx : liste) {
-					float bdx = bloq_bx[idx] - ox;
-					float bdz = bloq_bz[idx] - oz;
-					// Projection de (bdx, bdz) sur le segment observateur->arbre.
-					float t = bdx * ux + bdz * uz;
-					// Bloqueur doit etre STRICTEMENT entre observateur et arbre,
-					// avec marge MARGE_AUTO_M aux deux bouts pour eviter qu'un
-					// tronc s'auto-occulte lui-meme.
-					if (t <= MARGE_AUTO_M) continue;
-					if (t >= d - MARGE_AUTO_M) continue;
-					// Distance perpendiculaire du centre du tronc au segment.
-					float perp_x = bdx - t * ux;
-					float perp_z = bdz - t * uz;
-					float perp2 = perp_x * perp_x + perp_z * perp_z;
-					float r = bloq_r[idx];
-					if (perp2 <= r * r) {
-						occulte_i = true;
-						break;
-					}
+		if (!au_moins_un_visible) continue;
+		if (px_min < 0) px_min = 0;
+		if (px_max >= BUFFER_2D_LARGEUR) px_max = BUFFER_2D_LARGEUR - 1;
+		if (py_min < 0) py_min = 0;
+		if (py_max >= BUFFER_2D_HAUTEUR) py_max = BUFFER_2D_HAUTEUR - 1;
+		px_min += 1; px_max -= 1; py_min += 1; py_max -= 1;
+		if (px_min > px_max || py_min > py_max) continue;
+		for (int y = py_min; y <= py_max; ++y) {
+			for (int x = px_min; x <= px_max; ++x) {
+				int p = y * BUFFER_2D_LARGEUR + x;
+				if (depth_max_bloq < _buffer_2d[p]) {
+					_buffer_2d[p] = depth_max_bloq;
 				}
 			}
-			// Hysterese temporelle : mise a jour du compteur, puis seuil.
-			// occulte_i = resultat BRUT du test geometrique ce tick.
-			if (occulte_i) {
-				int32_t v = _occlusion_ticks[i] + 1;
-				_occlusion_ticks[i] = v > SEUIL_OCCL_TICKS ? SEUIL_OCCL_TICKS : v;
-			} else {
-				int32_t v = _occlusion_ticks[i] - 1;
-				_occlusion_ticks[i] = v < 0 ? 0 : v;
-			}
-			if (_occlusion_ticks[i] >= SEUIL_OCCL_TICKS) {
-				occulte[i] = 1;
-				++n_occultes;
-			}
 		}
+	}
+	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
+		if (!std::isinf(_buffer_2d[p])) ++pixels_couverts_buffer;
 	}
 	auto dans_cercle = [&](int i) -> bool {
 		if (!filtre_actif) return true;
@@ -1991,9 +1959,70 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (num < 0.0f && cos_demi_angle >= 0.0f) return false;
 		float rhs = cos_demi_angle * std::sqrt(d2);
 		if (num < rhs) return false;
-		// OCCLUSION : ajoute apres cercle+cone, ne les remplace pas. occulte
-		// reste tout 0 quand cone_actif=false (pas de passe d'inscription).
-		if (occulte[i]) return false;
+		// Etape 6/8 : test occlusion par lecture buffer 2D.
+		// Projette l'arbre en AABB verticale, prend depth_min et compare au
+		// max des profondeurs buffer sur son rectangle (test conservatif :
+		// occulte seulement si TOUT le rectangle buffer devant l'arbre est
+		// plus proche que le bord le plus proche de l'arbre, ET aucun pixel
+		// INF -- une trouee dans cette direction empeche l'occlusion).
+		{
+			float bx = px_r[i];
+			float bz = pz_r[i];
+			float by_bas = py_r[i];
+			float ht = _cache_p_ht[i];
+			float hf = _cache_p_hf[i];
+			float lt = _cache_p_lt[i];
+			float lf = _cache_p_lf[i];
+			float by_haut = by_bas + ht + hf;
+			float demi_l = (lt > lf ? lt : lf) * 0.5f;
+			float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
+								bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
+			float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
+								by_bas, by_bas, by_haut, by_haut};
+			float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
+								bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
+			int px_min = BUFFER_2D_LARGEUR;
+			int px_max = -1;
+			int py_min = BUFFER_2D_HAUTEUR;
+			int py_max = -1;
+			float depth_min_arbre = std::numeric_limits<float>::infinity();
+			bool au_moins_un_visible_arbre = false;
+			for (int k = 0; k < 8; ++k) {
+				int cpx = -1, cpy = -1;
+				float cdepth = 0.0f;
+				bool cvis = world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth);
+				if (!cvis) continue;
+				au_moins_un_visible_arbre = true;
+				if (cpx < px_min) px_min = cpx;
+				if (cpx > px_max) px_max = cpx;
+				if (cpy < py_min) py_min = cpy;
+				if (cpy > py_max) py_max = cpy;
+				if (cdepth < depth_min_arbre) depth_min_arbre = cdepth;
+			}
+			if (au_moins_un_visible_arbre) {
+				if (px_min < 0) px_min = 0;
+				if (px_max >= BUFFER_2D_LARGEUR) px_max = BUFFER_2D_LARGEUR - 1;
+				if (py_min < 0) py_min = 0;
+				if (py_max >= BUFFER_2D_HAUTEUR) py_max = BUFFER_2D_HAUTEUR - 1;
+				// Test conservatif Intel MOC : arbre occulte SEULEMENT si son
+				// bord le plus proche est plus loin que le MAX du buffer sur
+				// TOUT le rectangle. Un pixel INF (aucun bloqueur) -> pas
+				// d'occlusion (l'arbre est visible dans cette direction).
+				float depth_max_buffer = 0.0f;
+				bool buffer_troue = false;
+				for (int y = py_min; y <= py_max && !buffer_troue; ++y) {
+					for (int x = px_min; x <= px_max; ++x) {
+						int p = y * BUFFER_2D_LARGEUR + x;
+						float dp = _buffer_2d[p];
+						if (std::isinf(dp)) { buffer_troue = true; break; }
+						if (dp > depth_max_buffer) depth_max_buffer = dp;
+					}
+				}
+				if (!buffer_troue && depth_min_arbre > depth_max_buffer) {
+					return false;
+				}
+			}
+		}
 		return true;
 	};
 	int pop = 0;
@@ -2075,8 +2104,133 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// comme pour le tronc. Le feuillage devient bloqueur au meme titre.
 	out["buffer_feuillage_cercle"] = pb_f_cercle;
 	out["cone_actif"] = cone_actif;
-	out["n_bloqueurs"] = n_bloqueurs;
-	out["n_occultes"] = n_occultes;
+	out["nb_bloqueurs_camera"] = int(_bloqueurs_camera.size());
+	out["buffer_2d_largeur"] = BUFFER_2D_LARGEUR;
+	out["buffer_2d_hauteur"] = BUFFER_2D_HAUTEUR;
+	out["cam_hauteur"] = int(obs_y * 10.0f);
+	out["cam_pitch"] = int(pitch_y * 100.0f);
+	// Test projection etape 4 : premier arbre vivant.
+	int test_px = -1, test_py = -1;
+	float test_depth = 0.0f;
+	int test_visible = 0;
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1) continue;
+		int tpx = -1, tpy = -1;
+		float tdepth = 0.0f;
+		bool tvis = world_to_pixel(px_r[i], py_r[i], pz_r[i], tpx, tpy, tdepth);
+		test_px = tpx;
+		test_py = tpy;
+		test_depth = tdepth;
+		test_visible = tvis ? 1 : 0;
+		break;
+	}
+	out["test_px"] = test_px;
+	out["test_py"] = test_py;
+	out["test_depth"] = int(test_depth);
+	out["test_visible"] = test_visible;
+	out["pixels_couverts_buffer_2d"] = pixels_couverts_buffer;
+	// Instrumentation etape 6/8 : compter les arbres occultes par le buffer 2D.
+	int occultes_2d = 0;
+	int self_occ = 0;             // bloqueurs (ht >= 3m) qui sont occultes
+	int faux_pos_proches = 0;     // arbres a moins de 20 m de la camera occultes
+	// Dump cible : premier bloqueur adulte occulte du tick.
+	int dump_i = -1;
+	int dump_pxi_min = 0, dump_pxi_max = 0, dump_pyi_min = 0, dump_pyi_max = 0;
+	int dump_depth_arbre = 0;
+	int dump_depth_max_buffer = 0;
+	int dump_depth_max_buffer_zone = 0;
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1) continue;
+		float bx = px_r[i], bz = pz_r[i], by_bas = py_r[i];
+		float ht = _cache_p_ht[i], hf = _cache_p_hf[i];
+		float lt = _cache_p_lt[i], lf = _cache_p_lf[i];
+		float by_haut = by_bas + ht + hf;
+		float demi_l = (lt > lf ? lt : lf) * 0.5f;
+		float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
+							bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
+		float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
+							by_bas, by_bas, by_haut, by_haut};
+		float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
+							bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
+		int pxi_min = BUFFER_2D_LARGEUR, pxi_max = -1;
+		int pyi_min = BUFFER_2D_HAUTEUR, pyi_max = -1;
+		float depth_min_a = std::numeric_limits<float>::infinity();
+		bool visi = false;
+		for (int k = 0; k < 8; ++k) {
+			int cpx = -1, cpy = -1;
+			float cdepth = 0.0f;
+			if (!world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth)) continue;
+			visi = true;
+			if (cpx < pxi_min) pxi_min = cpx;
+			if (cpx > pxi_max) pxi_max = cpx;
+			if (cpy < pyi_min) pyi_min = cpy;
+			if (cpy > pyi_max) pyi_max = cpy;
+			if (cdepth < depth_min_a) depth_min_a = cdepth;
+		}
+		if (!visi) continue;
+		if (pxi_min < 0) pxi_min = 0;
+		if (pxi_max >= BUFFER_2D_LARGEUR) pxi_max = BUFFER_2D_LARGEUR - 1;
+		if (pyi_min < 0) pyi_min = 0;
+		if (pyi_max >= BUFFER_2D_HAUTEUR) pyi_max = BUFFER_2D_HAUTEUR - 1;
+		float dmax_buf = 0.0f;
+		bool troue = false;
+		for (int y = pyi_min; y <= pyi_max && !troue; ++y) {
+			for (int x = pxi_min; x <= pxi_max; ++x) {
+				int p = y * BUFFER_2D_LARGEUR + x;
+				float dp = _buffer_2d[p];
+				if (std::isinf(dp)) { troue = true; break; }
+				if (dp > dmax_buf) dmax_buf = dp;
+			}
+		}
+		if (!troue && depth_min_a > dmax_buf) {
+			++occultes_2d;
+			if (_cache_p_ht[i] >= 3.0f) ++self_occ;
+			float ddx = px_r[i] - ox;
+			float ddz = pz_r[i] - oz;
+			if (ddx * ddx + ddz * ddz < 400.0f) ++faux_pos_proches; // < 20 m
+			if (dump_i == -1 && _cache_p_ht[i] >= 3.0f) {
+				dump_i = i;
+				dump_pxi_min = pxi_min;
+				dump_pxi_max = pxi_max;
+				dump_pyi_min = pyi_min;
+				dump_pyi_max = pyi_max;
+				dump_depth_arbre = int(depth_min_a);
+				dump_depth_max_buffer = 0; // non calcule dans la variante MAX-buffer
+				dump_depth_max_buffer_zone = int(dmax_buf);
+			}
+		}
+	}
+	out["occultes_2d"] = occultes_2d;
+	out["self_occ"] = self_occ;
+	out["faux_pos_proches"] = faux_pos_proches;
+	// Histogramme buffer 2D : min, mediane, max des pixels non-INF.
+	float buf2d_min = std::numeric_limits<float>::infinity();
+	float buf2d_max = 0.0f;
+	std::vector<float> buf2d_vals;
+	buf2d_vals.reserve(size_t(BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR));
+	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
+		float v = _buffer_2d[p];
+		if (!std::isinf(v)) {
+			if (v < buf2d_min) buf2d_min = v;
+			if (v > buf2d_max) buf2d_max = v;
+			buf2d_vals.push_back(v);
+		}
+	}
+	float buf2d_med = 0.0f;
+	if (!buf2d_vals.empty()) {
+		std::sort(buf2d_vals.begin(), buf2d_vals.end());
+		buf2d_med = buf2d_vals[buf2d_vals.size() / 2];
+	}
+	if (std::isinf(buf2d_min)) buf2d_min = 0.0f;
+	out["buf2d_min"] = int(buf2d_min);
+	out["buf2d_med"] = int(buf2d_med);
+	out["buf2d_max"] = int(buf2d_max);
+	out["dump_i"] = dump_i;
+	out["dump_rect_x"] = dump_pxi_min * 100 + dump_pxi_max;
+	out["dump_rect_y"] = dump_pyi_min * 100 + dump_pyi_max;
+	out["dump_d_arbre"] = dump_depth_arbre;
+	out["dump_d_min_buf"] = dump_depth_max_buffer;
+	out["dump_d_max_buf"] = dump_depth_max_buffer_zone;
 	return out;
 }
 

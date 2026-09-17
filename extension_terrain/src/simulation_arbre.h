@@ -230,7 +230,9 @@ public:
 			bool cone_actif,
 			float dir_x,
 			float dir_z,
-			float cos_demi_angle);
+			float cos_demi_angle,
+			float obs_y,
+			float pitch_y);
 
 	// Invalide le cache : force tout_dirty=true au prochain appel.
 	// Miroir : agrandissement de capacite qui reset le buffer GPU.
@@ -669,8 +671,20 @@ private:
 	// borne dans [0, SEUIL]. L'arbre n'est REELLEMENT occulte que quand
 	// le compteur atteint SEUIL -> les vacillements courts (1-2 ticks)
 	// n'atteignent jamais le seuil, aucun changement visible.
-	std::vector<int32_t> _occlusion_ticks;
 	bool _cache_rendu_force_reset = true; // premier appel = tout_dirty
+	// Occlusion Intel MOC : liste des arbres susceptibles d'etre bloqueurs
+	// depuis la CAMERA (refill inconditionnel chaque tick).
+	std::vector<int32_t> _bloqueurs_camera;
+	// Seuil de hauteur minimale pour qu'un arbre soit inscrit comme bloqueur.
+	// Un jeune arbre de moins de 3 m ne cache pas grand chose ; l'exclure
+	// reduit la taille du cache et le cout du precalcul.
+	static constexpr float HAUTEUR_MIN_BLOQUEUR_M = 3.0f;
+	// Chantier occlusion 2D projete camera (etape 2/8) : buffer de profondeur.
+	// Chaque pixel = distance camera au plus proche bloqueur qui y est projete.
+	// INFINITY = pixel vide.
+	static constexpr int BUFFER_2D_LARGEUR = 512;
+	static constexpr int BUFFER_2D_HAUTEUR = 256;
+	std::vector<float> _buffer_2d;
 
 	// Stables banque (etape 14).
 	float _taille_case_dormantes = 0.0f;

@@ -106,7 +106,7 @@ var _temps_depuis_bake_occl: float = 0.0
 # reel (~45-50 degres a FOV 75 vertical + aspect 16:9) pour offrir une
 # marge : un arbre au bord de l'ecran ne clignote pas quand le joueur
 # pivote entre deux ticks. Cos precompute a `_ready`.
-const CONE_DEMI_ANGLE_DEG := 70.0
+const CONE_DEMI_ANGLE_DEG := 115.0
 var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
 
 # CONE PROGRESSIF -> COUPURE FRANCHE (2026-09-15). |fwd.y| = sin(tangage).
@@ -117,7 +117,7 @@ var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
 # vecteur). Entre les deux : bande de transition etroite (smoothstep)
 # pour eviter un saut visible. Bande 0.60..0.75 = tangage 37°..49° :
 # le cone se ferme bien avant que la direction XZ devienne bruitee.
-const CONE_TANGAGE_SEUIL_BAS := 0.85
+const CONE_TANGAGE_SEUIL_BAS := 0.64
 const CONE_TANGAGE_SEUIL_HAUT := 0.95
 
 # STREAMING RENDU 60 Hz (2026-09-15). Le rebuild du buffer compact suit
@@ -228,14 +228,11 @@ const INSTR_INTERVALLE_S: float = 1.0
 func _process(delta: float) -> void:
 	if _sim == null:
 		return
-	# Instrumentation occlusion (prompt 2026-09-15). Print rare (1 s) pour
-	# ne pas noyer la console. Lit trois getters exposes par la sim.
+	# Chantier occlusion par cellules, etape 2/8 : log de la cellule courante.
 	_instr_temps_depuis_affichage += delta
 	if _instr_temps_depuis_affichage >= INSTR_INTERVALLE_S:
 		_instr_temps_depuis_affichage = 0.0
-		print("cone_actif=", _sim.instr_cone_actif(),
-			" bloqueurs=", _sim.instr_n_bloqueurs(),
-			" occultes=", _sim.instr_n_occultes())
+		print("bloq=", _sim.instr_nb_bloqueurs_camera(), " buf2D=", _sim.instr_pixels_couverts_2d(), "/2048 occ=", _sim.instr_occultes_2d(), " self=", _sim.instr_self_occ(), " proches=", _sim.instr_faux_pos_proches(), " buf(min=", _sim.instr_buf2d_min(), " med=", _sim.instr_buf2d_med(), " max=", _sim.instr_buf2d_max(), ") dump=i(", _sim.instr_dump_i(), ") rectX=", _sim.instr_dump_rect_x(), " rectY=", _sim.instr_dump_rect_y(), " arbre=", _sim.instr_dump_d_arbre(), "m minBuf=", _sim.instr_dump_d_min_buf(), "m maxBuf=", _sim.instr_dump_d_max_buf(), "m")
 	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
 	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
 	# cadence -- que la sim ait tourne ce tick ou non, la position reste
@@ -301,6 +298,8 @@ func _process(delta: float) -> void:
 			dir_obs_xz = dir_xz
 			obs_cone_present = true
 			_sim.definir_observateur_cone(dir_xz.x, dir_xz.y, cos_eff)
+		# Etape 3/8 occlusion 2D projete camera : hauteur camera + fwd.y.
+		_sim.definir_observateur_3d(pos_obs.y, fwd.y)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
 	# `_sim.avancer(pas)` -- proba stochastique / cadence banque /
@@ -336,8 +335,12 @@ func _process(delta: float) -> void:
 			_dir_bake_prec = dir_obs_xz
 			_bake_prec_valide = true
 	elif sim_a_tourne and obs_present:
-		# Le tick sim a deja rebuild le buffer avec la camera courante.
-		# Synchro les references pour eviter un double rebuild imediat.
+		# DECOUPLAGE RENDU (prompt 2026-09-16). avancer() ne rebuild plus
+		# le buffer -- c'est ici que la coquille declenche le rebuild apres
+		# un tick sim, pour que la mutation (ages, stades, morts, naissances)
+		# soit propagee au rendu. Sans ce rebuild, les nouveaux arbres
+		# resteraient invisibles jusqu'au premier deplacement camera.
+		_sim.rafraichir_buffer_rendu()
 		_pos_bake_prec = pos_obs_xz
 		_dir_bake_prec = dir_obs_xz
 		_bake_prec_valide = true

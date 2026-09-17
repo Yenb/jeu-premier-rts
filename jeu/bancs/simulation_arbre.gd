@@ -315,11 +315,29 @@ var _slot_rendu_pour_data: PackedInt32Array = PackedInt32Array()
 var _buffer_tronc_occludeur: PackedFloat32Array = PackedFloat32Array()
 var _buffer_feuillage_occludeur: PackedFloat32Array = PackedFloat32Array()
 var _pop_occludeur: int = 0
-# Instrumentation occlusion (prompt 2026-09-15). Lecture seule, publiee par
-# le C++ dans le Dictionary de sortie. Lu par la coquille pour affichage.
-var _instr_cone_actif: bool = false
-var _instr_n_bloqueurs: int = 0
-var _instr_n_occultes: int = 0
+# Chantier occlusion par cellules, etape 2/8 : cellule courante du joueur.
+var _instr_nb_bloqueurs_camera: int = 0
+var _instr_buffer_2d_largeur: int = 0
+var _instr_buffer_2d_hauteur: int = 0
+var _instr_cam_hauteur: int = 0
+var _instr_cam_pitch: int = 0
+var _instr_test_px: int = 0
+var _instr_test_py: int = 0
+var _instr_test_depth: int = 0
+var _instr_test_visible: int = 0
+var _instr_pixels_couverts_2d: int = 0
+var _instr_occultes_2d: int = 0
+var _instr_self_occ: int = 0
+var _instr_faux_pos_proches: int = 0
+var _instr_buf2d_min: int = 0
+var _instr_buf2d_med: int = 0
+var _instr_buf2d_max: int = 0
+var _instr_dump_i: int = 0
+var _instr_dump_rect_x: int = 0
+var _instr_dump_rect_y: int = 0
+var _instr_dump_d_arbre: int = 0
+var _instr_dump_d_min_buf: int = 0
+var _instr_dump_d_max_buf: int = 0
 # Inverse : slot rendu j -> slot data, -1 si le slot rendu est libre.
 # Sert au morceau 2 pour effacer visuellement un arbre sorti du cercle.
 var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
@@ -375,6 +393,9 @@ var _observateur_actif: bool = false
 var _observateur_dir_x: float = 0.0
 var _observateur_dir_z: float = 0.0
 var _observateur_cos_demi_angle: float = -1.0
+# Etape 3/8 occlusion 2D projete camera : hauteur camera et sin(tangage).
+var _observateur_y: float = 0.0
+var _observateur_pitch_y: float = 0.0   # sin(tangage) = fwd.y
 var _observateur_cone_actif: bool = false
 
 # STREAMING RENDU ARBRE, ETAPE 2/4 (2026-09-15). Rayon du cercle rendu
@@ -682,6 +703,14 @@ func definir_observateur_cone(dir_x: float, dir_z: float, cos_demi_angle: float)
 	_observateur_dir_z = dir_z
 	_observateur_cos_demi_angle = cos_demi_angle
 	_observateur_cone_actif = true
+
+
+# Etape 3/8 occlusion 2D projete camera : hauteur camera et sin(tangage) pour
+# le buffer 2D d'occlusion. Appele par la coquille chaque frame avant
+# _ecrire_slots_lot_cpp.
+func definir_observateur_3d(obs_y: float, pitch_y: float) -> void:
+	_observateur_y = obs_y
+	_observateur_pitch_y = pitch_y
 
 # Accesseurs de verification (Yael bouge le joueur, lit ces valeurs pour
 # constater que la position suit). ETAPE 1/4 -- ils disparaitront avec le
@@ -1976,10 +2005,16 @@ func avancer(pas: float) -> void:
 	# `_ecrire_slot` pour reposer le buffer GPU quand la capacite double
 	# (chemin rare). Corps de `_ecrire_slots_lot` inline ci-dessous
 	# (morceau 7, suffixe `_esl`).
+	# DECOUPLAGE RENDU (prompt 2026-09-16). Bloc "RENDU EN LOT" retire de
+	# avancer() : l'ecriture du buffer et la passe d'occlusion NE tournent
+	# PLUS dans le tick sim. La coquille (banc_peuplement_arbre.gd:_process)
+	# appelle rafraichir_buffer_rendu() elle-meme apres un tick sim ET selon
+	# les seuils camera : le rendu est pilote a 60 Hz camera, indep. de la
+	# cadence sim (4 Hz). Sans ce decouplage, la passe d'occlusion tournait
+	# a 4 Hz et restait en retard sur le joueur en translation. Le bloc
+	# GDScript oracle (utilise_cpp=false) reste ci-dessous derriere `false`.
 	var _cap_esl: int = _capacite
-	if utilise_cpp and _simu_cpp != null:
-		_ecrire_slots_lot_cpp(_cap_esl)
-	elif _cap_esl > 0:
+	if false and _cap_esl > 0:
 		var _n_stades_esl: int = _durees.size()
 		var _n_stades_full_esl: int = _stades.size()
 		var _i_esl: int = 0
@@ -2335,7 +2370,9 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 		_observateur_cone_actif,
 		_observateur_dir_x,
 		_observateur_dir_z,
-		_observateur_cos_demi_angle
+		_observateur_cos_demi_angle,
+		_observateur_y,
+		_observateur_pitch_y
 	)
 	var _pop_i: int = int(res.get("pop", 0))
 	# MAJ mapping slot_data -> index_rendu (le C++ le calcule chaque tick,
@@ -2348,10 +2385,28 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	_buffer_tronc_occludeur = res.get("buffer_tronc_cercle", PackedFloat32Array())
 	_buffer_feuillage_occludeur = res.get("buffer_feuillage_cercle", PackedFloat32Array())
 	_pop_occludeur = int(res.get("pop_cercle", 0))
-	# Instrumentation occlusion (lecture seule).
-	_instr_cone_actif = bool(res.get("cone_actif", false))
-	_instr_n_bloqueurs = int(res.get("n_bloqueurs", 0))
-	_instr_n_occultes = int(res.get("n_occultes", 0))
+	_instr_nb_bloqueurs_camera = int(res.get("nb_bloqueurs_camera", 0))
+	_instr_buffer_2d_largeur = int(res.get("buffer_2d_largeur", 0))
+	_instr_buffer_2d_hauteur = int(res.get("buffer_2d_hauteur", 0))
+	_instr_cam_hauteur = int(res.get("cam_hauteur", 0))
+	_instr_cam_pitch = int(res.get("cam_pitch", 0))
+	_instr_test_px = int(res.get("test_px", 0))
+	_instr_test_py = int(res.get("test_py", 0))
+	_instr_test_depth = int(res.get("test_depth", 0))
+	_instr_test_visible = int(res.get("test_visible", 0))
+	_instr_pixels_couverts_2d = int(res.get("pixels_couverts_buffer_2d", 0))
+	_instr_occultes_2d = int(res.get("occultes_2d", 0))
+	_instr_self_occ = int(res.get("self_occ", 0))
+	_instr_faux_pos_proches = int(res.get("faux_pos_proches", 0))
+	_instr_buf2d_min = int(res.get("buf2d_min", 0))
+	_instr_buf2d_med = int(res.get("buf2d_med", 0))
+	_instr_buf2d_max = int(res.get("buf2d_max", 0))
+	_instr_dump_i = int(res.get("dump_i", 0))
+	_instr_dump_rect_x = int(res.get("dump_rect_x", 0))
+	_instr_dump_rect_y = int(res.get("dump_rect_y", 0))
+	_instr_dump_d_arbre = int(res.get("dump_d_arbre", 0))
+	_instr_dump_d_min_buf = int(res.get("dump_d_min_buf", 0))
+	_instr_dump_d_max_buf = int(res.get("dump_d_max_buf", 0))
 	# Push COMPACT : instance_count = pop, buffer = pop*16 floats. Godot
 	# n'accepte buffer que si buffer.size() == instance_count * 16 (stride
 	# TRANSFORM_3D + color) -- d'ou l'ajustement de instance_count a pop.
@@ -2381,17 +2436,92 @@ func pop_occludeur() -> int:
 	return _pop_occludeur
 
 
-# Accesseurs instrumentation occlusion (lecture seule).
-func instr_cone_actif() -> bool:
-	return _instr_cone_actif
+func instr_nb_bloqueurs_camera() -> int:
+	return _instr_nb_bloqueurs_camera
 
 
-func instr_n_bloqueurs() -> int:
-	return _instr_n_bloqueurs
+func instr_buffer_2d_largeur() -> int:
+	return _instr_buffer_2d_largeur
 
 
-func instr_n_occultes() -> int:
-	return _instr_n_occultes
+func instr_buffer_2d_hauteur() -> int:
+	return _instr_buffer_2d_hauteur
+
+
+func instr_cam_hauteur() -> int:
+	return _instr_cam_hauteur
+
+
+func instr_cam_pitch() -> int:
+	return _instr_cam_pitch
+
+
+func instr_test_px() -> int:
+	return _instr_test_px
+
+
+func instr_test_py() -> int:
+	return _instr_test_py
+
+
+func instr_test_depth() -> int:
+	return _instr_test_depth
+
+
+func instr_test_visible() -> int:
+	return _instr_test_visible
+
+
+func instr_pixels_couverts_2d() -> int:
+	return _instr_pixels_couverts_2d
+
+
+func instr_occultes_2d() -> int:
+	return _instr_occultes_2d
+
+
+func instr_self_occ() -> int:
+	return _instr_self_occ
+
+
+func instr_faux_pos_proches() -> int:
+	return _instr_faux_pos_proches
+
+
+func instr_buf2d_min() -> int:
+	return _instr_buf2d_min
+
+
+func instr_buf2d_med() -> int:
+	return _instr_buf2d_med
+
+
+func instr_buf2d_max() -> int:
+	return _instr_buf2d_max
+
+
+func instr_dump_i() -> int:
+	return _instr_dump_i
+
+
+func instr_dump_rect_x() -> int:
+	return _instr_dump_rect_x
+
+
+func instr_dump_rect_y() -> int:
+	return _instr_dump_rect_y
+
+
+func instr_dump_d_arbre() -> int:
+	return _instr_dump_d_arbre
+
+
+func instr_dump_d_min_buf() -> int:
+	return _instr_dump_d_min_buf
+
+
+func instr_dump_d_max_buf() -> int:
+	return _instr_dump_d_max_buf
 
 
 # ============================================================================
