@@ -1944,20 +1944,21 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	auto dans_cercle = [&](int i) -> bool {
 		if (!filtre_actif) return true;
 		float dx = px_r[i] - ox;
+		float dy = py_r[i] - obs_y;
 		float dz = pz_r[i] - oz;
 		float d2 = dx * dx + dz * dz;
 		if (d2 > rayon_carre) return false;
 		if (!cone_actif) return true;
 		if (d2 <= EPS_CONE_XZ_CARRE) return true;
-		// dot((dir_x, dir_z), normalize(dx, dz)) >= cos_demi_angle
-		// <=> (dir_x * dx + dir_z * dz) >= cos_demi_angle * sqrt(d2)
+		// dot(fwd3D, normalize(d3D)) >= cos_demi_angle
+		// <=> (fwd_x*dx + fwd_y*dy + fwd_z*dz) >= cos_demi_angle * sqrt(dx*dx+dy*dy+dz*dz)
 		// Comparer AVANT la sqrt pour epargner l'operation quand possible.
-		float num = dir_x * dx + dir_z * dz;
+		float num = fwd_x * dx + fwd_y * dy + fwd_z * dz;
 		// Cos_demi_angle attendu dans [-1, 1]. Marge d'angle poussee par la
 		// coquille (demi-angle > demi-FOV) pour eviter le clignotement au
 		// bord de l'ecran quand l'observateur pivote entre deux ticks.
 		if (num < 0.0f && cos_demi_angle >= 0.0f) return false;
-		float rhs = cos_demi_angle * std::sqrt(d2);
+		float rhs = cos_demi_angle * std::sqrt(dx * dx + dy * dy + dz * dz);
 		if (num < rhs) return false;
 		// Etape 6/8 : test occlusion par lecture buffer 2D.
 		// Projette l'arbre en AABB verticale, prend depth_min et compare au

@@ -106,7 +106,7 @@ var _temps_depuis_bake_occl: float = 0.0
 # reel (~45-50 degres a FOV 75 vertical + aspect 16:9) pour offrir une
 # marge : un arbre au bord de l'ecran ne clignote pas quand le joueur
 # pivote entre deux ticks. Cos precompute a `_ready`.
-const CONE_DEMI_ANGLE_DEG := 115.0
+const CONE_DEMI_ANGLE_DEG := 5.0
 var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
 
 # CONE PROGRESSIF -> COUPURE FRANCHE (2026-09-15). |fwd.y| = sin(tangage).
