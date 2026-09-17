@@ -86,6 +86,9 @@ void SimulationArbre::_bind_methods() {
 			&SimulationArbre::mettre_a_jour_buffers_rendu);
 	ClassDB::bind_method(D_METHOD("invalider_cache_rendu"), &SimulationArbre::invalider_cache_rendu);
 	ClassDB::bind_method(
+			D_METHOD("definir_fov_buffer", "fov_v_deg", "aspect"),
+			&SimulationArbre::definir_fov_buffer);
+	ClassDB::bind_method(
 			D_METHOD("appliquer_reset_morts",
 					"morts",
 					"libres",
@@ -1595,6 +1598,17 @@ void SimulationArbre::invalider_cache_rendu() {
 	_cache_rendu_force_reset = true;
 }
 
+void SimulationArbre::definir_fov_buffer(float fov_v_deg, float aspect) {
+	constexpr float PI_F = 3.14159265358979323846f;
+	float fv = fov_v_deg;
+	if (fv < 1.0f) fv = 1.0f;
+	if (fv > 170.0f) fv = 170.0f;
+	float fh = fv * (aspect > 0.01f ? aspect : 1.0f);
+	if (fh > 170.0f) fh = 170.0f;
+	_fov_v_rad_buffer = fv * PI_F / 180.0f;
+	_fov_h_rad_buffer = fh * PI_F / 180.0f;
+}
+
 Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		int capacite,
 		const PackedByteArray &libres,
@@ -1835,11 +1849,10 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// Etape 4/8 occlusion 2D projete camera : fonction de projection monde
 	// -> pixel du buffer 2D. Rend visible=false si point derriere camera ou
 	// hors du FOV.
-	constexpr float FOV_H_DEG_4 = 90.0f;
-	constexpr float FOV_V_DEG_4 = 45.0f;
-	constexpr float PI_F_4 = 3.14159265358979323846f;
-	constexpr float FOV_H_RAD_4 = FOV_H_DEG_4 * PI_F_4 / 180.0f;
-	constexpr float FOV_V_RAD_4 = FOV_V_DEG_4 * PI_F_4 / 180.0f;
+	// FOV du buffer pousses par la coquille via definir_fov_buffer (canal
+	// GD -> C++). Sans appel, valeurs par defaut du header (~115 h / 80 v).
+	const float FOV_H_RAD_4 = _fov_h_rad_buffer;
+	const float FOV_V_RAD_4 = _fov_v_rad_buffer;
 	// Reconstruire le vecteur regard 3D depuis dir_x/dir_z (XZ normalise)
 	// et pitch_y (sin(tangage)).
 	float pitch_clamped = pitch_y;
@@ -1909,12 +1922,51 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 							by_bas, by_bas, by_haut, by_haut};
 		float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
 							bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
+		// Partner Y-swap : coin k et coin partner_y[k] partagent X et Z,
+		// diffèrent uniquement par by_bas <-> by_haut. Sert au clip near
+		// plane sur l'arete verticale (rasterizer standard : point
+		// d'intersection exact, pas d'extension au bord).
+		static constexpr int partner_y[8] = {2, 3, 0, 1, 6, 7, 4, 5};
+		constexpr float NEAR_PLANE_M_LOCAL = 1.0f;   // miroir de world_to_pixel
+		// Cible du clip : legerement au-dessus du near pour que world_to_pixel
+		// (strict `<= NEAR`) accepte le point clippe.
+		constexpr float NEAR_TARGET = NEAR_PLANE_M_LOCAL * 1.0001f;
 		bool au_moins_un_visible = false;
+		// Cache fwd_v par coin pour ne pas recalculer sur l'arete du partner.
+		float f_v_coin[8];
 		for (int k = 0; k < 8; ++k) {
+			float vx_c = coins_x[k] - ox;
+			float vy_c = coins_y[k] - obs_y;
+			float vz_c = coins_z[k] - oz;
+			f_v_coin[k] = vx_c * fwd_x + vy_c * fwd_y + vz_c * fwd_z;
+		}
+		for (int k = 0; k < 8; ++k) {
+			float px_k = coins_x[k];
+			float py_k = coins_y[k];
+			float pz_k = coins_z[k];
+			if (f_v_coin[k] <= NEAR_PLANE_M_LOCAL) {
+				// Coin sous near plane -> clip sur l'arete verticale vers le
+				// coin partner (meme X, meme Z, autre Y). Si le partner est
+				// aussi derriere le near, toute l'arete verticale est occlue
+				// par le near : ignorer ce coin.
+				int q = partner_y[k];
+				float f_q = f_v_coin[q];
+				if (f_q <= NEAR_PLANE_M_LOCAL) continue;
+				// Interpolation lineaire le long de l'arete P_q -> P_k, en
+				// resolvant fwd_v(P_q + t*(P_k - P_q)) = NEAR_TARGET.
+				// fwd_v est lineaire, donc t = (f_q - NEAR_TARGET)/(f_q - f_k).
+				float t = (f_q - NEAR_TARGET) / (f_q - f_v_coin[k]);
+				if (t < 0.0f) t = 0.0f;
+				if (t > 1.0f) t = 1.0f;
+				// Seul Y change entre q et k (X et Z sont identiques par la
+				// topologie AABB, cf. partner_y).
+				py_k = coins_y[q] + t * (coins_y[k] - coins_y[q]);
+				// px_k / pz_k restent inchanges (deja = coins_x[q] / coins_z[q]).
+			}
 			int cpx = -1, cpy = -1;
 			float cdepth = 0.0f;
-			bool cvis = world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth);
-			if (!cvis) continue;
+			bool cvis = world_to_pixel(px_k, py_k, pz_k, cpx, cpy, cdepth);
+			if (!cvis) continue;   // hors buffer lateralement
 			au_moins_un_visible = true;
 			if (cpx < px_min) px_min = cpx;
 			if (cpx > px_max) px_max = cpx;
@@ -1950,16 +2002,19 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (d2 > rayon_carre) return false;
 		if (!cone_actif) return true;
 		if (d2 <= EPS_CONE_XZ_CARRE) return true;
-		// dot(fwd3D, normalize(d3D)) >= cos_demi_angle
-		// <=> (fwd_x*dx + fwd_y*dy + fwd_z*dz) >= cos_demi_angle * sqrt(dx*dx+dy*dy+dz*dz)
-		// Comparer AVANT la sqrt pour epargner l'operation quand possible.
-		float num = fwd_x * dx + fwd_y * dy + fwd_z * dz;
-		// Cos_demi_angle attendu dans [-1, 1]. Marge d'angle poussee par la
-		// coquille (demi-angle > demi-FOV) pour eviter le clignotement au
-		// bord de l'ecran quand l'observateur pivote entre deux ticks.
-		if (num < 0.0f && cos_demi_angle >= 0.0f) return false;
-		float rhs = cos_demi_angle * std::sqrt(dx * dx + dy * dy + dz * dz);
-		if (num < rhs) return false;
+		// Frustum radar : projeter (dx,dy,dz) sur les axes camera.
+		// Reference : Lighthouse3D "Radar Approach - Testing Points".
+		float fwd_v = dx * fwd_x + dy * fwd_y + dz * fwd_z;
+		if (fwd_v <= 0.0f) return false;               // derriere la camera
+		float right_v = dx * right_x + dy * right_y + dz * right_z;
+		float up_v    = dx * up_x    + dy * up_y    + dz * up_z;
+		// Demi-ouvertures = tan(demi-FOV). Marge MARGE_FRUSTUM pour eviter le
+		// clignotement au bord quand la camera pivote entre deux ticks.
+		constexpr float MARGE_FRUSTUM = 1.15f;
+		float tan_h = std::tan(FOV_H_RAD_4 * 0.5f) * MARGE_FRUSTUM;
+		float tan_v = std::tan(FOV_V_RAD_4 * 0.5f) * MARGE_FRUSTUM;
+		if (std::abs(right_v) > tan_h * fwd_v) return false;
+		if (std::abs(up_v)    > tan_v * fwd_v) return false;
 		// Etape 6/8 : test occlusion par lecture buffer 2D.
 		// Projette l'arbre en AABB verticale, prend depth_min et compare au
 		// max des profondeurs buffer sur son rectangle (test conservatif :
@@ -2009,17 +2064,25 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				// bord le plus proche est plus loin que le MAX du buffer sur
 				// TOUT le rectangle. Un pixel INF (aucun bloqueur) -> pas
 				// d'occlusion (l'arbre est visible dans cette direction).
+				// Seuil de couverture : occulter si la fraction de pixels vides
+				// (aucun bloqueur -> INF) reste sous FRACTION_TROUS_MAX. Depart
+				// TRES strict a 0.05 (5%), a diminuer au fur et a mesure.
+				constexpr float FRACTION_TROUS_MAX = 0.05f;
 				float depth_max_buffer = 0.0f;
-				bool buffer_troue = false;
-				for (int y = py_min; y <= py_max && !buffer_troue; ++y) {
+				int pixels_total = 0;
+				int pixels_vides = 0;
+				for (int y = py_min; y <= py_max; ++y) {
 					for (int x = px_min; x <= px_max; ++x) {
 						int p = y * BUFFER_2D_LARGEUR + x;
 						float dp = _buffer_2d[p];
-						if (std::isinf(dp)) { buffer_troue = true; break; }
+						++pixels_total;
+						if (std::isinf(dp)) { ++pixels_vides; continue; }
 						if (dp > depth_max_buffer) depth_max_buffer = dp;
 					}
 				}
-				if (!buffer_troue && depth_min_arbre > depth_max_buffer) {
+				bool trop_de_trous = (pixels_total == 0)
+					|| (float(pixels_vides) > FRACTION_TROUS_MAX * float(pixels_total));
+				if (!trop_de_trous && depth_min_arbre > depth_max_buffer) {
 					return false;
 				}
 			}
@@ -2130,6 +2193,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["test_depth"] = int(test_depth);
 	out["test_visible"] = test_visible;
 	out["pixels_couverts_buffer_2d"] = pixels_couverts_buffer;
+	// Instrumentation diagnostic buf2D=0 : compteur monotone incremente ici
+	// (une fois par remplissage complet du buffer 2D). Si le compteur ne
+	// bouge pas entre deux prints, mettre_a_jour_buffers_rendu n'a pas ete
+	// appele (gate coquille) et pixels_couverts_buffer_2d = 0 est attendu.
+	++_nb_remplissages_buffer;
+	out["nb_remplissages_buffer"] = int64_t(_nb_remplissages_buffer);
 	// Instrumentation etape 6/8 : compter les arbres occultes par le buffer 2D.
 	int occultes_2d = 0;
 	int self_occ = 0;             // bloqueurs (ht >= 3m) qui sont occultes
@@ -2173,16 +2242,22 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (pxi_max >= BUFFER_2D_LARGEUR) pxi_max = BUFFER_2D_LARGEUR - 1;
 		if (pyi_min < 0) pyi_min = 0;
 		if (pyi_max >= BUFFER_2D_HAUTEUR) pyi_max = BUFFER_2D_HAUTEUR - 1;
+		// Seuil de couverture (miroir du test principal dans dans_cercle).
+		constexpr float FRACTION_TROUS_MAX_INSTR = 0.05f;
 		float dmax_buf = 0.0f;
-		bool troue = false;
-		for (int y = pyi_min; y <= pyi_max && !troue; ++y) {
+		int pxls_total = 0;
+		int pxls_vides = 0;
+		for (int y = pyi_min; y <= pyi_max; ++y) {
 			for (int x = pxi_min; x <= pxi_max; ++x) {
 				int p = y * BUFFER_2D_LARGEUR + x;
 				float dp = _buffer_2d[p];
-				if (std::isinf(dp)) { troue = true; break; }
+				++pxls_total;
+				if (std::isinf(dp)) { ++pxls_vides; continue; }
 				if (dp > dmax_buf) dmax_buf = dp;
 			}
 		}
+		bool troue = (pxls_total == 0)
+			|| (float(pxls_vides) > FRACTION_TROUS_MAX_INSTR * float(pxls_total));
 		if (!troue && depth_min_a > dmax_buf) {
 			++occultes_2d;
 			if (_cache_p_ht[i] >= 3.0f) ++self_occ;

@@ -238,6 +238,13 @@ public:
 	// Miroir : agrandissement de capacite qui reset le buffer GPU.
 	void invalider_cache_rendu();
 
+	// Canal FOV camera -> buffer d'occlusion. Le buffer 2D projete avec
+	// FOV_V_RAD = fov_v_deg * pi/180 et FOV_H_RAD = FOV_V_RAD * aspect. Le
+	// coquille .gd est responsable d'appliquer la marge (fov_camera_deg *
+	// marge >= fov_rendu, pour couvrir tous les arbres rendus). Idempotent,
+	// safe a appeler par frame.
+	void definir_fov_buffer(float fov_v_deg, float aspect);
+
 	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
 	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
 	// Signature typée (ptrcall). Ne touche PAS aux structures GDScript non
@@ -685,6 +692,17 @@ private:
 	static constexpr int BUFFER_2D_LARGEUR = 512;
 	static constexpr int BUFFER_2D_HAUTEUR = 256;
 	std::vector<float> _buffer_2d;
+	// Compteur monotone : incremente a CHAQUE remplissage complet du buffer 2D
+	// dans mettre_a_jour_buffers_rendu. Sert au diagnostic buf2D=0 : si ce
+	// compteur ne bouge pas entre deux prints, le buffer n'a pas ete rebati
+	// (gate coquille : camera immobile) et pixels_couverts_buffer_2d = 0 est
+	// attendu. INSTRUMENTATION SEULE.
+	uint64_t _nb_remplissages_buffer = 0;
+	// FOV du buffer d'occlusion (pousses par definir_fov_buffer). Defauts :
+	// couvrent le rendu 75 deg vertical + marge 1.15x, aspect 16:9. Sans appel
+	// du canal, la coquille tourne avec ces valeurs par defaut.
+	float _fov_h_rad_buffer = 115.0f * 3.14159265358979323846f / 180.0f;
+	float _fov_v_rad_buffer = 80.0f * 3.14159265358979323846f / 180.0f;
 
 	// Stables banque (etape 14).
 	float _taille_case_dormantes = 0.0f;

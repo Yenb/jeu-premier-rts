@@ -326,6 +326,11 @@ var _instr_test_py: int = 0
 var _instr_test_depth: int = 0
 var _instr_test_visible: int = 0
 var _instr_pixels_couverts_2d: int = 0
+# INSTRUMENTATION diagnostic buf2D=0 : compteur monotone lu depuis le C++
+# (SimulationArbre::_nb_remplissages_buffer). Incremente exactement une fois
+# par appel a mettre_a_jour_buffers_rendu -> permet a la coquille de savoir
+# si le buffer a ete rebati entre deux prints.
+var _instr_nb_remplissages_buffer: int = 0
 var _instr_occultes_2d: int = 0
 var _instr_self_occ: int = 0
 var _instr_faux_pos_proches: int = 0
@@ -711,6 +716,14 @@ func definir_observateur_cone(dir_x: float, dir_z: float, cos_demi_angle: float)
 func definir_observateur_3d(obs_y: float, pitch_y: float) -> void:
 	_observateur_y = obs_y
 	_observateur_pitch_y = pitch_y
+
+
+# Canal FOV camera -> buffer occlusion. Pass-through vers SimulationArbre C++
+# (definir_fov_buffer). Sans C++ instancie, no-op. Appele par la coquille
+# chaque frame ; le C++ ne recalcule les FOV du buffer que sur nouvelle valeur.
+func definir_fov_buffer(fov_v_deg: float, aspect: float) -> void:
+	if _simu_cpp != null:
+		_simu_cpp.definir_fov_buffer(fov_v_deg, aspect)
 
 # Accesseurs de verification (Yael bouge le joueur, lit ces valeurs pour
 # constater que la position suit). ETAPE 1/4 -- ils disparaitront avec le
@@ -2395,6 +2408,7 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	_instr_test_depth = int(res.get("test_depth", 0))
 	_instr_test_visible = int(res.get("test_visible", 0))
 	_instr_pixels_couverts_2d = int(res.get("pixels_couverts_buffer_2d", 0))
+	_instr_nb_remplissages_buffer = int(res.get("nb_remplissages_buffer", 0))
 	_instr_occultes_2d = int(res.get("occultes_2d", 0))
 	_instr_self_occ = int(res.get("self_occ", 0))
 	_instr_faux_pos_proches = int(res.get("faux_pos_proches", 0))
@@ -2474,6 +2488,10 @@ func instr_test_visible() -> int:
 
 func instr_pixels_couverts_2d() -> int:
 	return _instr_pixels_couverts_2d
+
+
+func instr_nb_remplissages_buffer() -> int:
+	return _instr_nb_remplissages_buffer
 
 
 func instr_occultes_2d() -> int:
