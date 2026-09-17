@@ -326,11 +326,12 @@ var _instr_test_py: int = 0
 var _instr_test_depth: int = 0
 var _instr_test_visible: int = 0
 var _instr_pixels_couverts_2d: int = 0
-# INSTRUMENTATION diagnostic buf2D=0 : compteur monotone lu depuis le C++
-# (SimulationArbre::_nb_remplissages_buffer). Incremente exactement une fois
-# par appel a mettre_a_jour_buffers_rendu -> permet a la coquille de savoir
-# si le buffer a ete rebati entre deux prints.
-var _instr_nb_remplissages_buffer: int = 0
+# INSTRUMENTATION : arbres vivants exclus par filtre cercle (d2 > rayon_carre).
+var _instr_hors_rayon: int = 0
+# INSTRUMENTATION dump : distance MIN du buffer sur le rectangle de l'arbre
+# occulte (occulteur le plus proche devant lui). Sert au verdict "occlusion
+# legitime" : dmax dit qu'un bloqueur couvre bien, dmin dit ou il commence.
+var _instr_dump_d_min_buf_zone: int = 0
 var _instr_occultes_2d: int = 0
 var _instr_self_occ: int = 0
 var _instr_faux_pos_proches: int = 0
@@ -2408,7 +2409,8 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	_instr_test_depth = int(res.get("test_depth", 0))
 	_instr_test_visible = int(res.get("test_visible", 0))
 	_instr_pixels_couverts_2d = int(res.get("pixels_couverts_buffer_2d", 0))
-	_instr_nb_remplissages_buffer = int(res.get("nb_remplissages_buffer", 0))
+	_instr_hors_rayon = int(res.get("hors_rayon", 0))
+	_instr_dump_d_min_buf_zone = int(res.get("dump_d_min_buf_zone", 0))
 	_instr_occultes_2d = int(res.get("occultes_2d", 0))
 	_instr_self_occ = int(res.get("self_occ", 0))
 	_instr_faux_pos_proches = int(res.get("faux_pos_proches", 0))
@@ -2490,8 +2492,12 @@ func instr_pixels_couverts_2d() -> int:
 	return _instr_pixels_couverts_2d
 
 
-func instr_nb_remplissages_buffer() -> int:
-	return _instr_nb_remplissages_buffer
+func instr_hors_rayon() -> int:
+	return _instr_hors_rayon
+
+
+func instr_dump_d_min_buf_zone() -> int:
+	return _instr_dump_d_min_buf_zone
 
 
 func instr_occultes_2d() -> int:

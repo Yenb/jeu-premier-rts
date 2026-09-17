@@ -223,17 +223,6 @@ func _ready() -> void:
 
 var _instr_temps_depuis_affichage: float = 0.0
 const INSTR_INTERVALLE_S: float = 1.0
-# INSTRUMENTATION diagnostic buf2D=0 (aucune correction, comptage pur) :
-#   _instr_rebuilds_fenetre  : nb d'appels rafraichir_buffer_rendu dans la
-#                              fenetre INSTR_INTERVALLE_S en cours.
-#   _instr_frames_fenetre    : nb d'appels _process dans la meme fenetre.
-#   _instr_rebuild_frame_prec: rebuild declenche a la frame precedente (0/1).
-# Le print rapporte rebuilds_par_sec = _rebuilds_fenetre / INSTR_INTERVALLE_S
-# et frames_sans_rebuild_par_sec = (_frames_fenetre - _rebuilds_fenetre) /
-# INSTR_INTERVALLE_S, plus rebuild_ce_tick = _rebuild_frame_prec.
-var _instr_rebuilds_fenetre: int = 0
-var _instr_frames_fenetre: int = 0
-var _instr_rebuild_frame_prec: int = 0
 
 
 func _process(delta: float) -> void:
@@ -241,15 +230,12 @@ func _process(delta: float) -> void:
 		return
 	# Chantier occlusion par cellules, etape 2/8 : log de la cellule courante.
 	_instr_temps_depuis_affichage += delta
-	_instr_frames_fenetre += 1
 	if _instr_temps_depuis_affichage >= INSTR_INTERVALLE_S:
-		var rebuilds_par_sec: float = float(_instr_rebuilds_fenetre) / _instr_temps_depuis_affichage
-		var frames_sans_par_sec: float = float(_instr_frames_fenetre - _instr_rebuilds_fenetre) / _instr_temps_depuis_affichage
 		_instr_temps_depuis_affichage = 0.0
-		_instr_rebuilds_fenetre = 0
-		_instr_frames_fenetre = 0
-		_instr_rebuild_frame_prec = 0
-		print("bloq=", _sim.instr_nb_bloqueurs_camera(), " buf2D=", _sim.instr_pixels_couverts_2d(), "/2048 occ=", _sim.instr_occultes_2d(), " self=", _sim.instr_self_occ(), " proches=", _sim.instr_faux_pos_proches(), " buf(min=", _sim.instr_buf2d_min(), " med=", _sim.instr_buf2d_med(), " max=", _sim.instr_buf2d_max(), ") dump=i(", _sim.instr_dump_i(), ") rectX=", _sim.instr_dump_rect_x(), " rectY=", _sim.instr_dump_rect_y(), " arbre=", _sim.instr_dump_d_arbre(), "m minBuf=", _sim.instr_dump_d_min_buf(), "m maxBuf=", _sim.instr_dump_d_max_buf(), "m rebuild_ce_tick=", _instr_rebuild_frame_prec, " rebuilds/s=", "%.1f" % rebuilds_par_sec, " sans_rebuild/s=", "%.1f" % frames_sans_par_sec, " nb_remplissages_buf=", _sim.instr_nb_remplissages_buffer())
+		var _occ: int = _sim.instr_occultes_2d()
+		var _self: int = _sim.instr_self_occ()
+		var _occ_reels: int = _occ - _self
+		print("bloq=", _sim.instr_nb_bloqueurs_camera(), " occ=", _occ, " self=", _self, " occ_reels=", _occ_reels, " hors_rayon=", _sim.instr_hors_rayon(), " proches=", _sim.instr_faux_pos_proches(), " dump=i(", _sim.instr_dump_i(), ") arbre=", _sim.instr_dump_d_arbre(), "m minBufZone=", _sim.instr_dump_d_min_buf_zone(), "m maxBufZone=", _sim.instr_dump_d_max_buf(), "m")
 	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
 	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
 	# cadence -- que la sim ait tourne ce tick ou non, la position reste
@@ -365,8 +351,6 @@ func _process(delta: float) -> void:
 			_pos_bake_prec = pos_obs_xz
 			_dir_bake_prec = dir_obs_xz
 			_bake_prec_valide = true
-			_instr_rebuilds_fenetre += 1
-			_instr_rebuild_frame_prec = 1
 	elif sim_a_tourne and obs_present:
 		# DECOUPLAGE RENDU (prompt 2026-09-16). avancer() ne rebuild plus
 		# le buffer -- c'est ici que la coquille declenche le rebuild apres
@@ -377,8 +361,6 @@ func _process(delta: float) -> void:
 		_pos_bake_prec = pos_obs_xz
 		_dir_bake_prec = dir_obs_xz
 		_bake_prec_valide = true
-		_instr_rebuilds_fenetre += 1
-		_instr_rebuild_frame_prec = 1
 	# OCCLUSION ARBRE : rebake amorti a INTERVALLE_BAKE_OCCL_S. Independant
 	# de la cadence sim -- le buffer de rendu est toujours a jour du dernier
 	# tick, on rebake sur son etat actuel. Le noeud occludeur ne change rien

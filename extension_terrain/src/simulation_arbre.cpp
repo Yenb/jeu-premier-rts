@@ -1837,13 +1837,14 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// CAMERA a chaque tick. Coherence de reference frame -- meme observateur
 	// pour le filtrage, le remplissage buffer 2D et la lecture.
 	_bloqueurs_camera.clear();
+	int hors_rayon = 0;   // INSTRUMENTATION : arbres vivants exclus d2 > rayon_carre
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
-		if (_cache_p_ht[i] < HAUTEUR_MIN_BLOQUEUR_M) continue;
 		float dx = px_r[i] - ox;
 		float dz = pz_r[i] - oz;
 		float d2 = dx * dx + dz * dz;
-		if (d2 > rayon_carre) continue;
+		if (d2 > rayon_carre) { ++hors_rayon; continue; }
+		if (_cache_p_ht[i] < HAUTEUR_MIN_BLOQUEUR_M) continue;
 		_bloqueurs_camera.push_back(int32_t(i));
 	}
 	// Etape 4/8 occlusion 2D projete camera : fonction de projection monde
@@ -2201,12 +2202,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["test_depth"] = int(test_depth);
 	out["test_visible"] = test_visible;
 	out["pixels_couverts_buffer_2d"] = pixels_couverts_buffer;
-	// Instrumentation diagnostic buf2D=0 : compteur monotone incremente ici
-	// (une fois par remplissage complet du buffer 2D). Si le compteur ne
-	// bouge pas entre deux prints, mettre_a_jour_buffers_rendu n'a pas ete
-	// appele (gate coquille) et pixels_couverts_buffer_2d = 0 est attendu.
-	++_nb_remplissages_buffer;
-	out["nb_remplissages_buffer"] = int64_t(_nb_remplissages_buffer);
 	// Instrumentation etape 6/8 : compter les arbres occultes par le buffer 2D.
 	int occultes_2d = 0;
 	int self_occ = 0;             // bloqueurs (ht >= 3m) qui sont occultes
@@ -2217,6 +2212,9 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	int dump_depth_arbre = 0;
 	int dump_depth_max_buffer = 0;
 	int dump_depth_max_buffer_zone = 0;
+	// Distance mini du buffer sur le rectangle de l'arbre occulte (occulteur
+	// le plus proche devant lui). Sert a dire si l'occlusion est legitime.
+	int dump_depth_min_buffer_zone = 0;
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
 		float bx = px_r[i], bz = pz_r[i], by_bas = py_r[i];
@@ -2253,6 +2251,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		// Seuil de couverture (miroir du test principal dans dans_cercle).
 		constexpr float FRACTION_TROUS_MAX_INSTR = 0.05f;
 		float dmax_buf = 0.0f;
+		float dmin_buf = std::numeric_limits<float>::infinity();
 		int pxls_total = 0;
 		int pxls_vides = 0;
 		for (int y = pyi_min; y <= pyi_max; ++y) {
@@ -2262,6 +2261,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				++pxls_total;
 				if (std::isinf(dp)) { ++pxls_vides; continue; }
 				if (dp > dmax_buf) dmax_buf = dp;
+				if (dp < dmin_buf) dmin_buf = dp;
 			}
 		}
 		bool troue = (pxls_total == 0)
@@ -2281,6 +2281,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				dump_depth_arbre = int(depth_min_a);
 				dump_depth_max_buffer = 0; // non calcule dans la variante MAX-buffer
 				dump_depth_max_buffer_zone = int(dmax_buf);
+				dump_depth_min_buffer_zone = std::isinf(dmin_buf) ? 0 : int(dmin_buf);
 			}
 		}
 	}
@@ -2315,6 +2316,8 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["dump_d_arbre"] = dump_depth_arbre;
 	out["dump_d_min_buf"] = dump_depth_max_buffer;
 	out["dump_d_max_buf"] = dump_depth_max_buffer_zone;
+	out["dump_d_min_buf_zone"] = dump_depth_min_buffer_zone;
+	out["hors_rayon"] = hors_rayon;
 	return out;
 }
 

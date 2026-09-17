@@ -692,12 +692,6 @@ private:
 	static constexpr int BUFFER_2D_LARGEUR = 512;
 	static constexpr int BUFFER_2D_HAUTEUR = 256;
 	std::vector<float> _buffer_2d;
-	// Compteur monotone : incremente a CHAQUE remplissage complet du buffer 2D
-	// dans mettre_a_jour_buffers_rendu. Sert au diagnostic buf2D=0 : si ce
-	// compteur ne bouge pas entre deux prints, le buffer n'a pas ete rebati
-	// (gate coquille : camera immobile) et pixels_couverts_buffer_2d = 0 est
-	// attendu. INSTRUMENTATION SEULE.
-	uint64_t _nb_remplissages_buffer = 0;
 	// FOV du buffer d'occlusion (pousses par definir_fov_buffer). Defauts :
 	// couvrent le rendu 75 deg vertical + marge 1.15x, aspect 16:9. Sans appel
 	// du canal, la coquille tourne avec ces valeurs par defaut.
