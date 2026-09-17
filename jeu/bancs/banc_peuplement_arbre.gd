@@ -329,7 +329,7 @@ func _process(delta: float) -> void:
 			var vp: Viewport = get_viewport()
 			var vps: Vector2 = vp.get_visible_rect().size if vp != null else Vector2(16.0, 9.0)
 			var aspect_ecran: float = vps.x / vps.y if vps.y > 0.0 else 16.0 / 9.0
-			const MARGE_FOV_BUFFER := 1.15
+			const MARGE_FOV_BUFFER := 1.0
 			_sim.definir_fov_buffer(fov_v_cam * MARGE_FOV_BUFFER, aspect_ecran)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a

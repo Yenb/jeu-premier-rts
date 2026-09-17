@@ -1894,9 +1894,17 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		return (px >= 0 && px < BUFFER_2D_LARGEUR && py >= 0 && py < BUFFER_2D_HAUTEUR);
 	};
 	// Etape 5/8 : reset buffer 2D + projection des bloqueurs.
-	// Reset chaque tick : le buffer depend position ET orientation camera.
-	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
-		_buffer_2d[p] = std::numeric_limits<float>::infinity();
+	// CYCLE ATOMIQUE (2026-09-17) : le reset ne s'execute QUE si le remplissage
+	// va effectivement l'accompagner (au moins un bloqueur candidat). Sans ce
+	// garde, un tick avec _bloqueurs_camera vide (aucun arbre >= 3m dans le
+	// cercle, ou capacite=0) laisserait le buffer entierement a INF apres
+	// reset et l'occlusion s'eteindrait sur ce tick. Preserver le contenu
+	// precedent (stale mais non vide) vaut mieux qu'un buffer vide qui
+	// declenche buffer_troue et desactive l'occlusion.
+	if (!_bloqueurs_camera.empty()) {
+		for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
+			_buffer_2d[p] = std::numeric_limits<float>::infinity();
+		}
 	}
 	int pixels_couverts_buffer = 0;
 	for (int32_t idx : _bloqueurs_camera) {
