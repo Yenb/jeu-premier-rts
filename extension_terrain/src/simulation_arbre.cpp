@@ -1,5 +1,7 @@
 #include "simulation_arbre.h"
 
+#include <godot_cpp/classes/dir_access.hpp>
+#include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/math.hpp>
 
@@ -74,22 +76,24 @@ void SimulationArbre::_bind_methods() {
 					"positions_y",
 					"positions_z",
 					"filtre_actif",
-					"ox",
-					"oz",
 					"rayon_carre",
-					"cone_actif",
-					"obs_y",
-					"regard_x",
-					"regard_y",
-					"regard_z"),
+					"camera_active",
+					"cam_transform",
+					"cam_projection"),
 			&SimulationArbre::mettre_a_jour_buffers_rendu);
 	ClassDB::bind_method(D_METHOD("invalider_cache_rendu"), &SimulationArbre::invalider_cache_rendu);
 	ClassDB::bind_method(
-			D_METHOD("definir_fov_buffer", "fov_v_deg", "aspect"),
-			&SimulationArbre::definir_fov_buffer);
-	ClassDB::bind_method(
 			D_METHOD("definir_marge_frustum", "m"),
 			&SimulationArbre::definir_marge_frustum);
+	ClassDB::bind_method(
+			D_METHOD("definir_seuil_couverture", "s"),
+			&SimulationArbre::definir_seuil_couverture);
+	ClassDB::bind_method(
+			D_METHOD("definir_marge_profondeur", "m"),
+			&SimulationArbre::definir_marge_profondeur);
+	ClassDB::bind_method(
+			D_METHOD("demander_dump", "chemin"),
+			&SimulationArbre::demander_dump);
 	ClassDB::bind_method(
 			D_METHOD("appliquer_reset_morts",
 					"morts",
@@ -1600,28 +1604,27 @@ void SimulationArbre::invalider_cache_rendu() {
 	_cache_rendu_force_reset = true;
 }
 
-void SimulationArbre::definir_fov_buffer(float fov_v_deg, float aspect) {
-	constexpr float PI_F = 3.14159265358979323846f;
-	// FOV horizontal DERIVE DU VERTICAL VIA LES TANGENTES, pas les angles :
-	// tan(fh/2) = tan(fv/2) * aspect  ->  fh = 2 * atan(tan(fv/2) * aspect).
-	// Multiplier fv par aspect (defaut historique) etait mathematiquement
-	// faux et sous-estimait le FOV horizontal aux grands aspects.
-	float fv = fov_v_deg;
-	if (fv < 1.0f) fv = 1.0f;
-	if (fv > 170.0f) fv = 170.0f;
-	float asp = (aspect > 0.01f ? aspect : 1.0f);
-	float fv_rad = fv * PI_F / 180.0f;
-	float fh_rad = 2.0f * std::atan(std::tan(fv_rad * 0.5f) * asp);
-	float fh = fh_rad * 180.0f / PI_F;
-	if (fh > 170.0f) fh = 170.0f;
-	_fov_v_rad_buffer = fv * PI_F / 180.0f;
-	_fov_h_rad_buffer = fh * PI_F / 180.0f;
-}
-
 void SimulationArbre::definir_marge_frustum(float m) {
 	if (m < 1.0f) m = 1.0f;
 	if (m > 3.0f) m = 3.0f;
 	_marge_frustum = m;
+}
+
+void SimulationArbre::definir_seuil_couverture(float s) {
+	if (s < 0.0f) s = 0.0f;
+	if (s > 1.0f) s = 1.0f;
+	_seuil_couverture = s;
+}
+
+void SimulationArbre::definir_marge_profondeur(float m) {
+	if (m < 0.0f) m = 0.0f;
+	if (m > 10.0f) m = 10.0f;
+	_marge_profondeur = m;
+}
+
+void SimulationArbre::demander_dump(const String &chemin) {
+	_dump_demande = true;
+	_dump_chemin = chemin;
 }
 
 Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
@@ -1633,16 +1636,26 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		const PackedFloat32Array &positions_y,
 		const PackedFloat32Array &positions_z,
 		bool filtre_actif,
-		float ox,
-		float oz,
 		float rayon_carre,
-		bool cone_actif,
-		float obs_y,
-		float regard_x,
-		float regard_y,
-		float regard_z) {
+		bool camera_active,
+		const Transform3D &cam_transform,
+		const Projection &cam_projection) {
 	Dictionary out;
 	int cap = capacite;
+	// DUMP FRAME (2026-09-18) : arme par demander_dump. Consomme ici, remis
+	// a false en fin de fonction. Ne modifie AUCUNE logique -- ajoute des
+	// enregistrements sous `if (dump)`.
+	const bool dump = _dump_demande;
+	int dump_slot_courant = -1;
+	String csv_bloq, csv_vol, csv_tests, csv_slots;
+	std::vector<uint8_t> dump_raison;
+	if (dump) {
+		csv_bloq  = "slot,x,y,z,dist,ht,hf,lt,lf,occulte\n";
+		csv_vol   = "slot,volume,px_min,px_max,py_min,py_max,depth_max\n";
+		csv_tests = "slot,volume,px_min,px_max,py_min,py_max,pixels_total,pixels_couvrants,depth_min_arbre,seuil_devant,verdict\n";
+		csv_slots = "slot,x,y,z,dist,est_bloqueur,raison,verdict_brut,visible_stable\n";
+		dump_raison.assign(size_t(cap), uint8_t(255));
+	}
 
 	// Detection changement de capacite / cache reset -> tout_dirty.
 	bool tout_dirty = false;
@@ -1660,6 +1673,11 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		_cache_p_hf.assign(size_t(cap), 0.0f);
 		_cache_p_lf.assign(size_t(cap), 0.0f);
 		_cache_terminal.assign(size_t(cap), 0);
+		// HYSTERESIS OCCLUSION (GPU Gems 2 ch.6). Init visible par defaut
+		// (nouvel arbre affiche des sa naissance, le test decidera ensuite).
+		_visible_stable.assign(size_t(cap), 1u);
+		_compteur_bascule.assign(size_t(cap), 0u);
+		_dernier_brut.assign(size_t(cap), 1u);
 	}
 
 	const uint8_t *libres_r = libres.ptr();
@@ -1847,68 +1865,88 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// division par ~0 dans la normalisation et le pop visuel d'un arbre qui
 	// passerait entre les jambes du joueur.
 	constexpr float EPS_CONE_XZ_CARRE = 0.01f;
+	// BASE CAMERA + PRECALCULS FRUSTUM RADAR (2026-09-18 : deplaces AVANT
+	// la boucle bloqueurs pour filtrer les bloqueurs par le cone, pas
+	// seulement par la distance. Sans ce filtre, un bloqueur hors-champ se
+	// projette dans le rectangle buffer d'un arbre teste droit devant par
+	// coincidence angulaire et gonfle depth_max_buffer -> l'arbre lointain
+	// n'est pas occulte).
+	// CANAL CAMERA UNIQUE (2026-09-18). La base camera vient DIRECTEMENT du
+	// Transform3D affiche par Godot (colonnes de la Basis, doc Godot : col 0 =
+	// droite, col 1 = haut, col 2 = arriere donc forward = -col 2). Le FOV
+	// vient de la Projection reellement rendue (col-majeur, col[0][0] =
+	// 1/tan(fov_h/2), col[1][1] = 1/tan(fov_v/2)). Aucune reconstruction a la
+	// main : les bugs de signe/ordre disparaissent avec le code qui les
+	// portait. camera_active = drapeau leve par le setter definir_camera.
+	Basis b = cam_transform.basis.orthonormalized();
+	Vector3 c0 = b.get_column(0);
+	Vector3 c1 = b.get_column(1);
+	Vector3 c2 = b.get_column(2);
+	float right_x = c0.x, right_y = c0.y, right_z = c0.z;
+	float up_x    = c1.x, up_y    = c1.y, up_z    = c1.z;
+	float fwd_x   = -c2.x, fwd_y  = -c2.y, fwd_z  = -c2.z;
+	float ox    = cam_transform.origin.x;
+	float obs_y = cam_transform.origin.y;
+	float oz    = cam_transform.origin.z;
+	bool  cone_actif = camera_active;
+	float p00 = cam_projection.columns[0][0];
+	float p11 = cam_projection.columns[1][1];
+	float tan_half_h = (p00 > 1e-6f) ? 1.0f / p00 : 1.0f;
+	float tan_half_v = (p11 > 1e-6f) ? 1.0f / p11 : 1.0f;
+	const float FOV_H_RAD_4 = 2.0f * std::atan(tan_half_h);
+	const float FOV_V_RAD_4 = 2.0f * std::atan(tan_half_v);
+	// Precalculs sphere test frustum (identiques a passe_frustum plus bas).
+	// Marge reglable via definir_marge_frustum (member _marge_frustum, alimente
+	// par le .gd chaque frame). Fallback 1.15 si valeur pas encore poussee.
+	float marge = (_marge_frustum >= 1.0f ? _marge_frustum : 1.15f);
+	float demi_h = FOV_H_RAD_4 * 0.5f;
+	float demi_v = FOV_V_RAD_4 * 0.5f;
+	float tang_h = std::tan(demi_h) * marge;
+	float tang_v = std::tan(demi_v) * marge;
+	float sphere_factor_h = 1.0f / std::cos(demi_h);
+	float sphere_factor_v = 1.0f / std::cos(demi_v);
 	// Occlusion Intel MOC : refill inconditionnel des bloqueurs depuis la
 	// CAMERA a chaque tick. Coherence de reference frame -- meme observateur
 	// pour le filtrage, le remplissage buffer 2D et la lecture.
 	_bloqueurs_camera.clear();
-	int hors_rayon = 0;   // INSTRUMENTATION : arbres vivants exclus d2 > rayon_carre
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
 		float dx = px_r[i] - ox;
+		float dy = py_r[i] - obs_y;
 		float dz = pz_r[i] - oz;
 		float d2 = dx * dx + dz * dz;
-		if (d2 > rayon_carre) { ++hors_rayon; continue; }
+		if (d2 > rayon_carre) continue;
 		if (_cache_p_ht[i] < HAUTEUR_MIN_BLOQUEUR_M) continue;
+		// FILTRE CONE identique au test frustum radar sphere (voir la
+		// lambda passe_frustum plus bas) : porte proximite (arbre sur le
+		// joueur passe toujours), puis les 3 rejets standard profondeur /
+		// vertical / horizontal. Sans ce filtre, un bloqueur hors-champ
+		// pollue le buffer 2D par angle et fait echouer l'occlusion des
+		// arbres testes droit devant.
+		if (d2 > EPS_CONE_XZ_CARRE) {
+			float fwd_v = dx * fwd_x + dy * fwd_y + dz * fwd_z;
+			float right_v = dx * right_x + dy * right_y + dz * right_z;
+			float up_v = dx * up_x + dy * up_y + dz * up_z;
+			float larg = (_cache_p_lt[i] > _cache_p_lf[i] ? _cache_p_lt[i] : _cache_p_lf[i]);
+			float haut = _cache_p_ht[i] + _cache_p_hf[i];
+			float r = 0.5f * std::sqrt(larg * larg + haut * haut);
+			if (fwd_v < -r) continue;
+			float d_v_b = sphere_factor_v * r;
+			float az_v = tang_v * fwd_v;
+			if (up_v > az_v + d_v_b || up_v < -az_v - d_v_b) continue;
+			float d_h_b = sphere_factor_h * r;
+			float az_h = tang_h * fwd_v;
+			if (right_v > az_h + d_h_b || right_v < -az_h - d_h_b) continue;
+		}
 		_bloqueurs_camera.push_back(int32_t(i));
 	}
 	// Etape 4/8 occlusion 2D projete camera : fonction de projection monde
-	// -> pixel du buffer 2D. Rend visible=false si point derriere camera ou
-	// hors du FOV.
-	// FOV du buffer pousses par la coquille via definir_fov_buffer (canal
-	// GD -> C++). Sans appel, valeurs par defaut du header (~115 h / 80 v).
-	const float FOV_H_RAD_4 = _fov_h_rad_buffer;
-	const float FOV_V_RAD_4 = _fov_v_rad_buffer;
-	// Vecteur regard COMPLET recu de Godot (deja unitaire cote camera :
-	// -basis.z). Renormalisation defensive au cas ou l'appelant pousserait
-	// un vecteur nul (au tout premier tick, avant push camera) : fallback
-	// sur (0, 0, -1) pour eviter une base degeneree.
-	float fwd_x = regard_x;
-	float fwd_y = regard_y;
-	float fwd_z = regard_z;
-	float regard_len = std::sqrt(fwd_x * fwd_x + fwd_y * fwd_y + fwd_z * fwd_z);
-	if (regard_len > 0.0001f) {
-		float inv = 1.0f / regard_len;
-		fwd_x *= inv;
-		fwd_y *= inv;
-		fwd_z *= inv;
-	} else {
-		fwd_x = 0.0f;
-		fwd_y = 0.0f;
-		fwd_z = -1.0f;
-	}
-	// Base camera : right = fwd x (0,1,0), up = right x fwd.
-	float right_x = fwd_z;
-	float right_y = 0.0f;
-	float right_z = -fwd_x;
-	float right_len = std::sqrt(right_x * right_x + right_z * right_z);
-	if (right_len > 0.0001f) {
-		right_x /= right_len;
-		right_z /= right_len;
-	} else {
-		// Regard quasi vertical : fwd ~ (0, +/-1, 0). Le produit fwd x (0,1,0)
-		// s'effondre (right_len ~ 0), la base entiere devient degeneree et
-		// world_to_pixel projette tout au meme pixel -> occlusion totale.
-		// Fix standard lookAt (scratchapixel, gimbal handling) : basculer sur
-		// une reference orthogonale fixe. right = (1,0,0) est orthogonal a
-		// tout fwd vertical, donc up = right x fwd = (0, 0, +/-1) reste
-		// valide et orthonorme -- pas de renormalisation necessaire.
-		right_x = 1.0f;
-		right_y = 0.0f;
-		right_z = 0.0f;
-	}
-	float up_x = right_y * fwd_z - right_z * fwd_y;
-	float up_y = right_z * fwd_x - right_x * fwd_z;
-	float up_z = right_x * fwd_y - right_y * fwd_x;
+	// -> pixel du buffer 2D. Rend false SEULEMENT si le point est derriere
+	// le near. Les coordonnees hors image sont rendues telles quelles ;
+	// l'appelant calcule min/max puis borne. La base camera (fwd/right/up)
+	// + FOV_H/V_RAD_4 sont desormais calcules AVANT la boucle bloqueurs
+	// pour filtrer aussi les bloqueurs par le cone (voir bloc "BASE CAMERA
+	// + PRECALCULS FRUSTUM").
 	auto world_to_pixel = [&](float wx, float wy, float wz,
 							  int &out_px, int &out_py, float &out_depth) -> bool {
 		float vx = wx - ox;
@@ -1926,7 +1964,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		out_px = px;
 		out_py = py;
 		out_depth = fwd_v;
-		return (px >= 0 && px < BUFFER_2D_LARGEUR && py >= 0 && py < BUFFER_2D_HAUTEUR);
+		return true;
 	};
 	// Etape 5/8 : reset buffer 2D + projection des bloqueurs.
 	// CYCLE ATOMIQUE (2026-09-17) : le reset ne s'execute QUE si le remplissage
@@ -1941,7 +1979,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 			_buffer_2d[p] = std::numeric_limits<float>::infinity();
 		}
 	}
-	int pixels_couverts_buffer = 0;
 	// Moteur d'ecriture d'UN volume-boite dans le buffer 2D d'occlusion.
 	// Agnostique : ne connait ni arbre, ni tronc, ni feuillage. Recoit un
 	// centre XZ, une plage verticale [y_bas, y_haut] et une largeur AABB.
@@ -1950,7 +1987,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// tout futur type de bloqueur (personnage, ennemi, mur) : chaque
 	// objet fournira sa PROPRE liste de volumes appelant cette lambda,
 	// sans modifier le moteur.
-	auto ecrire_volume = [&](float cx, float cz, float y_bas, float y_haut, float largeur) -> void {
+	auto ecrire_volume = [&](float cx, float cz, float y_bas, float y_haut, float largeur, const char *nom_volume) -> void {
 		if (y_haut <= y_bas) return;
 		if (largeur <= 0.0f) return;
 		constexpr float INV_SQRT2 = 0.70710678f;
@@ -2010,7 +2047,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 			int cpx = -1, cpy = -1;
 			float cdepth = 0.0f;
 			bool cvis = world_to_pixel(px_k, py_k, pz_k, cpx, cpy, cdepth);
-			if (!cvis) continue;   // hors buffer lateralement
+			if (!cvis) continue;   // derriere le near
 			au_moins_un_visible = true;
 			if (cpx < px_min) px_min = cpx;
 			if (cpx > px_max) px_max = cpx;
@@ -2025,6 +2062,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (py_max >= BUFFER_2D_HAUTEUR) py_max = BUFFER_2D_HAUTEUR - 1;
 		px_min += 1; px_max -= 1; py_min += 1; py_max -= 1;
 		if (px_min > px_max || py_min > py_max) return;
+		if (dump && dump_slot_courant >= 0) {
+			csv_vol += String::num_int64(dump_slot_courant) + "," + String(nom_volume) + ","
+				+ String::num_int64(px_min) + "," + String::num_int64(px_max) + ","
+				+ String::num_int64(py_min) + "," + String::num_int64(py_max) + ","
+				+ String::num_real(depth_max_bloq) + "\n";
+		}
 		for (int y = py_min; y <= py_max; ++y) {
 			for (int x = px_min; x <= px_max; ++x) {
 				int p = y * BUFFER_2D_LARGEUR + x;
@@ -2034,7 +2077,115 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 			}
 		}
 	};
+	// AUTO-OCCLUSION FIX (2026-09-18, Intel MOC standard). Un bloqueur ne
+	// doit jamais etre teste contre le buffer qu'il a lui-meme rempli.
+	// Solution : trier front-to-back, puis pour chaque bloqueur TESTER
+	// d'abord (buffer courant = bloqueurs plus proches deja ecrits) et
+	// PUIS ecrire ses volumes. Un tronc derriere un rideau de troncs
+	// reste occultable ; il ne s'auto-occulte plus.
+	constexpr float INV_SQRT2_TEST = 0.70710678f;
+	constexpr float FRACTION_TROUS_MAX_TEST = 0.05f;
+	// test_volume_occulte extrait de passe_occlusion, partage entre la
+	// phase front-to-back et passe_occlusion (capture par [&]).
+	auto test_volume_occulte = [&](float cx, float cz, float y_bas, float y_haut, float largeur, const char *nom_volume) -> bool {
+		if (y_haut <= y_bas) return false;
+		if (largeur <= 0.0f) return false;
+		float demi_l = (largeur * 0.5f) * INV_SQRT2_TEST;
+		float coins_x[8] = {cx - demi_l, cx + demi_l, cx - demi_l, cx + demi_l,
+							cx - demi_l, cx + demi_l, cx - demi_l, cx + demi_l};
+		float coins_y[8] = {y_bas, y_bas, y_haut, y_haut,
+							y_bas, y_bas, y_haut, y_haut};
+		float coins_z[8] = {cz - demi_l, cz - demi_l, cz - demi_l, cz - demi_l,
+							cz + demi_l, cz + demi_l, cz + demi_l, cz + demi_l};
+		int px_min = BUFFER_2D_LARGEUR;
+		int px_max = -1;
+		int py_min = BUFFER_2D_HAUTEUR;
+		int py_max = -1;
+		float depth_min_arbre = std::numeric_limits<float>::infinity();
+		bool au_moins_un_visible_arbre = false;
+		for (int k = 0; k < 8; ++k) {
+			int cpx = -1, cpy = -1;
+			float cdepth = 0.0f;
+			bool cvis = world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth);
+			if (!cvis) continue;
+			au_moins_un_visible_arbre = true;
+			if (cpx < px_min) px_min = cpx;
+			if (cpx > px_max) px_max = cpx;
+			if (cpy < py_min) py_min = cpy;
+			if (cpy > py_max) py_max = cpy;
+			if (cdepth < depth_min_arbre) depth_min_arbre = cdepth;
+		}
+		if (!au_moins_un_visible_arbre) {
+			if (dump && dump_slot_courant >= 0) {
+				csv_tests += String::num_int64(dump_slot_courant) + "," + String(nom_volume) + ",0,0,0,0,0,0,0,0,0\n";
+			}
+			return false;
+		}
+		if (px_min < 0) px_min = 0;
+		if (px_max >= BUFFER_2D_LARGEUR) px_max = BUFFER_2D_LARGEUR - 1;
+		if (py_min < 0) py_min = 0;
+		if (py_max >= BUFFER_2D_HAUTEUR) py_max = BUFFER_2D_HAUTEUR - 1;
+		if (px_min > px_max || py_min > py_max) return false;
+		// MASQUE DE COUVERTURE (Intel MOC standard, 2026-09-18). Occulte
+		// SEULEMENT si une forte fraction des pixels de l'empreinte porte
+		// un occulteur STRICTEMENT plus proche que la face de l'arbre. Un
+		// pixel vide (INF) n'est pas couvrant, il ne compte pas -- il ne
+		// disqualifie plus le test par seuil de trous. Un pixel avec un
+		// depth EGAL ou plus loin (voisin de rangee, tronc lateral proche
+		// mais pas devant) n'est pas couvrant non plus : c'est ce qui evite
+		// l'auto-occlusion entre voisins.
+		// Reglables a chaud via definir_marge_profondeur / definir_seuil_couverture
+		// (canal pousse chaque frame par la coquille). Bornes cote setters.
+		float MARGE_PROFONDEUR = _marge_profondeur;   // metres, absorbe l'epaisseur
+		float SEUIL_COUVERTURE = _seuil_couverture;   // fraction min pour occulter
+		float seuil_devant = depth_min_arbre - MARGE_PROFONDEUR;
+		int pixels_total = 0;
+		int pixels_couvrants = 0;
+		for (int y = py_min; y <= py_max; ++y) {
+			for (int x = px_min; x <= px_max; ++x) {
+				int p = y * BUFFER_2D_LARGEUR + x;
+				float dp = _buffer_2d[p];
+				++pixels_total;
+				if (std::isinf(dp)) continue;
+				if (dp < seuil_devant) ++pixels_couvrants;
+			}
+		}
+		if (pixels_total <= 0) {
+			if (dump && dump_slot_courant >= 0) {
+				csv_tests += String::num_int64(dump_slot_courant) + "," + String(nom_volume) + ","
+					+ String::num_int64(px_min) + "," + String::num_int64(px_max) + ","
+					+ String::num_int64(py_min) + "," + String::num_int64(py_max) + ",0,0,"
+					+ String::num_real(depth_min_arbre) + "," + String::num_real(seuil_devant) + ",0\n";
+			}
+			return false;
+		}
+		bool verdict = (float(pixels_couvrants) >= SEUIL_COUVERTURE * float(pixels_total));
+		if (dump && dump_slot_courant >= 0) {
+			csv_tests += String::num_int64(dump_slot_courant) + "," + String(nom_volume) + ","
+				+ String::num_int64(px_min) + "," + String::num_int64(px_max) + ","
+				+ String::num_int64(py_min) + "," + String::num_int64(py_max) + ","
+				+ String::num_int64(pixels_total) + "," + String::num_int64(pixels_couvrants) + ","
+				+ String::num_real(depth_min_arbre) + "," + String::num_real(seuil_devant) + ","
+				+ String::num_int64(verdict ? 1 : 0) + "\n";
+		}
+		return verdict;
+	};
+	// Tri front-to-back par d2 XZ. Ordre d'ecriture n'affecte pas le
+	// contenu final du buffer (min-par-pixel dans ecrire_volume, commutatif),
+	// seulement quels bloqueurs sont testes contre quels autres.
+	std::stable_sort(_bloqueurs_camera.begin(), _bloqueurs_camera.end(),
+		[&](int32_t a, int32_t b) -> bool {
+			float dxa = px_r[a] - ox;
+			float dza = pz_r[a] - oz;
+			float dxb = px_r[b] - ox;
+			float dzb = pz_r[b] - oz;
+			return (dxa * dxa + dza * dza) < (dxb * dxb + dzb * dzb);
+		});
+	// Tables verdict indexees par slot (visibles par passe_occlusion via [&]).
+	std::vector<uint8_t> _est_bloqueur(size_t(cap), 0u);
+	std::vector<uint8_t> _bloqueur_occulte(size_t(cap), 0u);
 	for (int32_t idx : _bloqueurs_camera) {
+		_est_bloqueur[idx] = 1u;
 		float bx = px_r[idx];
 		float bz = pz_r[idx];
 		float by_bas = py_r[idx];
@@ -2042,162 +2193,187 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		float hf = _cache_p_hf[idx];
 		float lt = _cache_p_lt[idx];
 		float lf = _cache_p_lf[idx];
+		float y_tronc_haut = by_bas + ht;
+		float y_feuillage_haut = y_tronc_haut + hf;
+		if (dump) dump_slot_courant = idx;
+		// TEST d'abord contre le buffer partiel (bloqueurs plus proches
+		// deja ecrits). Verdict stocke, relu par passe_occlusion.
+		bool tronc_occ = test_volume_occulte(bx, bz, by_bas, y_tronc_haut, lt, "tronc");
+		bool feuillage_absent = (hf <= 0.0f || lf <= 0.0f);
+		bool feuillage_occ = feuillage_absent ? true
+			: test_volume_occulte(bx, bz, y_tronc_haut, y_feuillage_haut, lf, "feuillage");
+		_bloqueur_occulte[idx] = (tronc_occ && feuillage_occ) ? 1u : 0u;
+		if (dump) {
+			float dx_b = bx - ox, dz_b = bz - oz;
+			float dist_b = std::sqrt(dx_b * dx_b + dz_b * dz_b);
+			csv_bloq += String::num_int64(idx) + "," + String::num_real(bx) + ","
+				+ String::num_real(by_bas) + "," + String::num_real(bz) + ","
+				+ String::num_real(dist_b) + "," + String::num_real(ht) + ","
+				+ String::num_real(hf) + "," + String::num_real(lt) + ","
+				+ String::num_real(lf) + "," + String::num_int64(_bloqueur_occulte[idx]) + "\n";
+		}
+		// PUIS ecriture des deux volumes (tronc lt, feuillage lf).
 		// Volumes de l'arbre : DEUX boites inscrites, jamais une seule sur
 		// la hauteur totale. Un tronc fin (lt) au-dessous du feuillage
 		// large (lf) evite qu'un tronc n'occulte les arbres A COTE de lui
 		// (seulement ceux derriere), tout en preservant l'occlusion large
-		// donnee par la couronne. Ecriture independante (rectangles non
-		// fusionnes). Autres types d'objets (personnage, ennemi, mur)
-		// fourniront leur propre liste d'appels ecrire_volume ici sans
-		// toucher le moteur ci-dessus.
-		float y_tronc_haut = by_bas + ht;
-		float y_feuillage_haut = y_tronc_haut + hf;
-		ecrire_volume(bx, bz, by_bas, y_tronc_haut, lt);
-		ecrire_volume(bx, bz, y_tronc_haut, y_feuillage_haut, lf);
+		// donnee par la couronne.
+		ecrire_volume(bx, bz, by_bas, y_tronc_haut, lt, "tronc");
+		ecrire_volume(bx, bz, y_tronc_haut, y_feuillage_haut, lf, "feuillage");
 	}
-	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
-		if (!std::isinf(_buffer_2d[p])) ++pixels_couverts_buffer;
-	}
-	// INSTRUMENTATION 2026-09-18 : distinguer "rejete par frustum" de
-	// "occulte par buffer" a la verticale, exposer base camera + tan.
-	int rejetes_frustum = 0;
-	int passent_tout = 0;
-	constexpr float MARGE_FRUSTUM = 4.0f;
-	float demi_h = FOV_H_RAD_4 * 0.5f;
-	float demi_v = FOV_V_RAD_4 * 0.5f;
-	float tang_h = std::tan(demi_h) * MARGE_FRUSTUM;
-	float tang_v = std::tan(demi_v) * MARGE_FRUSTUM;
-	float sphere_factor_h = 1.0f / std::cos(demi_h);
-	float sphere_factor_v = 1.0f / std::cos(demi_v);
-	float tan_h_ins = tang_h;
-	float tan_v_ins = tang_v;
-	// Dump premier arbre rejete par frustum radar (defauts : rien rejete).
-	int dump_fr_i = -1;
-	float dump_fr_fwd_v = 0.0f;
-	float dump_fr_right_v = 0.0f;
-	float dump_fr_up_v = 0.0f;
-	float dump_fr_seuil_h = 0.0f;
-	float dump_fr_seuil_v = 0.0f;
-	int dump_fr_rejet_h = 0;
-	int dump_fr_rejet_v = 0;
-	float dump_fr_dx = 0.0f;
-	float dump_fr_dy = 0.0f;
-	float dump_fr_dz = 0.0f;
-	float dump_fr_dist = 0.0f;
-	auto dans_cercle = [&](int i) -> bool {
+	if (dump) dump_slot_courant = -1;
+	// SEPARATION EN 3 PASSES (2026-09-18). Un correctif d'une passe ne
+	// touche plus les deux autres. Verdict d'occlusion identique bit a
+	// bit : memes tests, memes seuils, meme ordre, memes valeurs.
+	// passe_distance : filtre distance seule (utilisable en dehors du
+	// enchainement -- garde pour futur, aucun warning unused sur lambda
+	// C++ non-utilisee).
+	auto passe_distance = [&](int i) -> bool {
 		if (!filtre_actif) return true;
 		float dx = px_r[i] - ox;
-		float dy = py_r[i] - obs_y;
 		float dz = pz_r[i] - oz;
 		float d2 = dx * dx + dz * dz;
 		if (d2 > rayon_carre) return false;
-		if (!cone_actif) return true;
-		if (d2 <= EPS_CONE_XZ_CARRE) return true;
-		// FRUSTUM RADAR - TEST DE SPHERE (standard Lighthouse3D, verifie ligne a ligne).
-		// Chaque objet est teste comme UNE SPHERE de rayon r (englobant complet).
-		// sphere_factor = 1/cos(demi_FOV) : dilatation de la paroi par le rayon, standard,
-		// NE PAS retirer, NE PAS remplacer par un ajout de rayon brut.
-		// POUR UN NOUVEAU TYPE D'OBJET : fournir SON rayon englobant r (demi-diagonale de
-		//   son AABB). Le test ne change jamais. NE PAS inventer de variante par axe :
-		//   le standard teste UNE sphere, un seul rayon.
-		float fwd_v = dx * fwd_x + dy * fwd_y + dz * fwd_z;
-		float right_v = dx * right_x + dy * right_y + dz * right_z;
-		float up_v    = dx * up_x    + dy * up_y    + dz * up_z;
-		float ht_i = _cache_p_ht[i];
-		float hf_i = _cache_p_hf[i];
-		float lt_i = _cache_p_lt[i];
-		float lf_i = _cache_p_lf[i];
-		float larg = (lt_i > lf_i ? lt_i : lf_i);
-		float haut = ht_i + hf_i;
-		float r = 0.5f * std::sqrt(larg * larg + haut * haut);
-		// 1. Profondeur : sphere derriere la camera au-dela de son rayon -> dehors.
-		if (fwd_v < -r) { ++rejetes_frustum; return false; }
-		// 2. Vertical : |up_v| au-dela de la paroi + rayon corrige -> dehors.
-		float d_v = sphere_factor_v * r;
-		float az_v = tang_v * fwd_v;
-		if (up_v > az_v + d_v || up_v < -az_v - d_v) { ++rejetes_frustum; return false; }
-		// 3. Horizontal : idem.
-		float d_h = sphere_factor_h * r;
-		float az_h = tang_h * fwd_v;
-		if (right_v > az_h + d_h || right_v < -az_h - d_h) { ++rejetes_frustum; return false; }
-		// Etape 6/8 : test occlusion par lecture buffer 2D.
-		// Projette l'arbre en AABB verticale, prend depth_min et compare au
-		// max des profondeurs buffer sur son rectangle (test conservatif :
-		// occulte seulement si TOUT le rectangle buffer devant l'arbre est
-		// plus proche que le bord le plus proche de l'arbre, ET aucun pixel
-		// INF -- une trouee dans cette direction empeche l'occlusion).
-		{
-			float bx = px_r[i];
-			float bz = pz_r[i];
-			float by_bas = py_r[i];
-			float ht = _cache_p_ht[i];
-			float hf = _cache_p_hf[i];
-			float lt = _cache_p_lt[i];
-			float lf = _cache_p_lf[i];
-			float by_haut = by_bas + ht + hf;
-			float demi_l = (lt > lf ? lt : lf) * 0.5f;
-			float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
-								bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
-			float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
-								by_bas, by_bas, by_haut, by_haut};
-			float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
-								bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
-			int px_min = BUFFER_2D_LARGEUR;
-			int px_max = -1;
-			int py_min = BUFFER_2D_HAUTEUR;
-			int py_max = -1;
-			float depth_min_arbre = std::numeric_limits<float>::infinity();
-			bool au_moins_un_visible_arbre = false;
-			for (int k = 0; k < 8; ++k) {
-				int cpx = -1, cpy = -1;
-				float cdepth = 0.0f;
-				bool cvis = world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth);
-				if (!cvis) continue;
-				au_moins_un_visible_arbre = true;
-				if (cpx < px_min) px_min = cpx;
-				if (cpx > px_max) px_max = cpx;
-				if (cpy < py_min) py_min = cpy;
-				if (cpy > py_max) py_max = cpy;
-				if (cdepth < depth_min_arbre) depth_min_arbre = cdepth;
-			}
-			if (au_moins_un_visible_arbre) {
-				if (px_min < 0) px_min = 0;
-				if (px_max >= BUFFER_2D_LARGEUR) px_max = BUFFER_2D_LARGEUR - 1;
-				if (py_min < 0) py_min = 0;
-				if (py_max >= BUFFER_2D_HAUTEUR) py_max = BUFFER_2D_HAUTEUR - 1;
-				// Test conservatif Intel MOC : arbre occulte SEULEMENT si son
-				// bord le plus proche est plus loin que le MAX du buffer sur
-				// TOUT le rectangle. Un pixel INF (aucun bloqueur) -> pas
-				// d'occlusion (l'arbre est visible dans cette direction).
-				// Seuil de couverture : occulter si la fraction de pixels vides
-				// (aucun bloqueur -> INF) reste sous FRACTION_TROUS_MAX. Depart
-				// TRES strict a 0.05 (5%), a diminuer au fur et a mesure.
-				constexpr float FRACTION_TROUS_MAX = 0.05f;
-				float depth_max_buffer = 0.0f;
-				int pixels_total = 0;
-				int pixels_vides = 0;
-				for (int y = py_min; y <= py_max; ++y) {
-					for (int x = px_min; x <= px_max; ++x) {
-						int p = y * BUFFER_2D_LARGEUR + x;
-						float dp = _buffer_2d[p];
-						++pixels_total;
-						if (std::isinf(dp)) { ++pixels_vides; continue; }
-						if (dp > depth_max_buffer) depth_max_buffer = dp;
-					}
-				}
-				bool trop_de_trous = (pixels_total == 0)
-					|| (float(pixels_vides) > FRACTION_TROUS_MAX * float(pixels_total));
-				if (!trop_de_trous && depth_min_arbre > depth_max_buffer) {
-					return false;
-				}
-			}
-		}
-		++passent_tout;
 		return true;
 	};
+	// PASSE B : frustum radar sphere (Lighthouse3D, inchange).
+	auto passe_frustum = [&](int i) -> bool {
+		float dx = px_r[i] - ox;
+		float dy = py_r[i] - obs_y;
+		float dz = pz_r[i] - oz;
+		float fwd_v   = dx * fwd_x   + dy * fwd_y   + dz * fwd_z;
+		float right_v = dx * right_x + dy * right_y + dz * right_z;
+		float up_v    = dx * up_x    + dy * up_y    + dz * up_z;
+		float larg = (_cache_p_lt[i] > _cache_p_lf[i] ? _cache_p_lt[i] : _cache_p_lf[i]);
+		float haut = _cache_p_ht[i] + _cache_p_hf[i];
+		float r = 0.5f * std::sqrt(larg * larg + haut * haut);
+		if (fwd_v < -r) return false;
+		float d_v = sphere_factor_v * r;
+		float az_v = tang_v * fwd_v;
+		if (up_v > az_v + d_v || up_v < -az_v - d_v) return false;
+		float d_h = sphere_factor_h * r;
+		float az_h = tang_h * fwd_v;
+		if (right_v > az_h + d_h || right_v < -az_h - d_h) return false;
+		return true;
+	};
+	// PASSE C : occlusion buffer 2D (Intel MOC, double volume inscrit).
+	// true = l'arbre est OCCULTE (donc a retirer).
+	auto passe_occlusion = [&](int i) -> bool {
+		// AUTO-OCCLUSION FIX (2026-09-18) : bloqueur -> lire verdict pose
+		// par la phase front-to-back (buffer n'avait que les bloqueurs
+		// PLUS PROCHES lors du test). Non-bloqueur -> test complet sur
+		// buffer plein (rien ecrit dedans, pas d'auto-occlusion).
+		if (_est_bloqueur[i] != 0u) {
+			return _bloqueur_occulte[i] != 0u;
+		}
+		float bx = px_r[i];
+		float bz = pz_r[i];
+		float by_bas = py_r[i];
+		float ht = _cache_p_ht[i];
+		float hf = _cache_p_hf[i];
+		float lt = _cache_p_lt[i];
+		float lf = _cache_p_lf[i];
+		if (dump) dump_slot_courant = i;
+		bool tronc_occ = test_volume_occulte(bx, bz, by_bas, by_bas + ht, lt, "tronc");
+		bool feuillage_absent = (hf <= 0.0f || lf <= 0.0f);
+		bool feuillage_occ = feuillage_absent ? true
+			: test_volume_occulte(bx, bz, by_bas + ht, by_bas + ht + hf, lf, "feuillage");
+		return (tronc_occ && feuillage_occ);
+	};
+	// ENCHAINEMENT : reproduit exactement l'ancien dans_cercle.
+	auto dans_cercle = [&](int i) -> bool {
+		if (!filtre_actif) return true;
+		float dx0 = px_r[i] - ox;
+		float dz0 = pz_r[i] - oz;
+		float d2 = dx0 * dx0 + dz0 * dz0;
+		if (d2 > rayon_carre) { if (dump) dump_raison[i] = 0; return false; }
+		if (!cone_actif) { if (dump) dump_raison[i] = 3; return true; }
+		if (d2 <= EPS_CONE_XZ_CARRE) { if (dump) dump_raison[i] = 3; return true; }
+		if (!passe_frustum(i)) { if (dump) dump_raison[i] = 1; return false; }
+		if (passe_occlusion(i)) { if (dump) dump_raison[i] = 2; return false; }
+		if (dump) dump_raison[i] = 3;
+		return true;
+	};
+	// MEMOISATION dans_cercle (2026-09-18) : evaluer UNE fois par slot,
+	// puis relire. Avant : dans_cercle appelee 2 fois (pop + remplissage)
+	// -> double cout CPU du test frustum + occlusion.
+	std::vector<uint8_t> _verdict_cercle(size_t(cap), 0u);
+	for (int i = 0; i < cap; ++i) {
+		_verdict_cercle[i] = (libres_r[i] == 0 && dans_cercle(i)) ? 1u : 0u;
+	}
+	// HYSTERESIS A PERSISTANCE DU NOUVEAU VERDICT (GPU Gems 2 ch.6, corrige
+	// 2026-09-18). L'etat affiche _visible_stable ne bascule que si le
+	// NOUVEAU verdict brut se maintient HYSTERESIS_FRAMES ticks
+	// CONSECUTIFS. Le compteur mesure la persistance du candidat au
+	// changement (brut != stable), et se remet a zero seulement quand :
+	// (a) le verdict brut redevient egal a stable (candidat disparait),
+	// (b) le verdict brut change de valeur d'un tick a l'autre (rafale).
+	// Sans ca (version precedente), le compteur se remettait a zero des
+	// que brut recroise stable une frame, ce qui empechait de compter
+	// consecutivement et produisait des bascules groupees plus visibles
+	// que le scintillement d'origine.
+	constexpr uint8_t HYSTERESIS_FRAMES = 3u;
+	// INSTRUMENT BASCULES (2026-09-18) : mesure objective du scintillement.
+	// Compte par frame et par bande de distance a l'oeil (proche/anneau/loin)
+	// les slots dont le verdict brut a bascule (ce que l'hysteresis absorbe)
+	// et ceux dont _visible_stable a bascule (ce que l'ecran montre).
+	int bascules_brut[3]   = {0, 0, 0};
+	int bascules_stable[3] = {0, 0, 0};
+	auto bande_distance = [&](int i) -> int {
+		float dx = px_r[i] - ox;
+		float dz = pz_r[i] - oz;
+		float d2 = dx * dx + dz * dz;
+		if (d2 < 30.0f * 30.0f) return 0;
+		if (d2 < 80.0f * 80.0f) return 1;
+		return 2;
+	};
+	for (int i = 0; i < cap; ++i) {
+		if (libres_r[i] == 1) {
+			_visible_stable[i] = 1u;
+			_compteur_bascule[i] = 0u;
+			_dernier_brut[i] = 1u;
+			continue;
+		}
+		uint8_t stable_avant = _visible_stable[i];
+		uint8_t brut = _verdict_cercle[i];
+		if (brut != _dernier_brut[i]) ++bascules_brut[bande_distance(i)];
+		if (brut == _visible_stable[i]) {
+			// verdict brut d'accord avec l'affichage : le candidat au
+			// changement disparait, on repart de zero.
+			_compteur_bascule[i] = 0u;
+		} else {
+			// verdict brut veut changer l'etat. On compte sa persistance
+			// CONSECUTIVE : meme valeur que la frame precedente -> continue,
+			// valeur differente -> repart a 1 (nouvelle rafale).
+			if (brut == _dernier_brut[i]) {
+				++_compteur_bascule[i];
+			} else {
+				_compteur_bascule[i] = 1u;
+			}
+			if (_compteur_bascule[i] >= HYSTERESIS_FRAMES) {
+				_visible_stable[i] = brut;
+				_compteur_bascule[i] = 0u;
+			}
+		}
+		if (_visible_stable[i] != stable_avant) ++bascules_stable[bande_distance(i)];
+		_dernier_brut[i] = brut;
+	}
+	if (dump) {
+		for (int i = 0; i < cap; ++i) {
+			if (libres_r[i] == 1) continue;
+			float dx_s = px_r[i] - ox;
+			float dz_s = pz_r[i] - oz;
+			float dist_s = std::sqrt(dx_s * dx_s + dz_s * dz_s);
+			csv_slots += String::num_int64(i) + "," + String::num_real(px_r[i]) + ","
+				+ String::num_real(py_r[i]) + "," + String::num_real(pz_r[i]) + ","
+				+ String::num_real(dist_s) + "," + String::num_int64(_est_bloqueur[i]) + ","
+				+ String::num_int64(dump_raison[i]) + "," + String::num_int64(_verdict_cercle[i]) + ","
+				+ String::num_int64(_visible_stable[i]) + "\n";
+		}
+	}
 	int pop = 0;
 	for (int i = 0; i < cap; ++i) {
-		if (libres_r[i] == 0 && dans_cercle(i)) ++pop;
+		if (_visible_stable[i] == 1u && libres_r[i] == 0) ++pop;
 	}
 	PackedFloat32Array pb_t;
 	PackedFloat32Array pb_f;
@@ -2210,7 +2386,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	float *pb_f_w = pb_f.ptrw();
 	int rank = 0;
 	for (int i = 0; i < cap; ++i) {
-		if (libres_r[i] == 1 || !dans_cercle(i)) {
+		if (_visible_stable[i] == 0u || libres_r[i] == 1) {
 			srpd_w[i] = -1;
 			continue;
 		}
@@ -2275,253 +2451,134 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["buffer_feuillage_cercle"] = pb_f_cercle;
 	out["cone_actif"] = cone_actif;
 	out["nb_bloqueurs_camera"] = int(_bloqueurs_camera.size());
-	out["buffer_2d_largeur"] = BUFFER_2D_LARGEUR;
-	out["buffer_2d_hauteur"] = BUFFER_2D_HAUTEUR;
-	out["cam_hauteur"] = int(obs_y * 10.0f);
-	out["cam_pitch"] = int(fwd_y * 100.0f);
-	// Test projection etape 4 : premier arbre vivant.
-	int test_px = -1, test_py = -1;
-	float test_depth = 0.0f;
-	int test_visible = 0;
-	for (int i = 0; i < cap; ++i) {
-		if (libres_r[i] == 1) continue;
-		int tpx = -1, tpy = -1;
-		float tdepth = 0.0f;
-		bool tvis = world_to_pixel(px_r[i], py_r[i], pz_r[i], tpx, tpy, tdepth);
-		test_px = tpx;
-		test_py = tpy;
-		test_depth = tdepth;
-		test_visible = tvis ? 1 : 0;
-		break;
-	}
-	out["test_px"] = test_px;
-	out["test_py"] = test_py;
-	out["test_depth"] = int(test_depth);
-	out["test_visible"] = test_visible;
-	out["pixels_couverts_buffer_2d"] = pixels_couverts_buffer;
-	// Instrumentation etape 6/8 : compter les arbres occultes par le buffer 2D.
+	out["bascules_brut_proche"]   = bascules_brut[0];
+	out["bascules_brut_anneau"]   = bascules_brut[1];
+	out["bascules_brut_loin"]     = bascules_brut[2];
+	out["bascules_stable_proche"] = bascules_stable[0];
+	out["bascules_stable_anneau"] = bascules_stable[1];
+	out["bascules_stable_loin"]   = bascules_stable[2];
+	// PASS INSTRUMENTATION reduit (2026-09-18) : ne calcule QUE occultes_2d et
+	// self_occ (les seuls compteurs encore lus par le banc). Utilise le
+	// verdict front-to-back pour les bloqueurs (auto-occlusion fix), et
+	// reproduit le test conservatif MOC pour les non-bloqueurs.
 	int occultes_2d = 0;
-	int self_occ = 0;             // bloqueurs (ht >= 3m) qui sont occultes
-	int faux_pos_proches = 0;     // arbres a moins de 20 m de la camera occultes
-	// Dump cible : premier bloqueur adulte occulte du tick.
-	int dump_i = -1;
-	int dump_pxi_min = 0, dump_pxi_max = 0, dump_pyi_min = 0, dump_pyi_max = 0;
-	int dump_depth_arbre = 0;
-	int dump_depth_max_buffer = 0;
-	int dump_depth_max_buffer_zone = 0;
-	// Distance mini du buffer sur le rectangle de l'arbre occulte (occulteur
-	// le plus proche devant lui). Sert a dire si l'occlusion est legitime.
-	int dump_depth_min_buffer_zone = 0;
-	// INSTRUMENTATION dump-arbre : taille rect projete + fraction remplie.
-	int dump_rect_w = 0;
-	int dump_rect_h = 0;
-	int dump_pixels_remplis = 0;
-	int dump_pixels_total = 0;
-	// Compteurs globaux sur tous les arbres testes non-bloqueurs :
-	// testes_derriere_bloqueur = arbres dont le rect a >= 1 pixel rempli.
-	// occultes_parmi_eux = combien de ceux-la sont occultes par le test.
-	int testes_derriere_bloqueur = 0;
-	int occultes_parmi_eux = 0;
+	int self_occ = 0;
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
-		float bx = px_r[i], bz = pz_r[i], by_bas = py_r[i];
-		float ht = _cache_p_ht[i], hf = _cache_p_hf[i];
-		float lt = _cache_p_lt[i], lf = _cache_p_lf[i];
-		float by_haut = by_bas + ht + hf;
-		float demi_l = (lt > lf ? lt : lf) * 0.5f;
-		float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
-							bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
-		float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
-							by_bas, by_bas, by_haut, by_haut};
-		float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
-							bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
-		int pxi_min = BUFFER_2D_LARGEUR, pxi_max = -1;
-		int pyi_min = BUFFER_2D_HAUTEUR, pyi_max = -1;
-		float depth_min_a = std::numeric_limits<float>::infinity();
-		bool visi = false;
-		for (int k = 0; k < 8; ++k) {
-			int cpx = -1, cpy = -1;
-			float cdepth = 0.0f;
-			if (!world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth)) continue;
-			visi = true;
-			if (cpx < pxi_min) pxi_min = cpx;
-			if (cpx > pxi_max) pxi_max = cpx;
-			if (cpy < pyi_min) pyi_min = cpy;
-			if (cpy > pyi_max) pyi_max = cpy;
-			if (cdepth < depth_min_a) depth_min_a = cdepth;
-		}
-		if (!visi) continue;
-		if (pxi_min < 0) pxi_min = 0;
-		if (pxi_max >= BUFFER_2D_LARGEUR) pxi_max = BUFFER_2D_LARGEUR - 1;
-		if (pyi_min < 0) pyi_min = 0;
-		if (pyi_max >= BUFFER_2D_HAUTEUR) pyi_max = BUFFER_2D_HAUTEUR - 1;
-		// Seuil de couverture (miroir du test principal dans dans_cercle).
-		constexpr float FRACTION_TROUS_MAX_INSTR = 0.05f;
-		float dmax_buf = 0.0f;
-		float dmin_buf = std::numeric_limits<float>::infinity();
-		int pxls_total = 0;
-		int pxls_vides = 0;
-		for (int y = pyi_min; y <= pyi_max; ++y) {
-			for (int x = pxi_min; x <= pxi_max; ++x) {
-				int p = y * BUFFER_2D_LARGEUR + x;
-				float dp = _buffer_2d[p];
-				++pxls_total;
-				if (std::isinf(dp)) { ++pxls_vides; continue; }
-				if (dp > dmax_buf) dmax_buf = dp;
-				if (dp < dmin_buf) dmin_buf = dp;
-			}
-		}
-		bool troue = (pxls_total == 0)
-			|| (float(pxls_vides) > FRACTION_TROUS_MAX_INSTR * float(pxls_total));
-		// INSTRUMENTATION : arbre non-bloqueur (ht < 3m) OU arbre plus haut mais
-		// dont le rect a >= 1 pixel rempli -> il y a un bloqueur devant une
-		// partie de lui. On veut savoir si le test finit par l'occulter.
-		int pxls_remplis = pxls_total - pxls_vides;
-		if (pxls_remplis > 0) ++testes_derriere_bloqueur;
-		if (!troue && depth_min_a > dmax_buf) {
-			++occultes_2d;
-			if (_cache_p_ht[i] >= 3.0f) ++self_occ;
-			if (pxls_remplis > 0) ++occultes_parmi_eux;
-			float ddx = px_r[i] - ox;
-			float ddz = pz_r[i] - oz;
-			if (ddx * ddx + ddz * ddz < 400.0f) ++faux_pos_proches; // < 20 m
-			if (dump_i == -1 && _cache_p_ht[i] >= 3.0f) {
-				dump_i = i;
-				dump_pxi_min = pxi_min;
-				dump_pxi_max = pxi_max;
-				dump_pyi_min = pyi_min;
-				dump_pyi_max = pyi_max;
-				dump_depth_arbre = int(depth_min_a);
-				dump_depth_max_buffer = 0; // non calcule dans la variante MAX-buffer
-				dump_depth_max_buffer_zone = int(dmax_buf);
-				dump_depth_min_buffer_zone = std::isinf(dmin_buf) ? 0 : int(dmin_buf);
-				dump_rect_w = pxi_max - pxi_min + 1;
-				dump_rect_h = pyi_max - pyi_min + 1;
-				dump_pixels_remplis = pxls_remplis;
-				dump_pixels_total = pxls_total;
-			}
-		}
-	}
-	// Chercher le bloqueur DEVANT l'arbre dumpe : celui dont la profondeur
-	// (fwd_v du centre bas) est la plus proche de dump_depth_min_buffer_zone.
-	// Reprojecter ses 8 coins pour calculer la taille pixel de son rectangle.
-	int dump_bloq_rect_w = 0;
-	int dump_bloq_rect_h = 0;
-	if (dump_i != -1) {
-		float target_depth = float(dump_depth_min_buffer_zone);
-		int best_idx = -1;
-		float best_diff = std::numeric_limits<float>::infinity();
-		for (int32_t idx : _bloqueurs_camera) {
-			float bvx = px_r[idx] - ox;
-			float bvz = pz_r[idx] - oz;
-			float bvy = (py_r[idx] + _cache_p_ht[idx] * 0.5f) - obs_y;
-			float f_v = bvx * fwd_x + bvy * fwd_y + bvz * fwd_z;
-			float d = std::abs(f_v - target_depth);
-			if (d < best_diff) { best_diff = d; best_idx = idx; }
-		}
-		if (best_idx >= 0) {
-			float bx3 = px_r[best_idx];
-			float bz3 = pz_r[best_idx];
-			float by_bas3 = py_r[best_idx];
-			float ht3 = _cache_p_ht[best_idx];
-			float hf3 = _cache_p_hf[best_idx];
-			float lt3 = _cache_p_lt[best_idx];
-			float lf3 = _cache_p_lf[best_idx];
-			float by_haut3 = by_bas3 + ht3 + hf3;
-			constexpr float INV_SQRT2 = 0.70710678f;
-			float rayon_reel3 = (lt3 > lf3 ? lt3 : lf3) * 0.5f;
-			float dl3 = rayon_reel3 * INV_SQRT2;
-			float cx3[8] = {bx3 - dl3, bx3 + dl3, bx3 - dl3, bx3 + dl3,
-							bx3 - dl3, bx3 + dl3, bx3 - dl3, bx3 + dl3};
-			float cy3[8] = {by_bas3, by_bas3, by_haut3, by_haut3,
-							by_bas3, by_bas3, by_haut3, by_haut3};
-			float cz3[8] = {bz3 - dl3, bz3 - dl3, bz3 - dl3, bz3 - dl3,
-							bz3 + dl3, bz3 + dl3, bz3 + dl3, bz3 + dl3};
-			int bxm = BUFFER_2D_LARGEUR, bxM = -1;
-			int bym = BUFFER_2D_HAUTEUR, byM = -1;
+		bool arbre_occulte;
+		if (_est_bloqueur[i] != 0u) {
+			arbre_occulte = (_bloqueur_occulte[i] != 0u);
+		} else {
+			float bx = px_r[i], bz = pz_r[i], by_bas = py_r[i];
+			float ht = _cache_p_ht[i], hf = _cache_p_hf[i];
+			float lt = _cache_p_lt[i], lf = _cache_p_lf[i];
+			float by_haut = by_bas + ht + hf;
+			float demi_l = (lt > lf ? lt : lf) * 0.5f;
+			float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
+								bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
+			float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
+								by_bas, by_bas, by_haut, by_haut};
+			float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
+								bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
+			int pxi_min = BUFFER_2D_LARGEUR, pxi_max = -1;
+			int pyi_min = BUFFER_2D_HAUTEUR, pyi_max = -1;
+			float depth_min_a = std::numeric_limits<float>::infinity();
+			bool visi = false;
 			for (int k = 0; k < 8; ++k) {
 				int cpx = -1, cpy = -1;
 				float cdepth = 0.0f;
-				if (world_to_pixel(cx3[k], cy3[k], cz3[k], cpx, cpy, cdepth)) {
-					if (cpx < bxm) bxm = cpx;
-					if (cpx > bxM) bxM = cpx;
-					if (cpy < bym) bym = cpy;
-					if (cpy > byM) byM = cpy;
+				if (!world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth)) continue;
+				visi = true;
+				if (cpx < pxi_min) pxi_min = cpx;
+				if (cpx > pxi_max) pxi_max = cpx;
+				if (cpy < pyi_min) pyi_min = cpy;
+				if (cpy > pyi_max) pyi_max = cpy;
+				if (cdepth < depth_min_a) depth_min_a = cdepth;
+			}
+			if (!visi) continue;
+			if (pxi_min < 0) pxi_min = 0;
+			if (pxi_max >= BUFFER_2D_LARGEUR) pxi_max = BUFFER_2D_LARGEUR - 1;
+			if (pyi_min < 0) pyi_min = 0;
+			if (pyi_max >= BUFFER_2D_HAUTEUR) pyi_max = BUFFER_2D_HAUTEUR - 1;
+			constexpr float FRACTION_TROUS_MAX_INSTR = 0.05f;
+			float dmax_buf = 0.0f;
+			int pxls_total = 0;
+			int pxls_vides = 0;
+			for (int y = pyi_min; y <= pyi_max; ++y) {
+				for (int x = pxi_min; x <= pxi_max; ++x) {
+					int p = y * BUFFER_2D_LARGEUR + x;
+					float dp = _buffer_2d[p];
+					++pxls_total;
+					if (std::isinf(dp)) { ++pxls_vides; continue; }
+					if (dp > dmax_buf) dmax_buf = dp;
 				}
 			}
-			if (bxM >= bxm && byM >= bym) {
-				dump_bloq_rect_w = bxM - bxm + 1;
-				dump_bloq_rect_h = byM - bym + 1;
-			}
+			bool troue = (pxls_total == 0)
+				|| (float(pxls_vides) > FRACTION_TROUS_MAX_INSTR * float(pxls_total));
+			arbre_occulte = (!troue && depth_min_a > dmax_buf);
+		}
+		if (arbre_occulte) {
+			++occultes_2d;
+			if (_cache_p_ht[i] >= 3.0f) ++self_occ;
 		}
 	}
 	out["occultes_2d"] = occultes_2d;
 	out["self_occ"] = self_occ;
-	out["faux_pos_proches"] = faux_pos_proches;
-	// Histogramme buffer 2D : min, mediane, max des pixels non-INF.
-	float buf2d_min = std::numeric_limits<float>::infinity();
-	float buf2d_max = 0.0f;
-	std::vector<float> buf2d_vals;
-	buf2d_vals.reserve(size_t(BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR));
-	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
-		float v = _buffer_2d[p];
-		if (!std::isinf(v)) {
-			if (v < buf2d_min) buf2d_min = v;
-			if (v > buf2d_max) buf2d_max = v;
-			buf2d_vals.push_back(v);
+	if (dump) {
+		auto ecrire = [&](const String &nom, const String &contenu) -> void {
+			Ref<FileAccess> f = FileAccess::open(_dump_chemin + "/" + nom, FileAccess::WRITE);
+			if (f.is_null()) {
+				out["dump_erreur"] = nom;
+				return;
+			}
+			f->store_string(contenu);
+		};
+		float rayon = std::sqrt(rayon_carre);
+		if (rayon <= 0.0001f) rayon = 1.0f;
+		String frame_json = String("{") +
+			"\"fwd\":[" + String::num_real(fwd_x) + "," + String::num_real(fwd_y) + "," + String::num_real(fwd_z) + "]," +
+			"\"right\":[" + String::num_real(right_x) + "," + String::num_real(right_y) + "," + String::num_real(right_z) + "]," +
+			"\"up\":[" + String::num_real(up_x) + "," + String::num_real(up_y) + "," + String::num_real(up_z) + "]," +
+			"\"oeil\":[" + String::num_real(ox) + "," + String::num_real(obs_y) + "," + String::num_real(oz) + "]," +
+			"\"fov_h_rad\":" + String::num_real(FOV_H_RAD_4) + "," +
+			"\"fov_v_rad\":" + String::num_real(FOV_V_RAD_4) + "," +
+			"\"tang_h\":" + String::num_real(tang_h) + "," +
+			"\"tang_v\":" + String::num_real(tang_v) + "," +
+			"\"marge_frustum\":" + String::num_real(_marge_frustum) + "," +
+			"\"seuil_couverture\":" + String::num_real(_seuil_couverture) + "," +
+			"\"marge_profondeur\":" + String::num_real(_marge_profondeur) + "," +
+			"\"rayon_carre\":" + String::num_real(rayon_carre) + "," +
+			"\"nb_bloqueurs\":" + String::num_int64(int(_bloqueurs_camera.size())) + "," +
+			"\"pop\":" + String::num_int64(pop) + "," +
+			"\"buffer_largeur\":" + String::num_int64(BUFFER_2D_LARGEUR) + "," +
+			"\"buffer_hauteur\":" + String::num_int64(BUFFER_2D_HAUTEUR) + "," +
+			"\"hysteresis_frames\":3}\n";
+		ecrire("frame.json", frame_json);
+		String pgm = String("P2\n") + String::num_int64(BUFFER_2D_LARGEUR) + " " + String::num_int64(BUFFER_2D_HAUTEUR) + "\n255\n";
+		for (int y = 0; y < BUFFER_2D_HAUTEUR; ++y) {
+			for (int x = 0; x < BUFFER_2D_LARGEUR; ++x) {
+				float v = _buffer_2d[y * BUFFER_2D_LARGEUR + x];
+				int niveau;
+				if (std::isinf(v)) {
+					niveau = 0;
+				} else {
+					int q = int(v / rayon * 254.0f);
+					if (q < 0) q = 0;
+					if (q > 254) q = 254;
+					niveau = 255 - q;
+				}
+				pgm += String::num_int64(niveau);
+				pgm += (x + 1 == BUFFER_2D_LARGEUR) ? "\n" : " ";
+			}
 		}
+		ecrire("buffer_2d.pgm", pgm);
+		ecrire("bloqueurs.csv", csv_bloq);
+		ecrire("volumes.csv", csv_vol);
+		ecrire("tests.csv", csv_tests);
+		ecrire("slots.csv", csv_slots);
+		out["dump_ecrit"] = _dump_chemin;
+		_dump_demande = false;
 	}
-	float buf2d_med = 0.0f;
-	if (!buf2d_vals.empty()) {
-		std::sort(buf2d_vals.begin(), buf2d_vals.end());
-		buf2d_med = buf2d_vals[buf2d_vals.size() / 2];
-	}
-	if (std::isinf(buf2d_min)) buf2d_min = 0.0f;
-	out["buf2d_min"] = int(buf2d_min);
-	out["buf2d_med"] = int(buf2d_med);
-	out["buf2d_max"] = int(buf2d_max);
-	out["dump_i"] = dump_i;
-	out["dump_rect_x"] = dump_pxi_min * 100 + dump_pxi_max;
-	out["dump_rect_y"] = dump_pyi_min * 100 + dump_pyi_max;
-	out["dump_d_arbre"] = dump_depth_arbre;
-	out["dump_d_min_buf"] = dump_depth_max_buffer;
-	out["dump_d_max_buf"] = dump_depth_max_buffer_zone;
-	out["dump_d_min_buf_zone"] = dump_depth_min_buffer_zone;
-	out["hors_rayon"] = hors_rayon;
-	out["testes_derriere_bloqueur"] = testes_derriere_bloqueur;
-	out["occultes_parmi_eux"] = occultes_parmi_eux;
-	// INSTRUMENTATION 2026-09-18 : diag verticale.
-	out["rejetes_frustum"] = rejetes_frustum;
-	out["passent_tout"] = passent_tout;
-	out["instr_fwd_x"] = fwd_x;
-	out["instr_fwd_y"] = fwd_y;
-	out["instr_fwd_z"] = fwd_z;
-	out["instr_right_x"] = right_x;
-	out["instr_right_z"] = right_z;
-	out["instr_up_x"] = up_x;
-	out["instr_up_y"] = up_y;
-	out["instr_up_z"] = up_z;
-	out["instr_tan_h"] = tan_h_ins;
-	out["instr_tan_v"] = tan_v_ins;
-	// Dump premier arbre rejete par frustum (instr 2026-09-18).
-	out["dump_fr_i"] = dump_fr_i;
-	out["dump_fr_fwd_v"] = dump_fr_fwd_v;
-	out["dump_fr_right_v"] = dump_fr_right_v;
-	out["dump_fr_up_v"] = dump_fr_up_v;
-	out["dump_fr_seuil_h"] = dump_fr_seuil_h;
-	out["dump_fr_seuil_v"] = dump_fr_seuil_v;
-	out["dump_fr_rejet_h"] = dump_fr_rejet_h;
-	out["dump_fr_rejet_v"] = dump_fr_rejet_v;
-	out["dump_fr_dx"] = dump_fr_dx;
-	out["dump_fr_dy"] = dump_fr_dy;
-	out["dump_fr_dz"] = dump_fr_dz;
-	out["dump_fr_dist"] = dump_fr_dist;
-	out["dump_rect_w"] = dump_rect_w;
-	out["dump_rect_h"] = dump_rect_h;
-	out["dump_pixels_remplis"] = dump_pixels_remplis;
-	out["dump_pixels_total"] = dump_pixels_total;
-	out["dump_bloq_rect_w"] = dump_bloq_rect_w;
-	out["dump_bloq_rect_h"] = dump_bloq_rect_h;
 	return out;
 }
 

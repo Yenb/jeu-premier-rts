@@ -26,3 +26,4 @@ extension_terrain/bin/~*
 extension_terrain/src/*.obj
 extension_terrain/src/*.obj.import
 extension_terrain/.sconsign.dblite
+dumps_occlusion/

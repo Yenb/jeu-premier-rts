@@ -45,6 +45,9 @@
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
+#include <godot_cpp/variant/projection.hpp>
+#include <godot_cpp/variant/string.hpp>
+#include <godot_cpp/variant/transform3d.hpp>
 
 #include <godot_cpp/variant/vector2i.hpp>
 #include <godot_cpp/variant/vector3i.hpp>
@@ -205,15 +208,10 @@ public:
 	//     UNIQUEMENT si (px-ox)^2 + (pz-oz)^2 <= rayon_carre. La sim GDScript
 	//     ne depend PAS de ce filtre (aucune colonne mutee ici).
 	//
-	// FILTRE CONE VISION (2026-09-15) : en plus du cercle. cone_actif=false ->
-	// pas de test cone (comportement identique au filtre distance seul).
-	// cone_actif=true -> frustum radar reconstruit depuis (fwd/right/up).
-	// Arbre a distance ~0 (sur le joueur) : test bypasse -> toujours inclus.
-	// VECTEUR REGARD (2026-09-18) : regard_x/regard_y/regard_z est le vecteur
-	// avant COMPLET de la camera (deja unitaire cote Godot : -basis.z). Il
-	// remplace la reconstruction partielle par (dir_x, dir_z, pitch_y) +
-	// sqrt(1-pitch^2) qui perdait le contexte directionnel et faisait
-	// deraper la base camera aux angles non horizontaux.
+	// CANAL CAMERA UNIQUE (2026-09-18) : le C++ lit droite/haut/avant/oeil dans
+	// la base du Transform3D affiche par Godot, et FOV_H/FOV_V dans les tangentes
+	// de la Projection. Aucun recalcul manuel de la base ; camera_active remplace
+	// cone_actif (drapeau leve des qu'un Transform valide est pousse).
 	Dictionary mettre_a_jour_buffers_rendu(
 			int capacite,
 			const PackedByteArray &libres,
@@ -223,28 +221,27 @@ public:
 			const PackedFloat32Array &positions_y,
 			const PackedFloat32Array &positions_z,
 			bool filtre_actif,
-			float ox,
-			float oz,
 			float rayon_carre,
-			bool cone_actif,
-			float obs_y,
-			float regard_x,
-			float regard_y,
-			float regard_z);
+			bool camera_active,
+			const Transform3D &cam_transform,
+			const Projection &cam_projection);
 
 	// Invalide le cache : force tout_dirty=true au prochain appel.
 	// Miroir : agrandissement de capacite qui reset le buffer GPU.
 	void invalider_cache_rendu();
-
-	// Canal FOV camera -> buffer d'occlusion. Le buffer 2D projete avec
-	// FOV_V_RAD = fov_v_deg * pi/180 et FOV_H_RAD = FOV_V_RAD * aspect. Le
-	// coquille .gd est responsable d'appliquer la marge (fov_camera_deg *
-	// marge >= fov_rendu, pour couvrir tous les arbres rendus). Idempotent,
-	// safe a appeler par frame.
-	void definir_fov_buffer(float fov_v_deg, float aspect);
 	// Marge du frustum radar (tan_h/tan_v * marge). Bornee [1.0, 3.0] cote
 	// setter (recadrage defensif). Coquille pousse chaque frame.
 	void definir_marge_frustum(float m);
+	// DUMP FRAME D'OCCLUSION (2026-09-18). Sur demande, la prochaine
+	// mettre_a_jour_buffers_rendu ecrit frame.json + buffer_2d.pgm + 4 CSV
+	// dans le dossier fourni, puis remet le drapeau a false. Cout nul le
+	// reste du temps.
+	void demander_dump(const String &chemin);
+	// Masque de couverture Intel MOC (test_volume_occulte). SEUIL_COUVERTURE
+	// clampe [0.0, 1.0], MARGE_PROFONDEUR clampe [0.0, 10.0]. Coquille pousse
+	// chaque frame (regles @export + surcharge JSON).
+	void definir_seuil_couverture(float s);
+	void definir_marge_profondeur(float m);
 
 	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
 	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
@@ -668,6 +665,13 @@ private:
 	std::vector<float> _cache_p_lt;
 	std::vector<float> _cache_p_hf;
 	std::vector<float> _cache_p_lf;
+	// HYSTERESIS DU VERDICT D'OCCLUSION (GPU Gems 2 ch.6, persistance
+	// N frames). Etat de visibilite affiche stabilise et compteur de
+	// bascules opposees consecutives. Un basculement n'affecte l'affichage
+	// que s'il tient HYSTERESIS_FRAMES ticks d'affilee.
+	std::vector<uint8_t> _visible_stable;
+	std::vector<uint8_t> _compteur_bascule;
+	std::vector<uint8_t> _dernier_brut;   // verdict brut du tick precedent (par slot)
 	// FIX B2 : flag "au terminal" par slot -- 1 quand le dernier recalcul
 	// a trouve==false (age > sum(durees), valeurs figees au dernier stade).
 	// Permet un SKIP EARLY avant la boucle lerp l.1673 : en regime stable,
@@ -693,16 +697,22 @@ private:
 	static constexpr int BUFFER_2D_LARGEUR = 512;
 	static constexpr int BUFFER_2D_HAUTEUR = 256;
 	std::vector<float> _buffer_2d;
-	// FOV du buffer d'occlusion (pousses par definir_fov_buffer). Defauts :
-	// couvrent le rendu 75 deg vertical + marge 1.15x, aspect 16:9. Sans appel
-	// du canal, la coquille tourne avec ces valeurs par defaut.
-	float _fov_h_rad_buffer = 115.0f * 3.14159265358979323846f / 180.0f;
-	float _fov_v_rad_buffer = 80.0f * 3.14159265358979323846f / 180.0f;
 	// Marge multiplicative appliquee aux demi-ouvertures du frustum radar
 	// (tan_h/tan_v * marge). Reglable a chaud via definir_marge_frustum,
 	// canal pousse chaque frame par la coquille. Defaut 1.15 = ancien
 	// comportement (constante en dur avant 2026-09-18).
 	float _marge_frustum = 1.15f;
+	// Masque de couverture Intel MOC : fraction min de pixels de l'empreinte
+	// strictement plus proches que la face de l'arbre pour occulter, et
+	// marge en metres pour absorber l'epaisseur d'un arbre. Reglables via
+	// definir_seuil_couverture / definir_marge_profondeur, pousses chaque
+	// frame par la coquille.
+	float _seuil_couverture = 0.90f;
+	float _marge_profondeur = 0.5f;
+	// DUMP FRAME (2026-09-18) : declenche par demander_dump, consomme et
+	// remis a false par le prochain mettre_a_jour_buffers_rendu.
+	bool _dump_demande = false;
+	String _dump_chemin;
 
 	// Stables banque (etape 14).
 	float _taille_case_dormantes = 0.0f;

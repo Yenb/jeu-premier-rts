@@ -1,6 +1,10 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://b01l5o4k2ih2r"]
 
-[ext_resource type="Script" path="res://jeu/bancs/banc_peuplement_arbre.gd" id="1_bppa"]
+[ext_resource type="Script" uid="uid://knh5newlawfl" path="res://jeu/bancs/banc_peuplement_arbre.gd" id="1_bppa"]
 
-[node name="BancPeuplementArbre" type="Node3D"]
+[node name="BancPeuplementArbre" type="Node3D" unique_id=1342326831]
 script = ExtResource("1_bppa")
+marge_frustum = 1.8
+seuil_couverture = 0.39
+marge_profondeur_m = 3.7
+rayon_rendu_m = 223.0

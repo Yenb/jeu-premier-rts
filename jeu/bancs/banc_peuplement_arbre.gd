@@ -107,24 +107,21 @@ var _temps_depuis_bake_occl: float = 0.0
 # la camera regarde vers le haut). Poussee au C++ chaque frame via
 # _sim.definir_marge_frustum. Bornes recadrees cote C++ (1.0..3.0).
 @export_range(1.0, 3.0, 0.01) var marge_frustum: float = 1.15
+# Masque de couverture Intel MOC (test d'occlusion buffer 2D). Fraction min
+# de pixels de l'empreinte STRICTEMENT plus proches que la face de l'arbre
+# pour occulter. 1.0 = pas d'occlusion (100% requis), 0.5 = moitie de
+# l'empreinte suffit. Poussee au C++ chaque frame via
+# _sim.definir_seuil_couverture. Bornes recadrees cote C++ (0.0..1.0).
+@export_range(0.0, 1.0, 0.01) var seuil_couverture: float = 0.90
+# Marge (metres) absorbee dans le seuil de profondeur : un pixel n'est
+# considere couvrant que si son buffer est < depth_min_arbre - marge.
+# Poussee au C++ chaque frame. Bornes recadrees cote C++ (0.0..10.0).
+@export_range(0.0, 10.0, 0.05) var marge_profondeur_m: float = 0.5
 # Rayon de rendu / bloqueurs (metres). Pousse a la sim via donnees JSON
 # (surcharge cle `rayon_rendu_m` avant configurer). Distingue "arbre non
 # dessine car trop loin" (> rayon_rendu_m) de "arbre occulte" dans les
 # instrumentations.
 @export_range(20.0, 1000.0, 1.0) var rayon_rendu_m: float = 200.0
-
-# STREAMING RENDU 60 Hz (2026-09-15). Le rebuild du buffer compact suit
-# la CAMERA (position + orientation XZ), pas la cadence sim. Sans ce
-# rebuild par frame, quand la camera pivote entre deux ticks sim (250 ms
-# a 4 Hz), les arbres qui entrent dans le champ n'apparaissent qu'au
-# prochain tick -> pop visible. La sim ne re-tourne PAS : seul le filtre
-# cercle+cone se recalcule. Gate par SEUIL_* pour ne pas rebuilder quand
-# la camera est immobile (economie a N=100000).
-const REBUILD_SEUIL_POS_M := 0.25   # 25 cm de deplacement
-const REBUILD_SEUIL_COS := 0.9998   # ~1.1 degre d'ecart d'orientation XZ
-var _pos_bake_prec: Vector2 = Vector2.INF * Vector2.ONE
-var _dir_bake_prec: Vector2 = Vector2.ZERO
-var _bake_prec_valide: bool = false
 
 # Module de simulation. Instancie au `_ready`, appele par `_process`.
 # `null` avant init : `_process` gate en tete pour ne pas appeler avancer
@@ -148,6 +145,10 @@ func _ready() -> void:
 	# valeur JSON gagne quand la cle est presente).
 	if donnees.has("marge_frustum"):
 		marge_frustum = float(donnees.marge_frustum)
+	if donnees.has("seuil_couverture"):
+		seuil_couverture = float(donnees.seuil_couverture)
+	if donnees.has("marge_profondeur_m"):
+		marge_profondeur_m = float(donnees.marge_profondeur_m)
 	if donnees.has("rayon_rendu_m"):
 		rayon_rendu_m = float(donnees.rayon_rendu_m)
 	# Pousse rayon_rendu_m a la sim via donnees (la sim relit sa cle
@@ -226,7 +227,20 @@ func _ready() -> void:
 
 
 var _instr_temps_depuis_affichage: float = 0.0
+# DUMP FRAME D'OCCLUSION (2026-09-18). Arme par F9 dans _unhandled_input,
+# consomme dans _process avant rafraichir_buffer_rendu.
+var _dump_demande_gd: bool = false
+# INSTRUMENT BASCULES (2026-09-18) : accumulateurs par frame, vidés au print
+# 1 Hz. Le C++ reporte par frame ; on cumule pour lire un total par seconde.
+var _acc_bb: Vector3i = Vector3i.ZERO
+var _acc_bs: Vector3i = Vector3i.ZERO
+var _acc_frames: int = 0
 const INSTR_INTERVALLE_S: float = 1.0
+
+
+func _unhandled_input(ev: InputEvent) -> void:
+	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9:
+		_dump_demande_gd = true
 
 
 func _process(delta: float) -> void:
@@ -236,33 +250,17 @@ func _process(delta: float) -> void:
 	_instr_temps_depuis_affichage += delta
 	if _instr_temps_depuis_affichage >= INSTR_INTERVALLE_S:
 		_instr_temps_depuis_affichage = 0.0
-		var _occ: int = _sim.instr_occultes_2d()
-		var _self: int = _sim.instr_self_occ()
 		print(
 			"bloq=", _sim.instr_nb_bloqueurs_camera(),
-			" occ=", _occ,
-			" self=", _self,
-			" rejetes_frustum=", _sim.instr_rejetes_frustum(),
-			" occultes_buffer=", _occ,
-			" passent_tout=", _sim.instr_passent_tout(),
-			" fwd=(", _sim.instr_fwd_x(), ",", _sim.instr_fwd_y(), ",", _sim.instr_fwd_z(), ")",
-			" right=(", _sim.instr_right_x(), ",", _sim.instr_right_z(), ")",
-			" up=(", _sim.instr_up_x(), ",", _sim.instr_up_y(), ",", _sim.instr_up_z(), ")",
-			" tan_h=", _sim.instr_tan_h(),
-			" tan_v=", _sim.instr_tan_v()
+			" occ=", _sim.instr_occultes_2d(),
+			" self=", _sim.instr_self_occ(),
+			" | frames=", _acc_frames,
+			" bascules_brut(proche,anneau,loin)=", _acc_bb,
+			" bascules_stable(proche,anneau,loin)=", _acc_bs
 		)
-		print(
-			"dump_fr i=", _sim.instr_dump_fr_i(),
-			" fwd_v=", _sim.instr_dump_fr_fwd_v(),
-			" right_v=", _sim.instr_dump_fr_right_v(),
-			" seuil_h=", _sim.instr_dump_fr_seuil_h(),
-			" rejet_h=", _sim.instr_dump_fr_rejet_h(),
-			" up_v=", _sim.instr_dump_fr_up_v(),
-			" seuil_v=", _sim.instr_dump_fr_seuil_v(),
-			" rejet_v=", _sim.instr_dump_fr_rejet_v(),
-			" d=(", _sim.instr_dump_fr_dx(), ",", _sim.instr_dump_fr_dy(), ",", _sim.instr_dump_fr_dz(), ")",
-			" dist=", _sim.instr_dump_fr_dist()
-		)
+		_acc_bb = Vector3i.ZERO
+		_acc_bs = Vector3i.ZERO
+		_acc_frames = 0
 	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
 	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
 	# cadence -- que la sim ait tourne ce tick ou non, la position reste
@@ -274,82 +272,36 @@ func _process(delta: float) -> void:
 	# CHAQUE FRAME (cout : 3 float stores + bool), utile a la fois pour
 	# avancer(pas) au prochain tick sim et pour rafraichir_buffer_rendu()
 	# entre deux ticks quand la camera bouge.
-	var pos_obs_xz := Vector2.ZERO
-	var dir_obs_xz := Vector2.ZERO
+	# Canal camera unique : Transform3D affichee + Projection de la camera
+	# active, poussees chaque frame. Le C++ lit droite/haut/avant/oeil dans
+	# la base, le FOV dans la projection. Plus aucune reconstruction manuelle.
 	var obs_present: bool = false
-	var obs_cone_present: bool = false
-	var obs := get_tree().get_first_node_in_group(&"observateur")
-	if obs != null and obs is Node3D:
-		var noeud_obs: Node3D = obs as Node3D
-		var pos_obs: Vector3 = noeud_obs.global_position
-		pos_obs_xz = Vector2(pos_obs.x, pos_obs.z)
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
 		obs_present = true
-		_sim.definir_observateur(pos_obs.x, pos_obs.z)
-		# CUSTOM_AABB RECENTREE SUR LE JOUEUR (2026-09-15). Godot culle un
-		# MultiMesh comme UN objet via son AABB globale ; l'AABB auto n'est
-		# pas rafraichie de maniere fiable apres reecriture des transforms
-		# du buffer, donc les arbres en bord d'ecran disparaissent quand la
-		# camera tourne. `top_level = true` -> transform du noeud = identite
-		# -> l'AABB locale posee ici est deja en coordonnees monde. Rayon
-		# rendu 80 m + marge 10 m ; Y garde -5 a +60 (origine -5, taille 65).
+		# Transform AFFICHEE (interpolation physique active : joueur_banc.gd
+		# l.21-22 ; doc Node3D.get_global_transform_interpolated).
+		var xf: Transform3D = cam.get_global_transform_interpolated()
+		# Projection reellement utilisee pour rendre (doc Camera3D).
+		var proj: Projection = cam.get_camera_projection()
+		_sim.definir_camera(xf, proj)
+		var pos_obs: Vector3 = xf.origin
+		# CUSTOM_AABB recentree (inchange, origine = oeil).
 		var demi := 90.0
 		var aabb_arbres := AABB(Vector3(pos_obs.x - demi, -5.0, pos_obs.z - demi), Vector3(demi * 2.0, 65.0, demi * 2.0))
 		_noeud_tronc.custom_aabb = aabb_arbres
 		_noeud_feuillage.custom_aabb = aabb_arbres
-		# CONE VISION (2026-09-15) : direction XZ du regard = -basis.z du
-		# noeud observateur, projetee sur XZ puis normalisee. Le joueur
-		# (JoueurBanc CharacterBody3D) porte son lacet sur son propre basis
-		# (le tangage vit dans _yeux, indifferent pour un cone XZ). Camera
-		# fixe (banc mode isole, joueur inactif) : -basis.z pointe vers
-		# l'origine, meme convention. Direction quasi-verticale (regard au
-		# sol ou au ciel) -> pas de cone (dir_xz trop courte a normaliser).
-		# Lire fwd sur la CAMERA ACTIVE, pas sur le body : le body ne porte
-		# que le lacet (joueur_banc.gd:81), le tangage vit sur la camera
-		# enfant (_yeux.rotation.x). Lire basis.z du body -> fwd.y ~= 0 quel
-		# que soit le regard vertical, le lerp cos_eff plus bas ne s'active
-		# jamais. get_viewport().get_camera_3d() rend la camera courante
-		# quelle que soit la scene ; fallback body si aucune camera active.
-		var cam := get_viewport().get_camera_3d()
-		var fwd: Vector3 = -cam.global_transform.basis.z if cam != null else -noeud_obs.global_transform.basis.z
-		# Garde dir_xz.length_squared : sert uniquement au BAKE occlusion
-		# (dir_obs_xz + obs_cone_present consommes plus bas pour decider
-		# de rebuilder le buffer bake). N'a plus aucun role dans le canal
-		# camera -> C++ : le vecteur regard COMPLET est pousse chaque
-		# frame sans gate ci-dessous.
-		var dir_xz := Vector2(fwd.x, fwd.z)
-		if dir_xz.length_squared() > 0.0001:
-			dir_xz = dir_xz.normalized()
-			dir_obs_xz = dir_xz
-			obs_cone_present = true
-		# VECTEUR REGARD COMPLET (2026-09-18). Pousse fwd entier (deja
-		# unitaire cote Godot : -basis.z) au C++ chaque frame, sans gate.
-		# Remplace l'ancien couple decompose (dir_x/dir_z gates + pitch_y
-		# separe) qui gelait le yaw a la verticale et decouplait la base
-		# camera C++ de la vue reelle aux angles non horizontaux. Cone
-		# actif s'auto-leve cote sim quand ce canal est appele.
-		_sim.definir_observateur_regard(fwd.x, fwd.y, fwd.z)
-		# Etape 3/8 occlusion 2D projete camera : hauteur camera seule.
-		_sim.definir_observateur_3d(pos_obs.y)
-		# Canal FOV camera -> buffer occlusion : le FOV du frustum doit
-		# EGALER le FOV rendu (a la marge anti-clignotement MARGE_FRUSTUM
-		# pres, appliquee cote C++). L'ancienne double marge
-		# marge_fov_buffer(=1.15) * MARGE_FRUSTUM(=4.0) elargissait deux
-		# fois, retiree. cam.fov est le FOV VERTICAL par defaut Godot 4
-		# (Camera3D.KEEP_HEIGHT=1). Si keep_aspect = KEEP_WIDTH (=0),
-		# cam.fov est horizontal : deriver le vertical via tangentes.
-		if cam != null:
-			var vp: Viewport = get_viewport()
-			var vps: Vector2 = vp.get_visible_rect().size if vp != null else Vector2(16.0, 9.0)
-			var aspect_ecran: float = vps.x / vps.y if vps.y > 0.0 else 16.0 / 9.0
-			var fov_v_cam: float = cam.fov
-			if cam.keep_aspect == Camera3D.KEEP_WIDTH and aspect_ecran > 0.01:
-				var fh_rad: float = deg_to_rad(cam.fov)
-				var fv_rad: float = 2.0 * atan(tan(fh_rad * 0.5) / aspect_ecran)
-				fov_v_cam = rad_to_deg(fv_rad)
-			_sim.definir_fov_buffer(fov_v_cam, aspect_ecran)
 		# Marge du frustum radar C++ : poussee chaque frame pour que le
 		# slider inspecteur / la surcharge JSON prennent effet a chaud.
 		_sim.definir_marge_frustum(marge_frustum)
+		# Masque de couverture Intel MOC (test occlusion). Slider a chaud
+		# pour trouver le point de calage sans recompiler.
+		_sim.definir_seuil_couverture(seuil_couverture)
+		_sim.definir_marge_profondeur(marge_profondeur_m)
+		# Rayon de rendu / occlusion : pousse chaque frame pour que le
+		# slider @export rayon_rendu_m ait un effet a chaud (sinon fige a
+		# la valeur d'init lue une seule fois par sim.configurer()).
+		_sim.definir_rayon_rendu(rayon_rendu_m)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
 	# `_sim.avancer(pas)` -- proba stochastique / cadence banque /
@@ -365,35 +317,63 @@ func _process(delta: float) -> void:
 			pas *= 4.0
 		_sim.avancer(pas)
 		sim_a_tourne = true
-	# STREAMING RENDU 60 Hz (2026-09-15). Si la sim n'a pas tourne ce frame
-	# ET que la camera a bouge/tourne au-dela des seuils, rafraichir le
-	# buffer compact SANS avancer la sim. Cout : un rebuild O(cap) borne
-	# cercle+cone, aucune mutation de colonne sim. Camera immobile : rien.
-	if obs_present and not sim_a_tourne:
-		var doit_rebuild: bool = not _bake_prec_valide
-		if not doit_rebuild:
-			var d_pos: float = (pos_obs_xz - _pos_bake_prec).length()
-			if d_pos >= REBUILD_SEUIL_POS_M:
-				doit_rebuild = true
-		if not doit_rebuild and obs_cone_present:
-			var d_cos: float = dir_obs_xz.dot(_dir_bake_prec)
-			if d_cos < REBUILD_SEUIL_COS:
-				doit_rebuild = true
-		if doit_rebuild:
-			_sim.rafraichir_buffer_rendu()
-			_pos_bake_prec = pos_obs_xz
-			_dir_bake_prec = dir_obs_xz
-			_bake_prec_valide = true
-	elif sim_a_tourne and obs_present:
-		# DECOUPLAGE RENDU (prompt 2026-09-16). avancer() ne rebuild plus
-		# le buffer -- c'est ici que la coquille declenche le rebuild apres
-		# un tick sim, pour que la mutation (ages, stades, morts, naissances)
-		# soit propagee au rendu. Sans ce rebuild, les nouveaux arbres
-		# resteraient invisibles jusqu'au premier deplacement camera.
+	# Visibilite/occlusion recalculees a chaque frame rendue (Intel MOC,
+	# GPU Gems 29.4.2). La sim reste a 4 Hz ; seul le filtre rendu suit la
+	# camera. HYSTERESIS_FRAMES compte desormais des frames rendues.
+	if obs_present and _dump_demande_gd:
+		# DUMP FRAME D'OCCLUSION (2026-09-18). Ecrit camera.json + viewport.png
+		# cote GD, puis arme le C++ pour qu'il ecrive frame.json + buffer_2d.pgm
+		# + 4 CSV sur ce meme frame (avant rafraichir_buffer_rendu ci-dessous).
+		var dossier: String = ProjectSettings.globalize_path("res://dumps_occlusion/") \
+			+ Time.get_datetime_string_from_system(false, true).replace(":", "-")
+		DirAccess.make_dir_recursive_absolute(dossier)
+		var cam_dump := get_viewport().get_camera_3d()
+		if cam_dump != null:
+			var gt := cam_dump.global_transform
+			var gti := cam_dump.get_global_transform_interpolated()
+			var proj := cam_dump.get_camera_projection()
+			# Basis en GDScript : .x = colonne 0, .y = colonne 1, .z = colonne 2.
+			var basis_dump := {
+				"col0": [gt.basis.x.x, gt.basis.x.y, gt.basis.x.z],
+				"col1": [gt.basis.y.x, gt.basis.y.y, gt.basis.y.z],
+				"col2": [gt.basis.z.x, gt.basis.z.y, gt.basis.z.z],
+				"origin": [gt.origin.x, gt.origin.y, gt.origin.z]
+			}
+			var basis_dump_i := {
+				"col0": [gti.basis.x.x, gti.basis.x.y, gti.basis.x.z],
+				"col1": [gti.basis.y.x, gti.basis.y.y, gti.basis.y.z],
+				"col2": [gti.basis.z.x, gti.basis.z.y, gti.basis.z.z],
+				"origin": [gti.origin.x, gti.origin.y, gti.origin.z]
+			}
+			var proj_arr: Array = []
+			for c_i in range(4):
+				var col_p: Vector4 = proj[c_i]
+				proj_arr.append([col_p.x, col_p.y, col_p.z, col_p.w])
+			var vps: Vector2 = get_viewport().get_visible_rect().size
+			var cam_json := {
+				"global_transform": basis_dump,
+				"global_transform_interpolated": basis_dump_i,
+				"projection_columns": proj_arr,
+				"fov": cam_dump.fov,
+				"keep_aspect": int(cam_dump.keep_aspect),
+				"near": cam_dump.near,
+				"far": cam_dump.far,
+				"viewport": [vps.x, vps.y],
+				"ticks_msec": Time.get_ticks_msec()
+			}
+			var f_cam := FileAccess.open(dossier + "/camera.json", FileAccess.WRITE)
+			if f_cam != null:
+				f_cam.store_string(JSON.stringify(cam_json))
+			var img := get_viewport().get_texture().get_image()
+			if img != null:
+				img.save_png(dossier + "/viewport.png")
+		_sim.demander_dump_occlusion(dossier)
+		_dump_demande_gd = false
+	if obs_present:
 		_sim.rafraichir_buffer_rendu()
-		_pos_bake_prec = pos_obs_xz
-		_dir_bake_prec = dir_obs_xz
-		_bake_prec_valide = true
+		_acc_bb += Vector3i(_sim.instr_bascules_brut_proche(), _sim.instr_bascules_brut_anneau(), _sim.instr_bascules_brut_loin())
+		_acc_bs += Vector3i(_sim.instr_bascules_stable_proche(), _sim.instr_bascules_stable_anneau(), _sim.instr_bascules_stable_loin())
+		_acc_frames += 1
 	# OCCLUSION ARBRE : rebake amorti a INTERVALLE_BAKE_OCCL_S. Independant
 	# de la cadence sim -- le buffer de rendu est toujours a jour du dernier
 	# tick, on rebake sur son etat actuel. Le noeud occludeur ne change rien
