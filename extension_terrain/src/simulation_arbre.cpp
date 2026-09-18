@@ -1908,31 +1908,32 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		}
 	}
 	int pixels_couverts_buffer = 0;
-	for (int32_t idx : _bloqueurs_camera) {
-		float bx = px_r[idx];
-		float bz = pz_r[idx];
-		float by_bas = py_r[idx];
-		float ht = _cache_p_ht[idx];
-		float hf = _cache_p_hf[idx];
-		float lt = _cache_p_lt[idx];
-		float lf = _cache_p_lf[idx];
-		float by_haut = by_bas + ht + hf;
+	// Moteur d'ecriture d'UN volume-boite dans le buffer 2D d'occlusion.
+	// Agnostique : ne connait ni arbre, ni tronc, ni feuillage. Recoit un
+	// centre XZ, une plage verticale [y_bas, y_haut] et une largeur AABB.
+	// Reference : Unity Occluder / c0de517e -- proxy simplifie inscrit
+	// dans la geometrie reelle (conservatif). Reutilisable tel quel par
+	// tout futur type de bloqueur (personnage, ennemi, mur) : chaque
+	// objet fournira sa PROPRE liste de volumes appelant cette lambda,
+	// sans modifier le moteur.
+	auto ecrire_volume = [&](float cx, float cz, float y_bas, float y_haut, float largeur) -> void {
+		if (y_haut <= y_bas) return;
+		if (largeur <= 0.0f) return;
 		constexpr float INV_SQRT2 = 0.70710678f;
-		float rayon_reel = (lt > lf ? lt : lf) * 0.5f;
-		float demi_l = rayon_reel * INV_SQRT2;
+		float demi_l = (largeur * 0.5f) * INV_SQRT2;
 		int px_min = BUFFER_2D_LARGEUR;
 		int px_max = -1;
 		int py_min = BUFFER_2D_HAUTEUR;
 		int py_max = -1;
 		float depth_max_bloq = 0.0f;
-		float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
-							bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
-		float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
-							by_bas, by_bas, by_haut, by_haut};
-		float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
-							bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
+		float coins_x[8] = {cx - demi_l, cx + demi_l, cx - demi_l, cx + demi_l,
+							cx - demi_l, cx + demi_l, cx - demi_l, cx + demi_l};
+		float coins_y[8] = {y_bas, y_bas, y_haut, y_haut,
+							y_bas, y_bas, y_haut, y_haut};
+		float coins_z[8] = {cz - demi_l, cz - demi_l, cz - demi_l, cz - demi_l,
+							cz + demi_l, cz + demi_l, cz + demi_l, cz + demi_l};
 		// Partner Y-swap : coin k et coin partner_y[k] partagent X et Z,
-		// diffèrent uniquement par by_bas <-> by_haut. Sert au clip near
+		// diffèrent uniquement par y_bas <-> y_haut. Sert au clip near
 		// plane sur l'arete verticale (rasterizer standard : point
 		// d'intersection exact, pas d'extension au bord).
 		static constexpr int partner_y[8] = {2, 3, 0, 1, 6, 7, 4, 5};
@@ -1983,13 +1984,13 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 			if (cpy > py_max) py_max = cpy;
 			if (cdepth > depth_max_bloq) depth_max_bloq = cdepth;
 		}
-		if (!au_moins_un_visible) continue;
+		if (!au_moins_un_visible) return;
 		if (px_min < 0) px_min = 0;
 		if (px_max >= BUFFER_2D_LARGEUR) px_max = BUFFER_2D_LARGEUR - 1;
 		if (py_min < 0) py_min = 0;
 		if (py_max >= BUFFER_2D_HAUTEUR) py_max = BUFFER_2D_HAUTEUR - 1;
 		px_min += 1; px_max -= 1; py_min += 1; py_max -= 1;
-		if (px_min > px_max || py_min > py_max) continue;
+		if (px_min > px_max || py_min > py_max) return;
 		for (int y = py_min; y <= py_max; ++y) {
 			for (int x = px_min; x <= px_max; ++x) {
 				int p = y * BUFFER_2D_LARGEUR + x;
@@ -1998,6 +1999,27 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				}
 			}
 		}
+	};
+	for (int32_t idx : _bloqueurs_camera) {
+		float bx = px_r[idx];
+		float bz = pz_r[idx];
+		float by_bas = py_r[idx];
+		float ht = _cache_p_ht[idx];
+		float hf = _cache_p_hf[idx];
+		float lt = _cache_p_lt[idx];
+		float lf = _cache_p_lf[idx];
+		// Volumes de l'arbre : DEUX boites inscrites, jamais une seule sur
+		// la hauteur totale. Un tronc fin (lt) au-dessous du feuillage
+		// large (lf) evite qu'un tronc n'occulte les arbres A COTE de lui
+		// (seulement ceux derriere), tout en preservant l'occlusion large
+		// donnee par la couronne. Ecriture independante (rectangles non
+		// fusionnes). Autres types d'objets (personnage, ennemi, mur)
+		// fourniront leur propre liste d'appels ecrire_volume ici sans
+		// toucher le moteur ci-dessus.
+		float y_tronc_haut = by_bas + ht;
+		float y_feuillage_haut = y_tronc_haut + hf;
+		ecrire_volume(bx, bz, by_bas, y_tronc_haut, lt);
+		ecrire_volume(bx, bz, y_tronc_haut, y_feuillage_haut, lf);
 	}
 	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
 		if (!std::isinf(_buffer_2d[p])) ++pixels_couverts_buffer;
@@ -2215,6 +2237,16 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// Distance mini du buffer sur le rectangle de l'arbre occulte (occulteur
 	// le plus proche devant lui). Sert a dire si l'occlusion est legitime.
 	int dump_depth_min_buffer_zone = 0;
+	// INSTRUMENTATION dump-arbre : taille rect projete + fraction remplie.
+	int dump_rect_w = 0;
+	int dump_rect_h = 0;
+	int dump_pixels_remplis = 0;
+	int dump_pixels_total = 0;
+	// Compteurs globaux sur tous les arbres testes non-bloqueurs :
+	// testes_derriere_bloqueur = arbres dont le rect a >= 1 pixel rempli.
+	// occultes_parmi_eux = combien de ceux-la sont occultes par le test.
+	int testes_derriere_bloqueur = 0;
+	int occultes_parmi_eux = 0;
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
 		float bx = px_r[i], bz = pz_r[i], by_bas = py_r[i];
@@ -2266,9 +2298,15 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		}
 		bool troue = (pxls_total == 0)
 			|| (float(pxls_vides) > FRACTION_TROUS_MAX_INSTR * float(pxls_total));
+		// INSTRUMENTATION : arbre non-bloqueur (ht < 3m) OU arbre plus haut mais
+		// dont le rect a >= 1 pixel rempli -> il y a un bloqueur devant une
+		// partie de lui. On veut savoir si le test finit par l'occulter.
+		int pxls_remplis = pxls_total - pxls_vides;
+		if (pxls_remplis > 0) ++testes_derriere_bloqueur;
 		if (!troue && depth_min_a > dmax_buf) {
 			++occultes_2d;
 			if (_cache_p_ht[i] >= 3.0f) ++self_occ;
+			if (pxls_remplis > 0) ++occultes_parmi_eux;
 			float ddx = px_r[i] - ox;
 			float ddz = pz_r[i] - oz;
 			if (ddx * ddx + ddz * ddz < 400.0f) ++faux_pos_proches; // < 20 m
@@ -2282,6 +2320,63 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				dump_depth_max_buffer = 0; // non calcule dans la variante MAX-buffer
 				dump_depth_max_buffer_zone = int(dmax_buf);
 				dump_depth_min_buffer_zone = std::isinf(dmin_buf) ? 0 : int(dmin_buf);
+				dump_rect_w = pxi_max - pxi_min + 1;
+				dump_rect_h = pyi_max - pyi_min + 1;
+				dump_pixels_remplis = pxls_remplis;
+				dump_pixels_total = pxls_total;
+			}
+		}
+	}
+	// Chercher le bloqueur DEVANT l'arbre dumpe : celui dont la profondeur
+	// (fwd_v du centre bas) est la plus proche de dump_depth_min_buffer_zone.
+	// Reprojecter ses 8 coins pour calculer la taille pixel de son rectangle.
+	int dump_bloq_rect_w = 0;
+	int dump_bloq_rect_h = 0;
+	if (dump_i != -1) {
+		float target_depth = float(dump_depth_min_buffer_zone);
+		int best_idx = -1;
+		float best_diff = std::numeric_limits<float>::infinity();
+		for (int32_t idx : _bloqueurs_camera) {
+			float bvx = px_r[idx] - ox;
+			float bvz = pz_r[idx] - oz;
+			float bvy = (py_r[idx] + _cache_p_ht[idx] * 0.5f) - obs_y;
+			float f_v = bvx * fwd_x + bvy * fwd_y + bvz * fwd_z;
+			float d = std::abs(f_v - target_depth);
+			if (d < best_diff) { best_diff = d; best_idx = idx; }
+		}
+		if (best_idx >= 0) {
+			float bx3 = px_r[best_idx];
+			float bz3 = pz_r[best_idx];
+			float by_bas3 = py_r[best_idx];
+			float ht3 = _cache_p_ht[best_idx];
+			float hf3 = _cache_p_hf[best_idx];
+			float lt3 = _cache_p_lt[best_idx];
+			float lf3 = _cache_p_lf[best_idx];
+			float by_haut3 = by_bas3 + ht3 + hf3;
+			constexpr float INV_SQRT2 = 0.70710678f;
+			float rayon_reel3 = (lt3 > lf3 ? lt3 : lf3) * 0.5f;
+			float dl3 = rayon_reel3 * INV_SQRT2;
+			float cx3[8] = {bx3 - dl3, bx3 + dl3, bx3 - dl3, bx3 + dl3,
+							bx3 - dl3, bx3 + dl3, bx3 - dl3, bx3 + dl3};
+			float cy3[8] = {by_bas3, by_bas3, by_haut3, by_haut3,
+							by_bas3, by_bas3, by_haut3, by_haut3};
+			float cz3[8] = {bz3 - dl3, bz3 - dl3, bz3 - dl3, bz3 - dl3,
+							bz3 + dl3, bz3 + dl3, bz3 + dl3, bz3 + dl3};
+			int bxm = BUFFER_2D_LARGEUR, bxM = -1;
+			int bym = BUFFER_2D_HAUTEUR, byM = -1;
+			for (int k = 0; k < 8; ++k) {
+				int cpx = -1, cpy = -1;
+				float cdepth = 0.0f;
+				if (world_to_pixel(cx3[k], cy3[k], cz3[k], cpx, cpy, cdepth)) {
+					if (cpx < bxm) bxm = cpx;
+					if (cpx > bxM) bxM = cpx;
+					if (cpy < bym) bym = cpy;
+					if (cpy > byM) byM = cpy;
+				}
+			}
+			if (bxM >= bxm && byM >= bym) {
+				dump_bloq_rect_w = bxM - bxm + 1;
+				dump_bloq_rect_h = byM - bym + 1;
 			}
 		}
 	}
@@ -2318,6 +2413,14 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["dump_d_max_buf"] = dump_depth_max_buffer_zone;
 	out["dump_d_min_buf_zone"] = dump_depth_min_buffer_zone;
 	out["hors_rayon"] = hors_rayon;
+	out["testes_derriere_bloqueur"] = testes_derriere_bloqueur;
+	out["occultes_parmi_eux"] = occultes_parmi_eux;
+	out["dump_rect_w"] = dump_rect_w;
+	out["dump_rect_h"] = dump_rect_h;
+	out["dump_pixels_remplis"] = dump_pixels_remplis;
+	out["dump_pixels_total"] = dump_pixels_total;
+	out["dump_bloq_rect_w"] = dump_bloq_rect_w;
+	out["dump_bloq_rect_h"] = dump_bloq_rect_h;
 	return out;
 }
 
