@@ -78,16 +78,18 @@ void SimulationArbre::_bind_methods() {
 					"oz",
 					"rayon_carre",
 					"cone_actif",
-					"dir_x",
-					"dir_z",
-					"cos_demi_angle",
 					"obs_y",
-					"pitch_y"),
+					"regard_x",
+					"regard_y",
+					"regard_z"),
 			&SimulationArbre::mettre_a_jour_buffers_rendu);
 	ClassDB::bind_method(D_METHOD("invalider_cache_rendu"), &SimulationArbre::invalider_cache_rendu);
 	ClassDB::bind_method(
 			D_METHOD("definir_fov_buffer", "fov_v_deg", "aspect"),
 			&SimulationArbre::definir_fov_buffer);
+	ClassDB::bind_method(
+			D_METHOD("definir_marge_frustum", "m"),
+			&SimulationArbre::definir_marge_frustum);
 	ClassDB::bind_method(
 			D_METHOD("appliquer_reset_morts",
 					"morts",
@@ -1600,13 +1602,26 @@ void SimulationArbre::invalider_cache_rendu() {
 
 void SimulationArbre::definir_fov_buffer(float fov_v_deg, float aspect) {
 	constexpr float PI_F = 3.14159265358979323846f;
+	// FOV horizontal DERIVE DU VERTICAL VIA LES TANGENTES, pas les angles :
+	// tan(fh/2) = tan(fv/2) * aspect  ->  fh = 2 * atan(tan(fv/2) * aspect).
+	// Multiplier fv par aspect (defaut historique) etait mathematiquement
+	// faux et sous-estimait le FOV horizontal aux grands aspects.
 	float fv = fov_v_deg;
 	if (fv < 1.0f) fv = 1.0f;
 	if (fv > 170.0f) fv = 170.0f;
-	float fh = fv * (aspect > 0.01f ? aspect : 1.0f);
+	float asp = (aspect > 0.01f ? aspect : 1.0f);
+	float fv_rad = fv * PI_F / 180.0f;
+	float fh_rad = 2.0f * std::atan(std::tan(fv_rad * 0.5f) * asp);
+	float fh = fh_rad * 180.0f / PI_F;
 	if (fh > 170.0f) fh = 170.0f;
 	_fov_v_rad_buffer = fv * PI_F / 180.0f;
 	_fov_h_rad_buffer = fh * PI_F / 180.0f;
+}
+
+void SimulationArbre::definir_marge_frustum(float m) {
+	if (m < 1.0f) m = 1.0f;
+	if (m > 3.0f) m = 3.0f;
+	_marge_frustum = m;
 }
 
 Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
@@ -1622,11 +1637,10 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		float oz,
 		float rayon_carre,
 		bool cone_actif,
-		float dir_x,
-		float dir_z,
-		float cos_demi_angle,
 		float obs_y,
-		float pitch_y) {
+		float regard_x,
+		float regard_y,
+		float regard_z) {
 	Dictionary out;
 	int cap = capacite;
 
@@ -1854,15 +1868,24 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// GD -> C++). Sans appel, valeurs par defaut du header (~115 h / 80 v).
 	const float FOV_H_RAD_4 = _fov_h_rad_buffer;
 	const float FOV_V_RAD_4 = _fov_v_rad_buffer;
-	// Reconstruire le vecteur regard 3D depuis dir_x/dir_z (XZ normalise)
-	// et pitch_y (sin(tangage)).
-	float pitch_clamped = pitch_y;
-	if (pitch_clamped > 1.0f) pitch_clamped = 1.0f;
-	if (pitch_clamped < -1.0f) pitch_clamped = -1.0f;
-	float fwd_h = std::sqrt(1.0f - pitch_clamped * pitch_clamped);
-	float fwd_x = dir_x * fwd_h;
-	float fwd_y = pitch_clamped;
-	float fwd_z = dir_z * fwd_h;
+	// Vecteur regard COMPLET recu de Godot (deja unitaire cote camera :
+	// -basis.z). Renormalisation defensive au cas ou l'appelant pousserait
+	// un vecteur nul (au tout premier tick, avant push camera) : fallback
+	// sur (0, 0, -1) pour eviter une base degeneree.
+	float fwd_x = regard_x;
+	float fwd_y = regard_y;
+	float fwd_z = regard_z;
+	float regard_len = std::sqrt(fwd_x * fwd_x + fwd_y * fwd_y + fwd_z * fwd_z);
+	if (regard_len > 0.0001f) {
+		float inv = 1.0f / regard_len;
+		fwd_x *= inv;
+		fwd_y *= inv;
+		fwd_z *= inv;
+	} else {
+		fwd_x = 0.0f;
+		fwd_y = 0.0f;
+		fwd_z = -1.0f;
+	}
 	// Base camera : right = fwd x (0,1,0), up = right x fwd.
 	float right_x = fwd_z;
 	float right_y = 0.0f;
@@ -1871,6 +1894,17 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	if (right_len > 0.0001f) {
 		right_x /= right_len;
 		right_z /= right_len;
+	} else {
+		// Regard quasi vertical : fwd ~ (0, +/-1, 0). Le produit fwd x (0,1,0)
+		// s'effondre (right_len ~ 0), la base entiere devient degeneree et
+		// world_to_pixel projette tout au meme pixel -> occlusion totale.
+		// Fix standard lookAt (scratchapixel, gimbal handling) : basculer sur
+		// une reference orthogonale fixe. right = (1,0,0) est orthogonal a
+		// tout fwd vertical, donc up = right x fwd = (0, 0, +/-1) reste
+		// valide et orthonorme -- pas de renormalisation necessaire.
+		right_x = 1.0f;
+		right_y = 0.0f;
+		right_z = 0.0f;
 	}
 	float up_x = right_y * fwd_z - right_z * fwd_y;
 	float up_y = right_z * fwd_x - right_x * fwd_z;
@@ -2024,6 +2058,32 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	for (int p = 0; p < BUFFER_2D_LARGEUR * BUFFER_2D_HAUTEUR; ++p) {
 		if (!std::isinf(_buffer_2d[p])) ++pixels_couverts_buffer;
 	}
+	// INSTRUMENTATION 2026-09-18 : distinguer "rejete par frustum" de
+	// "occulte par buffer" a la verticale, exposer base camera + tan.
+	int rejetes_frustum = 0;
+	int passent_tout = 0;
+	constexpr float MARGE_FRUSTUM = 4.0f;
+	float demi_h = FOV_H_RAD_4 * 0.5f;
+	float demi_v = FOV_V_RAD_4 * 0.5f;
+	float tang_h = std::tan(demi_h) * MARGE_FRUSTUM;
+	float tang_v = std::tan(demi_v) * MARGE_FRUSTUM;
+	float sphere_factor_h = 1.0f / std::cos(demi_h);
+	float sphere_factor_v = 1.0f / std::cos(demi_v);
+	float tan_h_ins = tang_h;
+	float tan_v_ins = tang_v;
+	// Dump premier arbre rejete par frustum radar (defauts : rien rejete).
+	int dump_fr_i = -1;
+	float dump_fr_fwd_v = 0.0f;
+	float dump_fr_right_v = 0.0f;
+	float dump_fr_up_v = 0.0f;
+	float dump_fr_seuil_h = 0.0f;
+	float dump_fr_seuil_v = 0.0f;
+	int dump_fr_rejet_h = 0;
+	int dump_fr_rejet_v = 0;
+	float dump_fr_dx = 0.0f;
+	float dump_fr_dy = 0.0f;
+	float dump_fr_dz = 0.0f;
+	float dump_fr_dist = 0.0f;
 	auto dans_cercle = [&](int i) -> bool {
 		if (!filtre_actif) return true;
 		float dx = px_r[i] - ox;
@@ -2033,19 +2093,33 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (d2 > rayon_carre) return false;
 		if (!cone_actif) return true;
 		if (d2 <= EPS_CONE_XZ_CARRE) return true;
-		// Frustum radar : projeter (dx,dy,dz) sur les axes camera.
-		// Reference : Lighthouse3D "Radar Approach - Testing Points".
+		// FRUSTUM RADAR - TEST DE SPHERE (standard Lighthouse3D, verifie ligne a ligne).
+		// Chaque objet est teste comme UNE SPHERE de rayon r (englobant complet).
+		// sphere_factor = 1/cos(demi_FOV) : dilatation de la paroi par le rayon, standard,
+		// NE PAS retirer, NE PAS remplacer par un ajout de rayon brut.
+		// POUR UN NOUVEAU TYPE D'OBJET : fournir SON rayon englobant r (demi-diagonale de
+		//   son AABB). Le test ne change jamais. NE PAS inventer de variante par axe :
+		//   le standard teste UNE sphere, un seul rayon.
 		float fwd_v = dx * fwd_x + dy * fwd_y + dz * fwd_z;
-		if (fwd_v <= 0.0f) return false;               // derriere la camera
 		float right_v = dx * right_x + dy * right_y + dz * right_z;
 		float up_v    = dx * up_x    + dy * up_y    + dz * up_z;
-		// Demi-ouvertures = tan(demi-FOV). Marge MARGE_FRUSTUM pour eviter le
-		// clignotement au bord quand la camera pivote entre deux ticks.
-		constexpr float MARGE_FRUSTUM = 1.15f;
-		float tan_h = std::tan(FOV_H_RAD_4 * 0.5f) * MARGE_FRUSTUM;
-		float tan_v = std::tan(FOV_V_RAD_4 * 0.5f) * MARGE_FRUSTUM;
-		if (std::abs(right_v) > tan_h * fwd_v) return false;
-		if (std::abs(up_v)    > tan_v * fwd_v) return false;
+		float ht_i = _cache_p_ht[i];
+		float hf_i = _cache_p_hf[i];
+		float lt_i = _cache_p_lt[i];
+		float lf_i = _cache_p_lf[i];
+		float larg = (lt_i > lf_i ? lt_i : lf_i);
+		float haut = ht_i + hf_i;
+		float r = 0.5f * std::sqrt(larg * larg + haut * haut);
+		// 1. Profondeur : sphere derriere la camera au-dela de son rayon -> dehors.
+		if (fwd_v < -r) { ++rejetes_frustum; return false; }
+		// 2. Vertical : |up_v| au-dela de la paroi + rayon corrige -> dehors.
+		float d_v = sphere_factor_v * r;
+		float az_v = tang_v * fwd_v;
+		if (up_v > az_v + d_v || up_v < -az_v - d_v) { ++rejetes_frustum; return false; }
+		// 3. Horizontal : idem.
+		float d_h = sphere_factor_h * r;
+		float az_h = tang_h * fwd_v;
+		if (right_v > az_h + d_h || right_v < -az_h - d_h) { ++rejetes_frustum; return false; }
 		// Etape 6/8 : test occlusion par lecture buffer 2D.
 		// Projette l'arbre en AABB verticale, prend depth_min et compare au
 		// max des profondeurs buffer sur son rectangle (test conservatif :
@@ -2118,6 +2192,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				}
 			}
 		}
+		++passent_tout;
 		return true;
 	};
 	int pop = 0;
@@ -2203,7 +2278,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["buffer_2d_largeur"] = BUFFER_2D_LARGEUR;
 	out["buffer_2d_hauteur"] = BUFFER_2D_HAUTEUR;
 	out["cam_hauteur"] = int(obs_y * 10.0f);
-	out["cam_pitch"] = int(pitch_y * 100.0f);
+	out["cam_pitch"] = int(fwd_y * 100.0f);
 	// Test projection etape 4 : premier arbre vivant.
 	int test_px = -1, test_py = -1;
 	float test_depth = 0.0f;
@@ -2415,6 +2490,32 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["hors_rayon"] = hors_rayon;
 	out["testes_derriere_bloqueur"] = testes_derriere_bloqueur;
 	out["occultes_parmi_eux"] = occultes_parmi_eux;
+	// INSTRUMENTATION 2026-09-18 : diag verticale.
+	out["rejetes_frustum"] = rejetes_frustum;
+	out["passent_tout"] = passent_tout;
+	out["instr_fwd_x"] = fwd_x;
+	out["instr_fwd_y"] = fwd_y;
+	out["instr_fwd_z"] = fwd_z;
+	out["instr_right_x"] = right_x;
+	out["instr_right_z"] = right_z;
+	out["instr_up_x"] = up_x;
+	out["instr_up_y"] = up_y;
+	out["instr_up_z"] = up_z;
+	out["instr_tan_h"] = tan_h_ins;
+	out["instr_tan_v"] = tan_v_ins;
+	// Dump premier arbre rejete par frustum (instr 2026-09-18).
+	out["dump_fr_i"] = dump_fr_i;
+	out["dump_fr_fwd_v"] = dump_fr_fwd_v;
+	out["dump_fr_right_v"] = dump_fr_right_v;
+	out["dump_fr_up_v"] = dump_fr_up_v;
+	out["dump_fr_seuil_h"] = dump_fr_seuil_h;
+	out["dump_fr_seuil_v"] = dump_fr_seuil_v;
+	out["dump_fr_rejet_h"] = dump_fr_rejet_h;
+	out["dump_fr_rejet_v"] = dump_fr_rejet_v;
+	out["dump_fr_dx"] = dump_fr_dx;
+	out["dump_fr_dy"] = dump_fr_dy;
+	out["dump_fr_dz"] = dump_fr_dz;
+	out["dump_fr_dist"] = dump_fr_dist;
 	out["dump_rect_w"] = dump_rect_w;
 	out["dump_rect_h"] = dump_rect_h;
 	out["dump_pixels_remplis"] = dump_pixels_remplis;

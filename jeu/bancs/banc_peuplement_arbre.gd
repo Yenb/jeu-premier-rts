@@ -101,24 +101,17 @@ const HAUTEUR_MIN_TRONC_OCCL := 1.0
 const HAUTEUR_MIN_FEUILLAGE_OCCL := 1.0
 var _temps_depuis_bake_occl: float = 0.0
 
-# CONE DE VISION (streaming, 2026-09-15). Demi-angle du cone de filtrage
-# rendu, EN DEGRES. Volontairement plus large que le demi-FOV horizontal
-# reel (~45-50 degres a FOV 75 vertical + aspect 16:9) pour offrir une
-# marge : un arbre au bord de l'ecran ne clignote pas quand le joueur
-# pivote entre deux ticks. Cos precompute a `_ready`.
-const CONE_DEMI_ANGLE_DEG := 55.0
-var _cone_cos_demi_angle: float = cos(deg_to_rad(CONE_DEMI_ANGLE_DEG))
-
-# CONE PROGRESSIF -> COUPURE FRANCHE (2026-09-15). |fwd.y| = sin(tangage).
-# Sous SEUIL_BAS : cone actif normal (rendu econome, vue horizontale).
-# Au-dessus de SEUIL_HAUT : cone desactive, tout le cercle rendu -- on
-# coupe AVANT la zone d'instabilite de dir_xz (quand length² <= 0.0001,
-# vers tangage ~89.4°, la garde declenche un basculement brutal du
-# vecteur). Entre les deux : bande de transition etroite (smoothstep)
-# pour eviter un saut visible. Bande 0.60..0.75 = tangage 37°..49° :
-# le cone se ferme bien avant que la direction XZ devienne bruitee.
-const CONE_TANGAGE_SEUIL_BAS := 0.64
-const CONE_TANGAGE_SEUIL_HAUT := 0.95
+# Marge multiplicative du frustum radar cote C++ (tan_h/tan_v * marge).
+# > 1.0 elargit le cone d'inclusion : evite qu'un arbre au bord du champ
+# soit filtre alors qu'il devrait etre rendu (piste : sur-occlusion quand
+# la camera regarde vers le haut). Poussee au C++ chaque frame via
+# _sim.definir_marge_frustum. Bornes recadrees cote C++ (1.0..3.0).
+@export_range(1.0, 3.0, 0.01) var marge_frustum: float = 1.15
+# Rayon de rendu / bloqueurs (metres). Pousse a la sim via donnees JSON
+# (surcharge cle `rayon_rendu_m` avant configurer). Distingue "arbre non
+# dessine car trop loin" (> rayon_rendu_m) de "arbre occulte" dans les
+# instrumentations.
+@export_range(20.0, 1000.0, 1.0) var rayon_rendu_m: float = 200.0
 
 # STREAMING RENDU 60 Hz (2026-09-15). Le rebuild du buffer compact suit
 # la CAMERA (position + orientation XZ), pas la cadence sim. Sans ce
@@ -149,6 +142,17 @@ func _ready() -> void:
 		_cadence_simulation_hz = float(donnees.cadence_simulation_hz)
 	if donnees.has("mode_test_rapide"):
 		_mode_test_rapide = bool(donnees.mode_test_rapide)
+	# Surcharges JSON des @export d'occlusion : le fichier data/banc_*.json
+	# pilote par defaut (Yael edite le JSON) ; l'inspecteur Godot reste une
+	# alternative live (Yael peut aussi cocher/regler dans l'editeur -- la
+	# valeur JSON gagne quand la cle est presente).
+	if donnees.has("marge_frustum"):
+		marge_frustum = float(donnees.marge_frustum)
+	if donnees.has("rayon_rendu_m"):
+		rayon_rendu_m = float(donnees.rayon_rendu_m)
+	# Pousse rayon_rendu_m a la sim via donnees (la sim relit sa cle
+	# `rayon_rendu_m` dans configurer -- surcharge apres surcharge JSON).
+	donnees["rayon_rendu_m"] = rayon_rendu_m
 	# En mode hote, on SURCHARGE la cle `demi_carte` du JSON avant de la
 	# passer a la sim, pour que la garde de semis (`abs(x) > _demi_carte`)
 	# corresponde a l'emprise reelle du terrain fourni par la scene hote.
@@ -234,8 +238,31 @@ func _process(delta: float) -> void:
 		_instr_temps_depuis_affichage = 0.0
 		var _occ: int = _sim.instr_occultes_2d()
 		var _self: int = _sim.instr_self_occ()
-		var _occ_reels: int = _occ - _self
-		print("bloq=", _sim.instr_nb_bloqueurs_camera(), " occ=", _occ, " self=", _self, " occ_reels=", _occ_reels, " hors_rayon=", _sim.instr_hors_rayon(), " proches=", _sim.instr_faux_pos_proches(), " dump=i(", _sim.instr_dump_i(), ") arbre=", _sim.instr_dump_d_arbre(), "m minBufZone=", _sim.instr_dump_d_min_buf_zone(), "m maxBufZone=", _sim.instr_dump_d_max_buf(), "m")
+		print(
+			"bloq=", _sim.instr_nb_bloqueurs_camera(),
+			" occ=", _occ,
+			" self=", _self,
+			" rejetes_frustum=", _sim.instr_rejetes_frustum(),
+			" occultes_buffer=", _occ,
+			" passent_tout=", _sim.instr_passent_tout(),
+			" fwd=(", _sim.instr_fwd_x(), ",", _sim.instr_fwd_y(), ",", _sim.instr_fwd_z(), ")",
+			" right=(", _sim.instr_right_x(), ",", _sim.instr_right_z(), ")",
+			" up=(", _sim.instr_up_x(), ",", _sim.instr_up_y(), ",", _sim.instr_up_z(), ")",
+			" tan_h=", _sim.instr_tan_h(),
+			" tan_v=", _sim.instr_tan_v()
+		)
+		print(
+			"dump_fr i=", _sim.instr_dump_fr_i(),
+			" fwd_v=", _sim.instr_dump_fr_fwd_v(),
+			" right_v=", _sim.instr_dump_fr_right_v(),
+			" seuil_h=", _sim.instr_dump_fr_seuil_h(),
+			" rejet_h=", _sim.instr_dump_fr_rejet_h(),
+			" up_v=", _sim.instr_dump_fr_up_v(),
+			" seuil_v=", _sim.instr_dump_fr_seuil_v(),
+			" rejet_v=", _sim.instr_dump_fr_rejet_v(),
+			" d=(", _sim.instr_dump_fr_dx(), ",", _sim.instr_dump_fr_dy(), ",", _sim.instr_dump_fr_dz(), ")",
+			" dist=", _sim.instr_dump_fr_dist()
+		)
 	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
 	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
 	# cadence -- que la sim ait tourne ce tick ou non, la position reste
@@ -284,39 +311,45 @@ func _process(delta: float) -> void:
 		# quelle que soit la scene ; fallback body si aucune camera active.
 		var cam := get_viewport().get_camera_3d()
 		var fwd: Vector3 = -cam.global_transform.basis.z if cam != null else -noeud_obs.global_transform.basis.z
-		# COUPURE FRANCHE SELON TANGAGE (2026-09-15). Le lerp lineaire
-		# precedent ouvrait le cone TROP TARD : la transition finissait
-		# vers tangage 90° alors que dir_xz devient bruite bien avant.
-		# Nouvelle logique : sous SEUIL_BAS le cone est normal, au-dessus
-		# de SEUIL_HAUT il est desactive (cos_eff=-1 = tout le cercle),
-		# bande smoothstep etroite au milieu. La coupure arrive AVANT que
-		# dir_xz devienne instable -> aucun saut au moment ou la garde
-		# length² > 0.0001 finit par se declencher (le cone est deja off).
-		# Frustum radar cote C++ (dans_cercle) filtre lui-meme le tangage via
-		# up_v vs tan(FOV_V/2) : la coupure par tangage qui rendait tout le
-		# cercle au sol/ciel est neutralisee ; cos_eff reste au demi-angle
-		# constant. Les constantes SEUIL_BAS/HAUT restent declarees en tete.
-		var cos_eff: float = _cone_cos_demi_angle
+		# Garde dir_xz.length_squared : sert uniquement au BAKE occlusion
+		# (dir_obs_xz + obs_cone_present consommes plus bas pour decider
+		# de rebuilder le buffer bake). N'a plus aucun role dans le canal
+		# camera -> C++ : le vecteur regard COMPLET est pousse chaque
+		# frame sans gate ci-dessous.
 		var dir_xz := Vector2(fwd.x, fwd.z)
 		if dir_xz.length_squared() > 0.0001:
 			dir_xz = dir_xz.normalized()
 			dir_obs_xz = dir_xz
 			obs_cone_present = true
-			_sim.definir_observateur_cone(dir_xz.x, dir_xz.y, cos_eff)
-		# Etape 3/8 occlusion 2D projete camera : hauteur camera + fwd.y.
-		_sim.definir_observateur_3d(pos_obs.y, fwd.y)
-		# Canal FOV camera -> buffer occlusion : le buffer 2D doit couvrir
-		# AU MOINS le champ rendu (75 vertical, aspect ecran) + une marge
-		# laterale pour eviter que les arbres au bord du champ echappent au
-		# test. Sans ce canal, le buffer restait fige a 115/80 en dur, plus
-		# etroit que le rendu -> arbres de bordure jamais occultes.
+		# VECTEUR REGARD COMPLET (2026-09-18). Pousse fwd entier (deja
+		# unitaire cote Godot : -basis.z) au C++ chaque frame, sans gate.
+		# Remplace l'ancien couple decompose (dir_x/dir_z gates + pitch_y
+		# separe) qui gelait le yaw a la verticale et decouplait la base
+		# camera C++ de la vue reelle aux angles non horizontaux. Cone
+		# actif s'auto-leve cote sim quand ce canal est appele.
+		_sim.definir_observateur_regard(fwd.x, fwd.y, fwd.z)
+		# Etape 3/8 occlusion 2D projete camera : hauteur camera seule.
+		_sim.definir_observateur_3d(pos_obs.y)
+		# Canal FOV camera -> buffer occlusion : le FOV du frustum doit
+		# EGALER le FOV rendu (a la marge anti-clignotement MARGE_FRUSTUM
+		# pres, appliquee cote C++). L'ancienne double marge
+		# marge_fov_buffer(=1.15) * MARGE_FRUSTUM(=4.0) elargissait deux
+		# fois, retiree. cam.fov est le FOV VERTICAL par defaut Godot 4
+		# (Camera3D.KEEP_HEIGHT=1). Si keep_aspect = KEEP_WIDTH (=0),
+		# cam.fov est horizontal : deriver le vertical via tangentes.
 		if cam != null:
-			var fov_v_cam: float = cam.fov
 			var vp: Viewport = get_viewport()
 			var vps: Vector2 = vp.get_visible_rect().size if vp != null else Vector2(16.0, 9.0)
 			var aspect_ecran: float = vps.x / vps.y if vps.y > 0.0 else 16.0 / 9.0
-			const MARGE_FOV_BUFFER := 1.0
-			_sim.definir_fov_buffer(fov_v_cam * MARGE_FOV_BUFFER, aspect_ecran)
+			var fov_v_cam: float = cam.fov
+			if cam.keep_aspect == Camera3D.KEEP_WIDTH and aspect_ecran > 0.01:
+				var fh_rad: float = deg_to_rad(cam.fov)
+				var fv_rad: float = 2.0 * atan(tan(fh_rad * 0.5) / aspect_ecran)
+				fov_v_cam = rad_to_deg(fv_rad)
+			_sim.definir_fov_buffer(fov_v_cam, aspect_ecran)
+		# Marge du frustum radar C++ : poussee chaque frame pour que le
+		# slider inspecteur / la surcharge JSON prennent effet a chaud.
+		_sim.definir_marge_frustum(marge_frustum)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
 	# `_sim.avancer(pas)` -- proba stochastique / cadence banque /

@@ -29,6 +29,10 @@
 	"stade_gros_max": 7,
 	"facteur_trouee_gros": 2.0,
 	"cadence_simulation_hz": 4.0,
+	"cone_demi_angle_deg": 115.0,
+	"marge_fov_buffer": 1.15,
+	"marge_frustum": 1.15,
+	"rayon_rendu_m": 200.0,
 	"ombrage_par_stade": [
 		{ "rayon_ombre_m": 0.0, "magnitude": 0.10 },
 		{ "rayon_ombre_m": 0.0, "magnitude": 0.30 },

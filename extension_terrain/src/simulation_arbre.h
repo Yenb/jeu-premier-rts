@@ -207,14 +207,13 @@ public:
 	//
 	// FILTRE CONE VISION (2026-09-15) : en plus du cercle. cone_actif=false ->
 	// pas de test cone (comportement identique au filtre distance seul).
-	// cone_actif=true -> un arbre dans le cercle passe SI le produit scalaire
-	// entre (dir_x, dir_z) et le vecteur arbre-observateur (normalise en xz)
-	// est >= cos_demi_angle. dir_x/dir_z est la direction de regard XZ NORMALISEE
-	// de la camera observateur (poussee par la coquille). cos_demi_angle porte
-	// une marge (demi-angle plus large que le demi-FOV reel) : evite le
-	// clignotement au bord de l'ecran quand l'observateur pivote entre deux
-	// ticks. Arbre a distance ~0 (sur le joueur) : test cone bypasse -> toujours
-	// inclus (evite division par ~0 et pop visible du joueur en marchant).
+	// cone_actif=true -> frustum radar reconstruit depuis (fwd/right/up).
+	// Arbre a distance ~0 (sur le joueur) : test bypasse -> toujours inclus.
+	// VECTEUR REGARD (2026-09-18) : regard_x/regard_y/regard_z est le vecteur
+	// avant COMPLET de la camera (deja unitaire cote Godot : -basis.z). Il
+	// remplace la reconstruction partielle par (dir_x, dir_z, pitch_y) +
+	// sqrt(1-pitch^2) qui perdait le contexte directionnel et faisait
+	// deraper la base camera aux angles non horizontaux.
 	Dictionary mettre_a_jour_buffers_rendu(
 			int capacite,
 			const PackedByteArray &libres,
@@ -228,11 +227,10 @@ public:
 			float oz,
 			float rayon_carre,
 			bool cone_actif,
-			float dir_x,
-			float dir_z,
-			float cos_demi_angle,
 			float obs_y,
-			float pitch_y);
+			float regard_x,
+			float regard_y,
+			float regard_z);
 
 	// Invalide le cache : force tout_dirty=true au prochain appel.
 	// Miroir : agrandissement de capacite qui reset le buffer GPU.
@@ -244,6 +242,9 @@ public:
 	// marge >= fov_rendu, pour couvrir tous les arbres rendus). Idempotent,
 	// safe a appeler par frame.
 	void definir_fov_buffer(float fov_v_deg, float aspect);
+	// Marge du frustum radar (tan_h/tan_v * marge). Bornee [1.0, 3.0] cote
+	// setter (recadrage defensif). Coquille pousse chaque frame.
+	void definir_marge_frustum(float m);
 
 	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
 	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
@@ -697,6 +698,11 @@ private:
 	// du canal, la coquille tourne avec ces valeurs par defaut.
 	float _fov_h_rad_buffer = 115.0f * 3.14159265358979323846f / 180.0f;
 	float _fov_v_rad_buffer = 80.0f * 3.14159265358979323846f / 180.0f;
+	// Marge multiplicative appliquee aux demi-ouvertures du frustum radar
+	// (tan_h/tan_v * marge). Reglable a chaud via definir_marge_frustum,
+	// canal pousse chaque frame par la coquille. Defaut 1.15 = ancien
+	// comportement (constante en dur avant 2026-09-18).
+	float _marge_frustum = 1.15f;
 
 	// Stables banque (etape 14).
 	float _taille_case_dormantes = 0.0f;

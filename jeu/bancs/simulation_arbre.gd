@@ -332,6 +332,19 @@ var _instr_hors_rayon: int = 0
 # occulte (occulteur le plus proche devant lui). Sert au verdict "occlusion
 # legitime" : dmax dit qu'un bloqueur couvre bien, dmin dit ou il commence.
 var _instr_dump_d_min_buf_zone: int = 0
+# INSTRUMENTATION couverture : compteurs globaux de dianostic occlusion.
+var _instr_testes_derriere_bloqueur: int = 0
+var _instr_occultes_parmi_eux: int = 0
+# INSTRUMENTATION dump-arbre : taille rect projete et remplissage.
+var _instr_dump_rect_w: int = 0
+var _instr_dump_rect_h: int = 0
+var _instr_dump_pixels_remplis: int = 0
+var _instr_dump_pixels_total: int = 0
+# INSTRUMENTATION dump-bloqueur devant : taille rect projete du bloqueur
+# dont la profondeur est la plus proche de celle du buffer sur le rect de
+# l'arbre dumpe.
+var _instr_dump_bloq_rect_w: int = 0
+var _instr_dump_bloq_rect_h: int = 0
 var _instr_occultes_2d: int = 0
 var _instr_self_occ: int = 0
 var _instr_faux_pos_proches: int = 0
@@ -344,6 +357,33 @@ var _instr_dump_rect_y: int = 0
 var _instr_dump_d_arbre: int = 0
 var _instr_dump_d_min_buf: int = 0
 var _instr_dump_d_max_buf: int = 0
+# INSTRUMENTATION 2026-09-18 : diag verticale (rejets frustum vs occlusion,
+# base camera reelle, tan effectifs).
+var _instr_rejetes_frustum: int = 0
+var _instr_passent_tout: int = 0
+var _instr_fwd_x: float = 0.0
+var _instr_fwd_y: float = 0.0
+var _instr_fwd_z: float = 0.0
+var _instr_right_x: float = 0.0
+var _instr_right_z: float = 0.0
+var _instr_up_x: float = 0.0
+var _instr_up_y: float = 0.0
+var _instr_up_z: float = 0.0
+var _instr_tan_h: float = 0.0
+var _instr_tan_v: float = 0.0
+# Dump premier arbre rejete par frustum radar (2026-09-18).
+var _instr_dump_fr_i: int = -1
+var _instr_dump_fr_fwd_v: float = 0.0
+var _instr_dump_fr_right_v: float = 0.0
+var _instr_dump_fr_up_v: float = 0.0
+var _instr_dump_fr_seuil_h: float = 0.0
+var _instr_dump_fr_seuil_v: float = 0.0
+var _instr_dump_fr_rejet_h: int = 0
+var _instr_dump_fr_rejet_v: int = 0
+var _instr_dump_fr_dx: float = 0.0
+var _instr_dump_fr_dy: float = 0.0
+var _instr_dump_fr_dz: float = 0.0
+var _instr_dump_fr_dist: float = 0.0
 # Inverse : slot rendu j -> slot data, -1 si le slot rendu est libre.
 # Sert au morceau 2 pour effacer visuellement un arbre sorti du cercle.
 var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
@@ -391,17 +431,17 @@ var _observateur_x: float = 0.0
 var _observateur_z: float = 0.0
 var _observateur_actif: bool = false
 
-# STREAMING RENDU ARBRE, FILTRE CONE (2026-09-15). Direction XZ NORMALISEE
-# du regard camera observateur + cosinus du demi-angle du champ (avec
-# marge). Pousses par la coquille via `definir_observateur_cone`. Si le
-# cone est inactif (aucune camera orientee poussee), le C++ n'applique
-# que le cercle -- comportement identique a l'etape precedente.
-var _observateur_dir_x: float = 0.0
-var _observateur_dir_z: float = 0.0
-var _observateur_cos_demi_angle: float = -1.0
-# Etape 3/8 occlusion 2D projete camera : hauteur camera et sin(tangage).
+# Etape 3/8 occlusion 2D projete camera : hauteur camera + VECTEUR REGARD
+# COMPLET (2026-09-18). Le regard XYZ vient direct de la camera Godot
+# (-basis.z, deja unitaire), pousse par la coquille chaque frame via
+# `definir_observateur_regard`. Il REMPLACE le couple (dir_x, dir_z,
+# pitch_y) : reconstruire fwd depuis pitch seul perdait le signe du
+# cosinus et faisait deraper la base camera C++ aux angles non horizontaux.
+# Defaut (0, 0, -1) = -Z Godot, base valide au premier tick avant push.
 var _observateur_y: float = 0.0
-var _observateur_pitch_y: float = 0.0   # sin(tangage) = fwd.y
+var _observateur_regard_x: float = 0.0
+var _observateur_regard_y: float = 0.0
+var _observateur_regard_z: float = -1.0
 var _observateur_cone_actif: bool = false
 
 # STREAMING RENDU ARBRE, ETAPE 2/4 (2026-09-15). Rayon du cercle rendu
@@ -704,19 +744,24 @@ func definir_observateur(x: float, z: float) -> void:
 # frame suffit (la coquille rappelle chaque frame). Cas coquille sans
 # camera orientee : ne pas appeler -> `_observateur_cone_actif` reste false,
 # le filtre cone reste inactif cote C++.
-func definir_observateur_cone(dir_x: float, dir_z: float, cos_demi_angle: float) -> void:
-	_observateur_dir_x = dir_x
-	_observateur_dir_z = dir_z
-	_observateur_cos_demi_angle = cos_demi_angle
+# Vecteur regard COMPLET (2026-09-18). API poussee par la coquille chaque
+# frame avec `-cam.global_transform.basis.z` (deja unitaire). Remplace la
+# reconstruction C++ partielle par pitch seul, qui perdait le signe du
+# cosinus et decouplait la base camera aux angles non horizontaux. Leve
+# _observateur_cone_actif : sa presence signale au C++ qu'un regard valide
+# est pousse (l'ancien canal definir_observateur_cone est purge).
+func definir_observateur_regard(rx: float, ry: float, rz: float) -> void:
+	_observateur_regard_x = rx
+	_observateur_regard_y = ry
+	_observateur_regard_z = rz
 	_observateur_cone_actif = true
 
 
 # Etape 3/8 occlusion 2D projete camera : hauteur camera et sin(tangage) pour
 # le buffer 2D d'occlusion. Appele par la coquille chaque frame avant
 # _ecrire_slots_lot_cpp.
-func definir_observateur_3d(obs_y: float, pitch_y: float) -> void:
+func definir_observateur_3d(obs_y: float) -> void:
 	_observateur_y = obs_y
-	_observateur_pitch_y = pitch_y
 
 
 # Canal FOV camera -> buffer occlusion. Pass-through vers SimulationArbre C++
@@ -725,6 +770,15 @@ func definir_observateur_3d(obs_y: float, pitch_y: float) -> void:
 func definir_fov_buffer(fov_v_deg: float, aspect: float) -> void:
 	if _simu_cpp != null:
 		_simu_cpp.definir_fov_buffer(fov_v_deg, aspect)
+
+
+# Canal marge du frustum radar -> C++. Pass-through vers SimulationArbre C++
+# (definir_marge_frustum). Sans C++ instancie, no-op. Pousse par la coquille
+# chaque frame (@export marge_frustum sur banc_peuplement_arbre.gd, surcharge
+# JSON marge_frustum). Bornes recadrees cote C++ (1.0..3.0).
+func definir_marge_frustum(m: float) -> void:
+	if _simu_cpp != null:
+		_simu_cpp.definir_marge_frustum(m)
 
 # Accesseurs de verification (Yael bouge le joueur, lit ces valeurs pour
 # constater que la position suit). ETAPE 1/4 -- ils disparaitront avec le
@@ -2365,8 +2419,9 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	# observateur a ete pousse depuis la coquille. rayon_carre passe une fois
 	# ; le C++ fait la distance^2 par slot vivant, exclut hors cercle du
 	# buffer compact.
-	# FILTRE CONE (2026-09-15) : cumule avec le cercle. Actif SEULEMENT si la
-	# coquille a pousse une direction de regard (definir_observateur_cone).
+	# FILTRE CONE (2026-09-15, revu 2026-09-18) : cumule avec le cercle.
+	# Actif SEULEMENT si la coquille a pousse un vecteur regard via
+	# definir_observateur_regard (leve _observateur_cone_actif).
 	# La sim GDScript ne touche RIEN ici.
 	var _rayon_carre_cpp: float = _rayon_rendu_m * _rayon_rendu_m
 	var res: Dictionary = _simu_cpp.mettre_a_jour_buffers_rendu(
@@ -2382,11 +2437,10 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 		_observateur_z,
 		_rayon_carre_cpp,
 		_observateur_cone_actif,
-		_observateur_dir_x,
-		_observateur_dir_z,
-		_observateur_cos_demi_angle,
 		_observateur_y,
-		_observateur_pitch_y
+		_observateur_regard_x,
+		_observateur_regard_y,
+		_observateur_regard_z
 	)
 	var _pop_i: int = int(res.get("pop", 0))
 	# MAJ mapping slot_data -> index_rendu (le C++ le calcule chaque tick,
@@ -2411,6 +2465,14 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	_instr_pixels_couverts_2d = int(res.get("pixels_couverts_buffer_2d", 0))
 	_instr_hors_rayon = int(res.get("hors_rayon", 0))
 	_instr_dump_d_min_buf_zone = int(res.get("dump_d_min_buf_zone", 0))
+	_instr_testes_derriere_bloqueur = int(res.get("testes_derriere_bloqueur", 0))
+	_instr_occultes_parmi_eux = int(res.get("occultes_parmi_eux", 0))
+	_instr_dump_rect_w = int(res.get("dump_rect_w", 0))
+	_instr_dump_rect_h = int(res.get("dump_rect_h", 0))
+	_instr_dump_pixels_remplis = int(res.get("dump_pixels_remplis", 0))
+	_instr_dump_pixels_total = int(res.get("dump_pixels_total", 0))
+	_instr_dump_bloq_rect_w = int(res.get("dump_bloq_rect_w", 0))
+	_instr_dump_bloq_rect_h = int(res.get("dump_bloq_rect_h", 0))
 	_instr_occultes_2d = int(res.get("occultes_2d", 0))
 	_instr_self_occ = int(res.get("self_occ", 0))
 	_instr_faux_pos_proches = int(res.get("faux_pos_proches", 0))
@@ -2423,6 +2485,30 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	_instr_dump_d_arbre = int(res.get("dump_d_arbre", 0))
 	_instr_dump_d_min_buf = int(res.get("dump_d_min_buf", 0))
 	_instr_dump_d_max_buf = int(res.get("dump_d_max_buf", 0))
+	_instr_rejetes_frustum = int(res.get("rejetes_frustum", 0))
+	_instr_passent_tout = int(res.get("passent_tout", 0))
+	_instr_fwd_x = float(res.get("instr_fwd_x", 0.0))
+	_instr_fwd_y = float(res.get("instr_fwd_y", 0.0))
+	_instr_fwd_z = float(res.get("instr_fwd_z", 0.0))
+	_instr_right_x = float(res.get("instr_right_x", 0.0))
+	_instr_right_z = float(res.get("instr_right_z", 0.0))
+	_instr_up_x = float(res.get("instr_up_x", 0.0))
+	_instr_up_y = float(res.get("instr_up_y", 0.0))
+	_instr_up_z = float(res.get("instr_up_z", 0.0))
+	_instr_tan_h = float(res.get("instr_tan_h", 0.0))
+	_instr_tan_v = float(res.get("instr_tan_v", 0.0))
+	_instr_dump_fr_i = int(res.get("dump_fr_i", -1))
+	_instr_dump_fr_fwd_v = float(res.get("dump_fr_fwd_v", 0.0))
+	_instr_dump_fr_right_v = float(res.get("dump_fr_right_v", 0.0))
+	_instr_dump_fr_up_v = float(res.get("dump_fr_up_v", 0.0))
+	_instr_dump_fr_seuil_h = float(res.get("dump_fr_seuil_h", 0.0))
+	_instr_dump_fr_seuil_v = float(res.get("dump_fr_seuil_v", 0.0))
+	_instr_dump_fr_rejet_h = int(res.get("dump_fr_rejet_h", 0))
+	_instr_dump_fr_rejet_v = int(res.get("dump_fr_rejet_v", 0))
+	_instr_dump_fr_dx = float(res.get("dump_fr_dx", 0.0))
+	_instr_dump_fr_dy = float(res.get("dump_fr_dy", 0.0))
+	_instr_dump_fr_dz = float(res.get("dump_fr_dz", 0.0))
+	_instr_dump_fr_dist = float(res.get("dump_fr_dist", 0.0))
 	# Push COMPACT : instance_count = pop, buffer = pop*16 floats. Godot
 	# n'accepte buffer que si buffer.size() == instance_count * 16 (stride
 	# TRANSFORM_3D + color) -- d'ou l'ajustement de instance_count a pop.
@@ -2500,6 +2586,38 @@ func instr_dump_d_min_buf_zone() -> int:
 	return _instr_dump_d_min_buf_zone
 
 
+func instr_testes_derriere_bloqueur() -> int:
+	return _instr_testes_derriere_bloqueur
+
+
+func instr_occultes_parmi_eux() -> int:
+	return _instr_occultes_parmi_eux
+
+
+func instr_dump_rect_w() -> int:
+	return _instr_dump_rect_w
+
+
+func instr_dump_rect_h() -> int:
+	return _instr_dump_rect_h
+
+
+func instr_dump_pixels_remplis() -> int:
+	return _instr_dump_pixels_remplis
+
+
+func instr_dump_pixels_total() -> int:
+	return _instr_dump_pixels_total
+
+
+func instr_dump_bloq_rect_w() -> int:
+	return _instr_dump_bloq_rect_w
+
+
+func instr_dump_bloq_rect_h() -> int:
+	return _instr_dump_bloq_rect_h
+
+
 func instr_occultes_2d() -> int:
 	return _instr_occultes_2d
 
@@ -2546,6 +2664,31 @@ func instr_dump_d_min_buf() -> int:
 
 func instr_dump_d_max_buf() -> int:
 	return _instr_dump_d_max_buf
+
+func instr_rejetes_frustum() -> int: return _instr_rejetes_frustum
+func instr_passent_tout() -> int: return _instr_passent_tout
+func instr_fwd_x() -> float: return _instr_fwd_x
+func instr_fwd_y() -> float: return _instr_fwd_y
+func instr_fwd_z() -> float: return _instr_fwd_z
+func instr_right_x() -> float: return _instr_right_x
+func instr_right_z() -> float: return _instr_right_z
+func instr_up_x() -> float: return _instr_up_x
+func instr_up_y() -> float: return _instr_up_y
+func instr_up_z() -> float: return _instr_up_z
+func instr_tan_h() -> float: return _instr_tan_h
+func instr_tan_v() -> float: return _instr_tan_v
+func instr_dump_fr_i() -> int: return _instr_dump_fr_i
+func instr_dump_fr_fwd_v() -> float: return _instr_dump_fr_fwd_v
+func instr_dump_fr_right_v() -> float: return _instr_dump_fr_right_v
+func instr_dump_fr_up_v() -> float: return _instr_dump_fr_up_v
+func instr_dump_fr_seuil_h() -> float: return _instr_dump_fr_seuil_h
+func instr_dump_fr_seuil_v() -> float: return _instr_dump_fr_seuil_v
+func instr_dump_fr_rejet_h() -> int: return _instr_dump_fr_rejet_h
+func instr_dump_fr_rejet_v() -> int: return _instr_dump_fr_rejet_v
+func instr_dump_fr_dx() -> float: return _instr_dump_fr_dx
+func instr_dump_fr_dy() -> float: return _instr_dump_fr_dy
+func instr_dump_fr_dz() -> float: return _instr_dump_fr_dz
+func instr_dump_fr_dist() -> float: return _instr_dump_fr_dist
 
 
 # ============================================================================
