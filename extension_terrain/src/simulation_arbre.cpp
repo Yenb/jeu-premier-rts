@@ -1648,13 +1648,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	const bool dump = _dump_demande;
 	int dump_slot_courant = -1;
 	String csv_bloq, csv_vol, csv_tests, csv_slots;
-	std::vector<uint8_t> dump_raison;
+	std::vector<uint8_t> dump_raison(size_t(cap), uint8_t(255));
 	if (dump) {
 		csv_bloq  = "slot,x,y,z,dist,ht,hf,lt,lf,occulte\n";
 		csv_vol   = "slot,volume,px_min,px_max,py_min,py_max,depth_max\n";
 		csv_tests = "slot,volume,px_min,px_max,py_min,py_max,pixels_total,pixels_couvrants,depth_min_arbre,seuil_devant,verdict\n";
 		csv_slots = "slot,x,y,z,dist,est_bloqueur,raison,verdict_brut,visible_stable\n";
-		dump_raison.assign(size_t(cap), uint8_t(255));
 	}
 
 	// Detection changement de capacite / cache reset -> tout_dirty.
@@ -2286,12 +2285,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		float dx0 = px_r[i] - ox;
 		float dz0 = pz_r[i] - oz;
 		float d2 = dx0 * dx0 + dz0 * dz0;
-		if (d2 > rayon_carre) { if (dump) dump_raison[i] = 0; return false; }
-		if (!cone_actif) { if (dump) dump_raison[i] = 3; return true; }
-		if (d2 <= EPS_CONE_XZ_CARRE) { if (dump) dump_raison[i] = 3; return true; }
-		if (!passe_frustum(i)) { if (dump) dump_raison[i] = 1; return false; }
-		if (passe_occlusion(i)) { if (dump) dump_raison[i] = 2; return false; }
-		if (dump) dump_raison[i] = 3;
+		if (d2 > rayon_carre) { dump_raison[i] = 0; return false; }
+		if (!cone_actif) { dump_raison[i] = 3; return true; }
+		if (d2 <= EPS_CONE_XZ_CARRE) { dump_raison[i] = 3; return true; }
+		if (!passe_frustum(i)) { dump_raison[i] = 1; return false; }
+		if (passe_occlusion(i)) { dump_raison[i] = 2; return false; }
+		dump_raison[i] = 3;
 		return true;
 	};
 	// MEMOISATION dans_cercle (2026-09-18) : evaluer UNE fois par slot,
@@ -2457,69 +2456,14 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["bascules_stable_proche"] = bascules_stable[0];
 	out["bascules_stable_anneau"] = bascules_stable[1];
 	out["bascules_stable_loin"]   = bascules_stable[2];
-	// PASS INSTRUMENTATION reduit (2026-09-18) : ne calcule QUE occultes_2d et
-	// self_occ (les seuls compteurs encore lus par le banc). Utilise le
-	// verdict front-to-back pour les bloqueurs (auto-occlusion fix), et
-	// reproduit le test conservatif MOC pour les non-bloqueurs.
+	// Decompte occultes depuis dump_raison (raison=2 = rejete par occlusion).
 	int occultes_2d = 0;
 	int self_occ = 0;
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
-		bool arbre_occulte;
-		if (_est_bloqueur[i] != 0u) {
-			arbre_occulte = (_bloqueur_occulte[i] != 0u);
-		} else {
-			float bx = px_r[i], bz = pz_r[i], by_bas = py_r[i];
-			float ht = _cache_p_ht[i], hf = _cache_p_hf[i];
-			float lt = _cache_p_lt[i], lf = _cache_p_lf[i];
-			float by_haut = by_bas + ht + hf;
-			float demi_l = (lt > lf ? lt : lf) * 0.5f;
-			float coins_x[8] = {bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l,
-								bx - demi_l, bx + demi_l, bx - demi_l, bx + demi_l};
-			float coins_y[8] = {by_bas, by_bas, by_haut, by_haut,
-								by_bas, by_bas, by_haut, by_haut};
-			float coins_z[8] = {bz - demi_l, bz - demi_l, bz - demi_l, bz - demi_l,
-								bz + demi_l, bz + demi_l, bz + demi_l, bz + demi_l};
-			int pxi_min = BUFFER_2D_LARGEUR, pxi_max = -1;
-			int pyi_min = BUFFER_2D_HAUTEUR, pyi_max = -1;
-			float depth_min_a = std::numeric_limits<float>::infinity();
-			bool visi = false;
-			for (int k = 0; k < 8; ++k) {
-				int cpx = -1, cpy = -1;
-				float cdepth = 0.0f;
-				if (!world_to_pixel(coins_x[k], coins_y[k], coins_z[k], cpx, cpy, cdepth)) continue;
-				visi = true;
-				if (cpx < pxi_min) pxi_min = cpx;
-				if (cpx > pxi_max) pxi_max = cpx;
-				if (cpy < pyi_min) pyi_min = cpy;
-				if (cpy > pyi_max) pyi_max = cpy;
-				if (cdepth < depth_min_a) depth_min_a = cdepth;
-			}
-			if (!visi) continue;
-			if (pxi_min < 0) pxi_min = 0;
-			if (pxi_max >= BUFFER_2D_LARGEUR) pxi_max = BUFFER_2D_LARGEUR - 1;
-			if (pyi_min < 0) pyi_min = 0;
-			if (pyi_max >= BUFFER_2D_HAUTEUR) pyi_max = BUFFER_2D_HAUTEUR - 1;
-			constexpr float FRACTION_TROUS_MAX_INSTR = 0.05f;
-			float dmax_buf = 0.0f;
-			int pxls_total = 0;
-			int pxls_vides = 0;
-			for (int y = pyi_min; y <= pyi_max; ++y) {
-				for (int x = pxi_min; x <= pxi_max; ++x) {
-					int p = y * BUFFER_2D_LARGEUR + x;
-					float dp = _buffer_2d[p];
-					++pxls_total;
-					if (std::isinf(dp)) { ++pxls_vides; continue; }
-					if (dp > dmax_buf) dmax_buf = dp;
-				}
-			}
-			bool troue = (pxls_total == 0)
-				|| (float(pxls_vides) > FRACTION_TROUS_MAX_INSTR * float(pxls_total));
-			arbre_occulte = (!troue && depth_min_a > dmax_buf);
-		}
-		if (arbre_occulte) {
+		if (dump_raison[i] == 2u) {
 			++occultes_2d;
-			if (_cache_p_ht[i] >= 3.0f) ++self_occ;
+			if (_cache_p_ht[i] >= HAUTEUR_MIN_BLOQUEUR_M) ++self_occ;
 		}
 	}
 	out["occultes_2d"] = occultes_2d;
