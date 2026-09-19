@@ -118,6 +118,14 @@ var _temps_depuis_bake_occl: float = 0.0
 # Poussee au C++ chaque frame. Bornes recadrees cote C++ (0.0..10.0).
 @export_range(0.0, 10.0, 0.05) var marge_profondeur_m: float = 0.5
 @export_range(1, 255, 1) var hysteresis_frames: int = 60
+# HYSTERESIS ADAPTATIVE A LA VITESSE CAMERA. `hysteresis_frames` est la
+# valeur de REPOS (camera immobile) ; plus la camera bouge vite (lineaire
+# ou angulaire), plus N descend vers `hysteresis_min` -- le filtre reagit
+# vite quand la scene change vite, se stabilise quand elle est calme. Les
+# deux seuils fixent la vitesse a laquelle N atteint le plancher.
+@export_range(1, 60, 1) var hysteresis_min: int = 3
+@export_range(0.1, 20.0, 0.1) var vitesse_seuil_lin: float = 3.0
+@export_range(0.1, 10.0, 0.1) var vitesse_seuil_ang: float = 1.5
 # Rayon de rendu / bloqueurs (metres). Pousse a la sim via donnees JSON
 # (surcharge cle `rayon_rendu_m` avant configurer). Distingue "arbre non
 # dessine car trop loin" (> rayon_rendu_m) de "arbre occulte" dans les
@@ -235,6 +243,17 @@ var _instr_temps_depuis_affichage: float = 0.0
 var _dump_demande_gd: bool = false
 var _acc_bascules: int = 0
 var _acc_frames: int = 0
+# Etat camera de la frame precedente, pour deriver la vitesse (lin/ang) et
+# en tirer le N adaptatif. `_cam_prec_valide` reste faux la premiere frame
+# (pas de precedent), N vaut alors `hysteresis_frames`.
+var _pos_cam_prec: Vector3 = Vector3.ZERO
+var _forward_cam_prec: Vector3 = Vector3.FORWARD
+var _cam_prec_valide: bool = false
+# Recopies membres pour l'instrumentation (le print tourne dans un gate
+# distinct du calcul camera, il lit ces valeurs de la derniere frame).
+var _n_adaptatif_instr: int = 60
+var _v_lin_instr: float = 0.0
+var _v_ang_instr: float = 0.0
 const INSTR_INTERVALLE_S: float = 1.0
 
 
@@ -255,7 +274,10 @@ func _process(delta: float) -> void:
 			" occ=", _sim.instr_occultes_2d(),
 			" self=", _sim.instr_self_occ(),
 			" | frames=", _acc_frames,
-			" bascules_stable=", _acc_bascules
+			" bascules_stable=", _acc_bascules,
+			" hyst=", _n_adaptatif_instr,
+			" v_lin=", snapped(_v_lin_instr, 0.01),
+			" v_ang=", snapped(_v_ang_instr, 0.01)
 		)
 		_acc_bascules = 0
 		_acc_frames = 0
@@ -282,6 +304,28 @@ func _process(delta: float) -> void:
 		var xf: Transform3D = cam.get_global_transform_interpolated()
 		# Projection reellement utilisee pour rendre (doc Camera3D).
 		var proj: Projection = cam.get_camera_projection()
+		# Vitesse camera (lineaire et angulaire) derivee de la frame
+		# precedente, puis N adaptatif entre repos et plancher.
+		var pos_cam: Vector3 = xf.origin
+		var forward_cam: Vector3 = -xf.basis.z
+		var v_lin_vec: Vector3 = Vector3.ZERO
+		var v_ang: float = 0.0
+		if _cam_prec_valide and delta > 0.0:
+			v_lin_vec = (pos_cam - _pos_cam_prec) / delta
+			var cos_angle: float = clamp(forward_cam.dot(_forward_cam_prec), -1.0, 1.0)
+			v_ang = acos(cos_angle) / delta
+		var n_adaptatif: int = hysteresis_frames
+		if _cam_prec_valide:
+			var facteur_lin: float = clamp(v_lin_vec.length() / vitesse_seuil_lin, 0.0, 1.0)
+			var facteur_ang: float = clamp(v_ang / vitesse_seuil_ang, 0.0, 1.0)
+			var facteur: float = max(facteur_lin, facteur_ang)
+			n_adaptatif = int(round(lerp(float(hysteresis_frames), float(hysteresis_min), facteur)))
+		_pos_cam_prec = pos_cam
+		_forward_cam_prec = forward_cam
+		_cam_prec_valide = true
+		_n_adaptatif_instr = n_adaptatif
+		_v_lin_instr = v_lin_vec.length()
+		_v_ang_instr = v_ang
 		_sim.definir_camera(xf, proj)
 		var pos_obs: Vector3 = xf.origin
 		# CUSTOM_AABB recentree (inchange, origine = oeil).
@@ -296,7 +340,7 @@ func _process(delta: float) -> void:
 		# pour trouver le point de calage sans recompiler.
 		_sim.definir_seuil_couverture(seuil_couverture)
 		_sim.definir_marge_profondeur(marge_profondeur_m)
-		_sim.definir_hysteresis_frames(hysteresis_frames)
+		_sim.definir_hysteresis_frames(n_adaptatif)
 		# Rayon de rendu / occlusion : pousse chaque frame pour que le
 		# slider @export rayon_rendu_m ait un effet a chaud (sinon fige a
 		# la valeur d'init lue une seule fois par sim.configurer()).
