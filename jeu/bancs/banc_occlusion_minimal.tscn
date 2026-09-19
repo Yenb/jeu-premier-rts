@@ -1,0 +1,12 @@
+[gd_scene format=3 uid="uid://pbh6boadnbjq"]
+
+[ext_resource type="Script" uid="uid://cw7sxyd6ybbxc" path="res://jeu/bancs/banc_occlusion_minimal.gd" id="1_bocm"]
+
+[node name="BancOcclusionMinimal" type="Node3D" unique_id=1173344301]
+script = ExtResource("1_bocm")
+nombre_arbres = 20
+marge_frustum = 1.15
+seuil_couverture = 0.9
+marge_profondeur_m = 0.5
+hysteresis_frames = 31
+rayon_rendu_m = 1000.0
