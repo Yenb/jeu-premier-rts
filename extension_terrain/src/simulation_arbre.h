@@ -243,6 +243,10 @@ public:
 	void definir_seuil_couverture(float s);
 	void definir_marge_profondeur(float m);
 	void definir_hysteresis_frames(int n);
+	// TRANSITION CONTINUE : nombre de frames pour qu'un slot glisse de 0 a 1
+	// (ou l'inverse). La decision d'occlusion reste binaire (cible 0/1) ;
+	// seul l'alpha de la couleur d'instance envoye au GPU rampe. Clampe [1, 3600].
+	void definir_fade_frames(int n);
 
 	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
 	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
@@ -711,6 +715,16 @@ private:
 	float _seuil_couverture = 0.90f;
 	float _marge_profondeur = 0.5f;
 	uint8_t _hysteresis_frames = 60u;
+	// TRANSITION CONTINUE VERS LE BUFFER. La cible d'un slot est 0 ou 1
+	// (decision d'occlusion binaire, inchangee) ; `_slots_visibilite_continue`
+	// suit cette cible d'au plus 1/_fade_frames par frame. L'alpha de la
+	// couleur d'instance (indice 15 du layout TRANSFORM_3D + color) est
+	// multiplie par ce float -> fondu par dithered discard (materiau en
+	// TRANSPARENCY_ALPHA_HASH cote banc). L'image, la position et la taille
+	// de l'arbre restent exactes ; seule la densite de pixels rendus glisse.
+	// Un slot a 0 est exclu du buffer comme avant.
+	int _fade_frames = 1;
+	std::vector<float> _slots_visibilite_continue;
 	// DUMP FRAME (2026-09-18) : declenche par demander_dump, consomme et
 	// remis a false par le prochain mettre_a_jour_buffers_rendu.
 	bool _dump_demande = false;

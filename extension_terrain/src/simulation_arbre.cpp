@@ -95,6 +95,9 @@ void SimulationArbre::_bind_methods() {
 			D_METHOD("definir_hysteresis_frames", "n"),
 			&SimulationArbre::definir_hysteresis_frames);
 	ClassDB::bind_method(
+			D_METHOD("definir_fade_frames", "n"),
+			&SimulationArbre::definir_fade_frames);
+	ClassDB::bind_method(
 			D_METHOD("demander_dump", "chemin"),
 			&SimulationArbre::demander_dump);
 	ClassDB::bind_method(
@@ -1631,6 +1634,12 @@ void SimulationArbre::definir_hysteresis_frames(int n) {
 	_hysteresis_frames = uint8_t(n);
 }
 
+void SimulationArbre::definir_fade_frames(int n) {
+	if (n < 1) n = 1;
+	if (n > 3600) n = 3600;
+	_fade_frames = n;
+}
+
 void SimulationArbre::demander_dump(const String &chemin) {
 	_dump_demande = true;
 	_dump_chemin = chemin;
@@ -1924,28 +1933,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		float d2 = dx * dx + dz * dz;
 		if (d2 > rayon_carre) continue;
 		if (_cache_p_ht[i] < HAUTEUR_MIN_BLOQUEUR_M) continue;
-		// FILTRE CONE identique au test frustum radar sphere (voir la
-		// lambda passe_frustum plus bas) : porte proximite (arbre sur le
-		// joueur passe toujours), puis les 3 rejets standard profondeur /
-		// vertical / horizontal. Sphere centree sur le centre geometrique
-		// de l'arbre (base + haut/2), pas sa base.
-		if (d2 > EPS_CONE_XZ_CARRE) {
-			float haut = _cache_p_ht[i] + _cache_p_hf[i];
-			float centre_y = py_r[i] + 0.5f * haut;
-			float dy = centre_y - obs_y;
-			float fwd_v = dx * fwd_x + dy * fwd_y + dz * fwd_z;
-			float right_v = dx * right_x + dy * right_y + dz * right_z;
-			float up_v = dx * up_x + dy * up_y + dz * up_z;
-			float larg = (_cache_p_lt[i] > _cache_p_lf[i] ? _cache_p_lt[i] : _cache_p_lf[i]);
-			float r = 0.5f * std::sqrt(larg * larg + haut * haut);
-			if (fwd_v < -r) continue;
-			float d_v_b = sphere_factor_v * r;
-			float az_v = tang_v * fwd_v;
-			if (up_v > az_v + d_v_b || up_v < -az_v - d_v_b) continue;
-			float d_h_b = sphere_factor_h * r;
-			float az_h = tang_h * fwd_v;
-			if (right_v > az_h + d_h_b || right_v < -az_h - d_h_b) continue;
-		}
 		_bloqueurs_camera.push_back(int32_t(i));
 	}
 	// Etape 4/8 occlusion 2D projete camera : fonction de projection monde
@@ -1965,10 +1952,15 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (fwd_v <= NEAR_PLANE_M) return false;
 		float right_v = vx * right_x + vy * right_y + vz * right_z;
 		float up_v = vx * up_x + vy * up_y + vz * up_z;
-		float alpha = std::atan2(right_v, fwd_v);
-		float beta = std::atan2(up_v, fwd_v);
-		int px = int((alpha + FOV_H_RAD_4 * 0.5f) / FOV_H_RAD_4 * float(BUFFER_2D_LARGEUR));
-		int py = int((FOV_V_RAD_4 * 0.5f - beta) / FOV_V_RAD_4 * float(BUFFER_2D_HAUTEUR));
+		// Projection perspective standard (tan-based) : ndc_x/y = view_x/y / (view_z * tan(fov/2)).
+		// Puis map ndc [-1, 1] -> pixel [0, buffer_size]. Y écran inversé par rapport à Y monde
+		// (pixel Y augmente vers le bas, up_v augmente vers le haut).
+		float tan_h = std::tan(FOV_H_RAD_4 * 0.5f);
+		float tan_v = std::tan(FOV_V_RAD_4 * 0.5f);
+		float ndc_x = right_v / (fwd_v * tan_h);
+		float ndc_y = up_v    / (fwd_v * tan_v);
+		int px = int((ndc_x + 1.0f) * 0.5f * float(BUFFER_2D_LARGEUR));
+		int py = int((1.0f - ndc_y) * 0.5f * float(BUFFER_2D_HAUTEUR));
 		out_px = px;
 		out_py = py;
 		out_depth = fwd_v;
@@ -1998,8 +1990,13 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	auto ecrire_volume = [&](float cx, float cz, float y_bas, float y_haut, float largeur, const char *nom_volume) -> void {
 		if (y_haut <= y_bas) return;
 		if (largeur <= 0.0f) return;
-		constexpr float INV_SQRT2 = 0.70710678f;
-		float demi_l = (largeur * 0.5f) * INV_SQRT2;
+		// Occulteur : carré CIRCONSCRIT à la silhouette du cylindre (largeur =
+		// diamètre). Pattern Intel MOC : couvrir toute l'AABB pour maximiser
+		// la couverture de pixels, quitte à occulter légèrement au-delà du
+		// rayon réel (erreur bornée par le radius). Le candidat côté
+		// test_volume_occulte garde l'inscrit (facteur INV_SQRT2_TEST) pour
+		// rester conservatif dans l'autre sens.
+		float demi_l = largeur * 0.5f;
 		int px_min = BUFFER_2D_LARGEUR;
 		int px_max = -1;
 		int py_min = BUFFER_2D_HAUTEUR;
@@ -2299,7 +2296,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		if (!cone_actif) { dump_raison[i] = 3; return true; }
 		if (d2 <= EPS_CONE_XZ_CARRE) { dump_raison[i] = 3; return true; }
 		if (!passe_frustum(i)) { dump_raison[i] = 1; return false; }
-		if (passe_occlusion(i)) { dump_raison[i] = 2; return false; }
+		// OCCLUSION 2D DÉSACTIVÉE (archive 2026-09-19, voir
+		// notes_gameplay/occlusion_2d_archive.md). dans_cercle filtre par
+		// distance et frustum seulement. Le code d'occlusion reste en place
+		// (passe_occlusion, ecrire_volume, test_volume_occulte) pour
+		// reactivation future.
+		// if (passe_occlusion(i)) { dump_raison[i] = 2; return false; }
 		dump_raison[i] = 3;
 		return true;
 	};
@@ -2369,9 +2371,28 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 				+ String::num_int64(_visible_stable[i]) + "\n";
 		}
 	}
+	// TRANSITION CONTINUE : cible binaire par slot (visible stable + vivant
+	// -> 1, sinon 0). Au premier dimensionnement, init a la valeur binaire
+	// courante -> aucun fade-in au demarrage. Ensuite chaque slot glisse
+	// vers sa cible d'au plus 1/_fade_frames par frame.
+	if ((int)_slots_visibilite_continue.size() != cap) {
+		_slots_visibilite_continue.resize(size_t(cap));
+		for (int i = 0; i < cap; ++i) {
+			_slots_visibilite_continue[i] =
+				(_visible_stable[i] == 1u && libres_r[i] == 0) ? 1.0f : 0.0f;
+		}
+	}
+	float pas_fade = 1.0f / (float)_fade_frames;
+	for (int i = 0; i < cap; ++i) {
+		float cible = (_visible_stable[i] == 1u && libres_r[i] == 0) ? 1.0f : 0.0f;
+		float a = _slots_visibilite_continue[i];
+		if (a < cible) a = std::min(cible, a + pas_fade);
+		else if (a > cible) a = std::max(cible, a - pas_fade);
+		_slots_visibilite_continue[i] = a;
+	}
 	int pop = 0;
 	for (int i = 0; i < cap; ++i) {
-		if (_visible_stable[i] == 1u && libres_r[i] == 0) ++pop;
+		if (_slots_visibilite_continue[i] > 0.0f && libres_r[i] == 0) ++pop;
 	}
 	PackedFloat32Array pb_t;
 	PackedFloat32Array pb_f;
@@ -2384,7 +2405,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	float *pb_f_w = pb_f.ptrw();
 	int rank = 0;
 	for (int i = 0; i < cap; ++i) {
-		if (_visible_stable[i] == 0u || libres_r[i] == 1) {
+		if (_slots_visibilite_continue[i] <= 0.0f || libres_r[i] == 1) {
 			srpd_w[i] = -1;
 			continue;
 		}
@@ -2393,6 +2414,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		int dst = rank * 16;
 		std::memcpy(pb_t_w + dst, bt + src, 16 * sizeof(float));
 		std::memcpy(pb_f_w + dst, bf + src, 16 * sizeof(float));
+		float alpha_i = _slots_visibilite_continue[i];
+		// Layout TRANSFORM_3D + color : couleur RGBA en 12,13,14,15.
+		// Multiplier uniquement l'alpha (indice 15). RGB, transform et
+		// origin restent intacts. L'arbre garde taille, position, couleur.
+		pb_t_w[dst + 15] *= alpha_i;
+		pb_f_w[dst + 15] *= alpha_i;
 		++rank;
 	}
 	out["pop"] = pop;

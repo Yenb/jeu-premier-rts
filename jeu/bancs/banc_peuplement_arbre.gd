@@ -7,6 +7,12 @@
 # (`SimulationArbreGd`), puis a chaque frame gerer la cadence de simulation
 # et deleguer le pas a `_sim.avancer(pas)`. Une porte, une commande.
 #
+# FILTRAGE RENDU : distance + frustum seulement. L'occlusion 2D est
+# desactivee cote C++ (dans_cercle) ; le code d'occlusion et son archive
+# vivent dans notes_gameplay/occlusion_2d_archive.md. Le banc ne pousse plus
+# aucun parametre d'occlusion : seuls marge_frustum, hysteresis_frames et
+# rayon_rendu_m servent au filtrage distance + frustum.
+#
 # Aucune ligne de logique de simulation ne vit ici. Les colonnes de la
 # population, les structures de travail par-tick, la config figee, le
 # RNG et les refs coeur vivent tous dans `SimulationArbreGd`. `monde.gd`
@@ -77,60 +83,17 @@ var _mm_feuillage: MultiMesh = null
 var _noeud_tronc: MultiMeshInstance3D = null
 var _noeud_feuillage: MultiMeshInstance3D = null
 
-# OCCLUSION ARBRE (2026-09-15). Un OccluderInstance3D dedie au peuplement,
-# alimente par les troncs deja dans le cercle de rendu (les MEMES arbres
-# que ceux poses dans _mm_tronc.buffer -- le C++ compact les a filtres
-# par distance). Un tronc = deux quads verticaux en croix (XY et ZY),
-# fusionnes en UN seul ArrayOccluder3D. Patron : `rendu_terrain_multimesh.gd`
-# _occludeur_de_cubes / _phase_baker_occluder l.838-873 (ArrayOccluder3D
-# double-face, set_arrays(sommets, indices), OccluderInstance3D.occluder = occ).
-# NE TOUCHE AUCUNE colonne de sim, aucun RNG, aucune cadence. Aucun cout
-# ajoute au tick sim ; seule la coquille rebake.
-var _noeud_occludeur: OccluderInstance3D = null
-# Rebake AMORTI a intervalle fixe. Sans amortissement, le cout CPU de
-# construction du ArrayOccluder3D (N=8000 troncs -> 64k sommets + 96k
-# indices + set_arrays) tomberait dans chaque frame et mangerait le gain
-# d'occlusion. 0.5 s = 2 rebake/s : la composition du cercle change lente
-# ment (l'observateur bouge de quelques m par seconde), la latence
-# visuelle est negligeable.
-const INTERVALLE_BAKE_OCCL_S := 0.5
-# Un tronc plus petit que ce seuil ne participe pas au maillage occludeur :
-# la geometrie ajoutee ne bloquerait presque rien (jeune arbre) et
-# gaspillerait le budget CPU rasterizer.
-const HAUTEUR_MIN_TRONC_OCCL := 1.0
-const HAUTEUR_MIN_FEUILLAGE_OCCL := 1.0
-var _temps_depuis_bake_occl: float = 0.0
-
 # Marge multiplicative du frustum radar cote C++ (tan_h/tan_v * marge).
-# > 1.0 elargit le cone d'inclusion : evite qu'un arbre au bord du champ
-# soit filtre alors qu'il devrait etre rendu (piste : sur-occlusion quand
-# la camera regarde vers le haut). Poussee au C++ chaque frame via
+# > 1.0 elargit le cone d'inclusion. Poussee au C++ chaque frame via
 # _sim.definir_marge_frustum. Bornes recadrees cote C++ (1.0..3.0).
-@export_range(1.0, 3.0, 0.01) var marge_frustum: float = 1.15
-# Masque de couverture Intel MOC (test d'occlusion buffer 2D). Fraction min
-# de pixels de l'empreinte STRICTEMENT plus proches que la face de l'arbre
-# pour occulter. 1.0 = pas d'occlusion (100% requis), 0.5 = moitie de
-# l'empreinte suffit. Poussee au C++ chaque frame via
-# _sim.definir_seuil_couverture. Bornes recadrees cote C++ (0.0..1.0).
-@export_range(0.0, 1.0, 0.01) var seuil_couverture: float = 0.90
-# Marge (metres) absorbee dans le seuil de profondeur : un pixel n'est
-# considere couvrant que si son buffer est < depth_min_arbre - marge.
-# Poussee au C++ chaque frame. Bornes recadrees cote C++ (0.0..10.0).
-@export_range(0.0, 10.0, 0.05) var marge_profondeur_m: float = 0.5
+@export_range(1.0, 10.0, 0.01) var marge_frustum: float = 10.0
+# Persistance temporelle du verdict de visibilite (frames). Poussee au C++
+# chaque frame. Bornes recadrees cote C++ (1..255).
 @export_range(1, 255, 1) var hysteresis_frames: int = 60
-# HYSTERESIS ADAPTATIVE A LA VITESSE CAMERA. `hysteresis_frames` est la
-# valeur de REPOS (camera immobile) ; plus la camera bouge vite (lineaire
-# ou angulaire), plus N descend vers `hysteresis_min` -- le filtre reagit
-# vite quand la scene change vite, se stabilise quand elle est calme. Les
-# deux seuils fixent la vitesse a laquelle N atteint le plancher.
-@export_range(1, 60, 1) var hysteresis_min: int = 3
-@export_range(0.1, 20.0, 0.1) var vitesse_seuil_lin: float = 3.0
-@export_range(0.1, 10.0, 0.1) var vitesse_seuil_ang: float = 1.5
 # Rayon de rendu / bloqueurs (metres). Pousse a la sim via donnees JSON
 # (surcharge cle `rayon_rendu_m` avant configurer). Distingue "arbre non
-# dessine car trop loin" (> rayon_rendu_m) de "arbre occulte" dans les
-# instrumentations.
-@export_range(20.0, 1000.0, 1.0) var rayon_rendu_m: float = 200.0
+# dessine car trop loin" (> rayon_rendu_m) de "arbre hors frustum".
+@export_range(20.0, 1000.0, 1.0) var rayon_rendu_m: float = 500.0
 
 # Module de simulation. Instancie au `_ready`, appele par `_process`.
 # `null` avant init : `_process` gate en tete pour ne pas appeler avancer
@@ -148,16 +111,11 @@ func _ready() -> void:
 		_cadence_simulation_hz = float(donnees.cadence_simulation_hz)
 	if donnees.has("mode_test_rapide"):
 		_mode_test_rapide = bool(donnees.mode_test_rapide)
-	# Surcharges JSON des @export d'occlusion : le fichier data/banc_*.json
-	# pilote par defaut (Yael edite le JSON) ; l'inspecteur Godot reste une
-	# alternative live (Yael peut aussi cocher/regler dans l'editeur -- la
-	# valeur JSON gagne quand la cle est presente).
+	# Surcharges JSON des @export : le fichier data/banc_*.json pilote par
+	# defaut (Yael edite le JSON) ; l'inspecteur Godot reste une alternative
+	# live (la valeur JSON gagne quand la cle est presente).
 	if donnees.has("marge_frustum"):
 		marge_frustum = float(donnees.marge_frustum)
-	if donnees.has("seuil_couverture"):
-		seuil_couverture = float(donnees.seuil_couverture)
-	if donnees.has("marge_profondeur_m"):
-		marge_profondeur_m = float(donnees.marge_profondeur_m)
 	if donnees.has("hysteresis_frames"):
 		hysteresis_frames = int(donnees.hysteresis_frames)
 	if donnees.has("rayon_rendu_m"):
@@ -238,34 +196,15 @@ func _ready() -> void:
 
 
 var _instr_temps_depuis_affichage: float = 0.0
-# DUMP FRAME D'OCCLUSION (2026-09-18). Arme par F9 dans _unhandled_input,
-# consomme dans _process avant rafraichir_buffer_rendu.
-var _dump_demande_gd: bool = false
 var _acc_bascules: int = 0
 var _acc_frames: int = 0
-# Etat camera de la frame precedente, pour deriver la vitesse (lin/ang) et
-# en tirer le N adaptatif. `_cam_prec_valide` reste faux la premiere frame
-# (pas de precedent), N vaut alors `hysteresis_frames`.
-var _pos_cam_prec: Vector3 = Vector3.ZERO
-var _forward_cam_prec: Vector3 = Vector3.FORWARD
-var _cam_prec_valide: bool = false
-# Recopies membres pour l'instrumentation (le print tourne dans un gate
-# distinct du calcul camera, il lit ces valeurs de la derniere frame).
-var _n_adaptatif_instr: int = 60
-var _v_lin_instr: float = 0.0
-var _v_ang_instr: float = 0.0
 const INSTR_INTERVALLE_S: float = 1.0
-
-
-func _unhandled_input(ev: InputEvent) -> void:
-	if ev is InputEventKey and ev.pressed and not ev.echo and ev.keycode == KEY_F9:
-		_dump_demande_gd = true
 
 
 func _process(delta: float) -> void:
 	if _sim == null:
 		return
-	# Chantier occlusion par cellules, etape 2/8 : log de la cellule courante.
+	# Instrumentation : compteurs C++ + frames rendues, une ligne par seconde.
 	_instr_temps_depuis_affichage += delta
 	if _instr_temps_depuis_affichage >= INSTR_INTERVALLE_S:
 		_instr_temps_depuis_affichage = 0.0
@@ -274,27 +213,14 @@ func _process(delta: float) -> void:
 			" occ=", _sim.instr_occultes_2d(),
 			" self=", _sim.instr_self_occ(),
 			" | frames=", _acc_frames,
-			" bascules_stable=", _acc_bascules,
-			" hyst=", _n_adaptatif_instr,
-			" v_lin=", snapped(_v_lin_instr, 0.01),
-			" v_ang=", snapped(_v_ang_instr, 0.01)
+			" bascules_stable=", _acc_bascules
 		)
 		_acc_bascules = 0
 		_acc_frames = 0
-	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
-	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
-	# cadence -- que la sim ait tourne ce tick ou non, la position reste
-	# fraiche. Patron identique a terrain_visible.gd (l.245-250) :
-	# `get_first_node_in_group(&"observateur")`. Mode isole (pas de joueur
-	# dans la scene) : aucun push, le drapeau `_observateur_actif` cote sim
-	# reste false (cas neutre, pas une panne).
-	# CAMERA suivie a 60 Hz : position XZ + direction XZ. Pousse a la sim
-	# CHAQUE FRAME (cout : 3 float stores + bool), utile a la fois pour
-	# avancer(pas) au prochain tick sim et pour rafraichir_buffer_rendu()
-	# entre deux ticks quand la camera bouge.
-	# Canal camera unique : Transform3D affichee + Projection de la camera
-	# active, poussees chaque frame. Le C++ lit droite/haut/avant/oeil dans
-	# la base, le FOV dans la projection. Plus aucune reconstruction manuelle.
+	# CAMERA suivie a 60 Hz. Canal camera unique : Transform3D affichee +
+	# Projection de la camera active, poussees chaque frame. Le C++ lit
+	# droite/haut/avant/oeil dans la base, le FOV dans la projection.
+	# Mode isole sans joueur : aucune camera -> aucun push (cas neutre).
 	var obs_present: bool = false
 	var cam := get_viewport().get_camera_3d()
 	if cam != null:
@@ -304,46 +230,19 @@ func _process(delta: float) -> void:
 		var xf: Transform3D = cam.get_global_transform_interpolated()
 		# Projection reellement utilisee pour rendre (doc Camera3D).
 		var proj: Projection = cam.get_camera_projection()
-		# Vitesse camera (lineaire et angulaire) derivee de la frame
-		# precedente, puis N adaptatif entre repos et plancher.
-		var pos_cam: Vector3 = xf.origin
-		var forward_cam: Vector3 = -xf.basis.z
-		var v_lin_vec: Vector3 = Vector3.ZERO
-		var v_ang: float = 0.0
-		if _cam_prec_valide and delta > 0.0:
-			v_lin_vec = (pos_cam - _pos_cam_prec) / delta
-			var cos_angle: float = clamp(forward_cam.dot(_forward_cam_prec), -1.0, 1.0)
-			v_ang = acos(cos_angle) / delta
-		var n_adaptatif: int = hysteresis_frames
-		if _cam_prec_valide:
-			var facteur_lin: float = clamp(v_lin_vec.length() / vitesse_seuil_lin, 0.0, 1.0)
-			var facteur_ang: float = clamp(v_ang / vitesse_seuil_ang, 0.0, 1.0)
-			var facteur: float = max(facteur_lin, facteur_ang)
-			n_adaptatif = int(round(lerp(float(hysteresis_frames), float(hysteresis_min), facteur)))
-		_pos_cam_prec = pos_cam
-		_forward_cam_prec = forward_cam
-		_cam_prec_valide = true
-		_n_adaptatif_instr = n_adaptatif
-		_v_lin_instr = v_lin_vec.length()
-		_v_ang_instr = v_ang
 		_sim.definir_camera(xf, proj)
 		var pos_obs: Vector3 = xf.origin
-		# CUSTOM_AABB recentree (inchange, origine = oeil).
+		# CUSTOM_AABB recentree sur l'oeil : boite englobante du MultiMesh
+		# pour le culling Godot (les instances sont en coordonnees monde).
 		var demi := 90.0
 		var aabb_arbres := AABB(Vector3(pos_obs.x - demi, -5.0, pos_obs.z - demi), Vector3(demi * 2.0, 65.0, demi * 2.0))
 		_noeud_tronc.custom_aabb = aabb_arbres
 		_noeud_feuillage.custom_aabb = aabb_arbres
-		# Marge du frustum radar C++ : poussee chaque frame pour que le
-		# slider inspecteur / la surcharge JSON prennent effet a chaud.
+		# Parametres pousses chaque frame (slider inspecteur / surcharge JSON
+		# a chaud). Seuls le filtrage distance + frustum sont actifs cote C++
+		# (occlusion 2D coupee) : on ne pousse que ce qui les sert.
 		_sim.definir_marge_frustum(marge_frustum)
-		# Masque de couverture Intel MOC (test occlusion). Slider a chaud
-		# pour trouver le point de calage sans recompiler.
-		_sim.definir_seuil_couverture(seuil_couverture)
-		_sim.definir_marge_profondeur(marge_profondeur_m)
-		_sim.definir_hysteresis_frames(n_adaptatif)
-		# Rayon de rendu / occlusion : pousse chaque frame pour que le
-		# slider @export rayon_rendu_m ait un effet a chaud (sinon fige a
-		# la valeur d'init lue une seule fois par sim.configurer()).
+		_sim.definir_hysteresis_frames(hysteresis_frames)
 		_sim.definir_rayon_rendu(rayon_rendu_m)
 	# CADENCE DE SIMULATION DECOUPLEE DU FRAMERATE : la sim ne tourne
 	# pas 60 fois par seconde. Le delta accumule est passe en `pas` a
@@ -352,78 +251,18 @@ func _process(delta: float) -> void:
 	# identique.
 	_temps_depuis_maj += delta
 	var intervalle_maj: float = 1.0 / _cadence_simulation_hz if _cadence_simulation_hz > 0.0 else 0.0
-	var sim_a_tourne: bool = false
 	if _temps_depuis_maj >= intervalle_maj:
 		var pas: float = _temps_depuis_maj
 		_temps_depuis_maj = 0.0
 		if _mode_test_rapide:
 			pas *= 4.0
 		_sim.avancer(pas)
-		sim_a_tourne = true
-	# Visibilite/occlusion recalculees a chaque frame rendue (Intel MOC,
-	# GPU Gems 29.4.2). La sim reste a 4 Hz ; seul le filtre rendu suit la
-	# camera. HYSTERESIS_FRAMES compte desormais des frames rendues.
-	if obs_present and _dump_demande_gd:
-		# DUMP FRAME D'OCCLUSION (2026-09-18). Ecrit camera.json + viewport.png
-		# cote GD, puis arme le C++ pour qu'il ecrive frame.json + buffer_2d.pgm
-		# + 4 CSV sur ce meme frame (avant rafraichir_buffer_rendu ci-dessous).
-		var dossier: String = ProjectSettings.globalize_path("res://dumps_occlusion/") \
-			+ Time.get_datetime_string_from_system(false, true).replace(":", "-")
-		DirAccess.make_dir_recursive_absolute(dossier)
-		var cam_dump := get_viewport().get_camera_3d()
-		if cam_dump != null:
-			var gt := cam_dump.global_transform
-			var gti := cam_dump.get_global_transform_interpolated()
-			var proj := cam_dump.get_camera_projection()
-			# Basis en GDScript : .x = colonne 0, .y = colonne 1, .z = colonne 2.
-			var basis_dump := {
-				"col0": [gt.basis.x.x, gt.basis.x.y, gt.basis.x.z],
-				"col1": [gt.basis.y.x, gt.basis.y.y, gt.basis.y.z],
-				"col2": [gt.basis.z.x, gt.basis.z.y, gt.basis.z.z],
-				"origin": [gt.origin.x, gt.origin.y, gt.origin.z]
-			}
-			var basis_dump_i := {
-				"col0": [gti.basis.x.x, gti.basis.x.y, gti.basis.x.z],
-				"col1": [gti.basis.y.x, gti.basis.y.y, gti.basis.y.z],
-				"col2": [gti.basis.z.x, gti.basis.z.y, gti.basis.z.z],
-				"origin": [gti.origin.x, gti.origin.y, gti.origin.z]
-			}
-			var proj_arr: Array = []
-			for c_i in range(4):
-				var col_p: Vector4 = proj[c_i]
-				proj_arr.append([col_p.x, col_p.y, col_p.z, col_p.w])
-			var vps: Vector2 = get_viewport().get_visible_rect().size
-			var cam_json := {
-				"global_transform": basis_dump,
-				"global_transform_interpolated": basis_dump_i,
-				"projection_columns": proj_arr,
-				"fov": cam_dump.fov,
-				"keep_aspect": int(cam_dump.keep_aspect),
-				"near": cam_dump.near,
-				"far": cam_dump.far,
-				"viewport": [vps.x, vps.y],
-				"ticks_msec": Time.get_ticks_msec()
-			}
-			var f_cam := FileAccess.open(dossier + "/camera.json", FileAccess.WRITE)
-			if f_cam != null:
-				f_cam.store_string(JSON.stringify(cam_json))
-			var img := get_viewport().get_texture().get_image()
-			if img != null:
-				img.save_png(dossier + "/viewport.png")
-		_sim.demander_dump_occlusion(dossier)
-		_dump_demande_gd = false
+	# Visibilite recalculee a chaque frame rendue : la sim reste a 4 Hz,
+	# seul le filtre rendu (distance + frustum) suit la camera.
 	if obs_present:
 		_sim.rafraichir_buffer_rendu()
 		_acc_bascules += _sim.instr_bascules_stable_total()
 		_acc_frames += 1
-	# OCCLUSION ARBRE : rebake amorti a INTERVALLE_BAKE_OCCL_S. Independant
-	# de la cadence sim -- le buffer de rendu est toujours a jour du dernier
-	# tick, on rebake sur son etat actuel. Le noeud occludeur ne change rien
-	# a la sim ; l'occlusion est un ajout de rendu pur.
-	_temps_depuis_bake_occl += delta
-	if _temps_depuis_bake_occl >= INTERVALLE_BAKE_OCCL_S:
-		_temps_depuis_bake_occl = 0.0
-		_rebake_occludeur_arbre()
 
 
 # Charge le JSON du banc (donnees + config). Rend un Dictionary vide en
@@ -543,7 +382,7 @@ func _monter_population_nodes() -> void:
 	mat_tronc.albedo_color = Color(0.35, 0.22, 0.12)
 	# Couleur d'instance -> albedo (paire OBLIGATOIRE avec
 	# `_mm_tronc.use_colors = true` : sans les deux, `set_instance_color`
-	# est ignore silencieusement).
+	# est ignore silencieusement). Materiau OPAQUE standard.
 	mat_tronc.vertex_color_use_as_albedo = true
 	tronc_mesh.material = mat_tronc
 	_mm_tronc = MultiMesh.new()
@@ -579,7 +418,7 @@ func _monter_population_nodes() -> void:
 	var mat_feuillage := StandardMaterial3D.new()
 	mat_feuillage.albedo_color = Color(0.15, 0.45, 0.2)
 	# Couleur d'instance -> albedo (paire OBLIGATOIRE avec use_colors,
-	# meme raison que pour le tronc).
+	# meme raison que pour le tronc). Materiau OPAQUE standard.
 	mat_feuillage.vertex_color_use_as_albedo = true
 	cone.material = mat_feuillage
 	_mm_feuillage = MultiMesh.new()
@@ -592,14 +431,6 @@ func _monter_population_nodes() -> void:
 	_noeud_feuillage.top_level = true
 	_noeud_feuillage.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	add_child(_noeud_feuillage)
-	# OCCLUSION ARBRE : noeud OccluderInstance3D dedie au peuplement.
-	# top_level = true : les sommets du ArrayOccluder3D sont ecrits en
-	# COORDONNEES MONDE (memes que _mm_tronc.buffer), le noeud reste a
-	# l'origine, meme convention que _noeud_tronc/_noeud_feuillage.
-	_noeud_occludeur = OccluderInstance3D.new()
-	_noeud_occludeur.top_level = true
-	_noeud_occludeur.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
-	add_child(_noeud_occludeur)
 
 
 # Lit une fois le groupe `&"exclusion_arbre"` et copie chaque zone en
@@ -608,115 +439,6 @@ func _monter_population_nodes() -> void:
 # `call_deferred` -- garantit que TOUS les noeuds d'exclusion freres ont
 # deja execute leur propre `_ready` (donc `add_to_group`) au moment ou
 # on lit le groupe.
-func _rebake_occludeur_arbre() -> void:
-	# OCCLUSION ARBRE (2026-09-15). Reconstruit un ArrayOccluder3D neuf a
-	# partir du BUFFER TRONC CERCLE SEUL (sim.buffer_tronc_occludeur()),
-	# batie cote C++ avec le filtre cercle uniquement -- sans cone, sans
-	# occlusion CPU. L'occludeur couvre donc tous les troncs du cercle de
-	# rendu et NE CHANGE PAS quand la camera tourne : il ne varie qu'au
-	# deplacement de l'observateur. Pour chaque tronc, deux quads verticaux
-	# en croix (perpendiculaires a X et a Z) : occulte dans toutes les
-	# directions horizontales sans depender de l'orientation (pas de
-	# billboard, pas de rebake sur rotation).
-	# ArrayOccluder3D est DOUBLE-FACE (voir rendu_terrain_multimesh.gd:838),
-	# winding order libre.
-	if _sim == null or _noeud_occludeur == null:
-		return
-	var pop: int = _sim.pop_occludeur()
-	if pop <= 0:
-		_noeud_occludeur.occluder = null
-		return
-	var buf: PackedFloat32Array = _sim.buffer_tronc_occludeur()
-	if buf.size() < pop * 16:
-		return
-	var sommets := PackedVector3Array()
-	var indices := PackedInt32Array()
-	# Reserve approximative : 8 sommets et 12 indices par tronc valide.
-	# Sur-allocation gerable, evite les realloc successives.
-	sommets.resize(0)
-	indices.resize(0)
-	var k: int = 0
-	while k < pop:
-		var base: int = k * 16
-		# Layout TRANSFORM_3D + color, 16 floats/instance. Buffer ecrit par
-		# le C++ (simulation_arbre.cpp:mettre_a_jour_buffers_rendu). Basis
-		# diagonale : rows[0].x = lt (largeur), rows[1].y = ht (hauteur),
-		# origin = (buf[3], buf[7], buf[11]) avec y = y_sol + ht*0.5.
-		var lt: float = buf[base + 0]
-		var ht: float = buf[base + 5]
-		if ht < HAUTEUR_MIN_TRONC_OCCL:
-			k += 1
-			continue
-		var ox: float = buf[base + 3]
-		var oy: float = buf[base + 7]
-		var oz: float = buf[base + 11]
-		var y_bas: float = oy - ht * 0.5
-		var y_haut: float = oy + ht * 0.5
-		var demi_l: float = lt * 0.5
-		# Quad 1 : plan XY (perpendiculaire a Z).
-		var s0: int = sommets.size()
-		sommets.append(Vector3(ox - demi_l, y_bas, oz))
-		sommets.append(Vector3(ox + demi_l, y_bas, oz))
-		sommets.append(Vector3(ox + demi_l, y_haut, oz))
-		sommets.append(Vector3(ox - demi_l, y_haut, oz))
-		indices.append(s0 + 0); indices.append(s0 + 1); indices.append(s0 + 2)
-		indices.append(s0 + 0); indices.append(s0 + 2); indices.append(s0 + 3)
-		# Quad 2 : plan ZY (perpendiculaire a X).
-		var s1: int = sommets.size()
-		sommets.append(Vector3(ox, y_bas, oz - demi_l))
-		sommets.append(Vector3(ox, y_bas, oz + demi_l))
-		sommets.append(Vector3(ox, y_haut, oz + demi_l))
-		sommets.append(Vector3(ox, y_haut, oz - demi_l))
-		indices.append(s1 + 0); indices.append(s1 + 1); indices.append(s1 + 2)
-		indices.append(s1 + 0); indices.append(s1 + 2); indices.append(s1 + 3)
-		k += 1
-	# Meme logique pour le FEUILLAGE : mêmes deux quads en croix, lus depuis
-	# buffer_feuillage_occludeur(). Layout identique (TRANSFORM_3D + color,
-	# 16 floats/instance) : rows[0].x = lf, rows[1].y = hf, origin.y =
-	# y_sol + ht + hf/2 (le feuillage est pose sur le tronc, pas centre au
-	# milieu de sa hauteur). Le feuillage devient bloqueur au meme titre
-	# que le tronc.
-	var buf_f: PackedFloat32Array = _sim.buffer_feuillage_occludeur()
-	if buf_f.size() >= pop * 16:
-		var kf: int = 0
-		while kf < pop:
-			var basef: int = kf * 16
-			var lf: float = buf_f[basef + 0]
-			var hf: float = buf_f[basef + 5]
-			if hf < HAUTEUR_MIN_FEUILLAGE_OCCL:
-				kf += 1
-				continue
-			var oxf: float = buf_f[basef + 3]
-			var oyf: float = buf_f[basef + 7]
-			var ozf: float = buf_f[basef + 11]
-			var yf_bas: float = oyf - hf * 0.5
-			var yf_haut: float = oyf + hf * 0.5
-			var demi_lf: float = lf * 0.5
-			# Quad 1 : plan XY (perpendiculaire a Z).
-			var sf0: int = sommets.size()
-			sommets.append(Vector3(oxf - demi_lf, yf_bas, ozf))
-			sommets.append(Vector3(oxf + demi_lf, yf_bas, ozf))
-			sommets.append(Vector3(oxf + demi_lf, yf_haut, ozf))
-			sommets.append(Vector3(oxf - demi_lf, yf_haut, ozf))
-			indices.append(sf0 + 0); indices.append(sf0 + 1); indices.append(sf0 + 2)
-			indices.append(sf0 + 0); indices.append(sf0 + 2); indices.append(sf0 + 3)
-			# Quad 2 : plan ZY (perpendiculaire a X).
-			var sf1: int = sommets.size()
-			sommets.append(Vector3(oxf, yf_bas, ozf - demi_lf))
-			sommets.append(Vector3(oxf, yf_bas, ozf + demi_lf))
-			sommets.append(Vector3(oxf, yf_haut, ozf + demi_lf))
-			sommets.append(Vector3(oxf, yf_haut, ozf - demi_lf))
-			indices.append(sf1 + 0); indices.append(sf1 + 1); indices.append(sf1 + 2)
-			indices.append(sf1 + 0); indices.append(sf1 + 2); indices.append(sf1 + 3)
-			kf += 1
-	if indices.is_empty():
-		_noeud_occludeur.occluder = null
-		return
-	var occ := ArrayOccluder3D.new()
-	occ.set_arrays(sommets, indices)
-	_noeud_occludeur.occluder = occ
-
-
 func _charger_zones_exclusion() -> void:
 	var zones: Array = []
 	for zone_node in get_tree().get_nodes_in_group(&"exclusion_arbre"):
