@@ -117,6 +117,7 @@ var _temps_depuis_bake_occl: float = 0.0
 # considere couvrant que si son buffer est < depth_min_arbre - marge.
 # Poussee au C++ chaque frame. Bornes recadrees cote C++ (0.0..10.0).
 @export_range(0.0, 10.0, 0.05) var marge_profondeur_m: float = 0.5
+@export_range(1, 255, 1) var hysteresis_frames: int = 60
 # Rayon de rendu / bloqueurs (metres). Pousse a la sim via donnees JSON
 # (surcharge cle `rayon_rendu_m` avant configurer). Distingue "arbre non
 # dessine car trop loin" (> rayon_rendu_m) de "arbre occulte" dans les
@@ -149,6 +150,8 @@ func _ready() -> void:
 		seuil_couverture = float(donnees.seuil_couverture)
 	if donnees.has("marge_profondeur_m"):
 		marge_profondeur_m = float(donnees.marge_profondeur_m)
+	if donnees.has("hysteresis_frames"):
+		hysteresis_frames = int(donnees.hysteresis_frames)
 	if donnees.has("rayon_rendu_m"):
 		rayon_rendu_m = float(donnees.rayon_rendu_m)
 	# Pousse rayon_rendu_m a la sim via donnees (la sim relit sa cle
@@ -230,10 +233,7 @@ var _instr_temps_depuis_affichage: float = 0.0
 # DUMP FRAME D'OCCLUSION (2026-09-18). Arme par F9 dans _unhandled_input,
 # consomme dans _process avant rafraichir_buffer_rendu.
 var _dump_demande_gd: bool = false
-# INSTRUMENT BASCULES (2026-09-18) : accumulateurs par frame, vidés au print
-# 1 Hz. Le C++ reporte par frame ; on cumule pour lire un total par seconde.
-var _acc_bb: Vector3i = Vector3i.ZERO
-var _acc_bs: Vector3i = Vector3i.ZERO
+var _acc_bascules: int = 0
 var _acc_frames: int = 0
 const INSTR_INTERVALLE_S: float = 1.0
 
@@ -255,11 +255,9 @@ func _process(delta: float) -> void:
 			" occ=", _sim.instr_occultes_2d(),
 			" self=", _sim.instr_self_occ(),
 			" | frames=", _acc_frames,
-			" bascules_brut(proche,anneau,loin)=", _acc_bb,
-			" bascules_stable(proche,anneau,loin)=", _acc_bs
+			" bascules_stable=", _acc_bascules
 		)
-		_acc_bb = Vector3i.ZERO
-		_acc_bs = Vector3i.ZERO
+		_acc_bascules = 0
 		_acc_frames = 0
 	# STREAMING RENDU ARBRE, ETAPE 1/4 : pousser la position de
 	# l'observateur (joueur) a la sim CHAQUE FRAME, avant le gate de
@@ -298,6 +296,7 @@ func _process(delta: float) -> void:
 		# pour trouver le point de calage sans recompiler.
 		_sim.definir_seuil_couverture(seuil_couverture)
 		_sim.definir_marge_profondeur(marge_profondeur_m)
+		_sim.definir_hysteresis_frames(hysteresis_frames)
 		# Rayon de rendu / occlusion : pousse chaque frame pour que le
 		# slider @export rayon_rendu_m ait un effet a chaud (sinon fige a
 		# la valeur d'init lue une seule fois par sim.configurer()).
@@ -371,8 +370,7 @@ func _process(delta: float) -> void:
 		_dump_demande_gd = false
 	if obs_present:
 		_sim.rafraichir_buffer_rendu()
-		_acc_bb += Vector3i(_sim.instr_bascules_brut_proche(), _sim.instr_bascules_brut_anneau(), _sim.instr_bascules_brut_loin())
-		_acc_bs += Vector3i(_sim.instr_bascules_stable_proche(), _sim.instr_bascules_stable_anneau(), _sim.instr_bascules_stable_loin())
+		_acc_bascules += _sim.instr_bascules_stable_total()
 		_acc_frames += 1
 	# OCCLUSION ARBRE : rebake amorti a INTERVALLE_BAKE_OCCL_S. Independant
 	# de la cadence sim -- le buffer de rendu est toujours a jour du dernier

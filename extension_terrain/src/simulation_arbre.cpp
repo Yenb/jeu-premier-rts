@@ -92,6 +92,9 @@ void SimulationArbre::_bind_methods() {
 			D_METHOD("definir_marge_profondeur", "m"),
 			&SimulationArbre::definir_marge_profondeur);
 	ClassDB::bind_method(
+			D_METHOD("definir_hysteresis_frames", "n"),
+			&SimulationArbre::definir_hysteresis_frames);
+	ClassDB::bind_method(
 			D_METHOD("demander_dump", "chemin"),
 			&SimulationArbre::demander_dump);
 	ClassDB::bind_method(
@@ -1622,6 +1625,12 @@ void SimulationArbre::definir_marge_profondeur(float m) {
 	_marge_profondeur = m;
 }
 
+void SimulationArbre::definir_hysteresis_frames(int n) {
+	if (n < 1) n = 1;
+	if (n > 255) n = 255;
+	_hysteresis_frames = uint8_t(n);
+}
+
 void SimulationArbre::demander_dump(const String &chemin) {
 	_dump_demande = true;
 	_dump_chemin = chemin;
@@ -1911,7 +1920,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) continue;
 		float dx = px_r[i] - ox;
-		float dy = py_r[i] - obs_y;
 		float dz = pz_r[i] - oz;
 		float d2 = dx * dx + dz * dz;
 		if (d2 > rayon_carre) continue;
@@ -1919,15 +1927,16 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		// FILTRE CONE identique au test frustum radar sphere (voir la
 		// lambda passe_frustum plus bas) : porte proximite (arbre sur le
 		// joueur passe toujours), puis les 3 rejets standard profondeur /
-		// vertical / horizontal. Sans ce filtre, un bloqueur hors-champ
-		// pollue le buffer 2D par angle et fait echouer l'occlusion des
-		// arbres testes droit devant.
+		// vertical / horizontal. Sphere centree sur le centre geometrique
+		// de l'arbre (base + haut/2), pas sa base.
 		if (d2 > EPS_CONE_XZ_CARRE) {
+			float haut = _cache_p_ht[i] + _cache_p_hf[i];
+			float centre_y = py_r[i] + 0.5f * haut;
+			float dy = centre_y - obs_y;
 			float fwd_v = dx * fwd_x + dy * fwd_y + dz * fwd_z;
 			float right_v = dx * right_x + dy * right_y + dz * right_z;
 			float up_v = dx * up_x + dy * up_y + dz * up_z;
 			float larg = (_cache_p_lt[i] > _cache_p_lf[i] ? _cache_p_lt[i] : _cache_p_lf[i]);
-			float haut = _cache_p_ht[i] + _cache_p_hf[i];
 			float r = 0.5f * std::sqrt(larg * larg + haut * haut);
 			if (fwd_v < -r) continue;
 			float d_v_b = sphere_factor_v * r;
@@ -2237,14 +2246,15 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	};
 	// PASSE B : frustum radar sphere (Lighthouse3D, inchange).
 	auto passe_frustum = [&](int i) -> bool {
+		float haut = _cache_p_ht[i] + _cache_p_hf[i];
+		float centre_y = py_r[i] + 0.5f * haut;
 		float dx = px_r[i] - ox;
-		float dy = py_r[i] - obs_y;
+		float dy = centre_y - obs_y;
 		float dz = pz_r[i] - oz;
 		float fwd_v   = dx * fwd_x   + dy * fwd_y   + dz * fwd_z;
 		float right_v = dx * right_x + dy * right_y + dz * right_z;
 		float up_v    = dx * up_x    + dy * up_y    + dz * up_z;
 		float larg = (_cache_p_lt[i] > _cache_p_lf[i] ? _cache_p_lt[i] : _cache_p_lf[i]);
-		float haut = _cache_p_ht[i] + _cache_p_hf[i];
 		float r = 0.5f * std::sqrt(larg * larg + haut * haut);
 		if (fwd_v < -r) return false;
 		float d_v = sphere_factor_v * r;
@@ -2302,7 +2312,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	}
 	// HYSTERESIS A PERSISTANCE DU NOUVEAU VERDICT (GPU Gems 2 ch.6, corrige
 	// 2026-09-18). L'etat affiche _visible_stable ne bascule que si le
-	// NOUVEAU verdict brut se maintient HYSTERESIS_FRAMES ticks
+	// NOUVEAU verdict brut se maintient _hysteresis_frames ticks
 	// CONSECUTIFS. Le compteur mesure la persistance du candidat au
 	// changement (brut != stable), et se remet a zero seulement quand :
 	// (a) le verdict brut redevient egal a stable (candidat disparait),
@@ -2311,21 +2321,11 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	// que brut recroise stable une frame, ce qui empechait de compter
 	// consecutivement et produisait des bascules groupees plus visibles
 	// que le scintillement d'origine.
-	constexpr uint8_t HYSTERESIS_FRAMES = 3u;
 	// INSTRUMENT BASCULES (2026-09-18) : mesure objective du scintillement.
 	// Compte par frame et par bande de distance a l'oeil (proche/anneau/loin)
 	// les slots dont le verdict brut a bascule (ce que l'hysteresis absorbe)
 	// et ceux dont _visible_stable a bascule (ce que l'ecran montre).
-	int bascules_brut[3]   = {0, 0, 0};
-	int bascules_stable[3] = {0, 0, 0};
-	auto bande_distance = [&](int i) -> int {
-		float dx = px_r[i] - ox;
-		float dz = pz_r[i] - oz;
-		float d2 = dx * dx + dz * dz;
-		if (d2 < 30.0f * 30.0f) return 0;
-		if (d2 < 80.0f * 80.0f) return 1;
-		return 2;
-	};
+	int bascules_stable_total = 0;
 	for (int i = 0; i < cap; ++i) {
 		if (libres_r[i] == 1) {
 			_visible_stable[i] = 1u;
@@ -2335,7 +2335,6 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 		}
 		uint8_t stable_avant = _visible_stable[i];
 		uint8_t brut = _verdict_cercle[i];
-		if (brut != _dernier_brut[i]) ++bascules_brut[bande_distance(i)];
 		if (brut == _visible_stable[i]) {
 			// verdict brut d'accord avec l'affichage : le candidat au
 			// changement disparait, on repart de zero.
@@ -2349,12 +2348,12 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 			} else {
 				_compteur_bascule[i] = 1u;
 			}
-			if (_compteur_bascule[i] >= HYSTERESIS_FRAMES) {
+			if (_compteur_bascule[i] >= _hysteresis_frames) {
 				_visible_stable[i] = brut;
 				_compteur_bascule[i] = 0u;
 			}
 		}
-		if (_visible_stable[i] != stable_avant) ++bascules_stable[bande_distance(i)];
+		if (_visible_stable[i] != stable_avant) ++bascules_stable_total;
 		_dernier_brut[i] = brut;
 	}
 	if (dump) {
@@ -2450,12 +2449,7 @@ Dictionary SimulationArbre::mettre_a_jour_buffers_rendu(
 	out["buffer_feuillage_cercle"] = pb_f_cercle;
 	out["cone_actif"] = cone_actif;
 	out["nb_bloqueurs_camera"] = int(_bloqueurs_camera.size());
-	out["bascules_brut_proche"]   = bascules_brut[0];
-	out["bascules_brut_anneau"]   = bascules_brut[1];
-	out["bascules_brut_loin"]     = bascules_brut[2];
-	out["bascules_stable_proche"] = bascules_stable[0];
-	out["bascules_stable_anneau"] = bascules_stable[1];
-	out["bascules_stable_loin"]   = bascules_stable[2];
+	out["bascules_stable_total"] = bascules_stable_total;
 	// Decompte occultes depuis dump_raison (raison=2 = rejete par occlusion).
 	int occultes_2d = 0;
 	int self_occ = 0;

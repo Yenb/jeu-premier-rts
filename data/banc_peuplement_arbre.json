@@ -34,6 +34,7 @@
 	"marge_frustum": 1.15,
 	"seuil_couverture": 0.90,
 	"marge_profondeur_m": 0.5,
+	"hysteresis_frames": 60,
 	"rayon_rendu_m": 200.0,
 	"ombrage_par_stade": [
 		{ "rayon_ombre_m": 0.0, "magnitude": 0.10 },

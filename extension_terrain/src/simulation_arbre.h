@@ -242,6 +242,7 @@ public:
 	// chaque frame (regles @export + surcharge JSON).
 	void definir_seuil_couverture(float s);
 	void definir_marge_profondeur(float m);
+	void definir_hysteresis_frames(int n);
 
 	// ETAPE 4 : RESET COLONNES du drainage morts vieillesse. Pour chaque
 	// indice mort, applique slot_stade[i] = -1, libres[i] = 1, ages[i] = 0.
@@ -668,7 +669,7 @@ private:
 	// HYSTERESIS DU VERDICT D'OCCLUSION (GPU Gems 2 ch.6, persistance
 	// N frames). Etat de visibilite affiche stabilise et compteur de
 	// bascules opposees consecutives. Un basculement n'affecte l'affichage
-	// que s'il tient HYSTERESIS_FRAMES ticks d'affilee.
+	// que s'il tient _hysteresis_frames ticks d'affilee.
 	std::vector<uint8_t> _visible_stable;
 	std::vector<uint8_t> _compteur_bascule;
 	std::vector<uint8_t> _dernier_brut;   // verdict brut du tick precedent (par slot)
@@ -709,6 +710,7 @@ private:
 	// frame par la coquille.
 	float _seuil_couverture = 0.90f;
 	float _marge_profondeur = 0.5f;
+	uint8_t _hysteresis_frames = 60u;
 	// DUMP FRAME (2026-09-18) : declenche par demander_dump, consomme et
 	// remis a false par le prochain mettre_a_jour_buffers_rendu.
 	bool _dump_demande = false;

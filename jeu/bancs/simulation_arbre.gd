@@ -319,15 +319,7 @@ var _pop_occludeur: int = 0
 var _instr_nb_bloqueurs_camera: int = 0
 var _instr_occultes_2d: int = 0
 var _instr_self_occ: int = 0
-# INSTRUMENT BASCULES (2026-09-18) : compte par frame et par bande de
-# distance a l'oeil (proche <30m / anneau 30-80m / loin >=80m) le nb de
-# slots dont le verdict brut a bascule et dont _visible_stable a bascule.
-var _instr_bascules_brut_proche: int = 0
-var _instr_bascules_brut_anneau: int = 0
-var _instr_bascules_brut_loin: int = 0
-var _instr_bascules_stable_proche: int = 0
-var _instr_bascules_stable_anneau: int = 0
-var _instr_bascules_stable_loin: int = 0
+var _instr_bascules_stable_total: int = 0
 # Inverse : slot rendu j -> slot data, -1 si le slot rendu est libre.
 # Sert au morceau 2 pour effacer visuellement un arbre sorti du cercle.
 var _data_pour_slot_rendu: PackedInt32Array = PackedInt32Array()
@@ -387,7 +379,7 @@ var _camera_active: bool = false
 # autour de l'observateur (metres). Un arbre data i est INCLUS dans le
 # buffer compact rendu par C++ SEULEMENT si (px-ox)^2 + (pz-oz)^2 <=
 # rayon^2. La SIMULATION ne lit JAMAIS ce rayon : la boucle 0..cap
-# continue sur tous les arbres. Defaut 80 m, reglable via JSON `rayon_rendu_m`.
+# continue sur tous les arbres. Defaut 200 m, reglable via JSON `rayon_rendu_m`.
 # En mode isole (_observateur_actif=false) : filtre inactif, buffer inchange.
 var _rayon_rendu_m: float = 200.0
 
@@ -695,6 +687,11 @@ func definir_seuil_couverture(s: float) -> void:
 func definir_marge_profondeur(m: float) -> void:
 	if _simu_cpp != null:
 		_simu_cpp.definir_marge_profondeur(m)
+
+
+func definir_hysteresis_frames(n: int) -> void:
+	if _simu_cpp != null:
+		_simu_cpp.definir_hysteresis_frames(n)
 
 
 # DUMP FRAME D'OCCLUSION (2026-09-18). Pass-through vers SimulationArbre C++
@@ -2384,12 +2381,7 @@ func _ecrire_slots_lot_cpp(cap: int) -> void:
 	_instr_nb_bloqueurs_camera = int(res.get("nb_bloqueurs_camera", 0))
 	_instr_occultes_2d = int(res.get("occultes_2d", 0))
 	_instr_self_occ = int(res.get("self_occ", 0))
-	_instr_bascules_brut_proche = int(res.get("bascules_brut_proche", 0))
-	_instr_bascules_brut_anneau = int(res.get("bascules_brut_anneau", 0))
-	_instr_bascules_brut_loin = int(res.get("bascules_brut_loin", 0))
-	_instr_bascules_stable_proche = int(res.get("bascules_stable_proche", 0))
-	_instr_bascules_stable_anneau = int(res.get("bascules_stable_anneau", 0))
-	_instr_bascules_stable_loin = int(res.get("bascules_stable_loin", 0))
+	_instr_bascules_stable_total = int(res.get("bascules_stable_total", 0))
 	if res.has("dump_ecrit"):
 		print("dump occlusion : ", res["dump_ecrit"])
 	# Push COMPACT : instance_count = pop, buffer = pop*16 floats. Godot
@@ -2424,12 +2416,7 @@ func pop_occludeur() -> int:
 func instr_nb_bloqueurs_camera() -> int: return _instr_nb_bloqueurs_camera
 func instr_occultes_2d() -> int: return _instr_occultes_2d
 func instr_self_occ() -> int: return _instr_self_occ
-func instr_bascules_brut_proche() -> int: return _instr_bascules_brut_proche
-func instr_bascules_brut_anneau() -> int: return _instr_bascules_brut_anneau
-func instr_bascules_brut_loin() -> int: return _instr_bascules_brut_loin
-func instr_bascules_stable_proche() -> int: return _instr_bascules_stable_proche
-func instr_bascules_stable_anneau() -> int: return _instr_bascules_stable_anneau
-func instr_bascules_stable_loin() -> int: return _instr_bascules_stable_loin
+func instr_bascules_stable_total() -> int: return _instr_bascules_stable_total
 
 
 # ============================================================================
